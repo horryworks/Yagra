@@ -12723,6 +12723,512 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/config-backup": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_config_backup",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node's config backup: configuration, whether it is fetched, the last result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigBackupView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "put_config_backup",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigBackupBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved; the bundled oxidized is asked to re-read its node list"
+          },
+          "400": {
+            "description": "An unknown input or model, or a credential that is not a CLI login (`invalid_config_backup`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or an account restricted to folders names a login (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/config-backup/diff": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_diff",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The older version.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The newer version.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The two versions compared line by line",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigDiff"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a version id (`invalid_oid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The bundled oxidized did not answer (`oxidized_unreachable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/config-backup/fetch": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "fetch_now",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Asked; the bundled oxidized fetches the node next"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The bundled oxidized did not answer (`oxidized_unreachable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/config-backup/versions": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "list_versions",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored versions, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfigVersion"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The bundled oxidized did not answer (`oxidized_unreachable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/config-backup/versions/{oid}": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_version",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "oid",
+            "in": "path",
+            "description": "Version id from `…/versions`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored configuration text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigText"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a version id (`invalid_oid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The bundled oxidized did not answer (`oxidized_unreachable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/dns-chain": {
       "get": {
         "tags": [
@@ -25418,6 +25924,49 @@
         ]
       }
     },
+    "/internal/oxidized/nodes": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "oxidized_source",
+        "responses": {
+          "200": {
+            "description": "The nodes the bundled oxidized fetches, with their logins in plaintext. For oxidized alone: it demands the source token in `x-yagra-oxidized-token`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourceNode"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or the wrong one (`oxidized_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/readyz": {
       "get": {
         "tags": [
@@ -26824,6 +27373,42 @@
             "type": "integer",
             "format": "int64",
             "description": "Unix seconds when the list was refreshed."
+          }
+        }
+      },
+      "BackupInput": {
+        "type": "string",
+        "description": "How oxidized reaches a node's command line.",
+        "enum": [
+          "ssh",
+          "telnet",
+          "ssh_then_telnet",
+          "unknown"
+        ]
+      },
+      "BackupStatusView": {
+        "type": "object",
+        "description": "What oxidized last reported.",
+        "required": [
+          "status",
+          "observed_at"
+        ],
+        "properties": {
+          "last_end": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When Yagra last read it. Older than ten minutes means oxidized has not been answering."
+          },
+          "status": {
+            "type": "string",
+            "description": "oxidized's word: `success`, `no_connection`, `fail`, `timelimit` or `never`."
           }
         }
       },
@@ -28342,6 +28927,100 @@
           }
         }
       },
+      "ConfigBackupBody": {
+        "type": "object",
+        "description": "A node's config-backup configuration.",
+        "required": [
+          "enabled",
+          "input"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "input": {
+            "$ref": "#/components/schemas/BackupInput"
+          },
+          "model_override": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ConfigBackupView": {
+        "type": "object",
+        "description": "One node's config backup.",
+        "required": [
+          "enabled",
+          "input",
+          "readiness",
+          "models",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "Whether this deployment has an oxidized at all."
+          },
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "input": {
+            "$ref": "#/components/schemas/BackupInput"
+          },
+          "model_override": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model a person picked; `null` means \"from the profile\"."
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The models a person may pick."
+          },
+          "profile_model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The model the node's profile maps to, if any."
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/Readiness",
+            "description": "Whether it is fetched, or the one thing to fix."
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BackupStatusView"
+              }
+            ]
+          }
+        }
+      },
       "ConfigBody": {
         "type": "object",
         "required": [
@@ -28500,6 +29179,65 @@
           "yagra_version": {
             "type": "string",
             "description": "The Yagra version that produced it."
+          }
+        }
+      },
+      "ConfigDiff": {
+        "type": "object",
+        "description": "Two versions compared line by line.",
+        "required": [
+          "from",
+          "to",
+          "lines"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiffLine"
+            }
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigText": {
+        "type": "object",
+        "description": "One version's text.",
+        "required": [
+          "oid",
+          "text"
+        ],
+        "properties": {
+          "oid": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigVersion": {
+        "type": "object",
+        "description": "One stored version.",
+        "required": [
+          "oid"
+        ],
+        "properties": {
+          "oid": {
+            "type": "string"
+          },
+          "stored_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was stored. `null` when oxidized printed a time this could not read."
           }
         }
       },
@@ -29783,6 +30521,31 @@
             "minimum": 0
           }
         }
+      },
+      "DiffLine": {
+        "type": "object",
+        "description": "One line of a diff.",
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DiffLineKind"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "DiffLineKind": {
+        "type": "string",
+        "description": "How a line of a diff relates the two versions.",
+        "enum": [
+          "same",
+          "added",
+          "removed"
+        ]
       },
       "Direction": {
         "type": "string",
@@ -40135,6 +40898,19 @@
           }
         }
       },
+      "Readiness": {
+        "type": "string",
+        "description": "Whether a node is fetched, and if not, the one thing to fix.",
+        "enum": [
+          "ready",
+          "off",
+          "no_model",
+          "no_credential",
+          "not_cli_login",
+          "unknown_input",
+          "address_changed"
+        ]
+      },
       "ReclassifyApplied": {
         "type": "object",
         "description": "What an apply did. The four counts add up to the number of distinct nodes named.",
@@ -41542,7 +42318,8 @@
           "password",
           "token",
           "header_name",
-          "header_value"
+          "header_value",
+          "enable"
         ]
       },
       "Role": {
@@ -42666,6 +43443,49 @@
           "trap",
           "flow"
         ]
+      },
+      "SourceNode": {
+        "type": "object",
+        "description": "One node as oxidized's HTTP source reads it. The field names are the keys the generated\nconfiguration's `map` names (`config::render`).",
+        "required": [
+          "name",
+          "ip",
+          "model",
+          "input",
+          "group",
+          "username",
+          "password"
+        ],
+        "properties": {
+          "enable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "type": "string"
+          },
+          "input": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The node id: oxidized's name for it, and the file it is stored under."
+          },
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
       },
       "SshAuthKind": {
         "type": "string",

@@ -17,7 +17,7 @@
  *
  *  Not every kind that can exist: the kinds an integration creates are in
  *  `INTEGRATION_CREDENTIAL_KINDS` below, and are deliberately absent here. */
-export const CREDENTIAL_KINDS = ['snmp_v2c', 'snmp_v3', 'http_auth', 'api_token'] as const;
+export const CREDENTIAL_KINDS = ['snmp_v2c', 'snmp_v3', 'http_auth', 'api_token', 'cli_login'] as const;
 
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 
@@ -86,6 +86,15 @@ export const SNMP_CREDENTIAL_KINDS: readonly CredentialKind[] = ['snmp_v2c', 'sn
  *  `api_token` predates it and is accepted as a bearer token (`secrets.rs::KIND_API_TOKEN`). */
 export const HTTP_CREDENTIAL_KINDS: readonly CredentialKind[] = ['http_auth', 'api_token'];
 
+/** Kinds a node's config backup may sign in with (ADR-210 stage 2): the device's command line, over
+ *  SSH or telnet. */
+export const CLI_CREDENTIAL_KINDS: readonly CredentialKind[] = ['cli_login'];
+
+/** Whether a credential row may be offered as a node's config-backup login. */
+export function isCliCredentialKind(kind: string): boolean {
+  return (CLI_CREDENTIAL_KINDS as readonly string[]).includes(kind);
+}
+
 /** Whether a credential row (whose `kind` is a free-form string server-side) may be offered as a
  *  node's SNMP binding. */
 export function isSnmpCredentialKind(kind: string): boolean {
@@ -111,7 +120,7 @@ export const REVEAL_AUTO_CLOSE_MS = 60_000;
 /** The tabs of Nodes ▸ Credentials & secrets (ADR-205 Inc.1), in the order they are drawn. The
  *  first is what a bare URL opens. `other` holds a kind this build does not know — a newer core can
  *  store one — and is drawn only while such a row exists, so no row is ever silently left out. */
-export const CREDENTIAL_GROUPS = ['snmp', 'http', 'integration', 'other'] as const;
+export const CREDENTIAL_GROUPS = ['snmp', 'http', 'cli', 'integration', 'other'] as const;
 
 export type CredentialGroup = (typeof CREDENTIAL_GROUPS)[number];
 
@@ -122,6 +131,7 @@ export type CredentialGroup = (typeof CREDENTIAL_GROUPS)[number];
 export const CREDENTIAL_GROUP_KINDS: Record<Exclude<CredentialGroup, 'other'>, readonly string[]> = {
   snmp: SNMP_CREDENTIAL_KINDS,
   http: HTTP_CREDENTIAL_KINDS,
+  cli: CLI_CREDENTIAL_KINDS,
   integration: INTEGRATION_CREDENTIAL_KINDS,
 };
 

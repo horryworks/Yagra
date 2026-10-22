@@ -12,6 +12,8 @@
 
 ### 新機能
 
+- **機器の config をバックアップするようになりました。** Yagra に oxidized を同梱し、スイッチを入れた機器の config を 1 日 1 回取得して、版をすべて残します。ノードの新しい Config タブで設定します（取るかどうか、CLI のログイン、SSH か telnet、プロファイルから機種が決まらないときの機種）。保存された版の一覧、本文の表示、1 つ前の版との比較もこのタブでできます。［今すぐ取得］ですぐに取りに行きます。本文を見るには監視の設定の権限が要ります。Viewer は版の一覧と最後の結果だけを見られます。Credentials & secrets に、SSH・telnet のログイン（ユーザー名、パスワード、enable パスワード（なくてもよい））を登録する CLI タブを足しました。秘密を表示でも中身を見られます。API クライアント向け: `GET`/`PUT /api/v1/nodes/{node_id}/config-backup`、`…/versions`、`…/versions/{oid}`、`…/diff`、`POST …/fetch` を追加しました。MCP の `get_node_status` に `config_backup`（取得しているかと最後の結果）が増えました。config の本文は MCP には出しません。スタックに 2 つのコンテナ（`oxidized` と一度だけ動く `oxidized-config`）と 2 つのボリューム（`oxconf`・`oxdata`）が増えます。止めるには `.env` に `YAGRA_OXIDIZED_URL=`（空）と書きます。
+
 - **登録した機器の認証情報を、画面で表示してコピーできるようになりました。** Nodes ▸ Credentials & secrets で、SNMP と HTTP の認証情報の行に「秘密を表示」が出ます。コミュニティ、SNMPv3 のユーザーとパスフレーズ、HTTP のログイン情報を、項目ごとのコピーボタンつきで表示します。窓は 1 分で自動で閉じます。使うには新しい権限 Reveal credentials が要り、オペレーターと管理者が持っています。連携の鍵（Meraki・NetBox）は表示しません。API クライアント向け: `POST /api/v1/credentials/{id}/reveal` を追加しました。API トークンとフォルダを絞られたアカウントからは使えず、MCP のツールもありません。`GET /api/v1/roles` の権限は 9 つ目の `reveal_credentials` が増えました。
 
 ### セキュリティ

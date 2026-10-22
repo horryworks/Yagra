@@ -1,0 +1,91 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* NodeDetail ▸ Config (ADR-210 stage 2). Colours and fonts come from theme variables. */
+
+.cfgb {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.cfgb-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 16px;
+  align-items: end;
+}
+
+.cfgb-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--text-primary);
+}
+
+.cfgb-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.cfgb-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.cfgb-readiness-ready,
+.cfgb-result-ok {
+  color: var(--status-ok);
+}
+
+.cfgb-readiness-off,
+.cfgb-result-none {
+  color: var(--text-secondary);
+}
+
+.cfgb-readiness-no_model,
+.cfgb-readiness-no_credential,
+.cfgb-readiness-not_cli_login,
+.cfgb-readiness-unknown_input,
+.cfgb-readiness-address_changed {
+  color: var(--status-warning);
+}
+
+.cfgb-result-bad {
+  color: var(--status-critical);
+}
+
+.cfgb-viewer {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+
+.cfgb-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+/* The text keeps the device's own line breaks and scrolls inside its box. */
+.cfgb-text {
+  margin: 0;
+  padding: 10px;
+  max-height: 60vh;
+  overflow: auto;
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  white-space: pre;
+}
+
+.cfgb-line-added {
+  color: var(--status-ok);
+}
+
+.cfgb-line-removed {
+  color: var(--status-critical);
+}

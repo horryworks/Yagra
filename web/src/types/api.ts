@@ -80,6 +80,8 @@ const schemaEnumPins: {
   UserKind: AssertEqual<UserKind, components['schemas']['UserKind']>;
   OidcProviderKind: AssertEqual<OidcProviderKind, components['schemas']['OidcProviderKind']>;
   TokenSurface: AssertEqual<TokenSurface, components['schemas']['TokenSurface']>;
+  BackupInput: AssertEqual<BackupInput, Exclude<components['schemas']['BackupInput'], 'unknown'>>;
+  BackupReadiness: AssertEqual<BackupReadiness, components['schemas']['Readiness']>;
   RevealedFieldKey: AssertEqual<RevealedFieldKey, components['schemas']['RevealedFieldKey']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
   DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
@@ -149,6 +151,8 @@ const schemaEnumPins: {
   UserKind: true,
   OidcProviderKind: true,
   TokenSurface: true,
+  BackupInput: true,
+  BackupReadiness: true,
   RevealedFieldKey: true,
   NeighborProto: true,
   NeighborCapability: true,
@@ -371,6 +375,33 @@ export type NodeStatus = components['schemas']['NodeStatus'];
 /** Credential metadata (never the secret value). */
 export type CredentialSummary = components['schemas']['CredentialSummary'];
 
+/** One node's config backup through the bundled oxidized (ADR-210 stage 2). */
+export type ConfigBackupView = components['schemas']['ConfigBackupView'];
+/** One stored version of a node's configuration. */
+export type ConfigVersion = components['schemas']['ConfigVersion'];
+/** One version's text. */
+export type ConfigText = components['schemas']['ConfigText'];
+/** Two versions compared line by line. */
+export type ConfigDiff = components['schemas']['ConfigDiff'];
+
+/** How oxidized reaches a node's command line, in the order the connection select lists them. The
+ *  server's `unknown` (a token a newer core wrote) is never offered. Pinned to `schemas.BackupInput`
+ *  minus `unknown`. */
+export const BACKUP_INPUTS = ['ssh', 'ssh_then_telnet', 'telnet'] as const;
+export type BackupInput = (typeof BACKUP_INPUTS)[number];
+
+/** Whether a node's config is fetched, or the one thing to fix. Pinned to `schemas.Readiness`. */
+export const BACKUP_READINESS = [
+  'ready',
+  'off',
+  'no_model',
+  'no_credential',
+  'not_cli_login',
+  'unknown_input',
+  'address_changed',
+] as const;
+export type BackupReadiness = (typeof BACKUP_READINESS)[number];
+
 /** A credential's secret in plaintext (`POST /api/v1/credentials/{id}/reveal`, ADR-210). Held only
  *  while the dialog that asked for it is open; never stored. */
 export type RevealedCredential = components['schemas']['RevealedCredential'];
@@ -390,6 +421,7 @@ export const REVEALED_FIELD_KEYS = [
   'token',
   'header_name',
   'header_value',
+  'enable',
 ] as const;
 
 /** One part of a revealed secret. Pinned to `schemas.RevealedFieldKey`. */

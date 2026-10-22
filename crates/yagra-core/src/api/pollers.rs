@@ -1904,9 +1904,10 @@ mod tests {
             checked += in_file;
         }
         assert_eq!(
-            checked, 5,
-            "expected 5 Yagra image references: four in the deploy composition (core, core again \
-             for bus-init, the co-located poller, web) and one in the remote-site poller's. A \
+            checked, 6,
+            "expected 6 Yagra image references: five in the deploy composition (core, core again \
+             for bus-init and for oxidized-config (ADR-210), the co-located poller, web) and one in \
+             the remote-site poller's. A \
              changed count means a service was added or removed, so decide this number again \
              rather than raising it to whatever was measured",
         );

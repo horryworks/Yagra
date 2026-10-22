@@ -558,6 +558,7 @@ impl YagraMcp {
             wireless,
             meraki_pair,
             meraki_site,
+            config_backup: crate::api::config_backup::summary_of(admin, p.node_id).await,
             collection_fault: crate::api::nodes::collection_fault_of(&self.state, node.id).await,
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts

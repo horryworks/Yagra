@@ -71,6 +71,8 @@ import {
   CLAIM_PORT_STATES,
   CHANNEL_KINDS,
   REVEALED_FIELD_KEYS,
+  BACKUP_INPUTS,
+  BACKUP_READINESS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -347,6 +349,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enAccess, ja: jaAccess };
     expectKeys('audit action', locales, 'audit.action.', AUDIT_ACTIONS);
     expectKeys('audit status class', locales, 'audit.statusClass.', AUDIT_STATUS_CLASSES);
+  });
+
+  it('every config-backup connection and readiness has a label (nodes:config.*)', () => {
+    // NodeDetail ▸ Config (ADR-210 stage 2) builds both keys from the token the server sent. The
+    // readiness is the one sentence saying why a device is not backed up; a raw key there hides it.
+    const locales = { en: enNodes, ja: jaNodes };
+    expectKeys('config backup input', locales, 'config.input.', BACKUP_INPUTS);
+    expectKeys('config backup readiness', locales, 'config.readiness.', BACKUP_READINESS);
   });
 
   it('every part of a revealed secret has a label (access:cred.reveal.field.*)', () => {

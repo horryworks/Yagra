@@ -12,7 +12,8 @@
       "snmp": "SNMP",
       "http": "HTTP",
       "integration": "Integration keys",
-      "other": "Other"
+      "other": "Other",
+      "cli": "CLI"
     },
     "kind": {
       "snmp_v2c": "SNMP v2c (community)",
@@ -20,7 +21,8 @@
       "http_auth": "HTTP auth (URL monitors)",
       "api_token": "API token",
       "meraki_api": "Cisco Meraki API key",
-      "netbox_token": "NetBox API token"
+      "netbox_token": "NetBox API token",
+      "cli_login": "CLI login (SSH / telnet)"
     },
     "http": {
       "scheme": "Scheme",
@@ -84,7 +86,8 @@
       "secretPlaceholder": {
         "apiToken": "Bearer token",
         "community": "Community string"
-      }
+      },
+      "cliTitle": "Add CLI login"
     },
     "edit": {
       "title": "Edit credential",
@@ -122,8 +125,15 @@
         "password": "Password",
         "token": "Token",
         "header_name": "Header name",
-        "header_value": "Header value"
+        "header_value": "Header value",
+        "enable": "Enable password"
       }
+    },
+    "cli": {
+      "username": "Username",
+      "password": "Password",
+      "enable": "Enable password",
+      "enableNone": "None"
     }
   },
   "users": {

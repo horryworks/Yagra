@@ -265,7 +265,8 @@
     "neighbors": "Neighbors",
     "collection": "Collection",
     "events": "Events",
-    "flow": "Flow"
+    "flow": "Flow",
+    "config": "Config"
   },
   "ap": {
     "colAp": "Access point",
@@ -1223,6 +1224,49 @@
     "err": {
       "preview": "Could not read the selected nodes.",
       "apply": "Could not rename the nodes."
+    }
+  },
+  "config": {
+    "enabled": "Back up config",
+    "login": "Login",
+    "loginNone": "None",
+    "connection": "Connection",
+    "input": {
+      "ssh_then_telnet": "SSH, then telnet",
+      "ssh": "SSH",
+      "telnet": "Telnet"
+    },
+    "model": "Model",
+    "modelFromProfile": "From profile ({{model}})",
+    "modelPick": "Pick a model",
+    "fetchNow": "Fetch now",
+    "asked": "Asked. The new version appears here after the fetch.",
+    "readiness": {
+      "ready": "Fetched daily",
+      "off": "Not backed up",
+      "no_model": "No model for this device's profile. Pick one.",
+      "no_credential": "No login chosen.",
+      "not_cli_login": "The chosen login is not a CLI login.",
+      "unknown_input": "The stored connection is unknown to this version. Pick one and save.",
+      "address_changed": "The address changed since this was saved. Save again to resume."
+    },
+    "lastResult": "Last fetch: {{status}}",
+    "stale": "not updated for over 15 min",
+    "unavailable": "This deployment has no config backup service.",
+    "noVersions": "No versions yet.",
+    "cols": {
+      "stored": "Stored",
+      "version": "Version",
+      "actions": "Actions"
+    },
+    "view": "View",
+    "compare": "Compare",
+    "err": {
+      "load": "Could not load config backup.",
+      "versions": "Could not list versions.",
+      "save": "Could not save.",
+      "fetch": "Could not ask for a fetch.",
+      "text": "Could not read the version."
     }
   }
 }

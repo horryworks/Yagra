@@ -2651,6 +2651,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/config-backup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_config_backup"];
+        put: operations["put_config_backup"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/config-backup/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_diff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/config-backup/fetch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["fetch_now"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/config-backup/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_versions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/config-backup/versions/{oid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_version"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/dns-chain": {
         parameters: {
             query?: never;
@@ -5363,6 +5443,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/oxidized/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["oxidized_source"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -6014,6 +6110,23 @@ export interface components {
              * @description Unix seconds when the list was refreshed.
              */
             written_at: number;
+        };
+        /**
+         * @description How oxidized reaches a node's command line.
+         * @enum {string}
+         */
+        BackupInput: "ssh" | "telnet" | "ssh_then_telnet" | "unknown";
+        /** @description What oxidized last reported. */
+        BackupStatusView: {
+            /** Format: date-time */
+            last_end?: string | null;
+            /**
+             * Format: date-time
+             * @description When Yagra last read it. Older than ten minutes means oxidized has not been answering.
+             */
+            observed_at: string;
+            /** @description oxidized's word: `success`, `no_connection`, `fail`, `timelimit` or `never`. */
+            status: string;
         };
         /**
          * @description A keyword rule applied to a URL monitor's response body.
@@ -6799,6 +6912,32 @@ export interface components {
             /** @description The operand, parsed per field type at compile time. */
             value?: string;
         };
+        /** @description A node's config-backup configuration. */
+        ConfigBackupBody: {
+            /** Format: uuid */
+            credential_id?: string | null;
+            enabled: boolean;
+            input: components["schemas"]["BackupInput"];
+            model_override?: string | null;
+        };
+        /** @description One node's config backup. */
+        ConfigBackupView: {
+            /** @description Whether this deployment has an oxidized at all. */
+            available: boolean;
+            /** Format: uuid */
+            credential_id?: string | null;
+            enabled: boolean;
+            input: components["schemas"]["BackupInput"];
+            /** @description The model a person picked; `null` means "from the profile". */
+            model_override?: string | null;
+            /** @description The models a person may pick. */
+            models: string[];
+            /** @description The model the node's profile maps to, if any. */
+            profile_model?: string | null;
+            /** @description Whether it is fetched, or the one thing to fix. */
+            readiness: components["schemas"]["Readiness"];
+            status?: null | components["schemas"]["BackupStatusView"];
+        };
         ConfigBody: {
             /** Format: int32 */
             default_poll_interval_secs: number;
@@ -6840,6 +6979,26 @@ export interface components {
             version: number;
             /** @description The Yagra version that produced it. */
             yagra_version: string;
+        };
+        /** @description Two versions compared line by line. */
+        ConfigDiff: {
+            from: string;
+            lines: components["schemas"]["DiffLine"][];
+            to: string;
+        };
+        /** @description One version's text. */
+        ConfigText: {
+            oid: string;
+            text: string;
+        };
+        /** @description One stored version. */
+        ConfigVersion: {
+            oid: string;
+            /**
+             * Format: date-time
+             * @description When it was stored. `null` when oxidized printed a time this could not read.
+             */
+            stored_at?: string | null;
         };
         /**
          * @description Where one poller has got to in a convergence.
@@ -7404,6 +7563,16 @@ export interface components {
              */
             sent: number;
         };
+        /** @description One line of a diff. */
+        DiffLine: {
+            kind: components["schemas"]["DiffLineKind"];
+            text: string;
+        };
+        /**
+         * @description How a line of a diff relates the two versions.
+         * @enum {string}
+         */
+        DiffLineKind: "same" | "added" | "removed";
         /**
          * @description Which way a metric breaches its bound.
          * @enum {string}
@@ -12592,6 +12761,11 @@ export interface components {
             provider: string;
             summary: string;
         };
+        /**
+         * @description Whether a node is fetched, and if not, the one thing to fix.
+         * @enum {string}
+         */
+        Readiness: "ready" | "off" | "no_model" | "no_credential" | "not_cli_login" | "unknown_input" | "address_changed";
         /** @description What an apply did. The four counts add up to the number of distinct nodes named. */
         ReclassifyApplied: {
             /** @description Nodes moved to the profile the rules choose. */
@@ -13172,7 +13346,7 @@ export interface components {
          * @description One part of a revealed secret. Which parts a credential has depends on its kind.
          * @enum {string}
          */
-        RevealedFieldKey: "community" | "user" | "security_level" | "auth_protocol" | "auth_key" | "priv_protocol" | "priv_key" | "scheme" | "username" | "password" | "token" | "header_name" | "header_value";
+        RevealedFieldKey: "community" | "user" | "security_level" | "auth_protocol" | "auth_key" | "priv_protocol" | "priv_key" | "scheme" | "username" | "password" | "token" | "header_name" | "header_value" | "enable";
         /**
          * @description Predefined roles, ordered least → most privileged.
          * @enum {string}
@@ -13734,6 +13908,21 @@ export interface components {
          * @enum {string}
          */
         SourceKind: "syslog" | "trap" | "flow";
+        /**
+         * @description One node as oxidized's HTTP source reads it. The field names are the keys the generated
+         *     configuration's `map` names (`config::render`).
+         */
+        SourceNode: {
+            enable?: string | null;
+            group: string;
+            input: string;
+            ip: string;
+            model: string;
+            /** @description The node id: oxidized's name for it, and the file it is stored under. */
+            name: string;
+            password: string;
+            username: string;
+        };
         /**
          * @description How the operator authenticates to the target host.
          * @enum {string}
@@ -25171,6 +25360,412 @@ export interface operations {
             };
         };
     };
+    get_config_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The node's config backup: configuration, whether it is fetched, the last result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigBackupView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_config_backup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigBackupBody"];
+            };
+        };
+        responses: {
+            /** @description Saved; the bundled oxidized is asked to re-read its node list */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An unknown input or model, or a credential that is not a CLI login (`invalid_config_backup`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or an account restricted to folders names a login (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_diff: {
+        parameters: {
+            query: {
+                /** @description The older version. */
+                from: string;
+                /** @description The newer version. */
+                to: string;
+            };
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The two versions compared line by line */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigDiff"];
+                };
+            };
+            /** @description Not a version id (`invalid_oid`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The bundled oxidized did not answer (`oxidized_unreachable`) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    fetch_now: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asked; the bundled oxidized fetches the node next */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The bundled oxidized did not answer (`oxidized_unreachable`) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_versions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stored versions, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigVersion"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The bundled oxidized did not answer (`oxidized_unreachable`) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_version: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+                /** @description Version id from `…/versions` */
+                oid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stored configuration text */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigText"];
+                };
+            };
+            /** @description Not a version id (`invalid_oid`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The bundled oxidized did not answer (`oxidized_unreachable`) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     get_dns_chain: {
         parameters: {
             query?: never;
@@ -35484,6 +36079,44 @@ export interface operations {
                 };
                 content: {
                     "text/plain": unknown;
+                };
+            };
+        };
+    };
+    oxidized_source: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The nodes the bundled oxidized fetches, with their logins in plaintext. For oxidized alone: it demands the source token in `x-yagra-oxidized-token` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceNode"][];
+                };
+            };
+            /** @description No token, or the wrong one (`oxidized_token`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
         };

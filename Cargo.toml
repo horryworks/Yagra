@@ -97,6 +97,8 @@ futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 # Polling jitter (anti-stampede, monitoring-conventions)
 rand = "0.8"
+# A line diff of two stored device configurations (ADR-210 stage 2).
+similar = "2"
 # Machine hostname for poller identity default (ADR-009) — tiny, cross-platform, no unsafe of ours.
 hostname = "0.4"
 # Semantic-version comparison for the upgrade compatibility window (ADR-050 decision 7). Hand-rolled

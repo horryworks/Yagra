@@ -6,6 +6,7 @@ import {
   CREDENTIAL_GROUP_KINDS,
   CREDENTIAL_GROUPS,
   CREDENTIAL_KINDS,
+  CLI_CREDENTIAL_KINDS,
   HTTP_CREDENTIAL_KINDS,
   INTEGRATION_CREDENTIAL_KINDS,
   SNMP_CREDENTIAL_KINDS,
@@ -13,6 +14,7 @@ import {
   credentialGroupOf,
   integrationSecret,
   isHttpCredentialKind,
+  isCliCredentialKind,
   isRevealableCredentialKind,
   isSnmpCredentialKind,
   secretReplacementFor,
@@ -49,12 +51,12 @@ describe('credential kind allow-lists', () => {
   it('draws both allow-lists from the creatable set', () => {
     // A kind in a picker that Settings ▸ Credentials cannot create is a picker that can only ever
     // be empty.
-    for (const k of [...SNMP_CREDENTIAL_KINDS, ...HTTP_CREDENTIAL_KINDS]) {
+    for (const k of [...SNMP_CREDENTIAL_KINDS, ...HTTP_CREDENTIAL_KINDS, ...CLI_CREDENTIAL_KINDS]) {
       expect(CREDENTIAL_KINDS, k).toContain(k);
     }
     // And every creatable kind is usable somewhere — otherwise it is a secret with no consumer.
     for (const k of CREDENTIAL_KINDS) {
-      expect(isSnmpCredentialKind(k) || isHttpCredentialKind(k), k).toBe(true);
+      expect(isSnmpCredentialKind(k) || isHttpCredentialKind(k) || isCliCredentialKind(k), k).toBe(true);
     }
   });
 });

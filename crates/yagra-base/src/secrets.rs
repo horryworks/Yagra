@@ -240,6 +240,46 @@ pub const KIND_HTTP_AUTH: &str = "http_auth";
 /// [`KIND_HTTP_AUTH`], which can also express Basic and custom headers.
 pub const KIND_API_TOKEN: &str = "api_token";
 
+/// Credential kind for signing in to a device's command line over SSH or telnet (ADR-210 stage 2).
+/// The secret is a [`CliLoginSecret`] JSON document. Read by the config-backup source alone, which
+/// hands it to the bundled oxidized; nothing polls with it.
+///
+/// ⚠️ **Never an SNMP credential.** `scheduler::dispatch::resolve_snmp_auth` refuses this kind by
+/// name, because it otherwise reads any non-v3 secret as a community — which would put a login
+/// password on the wire in an SNMP GET.
+pub const KIND_CLI_LOGIN: &str = "cli_login";
+
+/// The sealed JSON shape of a `cli_login` credential. `enable` is the privileged-mode password a
+/// Cisco-style device asks for after the login; absent when the account lands privileged.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CliLoginSecret {
+    pub username: String,
+    pub password: String,
+    #[serde(default)]
+    pub enable: Option<String>,
+}
+
+impl CliLoginSecret {
+    /// Parse and structurally validate a CLI login document. `Err` carries a static description
+    /// only — never any field content.
+    pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
+        let mut secret: Self =
+            serde_json::from_slice(bytes).map_err(|_| "not a valid CLI login JSON document")?;
+        if secret.username.trim().is_empty() {
+            return Err("username must not be empty");
+        }
+        if secret.password.is_empty() {
+            return Err("password must not be empty");
+        }
+        // An empty enable is "none", so a form that always sends the field cannot store a blank
+        // password the device would then be sent.
+        if secret.enable.as_deref().is_some_and(str::is_empty) {
+            secret.enable = None;
+        }
+        Ok(secret)
+    }
+}
+
 /// Parse a sealed credential into the [`HttpAuth`] a poll job carries.
 ///
 /// `Err` carries a static description only — never any field content, since the message reaches

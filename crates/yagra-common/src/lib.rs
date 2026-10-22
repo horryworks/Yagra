@@ -31,6 +31,7 @@ pub mod node;
 mod node_kind;
 mod notify_template;
 pub mod oid;
+pub mod oxidized_model;
 pub mod poll_interval;
 pub mod profile;
 pub mod ratelimit;

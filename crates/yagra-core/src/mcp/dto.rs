@@ -532,6 +532,11 @@ pub struct NodeStatusDto {
     /// The Meraki organization and network this node sits in, by name (ADR-185). Mirrors
     /// `NodeDetail.meraki_site`, from the same function.
     pub meraki_site: Option<yagra_meraki::MerakiSite>,
+    /// Config backup through the bundled oxidized (ADR-210 stage 2): whether the node is fetched,
+    /// or the one thing to fix, and the last result. Mirrors `GET
+    /// /api/v1/nodes/{node_id}/config-backup`, from the same function. The configuration text is
+    /// deliberately not on this surface. `null` ⇒ the read failed.
+    pub config_backup: Option<crate::api::config_backup::ConfigBackupSummary>,
 }
 
 // The dependency-graph DTO is not here: `get_topology` serves `api::topology::TopologyPage`, the
@@ -1167,6 +1172,7 @@ mod tests {
             serial_number: Some("FCW1929B68S, FCW1931A06Z".to_owned()),
             profile_locked: true,
             sys_name: Some("sw-01".to_owned()),
+            config_backup: Some(crate::api::config_backup::ConfigBackupSummary::sample()),
             // Populated, both halves: the canary sees only the keys an instance fills.
             wireless: Some(crate::api::wireless::NodeWireless {
                 controller: Some(crate::api::wireless::WirelessControllerSummary {

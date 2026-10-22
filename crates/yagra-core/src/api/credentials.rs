@@ -188,6 +188,14 @@ fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
             ));
         }
     }
+    if kind == yagra_base::secrets::KIND_CLI_LOGIN {
+        if let Err(reason) = yagra_base::secrets::CliLoginSecret::parse(secret) {
+            return Err(ApiError::bad_request(
+                "invalid_credential",
+                format!("invalid CLI login credential: {reason}"),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -497,6 +505,8 @@ pub(crate) enum RevealedFieldKey {
     HeaderName,
     /// The value of a custom HTTP header.
     HeaderValue,
+    /// A device's privileged-mode ("enable") password, sent after a CLI login.
+    Enable,
 }
 
 /// One part of a revealed secret and its value.
@@ -525,7 +535,7 @@ pub(crate) struct RevealedCredential {
 /// kind this core does not know might be anything, so neither is opened for a person. `Err`
 /// carries a static reason only, never field content.
 fn revealed_fields(kind: &str, secret: &[u8]) -> Option<Result<Vec<RevealedField>, &'static str>> {
-    use yagra_base::secrets::{KIND_API_TOKEN, KIND_HTTP_AUTH, KIND_SNMP_V3};
+    use yagra_base::secrets::{KIND_API_TOKEN, KIND_CLI_LOGIN, KIND_HTTP_AUTH, KIND_SNMP_V3};
     use yagra_common::url_check::HttpAuth;
     use RevealedFieldKey as K;
     let field = |field, value: &str, secret| RevealedField {
@@ -573,6 +583,16 @@ fn revealed_fields(kind: &str, secret: &[u8]) -> Option<Result<Vec<RevealedField
                 }
             })
         }
+        KIND_CLI_LOGIN => yagra_base::secrets::CliLoginSecret::parse(secret).map(|cli| {
+            let mut out = vec![
+                field(K::Username, &cli.username, false),
+                field(K::Password, &cli.password, true),
+            ];
+            if let Some(enable) = cli.enable.as_deref() {
+                out.push(field(K::Enable, enable, true));
+            }
+            out
+        }),
         _ => return None,
     };
     Some(fields)
@@ -631,7 +651,8 @@ async fn reveal_credential(
         None => {
             return Err(ApiError::bad_request(
                 "not_revealable",
-                "only device credentials (SNMP and HTTP) can be shown; an integration key cannot",
+                "only device credentials (SNMP, HTTP and CLI) can be shown; an integration key \
+                 cannot",
             ))
         }
         Some(Err(reason)) => {
@@ -1296,6 +1317,7 @@ mod tests {
             match kind {
                 "snmp_v3" => br#"{"user":"u","security_level":"noauth"}"#,
                 "http_auth" => br#"{"scheme":"bearer","token":"t"}"#,
+                "cli_login" => br#"{"username":"u","password":"p"}"#,
                 _ => b"x",
             }
         };

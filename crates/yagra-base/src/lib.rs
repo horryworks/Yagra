@@ -25,6 +25,7 @@
 /// Replacing a file so that no reader ever sees half of it (ADR-184).
 pub mod atomic_file;
 pub mod change_feed;
+pub mod config_backup;
 pub mod config_gen;
 pub mod groups;
 /// The outbound HTTP client core and its integrations build (ADR-184). Apart from

@@ -12,7 +12,8 @@
       "snmp": "SNMP",
       "http": "HTTP",
       "integration": "連携の鍵",
-      "other": "その他"
+      "other": "その他",
+      "cli": "CLI"
     },
     "kind": {
       "snmp_v2c": "SNMP v2c（コミュニティ）",
@@ -20,7 +21,8 @@
       "http_auth": "HTTP 認証 (URL 監視)",
       "api_token": "API トークン",
       "meraki_api": "Cisco Meraki API キー",
-      "netbox_token": "NetBox API トークン"
+      "netbox_token": "NetBox API トークン",
+      "cli_login": "CLI ログイン（SSH / telnet）"
     },
     "http": {
       "scheme": "方式",
@@ -81,7 +83,8 @@
       "secretPlaceholder": {
         "apiToken": "Bearer トークン",
         "community": "コミュニティ文字列"
-      }
+      },
+      "cliTitle": "CLI ログインを追加"
     },
     "edit": {
       "title": "認証情報を編集",
@@ -119,8 +122,15 @@
         "password": "パスワード",
         "token": "トークン",
         "header_name": "ヘッダー名",
-        "header_value": "ヘッダーの値"
+        "header_value": "ヘッダーの値",
+        "enable": "enable パスワード"
       }
+    },
+    "cli": {
+      "username": "ユーザー名",
+      "password": "パスワード",
+      "enable": "enable パスワード",
+      "enableNone": "なし"
     }
   },
   "users": {

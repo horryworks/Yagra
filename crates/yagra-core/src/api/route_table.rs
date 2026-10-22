@@ -1433,6 +1433,48 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "GET",
+        "/api/v1/nodes/:node_id/config-backup",
+        NodeScoped,
+        Tool("get_node_status"),
+    ),
+    (
+        "PUT",
+        "/api/v1/nodes/:node_id/config-backup",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/config-backup/versions",
+        NodeScoped,
+        Exempt(
+            "a list of version ids whose only use is opening a version's text, which MCP does not              serve (ADR-210 decision 16); whether the node is fetched and its last result are in              get_node_status",
+        ),
+    ),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/config-backup/versions/:oid",
+        NodeScoped,
+        Exempt(
+            "device configuration text: oxidized's remove_secret is model by model and can miss              one, so it is not handed to an AI client (ADR-210 decision 16)",
+        ),
+    ),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/config-backup/diff",
+        NodeScoped,
+        Exempt(
+            "two versions of device configuration text, kept off MCP for the reason the text              itself is (ADR-210 decision 16)",
+        ),
+    ),
+    (
+        "POST",
+        "/api/v1/nodes/:node_id/config-backup/fetch",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
         "POST",
         "/api/v1/nodes/:node_id/rediscover/apply",
         NodeScoped,
@@ -2281,6 +2323,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Global("unauthenticated readiness probe"),
         Exempt("an unauthenticated container probe; /mcp is never anonymous"),
     ),
+    (
+        "GET",
+        "/internal/oxidized/nodes",
+        Global(
+            "the bundled oxidized's node list: every node it fetches, for oxidized alone, behind the              source token rather than a person's session (ADR-210)",
+        ),
+        Exempt(
+            "device logins in plaintext for the bundled oxidized; ADR-018 keeps secret material out              of every tool result",
+        ),
+    ),
 ];
 
 /// Every `#[tool]` name the `mcp/tools/` surface declares.
@@ -2742,6 +2794,11 @@ mod tests {
             "GET",
             "/healthz",
             "liveness probe — compose healthchecks and orchestrators call it, never a browser",
+        ),
+        (
+            "GET",
+            "/internal/oxidized/nodes",
+            "the bundled oxidized's HTTP source (ADR-210) - oxidized calls it with the source token,              never a browser",
         ),
         (
             "GET",

@@ -243,18 +243,20 @@ describe('the tabs of Credentials & secrets (ADR-205 Inc.1)', () => {
       row('meraki_api'),
       row('snmp_v4'),
     ]);
-    expect(counts).toEqual({ snmp: 3, http: 1, integration: 1, other: 1 });
+    expect(counts).toEqual({ snmp: 3, http: 1, cli: 0, integration: 1, other: 1 });
   });
 
   it('draws the Other tab only while a row needs it', () => {
-    expect(visibleCredentialGroups({ snmp: 2, http: 0, integration: 0, other: 0 })).toEqual([
+    expect(visibleCredentialGroups({ snmp: 2, http: 0, cli: 0, integration: 0, other: 0 })).toEqual([
       'snmp',
       'http',
+      'cli',
       'integration',
     ]);
-    expect(visibleCredentialGroups({ snmp: 0, http: 0, integration: 0, other: 1 })).toEqual([
+    expect(visibleCredentialGroups({ snmp: 0, http: 0, cli: 0, integration: 0, other: 1 })).toEqual([
       'snmp',
       'http',
+      'cli',
       'integration',
       'other',
     ]);
@@ -264,7 +266,7 @@ describe('the tabs of Credentials & secrets (ADR-205 Inc.1)', () => {
     const prefixes = Object.values(CREDENTIAL_TABLE_PREFIX);
     expect(new Set(prefixes).size).toBe(prefixes.length);
     expect(Object.keys(CREDENTIAL_GROUP_LABEL_KEYS).sort()).toEqual(Object.keys(CREDENTIAL_TABLE_PREFIX).sort());
-    expect(Object.keys(CREDENTIAL_ADD_TITLE_KEYS).sort()).toEqual(['http', 'snmp']);
+    expect(Object.keys(CREDENTIAL_ADD_TITLE_KEYS).sort()).toEqual(['cli', 'http', 'snmp']);
   });
 });
 

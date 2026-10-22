@@ -59,6 +59,12 @@ import {
   type HttpAuthState,
 } from './httpAuthCredential';
 import {
+  buildCliLoginSecret,
+  cliLoginReady,
+  emptyCliLogin,
+  type CliLoginState,
+} from './cliLoginCredential';
+import {
   canReorderCredentials,
   credentialFilters,
   credentialSortIn,
@@ -118,7 +124,59 @@ const KIND_ICONS: Record<string, ComponentType> = {
   meraki_api: KeyIcon,
   // Likewise NetBox tokens (ADR-100) — created on the integration page, never here.
   netbox_token: KeyIcon,
+  // A device's command-line login for config backup (ADR-210 stage 2).
+  cli_login: LockIcon,
 };
+
+/** The CLI login sub-form (ADR-210 stage 2): the login, and the privileged-mode password when the
+ *  account does not land privileged. */
+function CliLoginFields({
+  value,
+  onChange,
+}: {
+  value: CliLoginState;
+  onChange: (next: CliLoginState) => void;
+}) {
+  const { t } = useTranslation('access');
+  return (
+    <>
+      <div className="modal-field">
+        <label className="modal-field-label" htmlFor="cred-cli-user">
+          {t('cred.cli.username')}
+        </label>
+        <TextInput
+          id="cred-cli-user"
+          autoComplete="off"
+          value={value.username}
+          onChange={(e) => onChange({ ...value, username: e.target.value })}
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label" htmlFor="cred-cli-password">
+          {t('cred.cli.password')}
+        </label>
+        <SecretInput
+          id="cred-cli-password"
+          stored={false}
+          value={value.password}
+          onChange={(password) => onChange({ ...value, password })}
+        />
+      </div>
+      <div className="modal-field">
+        <label className="modal-field-label" htmlFor="cred-cli-enable">
+          {t('cred.cli.enable')}
+        </label>
+        <SecretInput
+          id="cred-cli-enable"
+          stored={false}
+          placeholder={t('cred.cli.enableNone')}
+          value={value.enable}
+          onChange={(enable) => onChange({ ...value, enable })}
+        />
+      </div>
+    </>
+  );
+}
 
 
 
@@ -310,6 +368,7 @@ function AddCredentialModal({
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
   const [httpAuth, setHttpAuth] = useState<HttpAuthState>(emptyHttpAuth);
+  const [cli, setCli] = useState<CliLoginState>(emptyCliLogin);
   const form = useSubmit({
     errorFallback: t('cred.err.add'),
     onDone: () => {
@@ -320,9 +379,16 @@ function AddCredentialModal({
 
   const isV3 = kind === 'snmp_v3';
   const isHttpAuth = kind === 'http_auth';
+  const isCli = kind === 'cli_login';
   const ready =
     name.trim() !== '' &&
-    (isV3 ? v3Ready(v3) : isHttpAuth ? httpAuthReady(httpAuth) : secret !== '');
+    (isV3
+      ? v3Ready(v3)
+      : isHttpAuth
+        ? httpAuthReady(httpAuth)
+        : isCli
+          ? cliLoginReady(cli)
+          : secret !== '');
 
   const submit = () => {
     if (!ready) return;
@@ -335,7 +401,9 @@ function AddCredentialModal({
             ? buildV3Secret(v3)
             : isHttpAuth
               ? buildHttpAuthSecret(httpAuth)
-              : secret,
+              : isCli
+                ? buildCliLoginSecret(cli)
+                : secret,
         })
         .then(() => done()),
     );
@@ -378,6 +446,8 @@ function AddCredentialModal({
         <V3Fields value={v3} onChange={setV3} />
       ) : isHttpAuth ? (
         <HttpAuthFields value={httpAuth} onChange={setHttpAuth} />
+      ) : isCli ? (
+        <CliLoginFields value={cli} onChange={setCli} />
       ) : (
         <div className="modal-field">
           <label className="modal-field-label" htmlFor="cred-add-secret">
@@ -422,6 +492,7 @@ function EditCredentialModal({
   );
   const [secret, setSecret] = useState('');
   const [v3, setV3] = useState<V3State>(emptyV3);
+  const [cli, setCli] = useState<CliLoginState>(emptyCliLogin);
   const form = useSubmit({
     errorFallback: t('cred.err.update'),
     onDone: () => {
@@ -432,8 +503,10 @@ function EditCredentialModal({
 
   const fixedKind = replacement.mode === 'fixed' ? replacement.kind : null;
   const isV3 = fixedKind === null && kind === 'snmp_v3';
+  const isCli = fixedKind === null && kind === 'cli_login';
   const typed = fixedKind ? secret.trim() : secret;
-  const secretReady = !replace || (isV3 ? v3Ready(v3) : typed !== '');
+  const secretReady =
+    !replace || (isV3 ? v3Ready(v3) : isCli ? cliLoginReady(cli) : typed !== '');
   const ready = name.trim() !== '' && secretReady;
 
   const save = () => {
@@ -441,7 +514,11 @@ function EditCredentialModal({
       ? { name: name.trim() }
       : fixedKind
         ? { name: name.trim(), kind: fixedKind, secret: integrationSecret(fixedKind, secret) }
-        : { name: name.trim(), kind, secret: isV3 ? buildV3Secret(v3) : secret };
+        : {
+            name: name.trim(),
+            kind,
+            secret: isV3 ? buildV3Secret(v3) : isCli ? buildCliLoginSecret(cli) : secret,
+          };
     form.submit(() =>
       api
         .updateCredential(cred.id, body)
@@ -502,9 +579,13 @@ function EditCredentialModal({
               </Select>
             )}
           </div>
-          {isV3 ? (
+          {isV3 || isCli ? (
             <>
-              <V3Fields value={v3} onChange={setV3} />
+              {isV3 ? (
+                <V3Fields value={v3} onChange={setV3} />
+              ) : (
+                <CliLoginFields value={cli} onChange={setCli} />
+              )}
               <div className="cred-keep">
                 <Button type="button" onClick={() => setReplace(false)}>
                   {t('common:secret.keep')}
@@ -990,6 +1071,7 @@ function CredentialGroupTable({
       )}
       {group === 'snmp' && <DataTable tableId="settings.credentials" {...table} />}
       {group === 'http' && <DataTable tableId="settings.credentialsHttp" {...table} />}
+      {group === 'cli' && <DataTable tableId="settings.credentialsCli" {...table} />}
       {group === 'integration' && <DataTable tableId="settings.credentialsIntegration" {...table} />}
       {group === 'other' && <DataTable tableId="settings.credentialsOther" {...table} />}
 

@@ -397,6 +397,11 @@ async fn live_state_with(
     ));
 
     let admin = Arc::new(super::AdminState {
+        config_backup: Arc::new(yagra_base::config_backup::ConfigBackupRepo::new(
+            pool.clone(),
+        )),
+        // No oxidized: its routes answer 503 here, and a test that wants one builds the handle.
+        oxidized: None,
         repo: repo.clone(),
         creds: creds.clone(),
         users: Arc::new(yagra_auth::auth::UserStore::new(pool.clone())),

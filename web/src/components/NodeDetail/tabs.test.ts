@@ -27,6 +27,7 @@ describe('node-detail tabs', () => {
       'interfaces',
       'neighbors',
       'collection',
+      'config',
       'events',
       'flow',
     ]);
@@ -207,10 +208,11 @@ describe('node-detail tab visibility', () => {
     expect(tabs('device', true, true)).toEqual([...NODE_DETAIL_TABS]);
     // And the AP tab is the only thing that changes — the wireless answer must not disturb the
     // SNMP one, which is the mistake a single combined flag would have made.
-    expect(tabs('device', false, true)).toEqual(['overview', 'collection', 'events', 'flow']);
+    expect(tabs('device', false, true)).toEqual(['overview', 'collection', 'config', 'events', 'flow']);
     // The ADR-119 case: Interfaces and Neighbors go, Events and Flow stay — they are attributed by
     // the device's address, so a ping-only node can have rows in either.
-    expect(tabs('device', false)).toEqual(['overview', 'collection', 'events', 'flow']);
+    // Config too (ADR-210 stage 2): it is read over SSH or telnet, not SNMP.
+    expect(tabs('device', false)).toEqual(['overview', 'collection', 'config', 'events', 'flow']);
     expect(tabs('url', true)).toEqual(['overview', 'collection']);
     expect(tabs('url', false)).toEqual(['overview', 'collection']);
     expect(tabs('dns', false)).toEqual(['overview', 'collection']);

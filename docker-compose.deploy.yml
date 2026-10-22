@@ -180,6 +180,36 @@ services:
       - buscerts:/etc/nats
     restart: "no"
 
+  # ── Config backup volume init (ADR-210 stage 2) — same one-shot pattern as log-init ──
+  # The shared directory holds the bundled oxidized's configuration and the source token. Core
+  # (uid 10001) writes both; oxidized (uid 30000) reads the configuration. Setgid to oxidized's
+  # group, so a file core writes there is group-owned by 30000 and readable at 0640; the token
+  # file is 0600 and stays core's alone.
+  oxidized-init:
+    image: busybox:stable
+    command:
+      - sh
+      - -c
+      - "mkdir -p /ox && chown 10001:30000 /ox && chmod 2750 /ox && chgrp -R 30000 /ox"
+    volumes:
+      - oxconf:/ox
+    restart: "no"
+
+  # Writes oxidized's configuration file (ADR-210 stage 2). oxidized reads it only when it starts,
+  # so this runs first and oxidized waits for it. No database and no bus.
+  oxidized-config:
+    image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
+    pull_policy: ${YAGRA_PULL_POLICY:-always}
+    command: ["oxidized-config"]
+    depends_on:
+      oxidized-init: { condition: service_completed_successfully }
+    environment:
+      YAGRA_OXIDIZED_HOME: /var/lib/yagra/oxidized
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - oxconf:/var/lib/yagra/oxidized
+    restart: "no"
+
   # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
   core:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
@@ -197,9 +227,15 @@ services:
       kek-init: { condition: service_completed_successfully }
       tls-init: { condition: service_completed_successfully }
       log-init: { condition: service_completed_successfully }
+      # The source token must exist before core serves oxidized its node list (ADR-210 stage 2).
+      oxidized-config: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
+      # Config backup through the bundled oxidized (ADR-210 stage 2). Set empty in .env to turn the
+      # feature off; core then answers 503 for what needs oxidized and never calls it.
+      YAGRA_OXIDIZED_URL: ${YAGRA_OXIDIZED_URL-http://oxidized:8888}
+      YAGRA_OXIDIZED_HOME: /var/lib/yagra/oxidized
       # Plaintext on the internal network by default. Settings ▸ Pollers ▸ Remote pollers rewrites
       # this to `tls://core:<password>@nats:4222` in `.env` when remote acceptance is turned on —
       # server-wide TLS leaves no plaintext port, so the co-located clients move with the bus
@@ -374,6 +410,9 @@ services:
       # sees it finish, so progress has to outlive both. Harmless with no sidecar deployed: core
       # then reports the mechanism as disabled and nothing ever reads the directory.
       - upgradedata:/data/upgrade
+      # oxidized's configuration and the source token (ADR-210 stage 2). Read-only: the one-shot
+      # oxidized-config writes them, and core only checks the token oxidized presents.
+      - oxconf:/var/lib/yagra/oxidized:ro
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
@@ -394,6 +433,24 @@ services:
       #   YAGRA_API_BIND=127.0.0.1
       # in .env leaves it reachable on the box and off the network. Settings ▸ TLS says so too.
       - "${YAGRA_API_BIND:-0.0.0.0}:${YAGRA_API_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  # ── oxidized — device configuration backup (ADR-210 stage 2) ──
+  # The upstream image, pinned. It logs in to the devices Yagra hands it (SSH or telnet), runs the
+  # model's commands and keeps every version in Git on `oxdata`. Its REST API has NO authentication,
+  # so no port is published: core reaches it across this network and nothing else can.
+  # Its node list comes from core (`/internal/oxidized/nodes`, behind the source token), so it starts
+  # after core is healthy; it restarts until core answers.
+  oxidized:
+    image: oxidized/oxidized:0.37.0
+    depends_on:
+      oxidized-config: { condition: service_completed_successfully }
+      core: { condition: service_healthy }
+    environment:
+      OXIDIZED_HOME: /var/lib/yagra/oxidized
+    volumes:
+      - oxconf:/var/lib/yagra/oxidized:ro
+      - oxdata:/home/oxidized/.config/oxidized
     restart: unless-stopped
 
   # ── Yagra-poller (crates/poller) — stateless poller worker ──
@@ -1903,6 +1960,10 @@ volumes:
              # YAGRA_LOG_RETAIN_HOURS hourly files; deleting it costs only the retained history.
              # Also mounted by the poller, which writes into the pollers/ subdirectory (Inc.3) —
              # one volume, two writers, kept apart by path so neither collector sees the other's.
+  oxconf:    # the bundled oxidized's configuration + the source token (ADR-210 stage 2). Written by
+             # oxidized-config on every start; deleting it costs a new token, nothing else.
+  oxdata:    # oxidized's Git repository of device configurations (ADR-210 stage 2) — the version
+             # history. ⚠️ Not carried by relocation or yagra-backup.sh yet.
   upgradedata: # upgrade request/status hand-off between core and the yagra-updater sidecar
              # (ADR-050). Holds no configuration and no secret — deleting it loses only the record
              # of the last run. It exists even with the sidecar commented out, which costs nothing

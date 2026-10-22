@@ -39,6 +39,7 @@ mod changes;
 pub(crate) mod checks;
 mod classification;
 pub(crate) mod collection;
+pub(crate) mod config_backup;
 mod config_bundle;
 pub(crate) mod credentials;
 mod dashboard;
@@ -152,6 +153,10 @@ use yagra_base::secrets::CredentialStore;
 /// Live-only write side: inventory, credentials, and user accounts. Absent in skeleton
 /// mode, where the management/auth endpoints return 503.
 pub struct AdminState {
+    /// Config backup (ADR-210 stage 2): which nodes oxidized fetches, and what it last reported.
+    pub config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
+    /// The bundled oxidized; `None` on a deployment without one, where its routes answer 503.
+    pub oxidized: Option<Arc<config_backup::OxidizedHandle>>,
     pub repo: Arc<NodeRepo>,
     pub creds: Arc<CredentialStore>,
     pub users: Arc<UserStore>,
@@ -495,6 +500,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(classification::routes())
         .merge(reclassify::routes())
         .merge(rediscover::routes())
+        // Config backup through the bundled oxidized (ADR-210 stage 2), and oxidized's source.
+        .merge(config_backup::routes())
         // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
         .merge(openapi::routes())
         .merge(discovery::routes())
@@ -711,6 +718,10 @@ fn changes_monitoring_config(path: &str) -> bool {
         // what holds it. The trailing segment keeps `PUT /credentials/{id}` (a real re-seal,
         // which the scheduler must pick up) dirty.
         || (path.starts_with("/api/v1/credentials/") && path.ends_with("/reveal"))
+        // Asking the bundled oxidized to fetch a node now (ADR-210 stage 2). It writes nothing a
+        // rebuild reads; the configuration it fetches with is `PUT …/config-backup`, which is not
+        // listed and does bump the signal. Same blind spot as the previews: ManageConfig.
+        || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/fetch"))
         // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the
@@ -1911,6 +1922,13 @@ mod tests {
             !changes_monitoring_config("/api/v1/credentials/order"),
             "the credential order is read by no rebuild"
         );
+        // ADR-210 stage 2: fetching now writes nothing; the configuration write stays dirty.
+        assert!(!changes_monitoring_config(
+            "/api/v1/nodes/00000000-0000-4000-8000-000000000001/config-backup/fetch"
+        ));
+        assert!(changes_monitoring_config(
+            "/api/v1/nodes/00000000-0000-4000-8000-000000000001/config-backup"
+        ));
         // ADR-210: reading a secret back writes nothing.
         assert!(
             !changes_monitoring_config(

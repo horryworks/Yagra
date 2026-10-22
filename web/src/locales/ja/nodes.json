@@ -265,7 +265,8 @@
     "neighbors": "隣接",
     "collection": "収集",
     "events": "イベント",
-    "flow": "フロー"
+    "flow": "フロー",
+    "config": "Config"
   },
   "ap": {
     "colAp": "アクセスポイント",
@@ -1213,6 +1214,49 @@
     "err": {
       "preview": "選んだノードを読めませんでした。",
       "apply": "名前を変えられませんでした。"
+    }
+  },
+  "config": {
+    "enabled": "config をバックアップ",
+    "login": "ログイン",
+    "loginNone": "なし",
+    "connection": "接続",
+    "input": {
+      "ssh_then_telnet": "SSH、だめなら telnet",
+      "ssh": "SSH",
+      "telnet": "telnet"
+    },
+    "model": "機種",
+    "modelFromProfile": "プロファイルから（{{model}}）",
+    "modelPick": "機種を選ぶ",
+    "fetchNow": "今すぐ取得",
+    "asked": "依頼しました。取得が終わるとここに新しい版が出ます。",
+    "readiness": {
+      "ready": "毎日取得",
+      "off": "バックアップしない",
+      "no_model": "この機器のプロファイルに機種がありません。選んでください。",
+      "no_credential": "ログインが選ばれていません。",
+      "not_cli_login": "選んだログインは CLI 用ではありません。",
+      "unknown_input": "保存されている接続はこの版では分かりません。選び直して保存してください。",
+      "address_changed": "保存した後にアドレスが変わりました。もう一度保存すると再開します。"
+    },
+    "lastResult": "最後の取得: {{status}}",
+    "stale": "15 分以上更新されていない",
+    "unavailable": "この環境には config バックアップがありません。",
+    "noVersions": "版はまだありません。",
+    "cols": {
+      "stored": "保存日時",
+      "version": "版",
+      "actions": "操作"
+    },
+    "view": "表示",
+    "compare": "比較",
+    "err": {
+      "load": "config バックアップを読み込めませんでした。",
+      "versions": "版の一覧を読めませんでした。",
+      "save": "保存できませんでした。",
+      "fetch": "取得を依頼できませんでした。",
+      "text": "版を読めませんでした。"
     }
   }
 }

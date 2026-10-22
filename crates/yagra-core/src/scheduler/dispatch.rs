@@ -518,6 +518,11 @@ async fn resolve_snmp_auth(
                             tracing::warn!(node = %node.id, %reason, "invalid snmp_v3 credential");
                         }
                     }
+                } else if kind == secrets::KIND_CLI_LOGIN {
+                    // A device login bound as the SNMP credential (ADR-210): reading it as a
+                    // community would send the password in cleartext in every GET. Fall back to
+                    // the env community as for a missing credential.
+                    tracing::warn!(node = %node.id, "a CLI login is bound as the SNMP credential");
                 } else if let Ok(community) = String::from_utf8(bytes) {
                     return Some(SnmpAuth::V2c(community));
                 }
@@ -1001,6 +1006,26 @@ mod tests {
             h.dispatcher.snmp_configured_for(&n),
             "and `snmp_configured_for` deliberately still says yes — see its doc"
         );
+    }
+
+    /// 🚨 A CLI login bound as the SNMP credential is never read as a community (ADR-210): the
+    /// password would go on the wire in every GET. With an env community it falls back to that.
+    #[tokio::test]
+    async fn a_cli_login_is_never_sent_as_a_community() {
+        let cred = Uuid::from_u128(0xc11);
+        let mut n = node("cli-bound");
+        n.credential = Some(CredentialId::from(cred));
+        let login = br#"{"username":"ops","password":"s3cret"}"#;
+        let h = Harness::builder()
+            .creds(FakeCreds::new().with(cred, secrets::KIND_CLI_LOGIN, login))
+            .build();
+        assert!(resolve_snmp_auth(h.creds.as_ref(), &n, None)
+            .await
+            .is_none());
+        match resolve_snmp_auth(h.creds.as_ref(), &n, Some("public")).await {
+            Some(SnmpAuth::V2c(c)) => assert_eq!(c, "public"),
+            other => panic!("expected the env community, got {}", other.is_some()),
+        }
     }
     /// 🚨 **Current behaviour, recorded rather than endorsed** (ADR-111 decision 6): a bound `snmp_v3`
     /// credential that does not parse falls through to the environment's **v2c** community, so a

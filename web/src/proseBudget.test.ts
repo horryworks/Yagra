@@ -62,7 +62,7 @@ import { readSources, SRC } from './testSupport/sources';
 
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06 (Inc.24); lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
-  access: [1398, 755],
+  access: [1422, 777],
   alertNames: [166, 97],
   alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
   alertsConfig: [8368, 4434], // + routing.rules.emptyNoChannels and the port picker's two state lines, - interfaceHint (ADR-209, 2026-10-21)
@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11222, 6750], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   nav: [2937, 1384], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
-  nodes: [15591, 8828], // + rediscover.phase.deviceChanged, and the name-from-device dialog's state line, two errors and menu items (ADR-208, 2026-10-20)
+  nodes: [15958, 9064], // + the Config tab: seven readiness lines, five errors, its labels (ADR-210 stage 2, 2026-10-22)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

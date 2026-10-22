@@ -36,6 +36,7 @@ import { NeighborsTab } from './NeighborsTab';
 import { ApTab } from './ApTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
+import { ConfigBackupTab } from './ConfigBackupTab';
 import { FlowTab } from './FlowTab';
 import {
   NODE_DETAIL_TAB_META,
@@ -443,6 +444,7 @@ export function NodeDetail({
     ),
     neighbors: <NeighborsTab node={node} />,
     collection: <CollectionTab node={node} canEdit={canEdit} />,
+    config: <ConfigBackupTab node={node} />,
     events: <EventsTab node={node} />,
     flow: <FlowTab node={node} />,
   };

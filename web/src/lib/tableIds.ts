@@ -27,6 +27,7 @@
  */
 export const TABLE_IDS = [
   // Node detail
+  'node.configVersions',
   'node.dnsHealth',
   'node.events',
   'node.flows',
@@ -65,6 +66,7 @@ export const TABLE_IDS = [
   'settings.apiTokens',
   'settings.audit',
   'settings.credentials',
+  'settings.credentialsCli',
   'settings.credentialsHttp',
   'settings.credentialsIntegration',
   'settings.credentialsOther',

@@ -40,6 +40,7 @@ mod mcp;
 #[cfg(test)]
 mod module_source;
 mod monitors;
+mod oxidized;
 mod passive;
 // The source-text checks whose claim is about the whole program, reading core's tree and the
 // crates split out of it together (ADR-202 Inc.5).
@@ -140,6 +141,15 @@ async fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("verify-secrets") {
         let _telemetry = yagra_telemetry::init("yagra-verify-secrets");
         std::process::exit(run_verify_secrets().await);
+    }
+
+    // `yagra-core oxidized-config` writes the bundled oxidized's configuration file and source
+    // token into the shared directory, then exits (ADR-210 stage 2). oxidized reads its
+    // configuration only when it starts, so the composition runs this before oxidized and oxidized
+    // waits for it. No database and no bus: the file names nothing a store holds.
+    if std::env::args().nth(1).as_deref() == Some("oxidized-config") {
+        let _telemetry = yagra_telemetry::init("yagra-oxidized-config");
+        return run_oxidized_config();
     }
 
     // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
@@ -259,6 +269,23 @@ async fn run_bus_cert() -> anyhow::Result<()> {
     callout.install_conf(&identity)?;
 
     tracing::info!("bus TLS material is ready");
+    Ok(())
+}
+
+/// `yagra-core oxidized-config` — write the bundled oxidized's configuration (ADR-210 stage 2).
+///
+/// The directory comes from `YAGRA_OXIDIZED_HOME`; with it unset there is nothing to configure and
+/// this succeeds, so a deployment that removed oxidized does not fail its start-up on this step.
+fn run_oxidized_config() -> anyhow::Result<()> {
+    let Ok(home) = std::env::var(oxidized::HOME_ENV) else {
+        tracing::info!("YAGRA_OXIDIZED_HOME is unset; no oxidized configuration written");
+        return Ok(());
+    };
+    oxidized::config::write(
+        std::path::Path::new(&home),
+        "http://core:8080/internal/oxidized/nodes",
+    )?;
+    tracing::info!(%home, "oxidized configuration written");
     Ok(())
 }
 
@@ -775,7 +802,19 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Built here rather than beside the RCA orchestrator: the result-ingest writer records the
     // renames it makes on its own (ADR-208), so the leader's tasks need it too.
     let audit_repo = Arc::new(AuditRepo::new(repo.pool()));
+    // Config backup (ADR-210 stage 2): the store every core reads, and the bundled oxidized when
+    // this deployment has one. With `YAGRA_OXIDIZED_URL` unset the feature is off and the API
+    // answers 503 for what needs oxidized.
+    let config_backup = Arc::new(yagra_base::config_backup::ConfigBackupRepo::new(
+        repo.pool(),
+    ));
+    let oxidized_settings = oxidized::Settings::from_env();
+    let oxidized_client = oxidized_settings
+        .as_ref()
+        .map(|s| Arc::new(oxidized::client::OxidizedClient::new(&s.url)));
     let leader_tasks = LeaderTasks {
+        config_backup: config_backup.clone(),
+        oxidized: oxidized_client.clone(),
         llm: llm_repo.clone(),
         audit: audit_repo.clone(),
         deliveries: deliveries.clone(),
@@ -848,6 +887,12 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     )));
 
     let admin = Some(Arc::new(AdminState {
+        config_backup,
+        oxidized: oxidized_settings
+            .zip(oxidized_client)
+            .map(|(settings, client)| {
+                Arc::new(api::config_backup::OxidizedHandle { settings, client })
+            }),
         repo: repo.clone(),
         creds,
         users,
@@ -1140,6 +1185,10 @@ struct LeaderTasks {
     /// The notification delivery log - held only so the retention loop can prune it
     /// (`runtime::retention::Subject::NotificationDeliveries`); writing it is the notifier's.
     deliveries: Arc<alerts::notification_log::DeliveryLogRepo>,
+    /// Config backup (ADR-210 stage 2): where the status loop records what oxidized reported.
+    config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
+    /// The bundled oxidized; `None` when this deployment has none, and the loop does not start.
+    oxidized: Option<Arc<oxidized::client::OxidizedClient>>,
     forward_handle: passive::forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<passive::forward::ForwardRunner>,
@@ -1204,6 +1253,13 @@ impl LeaderTasks {
         self.spawn_flow_pipeline().await?;
         self.spawn_schedulers();
         self.spawn_refresh_loops(&delivery);
+        // Config backup (ADR-210 stage 2). Leader-only for the reason `oxidized/status.rs` gives.
+        if let Some(client) = self.oxidized.clone() {
+            spawn_cancellable(
+                &self.shutdown,
+                oxidized::status::run_status_loop(client, self.config_backup.clone()),
+            );
+        }
         self.reconcile_orphaned_jobs().await;
         Ok(())
     }

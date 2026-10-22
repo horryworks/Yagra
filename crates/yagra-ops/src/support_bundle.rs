@@ -143,6 +143,9 @@ pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
     ),
     ("YAGRA_PAT_OIDC_IDLE_DAYS", EnvShape::Plain),
     ("YAGRA_IPASN_DB", EnvShape::Plain),
+    // Config backup (ADR-210 stage 2): where the bundled oxidized is, and its shared directory.
+    ("YAGRA_OXIDIZED_URL", EnvShape::Url),
+    ("YAGRA_OXIDIZED_HOME", EnvShape::Plain),
     ("YAGRA_IPASN_RELOAD_SECS", EnvShape::Plain),
     // Key material: the PATH only, never the contents. "Is it mounted?" is the question.
     ("YAGRA_KEK_FILE", EnvShape::Plain),

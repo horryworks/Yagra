@@ -64,6 +64,7 @@ redis = { workspace = true }
 reqwest = { workspace = true }
 futures = { workspace = true }
 rand = { workspace = true }
+similar = { workspace = true }
 async-trait = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }

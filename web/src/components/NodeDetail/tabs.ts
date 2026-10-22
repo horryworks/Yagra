@@ -48,6 +48,7 @@ export const NODE_DETAIL_TABS = [
   'interfaces',
   'neighbors',
   'collection',
+  'config',
   'events',
   'flow',
 ] as const;
@@ -285,6 +286,16 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // can have rows in either. Hiding them with the SNMP axis was asked for and declined on that
   // evidence (ADR-119 decision 1).
   // An imported AP keeps it too: an AP that has a management address can send syslog of its own.
+  // Config backup through the bundled oxidized (ADR-210 stage 2). A device only: a URL or DNS
+  // monitor has no command line, and Meraki gear is configured in the Dashboard, which oxidized has
+  // no model for. `needsSnmp: false` — the config is read over SSH or telnet, so a ping-only switch
+  // can be backed up too.
+  config: {
+    labelKey: 'tabs.config',
+    kinds: DEVICE_ONLY,
+    needsSnmp: false,
+    needsWlanController: false,
+  },
   events: {
     labelKey: 'tabs.events',
     kinds: ['device', 'meraki', 'wireless_ap'],

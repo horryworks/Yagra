@@ -137,6 +137,7 @@ export const CREDENTIAL_KIND_LABEL_KEYS: Record<string, string> = {
   snmp_v3: 'cred.kind.snmp_v3',
   http_auth: 'cred.kind.http_auth',
   api_token: 'cred.kind.api_token',
+  cli_login: 'cred.kind.cli_login',
   meraki_api: 'cred.kind.meraki_api',
   netbox_token: 'cred.kind.netbox_token',
 };
@@ -210,7 +211,7 @@ export function usageLabel(c: CredentialUsage, t: TFunction): string {
 
 /** How many rows each tab holds (ADR-205 Inc.1). */
 export function credentialGroupCounts(rows: readonly { kind: string }[]): Record<CredentialGroup, number> {
-  const counts: Record<CredentialGroup, number> = { snmp: 0, http: 0, integration: 0, other: 0 };
+  const counts: Record<CredentialGroup, number> = { snmp: 0, http: 0, cli: 0, integration: 0, other: 0 };
   for (const r of rows) counts[credentialGroupOf(r.kind)] += 1;
   return counts;
 }
@@ -228,6 +229,7 @@ export function visibleCredentialGroups(
 export const CREDENTIAL_TABLE_PREFIX: Record<CredentialGroup, string> = {
   snmp: 'snmp.',
   http: 'http.',
+  cli: 'cli.',
   integration: 'keys.',
   other: 'other.',
 };
@@ -236,6 +238,7 @@ export const CREDENTIAL_TABLE_PREFIX: Record<CredentialGroup, string> = {
 export const CREDENTIAL_GROUP_LABEL_KEYS: Record<CredentialGroup, string> = {
   snmp: 'cred.tab.snmp',
   http: 'cred.tab.http',
+  cli: 'cred.tab.cli',
   integration: 'cred.tab.integration',
   other: 'cred.tab.other',
 };
@@ -244,4 +247,5 @@ export const CREDENTIAL_GROUP_LABEL_KEYS: Record<CredentialGroup, string> = {
 export const CREDENTIAL_ADD_TITLE_KEYS: Partial<Record<CredentialGroup, string>> = {
   snmp: 'cred.add.snmpTitle',
   http: 'cred.add.httpTitle',
+  cli: 'cred.add.cliTitle',
 };

@@ -229,6 +229,13 @@ pub(super) async fn resolve_scan_credentials(
                     ))
                 }
             }
+        } else if kind == yagra_base::secrets::KIND_CLI_LOGIN {
+            // A device login (ADR-210): read as a community it would go out in cleartext in every
+            // GET of the sweep, to every address in the range.
+            return Err(ApiError::bad_request(
+                "invalid_credential",
+                format!("credential {id} is a CLI login, not an SNMP credential"),
+            ));
         } else {
             match String::from_utf8(secret) {
                 Ok(community) => out.push(yagra_bus::DiscoveryCredential {

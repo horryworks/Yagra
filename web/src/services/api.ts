@@ -40,6 +40,11 @@ import type {
   ConfigBundle,
   CredentialSummary,
   RevealedCredential,
+  ConfigBackupView,
+  ConfigVersion,
+  ConfigText,
+  ConfigDiff,
+  BackupInput,
   DiscoveryCandidate,
   DiscoveryScan,
   DiscoveryScanSummary,
@@ -1209,6 +1214,43 @@ export const api = {
   /** One node's live status: rolled-up display state + active alerts attributed to it. */
   getNodeStatus: (id: string): Promise<NodeStatus> =>
     apiGet('/api/v1/nodes/{node_id}/status', { path: { node_id: id } }),
+
+  /** A node's config backup (ADR-210 stage 2): configuration, whether it is fetched, last result. */
+  getConfigBackup: (id: string): Promise<ConfigBackupView> =>
+    apiGet('/api/v1/nodes/{node_id}/config-backup', { path: { node_id: id } }),
+
+  /** Save a node's config-backup configuration; oxidized re-reads its node list right after. */
+  putConfigBackup: (
+    id: string,
+    body: {
+      enabled: boolean;
+      credential_id: string | null;
+      input: BackupInput;
+      model_override: string | null;
+    },
+  ): Promise<void> =>
+    apiPut('/api/v1/nodes/{node_id}/config-backup', { path: { node_id: id }, body }),
+
+  /** The stored versions of a node's configuration, newest first. */
+  listConfigVersions: (id: string): Promise<ConfigVersion[]> =>
+    apiGet('/api/v1/nodes/{node_id}/config-backup/versions', { path: { node_id: id } }),
+
+  /** One version's text (ManageConfig). */
+  getConfigVersion: (id: string, oid: string): Promise<ConfigText> =>
+    apiGet('/api/v1/nodes/{node_id}/config-backup/versions/{oid}', {
+      path: { node_id: id, oid },
+    }),
+
+  /** Two versions compared line by line (ManageConfig). */
+  diffConfigVersions: (id: string, from: string, to: string): Promise<ConfigDiff> =>
+    apiGet('/api/v1/nodes/{node_id}/config-backup/diff', {
+      path: { node_id: id },
+      query: { from, to },
+    }),
+
+  /** Ask the bundled oxidized to fetch the node now. */
+  fetchConfigNow: (id: string): Promise<void> =>
+    apiPost('/api/v1/nodes/{node_id}/config-backup/fetch', { path: { node_id: id } }),
 
   /** One node's config detail incl. bindings (profile/credential/parent). */
   getNode: (id: string): Promise<NodeDetail> =>
