@@ -25451,7 +25451,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig, or an account restricted to folders names a login (`scope_unsupported`) */
+            /** @description Role lacks ManageConfig; or a login is named by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`) */
             403: {
                 headers: {
                     [name: string]: unknown;

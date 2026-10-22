@@ -36,7 +36,9 @@ use uuid::Uuid;
 use yagra_base::config_backup::{BackupInput, NodeConfigBackup};
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
+use super::extract::{
+    Admin, RequireManageConfig, RequireRevealCredentials, RequireView, Scoped, VisibleNode,
+};
 use super::ApiState;
 use crate::oxidized::{self, client::OxidizedClient, source::Readiness};
 
@@ -266,13 +268,15 @@ pub(super) struct ConfigBackupBody {
         (status = 204, description = "Saved; the bundled oxidized is asked to re-read its node list"),
         (status = 400, description = "An unknown input or model, or a credential that is not a CLI login (`invalid_config_backup`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig, or an account restricted to folders names a login (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig; or a login is named by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn put_config_backup(
     _perm: RequireManageConfig,
+    // Optional: needed only to choose a login (below). An API token never holds it.
+    reveal: Option<RequireRevealCredentials>,
     _visible: VisibleNode,
     Scoped(scope): Scoped,
     admin: Admin,
@@ -294,6 +298,15 @@ async fn put_config_backup(
     }
     if body.credential_id.is_some() {
         refuse_scoped_login(&scope)?;
+        // Choosing a login hands it to the node's address, so it takes what reading one back takes:
+        // a caller that may not see the password must not be able to send it somewhere it chose.
+        if reveal.is_none() {
+            return Err(ApiError::forbidden_code(
+                "login_not_permitted",
+                "choosing a CLI login needs the Reveal credentials permission, which an API token \
+                 never holds",
+            ));
+        }
         match credential_kind(&admin, body.credential_id)
             .await?
             .as_deref()

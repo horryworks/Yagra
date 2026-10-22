@@ -433,6 +433,10 @@ services:
       #   YAGRA_API_BIND=127.0.0.1
       # in .env leaves it reachable on the box and off the network. Settings ▸ TLS says so too.
       - "${YAGRA_API_BIND:-0.0.0.0}:${YAGRA_API_PORT:-8080}:8080"
+    # `default` for everything else, `oxidized` for the bundled oxidized alone (ADR-210 stage 2).
+    networks:
+      - default
+      - oxidized
     restart: unless-stopped
 
   # ── oxidized — device configuration backup (ADR-210 stage 2) ──
@@ -455,6 +459,11 @@ services:
     volumes:
       - oxconf:/var/lib/yagra/oxidized:ro
       - oxdata:/home/oxidized/.config/oxidized
+    # Its own network, shared with core alone. On the default network the poller could reach it,
+    # and a URL monitor pointed at http://oxidized:8888 would read device configurations and
+    # enable passwords back through a check result. Not `internal`: oxidized must reach devices.
+    networks:
+      - oxidized
     restart: unless-stopped
 
   # ── Yagra-poller (crates/poller) — stateless poller worker ──
@@ -1944,6 +1953,12 @@ configs:
           <processors_profile_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></processors_profile_log>
           <error_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></error_log>
       </clickhouse>
+
+networks:
+  default:
+  # Core and the bundled oxidized only (ADR-210 stage 2): oxidized's REST API has no
+  # authentication, so nothing else may share a network with it.
+  oxidized:
 
 volumes:
   pgdata:
