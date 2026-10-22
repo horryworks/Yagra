@@ -41,23 +41,39 @@ pub(crate) fn status_rows(
         .collect()
 }
 
+/// How many ticks in a row may skip their reload because a fetch is out. A node switched off or a
+/// login taken out reaches oxidized only on a reload, so a run of fetches (someone pressing Fetch
+/// now again and again) must not hold it back for ever: after this many skipped ticks the next one
+/// reloads anyway, accepting that a fetch out at that moment may run a second time.
+const MAX_SKIPPED_RELOADS: u32 = 2;
+
+/// Whether this tick reloads: when no fetch is out, or when too many ticks in a row have not.
+#[must_use]
+pub(crate) const fn reload_now(may_reload: bool, skipped: u32) -> bool {
+    may_reload || skipped >= MAX_SKIPPED_RELOADS
+}
+
 /// One tick: reload — unless a fetch is out, which a reload would start a second time
-/// (`rotation::may_reload`) — then copy the statuses.
-async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo) {
-    match super::rotation::may_reload(repo, chrono::Utc::now()).await {
-        Ok(true) => {
-            if let Err(e) = client.reload().await {
-                tracing::warn!(error = %e, "config backup: oxidized did not reload its node list");
-                metrics::counter!("yagra_oxidized_errors_total", "op" => "reload").increment(1);
-                return;
-            }
-        }
-        Ok(false) => {}
+/// (`rotation::may_reload`), and not for longer than [`MAX_SKIPPED_RELOADS`] ticks — then copy the
+/// statuses. Returns how many ticks in a row have now skipped their reload.
+async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, skipped: u32) -> u32 {
+    let may = match super::rotation::may_reload(repo, chrono::Utc::now()).await {
+        Ok(may) => may,
         Err(e) => {
             tracing::warn!(error = %e, "config backup: could not tell whether a fetch is out");
-            return;
+            false
         }
-    }
+    };
+    let skipped = if reload_now(may, skipped) {
+        if let Err(e) = client.reload().await {
+            tracing::warn!(error = %e, "config backup: oxidized did not reload its node list");
+            metrics::counter!("yagra_oxidized_errors_total", "op" => "reload").increment(1);
+            return skipped;
+        }
+        0
+    } else {
+        skipped + 1
+    };
     match client.nodes().await {
         Ok(nodes) => {
             if let Err(e) = repo.record_statuses(&status_rows(&nodes)).await {
@@ -69,21 +85,33 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo) {
             metrics::counter!("yagra_oxidized_errors_total", "op" => "nodes").increment(1);
         }
     }
+    skipped
 }
 
 /// Runs until cancelled.
 pub(crate) async fn run_status_loop(client: Arc<OxidizedClient>, repo: Arc<ConfigBackupRepo>) {
     let mut every = tokio::time::interval(TICK);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut skipped = 0;
     loop {
         every.tick().await;
-        tick(&client, &repo).await;
+        skipped = tick(&client, &repo, skipped).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reload waits for fetches, but not for ever: a change that takes a node or a login away
+    /// reaches oxidized within three ticks however busy it is.
+    #[test]
+    fn a_reload_held_back_by_fetches_happens_by_the_third_tick() {
+        assert!(reload_now(true, 0));
+        assert!(!reload_now(false, 0));
+        assert!(!reload_now(false, 1));
+        assert!(reload_now(false, MAX_SKIPPED_RELOADS));
+    }
 
     #[test]
     fn only_yagras_nodes_are_recorded_and_never_has_no_time() {
