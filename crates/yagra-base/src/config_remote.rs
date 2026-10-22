@@ -162,7 +162,7 @@ pub fn should_push(remote: &ConfigRemote, head: &str, now: DateTime<Utc>) -> boo
     }
     let retry =
         chrono::Duration::from_std(RETRY_AFTER).unwrap_or_else(|_| chrono::Duration::zero());
-    !remote.failed_at.is_some_and(|at| now - at < retry)
+    remote.failed_at.is_none_or(|at| now - at >= retry)
 }
 
 /// The run of failures to report when the destination's alert should be open, `None` when it
