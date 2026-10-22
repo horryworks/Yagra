@@ -384,6 +384,16 @@ async fn list_versions(
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ConfigVersion>>> {
     let ox = oxidized_of(&admin)?;
+    // 🚨 A node oxidized is not fetching is not in its list, and oxidized answers its history with a
+    // 500 (`NodeNotFound`), which read as "the config backup service did not answer" under the table
+    // of every node not switched on yet — measured on a lab deployment. Such a node has no history
+    // oxidized can serve, so the answer is none, without asking.
+    let ready = summary_of(&admin, node_id)
+        .await
+        .is_some_and(|s| s.readiness == Readiness::Ready);
+    if !ready {
+        return Ok(Json(Vec::new()));
+    }
     let versions = ox
         .client
         .versions(node_id)
