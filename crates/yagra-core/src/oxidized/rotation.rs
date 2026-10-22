@@ -246,7 +246,7 @@ pub(crate) async fn step_of(
         return Ok(None);
     }
     let node_attempts = repo.attempts_of(node, ATTEMPTS_PER_NODE).await?;
-    let fleet = repo.attempts_since(now - WINDOW).await?;
+    let fleet = fleet_recent(repo, now).await?;
     Ok(Some(next_step(
         node,
         &cands,
@@ -257,6 +257,17 @@ pub(crate) async fn step_of(
     )))
 }
 
+/// Every attempt in the last [`WINDOW`] plus every fetch still out, which the limits count as if it
+/// will fail.
+pub(crate) async fn fleet_recent(
+    repo: &ConfigBackupRepo,
+    now: DateTime<Utc>,
+) -> anyhow::Result<Vec<Attempt>> {
+    let mut all = repo.attempts_since(now - WINDOW).await?;
+    all.extend(repo.outstanding(now - REQUEST_TIMEOUT).await?);
+    Ok(all)
+}
+
 /// How many of a node's own attempts are read to find what its pass has tried. More than any pass
 /// can hold at three failures an hour for a day.
 const ATTEMPTS_PER_NODE: i64 = 200;
@@ -265,17 +276,14 @@ const ATTEMPTS_PER_NODE: i64 = 200;
 /// login of every node whose turn it is.
 async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &CredentialStore) {
     let now = Utc::now();
-    let (targets, logins, mut fleet) = match tokio::try_join!(
-        repo.targets(),
-        cli_logins(creds),
-        repo.attempts_since(now - WINDOW)
-    ) {
-        Ok(read) => read,
-        Err(e) => {
-            tracing::warn!(error = %e, "config backup: the rotation could not read its state");
-            return;
-        }
-    };
+    let (targets, logins, mut fleet) =
+        match tokio::try_join!(repo.targets(), cli_logins(creds), fleet_recent(repo, now)) {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(error = %e, "config backup: the rotation could not read its state");
+                return;
+            }
+        };
     let mut started = Vec::new();
     for t in targets {
         if t.rotation.requested_at.is_some() && !in_flight(t.rotation.requested_at, now) {
@@ -334,8 +342,18 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &Credenti
                     new_version: None,
                     at: now,
                 });
-                started.push(t.node_id);
-                repo.dispatch(t.node_id, credential, now).await
+                match repo
+                    .dispatch(t.node_id, credential, now, now - REQUEST_TIMEOUT)
+                    .await
+                {
+                    Ok(true) => {
+                        started.push(t.node_id);
+                        Ok(())
+                    }
+                    // A person's "fetch now" got there first.
+                    Ok(false) => Ok(()),
+                    Err(e) => Err(e),
+                }
             }
             Step::Wait { until, .. } => {
                 if rotation.next_try_at == Some(until) {

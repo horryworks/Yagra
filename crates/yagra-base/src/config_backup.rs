@@ -371,25 +371,54 @@ impl ConfigBackupRepo {
         Ok(())
     }
 
-    /// Hand `credential` to oxidized for `node` and remember that a fetch was asked for at `at`.
+    /// Hand `credential` to oxidized for `node` and remember that a fetch was asked for at `at` —
+    /// unless a fetch asked for after `outstanding_after` is still out, in which case nothing
+    /// changes and this answers `false`. The check and the write are one statement, so two callers
+    /// (the leader's loop and a person's "fetch now") cannot both start a login at one device.
     pub async fn dispatch(
         &self,
         node: Uuid,
         credential: Uuid,
         at: DateTime<Utc>,
-    ) -> anyhow::Result<()> {
-        sqlx::query(
+        outstanding_after: DateTime<Utc>,
+    ) -> anyhow::Result<bool> {
+        let done = sqlx::query(
             "UPDATE node_config_backup SET credential_id = $2, requested_at = $3, \
                next_try_at = NULL, \
                login_confirmed = login_confirmed AND credential_id IS NOT DISTINCT FROM $2 \
-             WHERE node_id = $1",
+             WHERE node_id = $1 AND (requested_at IS NULL OR requested_at <= $4)",
         )
         .bind(node)
         .bind(credential)
         .bind(at)
+        .bind(outstanding_after)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// Every fetch asked for after `after` and not yet answered, as an attempt with the login it
+    /// was handed. The limits count these as if they will fail: until oxidized reports, a login
+    /// sent to a device may be the one that locks it.
+    pub async fn outstanding(&self, after: DateTime<Utc>) -> anyhow::Result<Vec<Attempt>> {
+        let rows = sqlx::query(
+            "SELECT node_id, credential_id, requested_at FROM node_config_backup \
+             WHERE requested_at > $1 AND credential_id IS NOT NULL",
+        )
+        .bind(after)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(Attempt {
+                    node_id: r.try_get("node_id")?,
+                    credential_id: r.try_get("credential_id")?,
+                    outcome: AttemptOutcome::Lost,
+                    new_version: None,
+                    at: r.try_get("requested_at")?,
+                })
+            })
+            .collect()
     }
 
     /// Forget a fetch that oxidized was never actually asked for (it did not answer the request),
@@ -452,8 +481,8 @@ impl ConfigBackupRepo {
     ) -> anyhow::Result<Option<Attempt>> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
-            "SELECT credential_id, login_confirmed, last_version_oid FROM node_config_backup \
-             WHERE node_id = $1 FOR UPDATE",
+            "SELECT credential_id, login_confirmed, last_version_oid, requested_at \
+             FROM node_config_backup WHERE node_id = $1 FOR UPDATE",
         )
         .bind(node)
         .fetch_optional(&mut *tx)
@@ -461,8 +490,18 @@ impl ConfigBackupRepo {
         let Some(row) = row else {
             return Ok(None);
         };
-        let credential: Option<Uuid> = row.try_get("credential_id")?;
         let confirmed: bool = row.try_get("login_confirmed")?;
+        let requested: Option<DateTime<Utc>> = row.try_get("requested_at")?;
+        // A result nobody is waiting for — a fetch reported after it was counted lost, while the
+        // node is still looking for a login — cannot be tied to the login now on the row, which may
+        // have moved on since. It is recorded, so the device's limit counts it, against no login,
+        // and it moves nothing.
+        let unrequested = !confirmed && requested.is_none() && outcome != AttemptOutcome::Lost;
+        let credential: Option<Uuid> = if unrequested {
+            None
+        } else {
+            row.try_get("credential_id")?
+        };
         let previous: Option<String> = row.try_get("last_version_oid")?;
         let new_version = match (outcome, oid) {
             (AttemptOutcome::Success, Some(oid)) => Some(previous.as_deref() != Some(oid)),
@@ -478,7 +517,9 @@ impl ConfigBackupRepo {
         .bind(new_version)
         .fetch_one(&mut *tx)
         .await?;
-        if outcome == AttemptOutcome::Success {
+        if unrequested {
+            // Nothing to move.
+        } else if outcome == AttemptOutcome::Success {
             sqlx::query(
                 "UPDATE node_config_backup SET login_confirmed = credential_id IS NOT NULL, \
                    requested_at = NULL, next_try_at = NULL, \
@@ -706,9 +747,15 @@ mod tests {
             .put(node, &on(BackupInput::Ssh, Some("ios")), true)
             .await
             .expect("put"));
-        repo.dispatch(node, login, Utc::now())
+        assert!(repo
+            .dispatch(
+                node,
+                login,
+                Utc::now(),
+                Utc::now() - chrono::TimeDelta::minutes(10)
+            )
             .await
-            .expect("dispatch");
+            .expect("dispatch"));
 
         let first = repo
             .record_result(node, AttemptOutcome::Success, Some("aaa"))
@@ -765,5 +812,42 @@ mod tests {
             .await
             .expect("record")
             .is_none());
+
+        // With nothing asked for, a late success is recorded against no login and confirms none.
+        let late = repo
+            .record_result(node, AttemptOutcome::Success, Some("bbb"))
+            .await
+            .expect("record")
+            .expect("configured");
+        assert_eq!(late.credential_id, None);
+        let (_, rot) = repo
+            .get_with_rotation(node)
+            .await
+            .expect("get")
+            .expect("row");
+        assert!(!rot.login_confirmed);
+        assert_eq!(rot.last_version_oid.as_deref(), Some("aaa"));
+    }
+
+    /// A second dispatch while one is out changes nothing, and the one out counts as an attempt.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn one_fetch_at_a_time_and_it_counts_until_answered(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "sw-04", 4, None).await;
+        let a = crate::pgtest::credential(&pool, "ops-a", "cli_login").await;
+        let b = crate::pgtest::credential(&pool, "ops-b", "cli_login").await;
+        assert!(repo
+            .put(node, &on(BackupInput::Ssh, Some("ios")), true)
+            .await
+            .expect("put"));
+        let now = Utc::now();
+        let cutoff = now - chrono::TimeDelta::minutes(10);
+        assert!(repo.dispatch(node, a, now, cutoff).await.expect("first"));
+        assert!(!repo.dispatch(node, b, now, cutoff).await.expect("second"));
+        let out = repo.outstanding(cutoff).await.expect("outstanding");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].credential_id, Some(a));
+        assert!(out[0].outcome.is_login_failure());
     }
 }

@@ -752,9 +752,16 @@ async fn fetch_now(
     }
     match step {
         Step::Fetch(credential) => {
-            repo.dispatch(node_id, credential, now)
+            let started = repo
+                .dispatch(node_id, credential, now, now - rotation::REQUEST_TIMEOUT)
                 .await
                 .map_err(|e| read_failed(&e))?;
+            if !started {
+                return Err(ApiError::conflict(
+                    "config_backup_pending",
+                    "a fetch is already out for this node",
+                ));
+            }
             let asked = async {
                 ox.client.reload().await?;
                 ox.client.fetch_now(node_id).await
@@ -1134,9 +1141,14 @@ mod tests {
         )
         .await
         .expect("put");
-        repo.dispatch(node, login, Utc::now())
-            .await
-            .expect("dispatch");
+        repo.dispatch(
+            node,
+            login,
+            Utc::now(),
+            Utc::now() - rotation::REQUEST_TIMEOUT,
+        )
+        .await
+        .expect("dispatch");
 
         let post = |presented: &str| {
             axum::http::Request::builder()
