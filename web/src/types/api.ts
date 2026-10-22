@@ -83,6 +83,7 @@ const schemaEnumPins: {
   BackupInput: AssertEqual<BackupInput, Exclude<components['schemas']['BackupInput'], 'unknown'>>;
   BackupReadiness: AssertEqual<BackupReadiness, components['schemas']['Readiness']>;
   AttemptOutcome: AssertEqual<AttemptOutcome, components['schemas']['AttemptOutcome']>;
+  ScanMode: AssertEqual<ScanMode, Exclude<components['schemas']['ScanMode'], 'unknown'>>;
   RevealedFieldKey: AssertEqual<RevealedFieldKey, components['schemas']['RevealedFieldKey']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
   DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
@@ -155,6 +156,7 @@ const schemaEnumPins: {
   BackupInput: true,
   BackupReadiness: true,
   AttemptOutcome: true,
+  ScanMode: true,
   RevealedFieldKey: true,
   NeighborProto: true,
   NeighborCapability: true,
@@ -402,6 +404,12 @@ export const BACKUP_READINESS = [
   'address_changed',
 ] as const;
 export type BackupReadiness = (typeof BACKUP_READINESS)[number];
+
+/** How fast a node tries its CLI logins, fastest first (ADR-210 stage 3 decision 27). The
+ *  server's `unknown` (a token a newer core wrote) is never offered. Pinned to `schemas.ScanMode`
+ *  minus `unknown`. */
+export const SCAN_MODES = ['rapid', 'normal', 'slow'] as const;
+export type ScanMode = (typeof SCAN_MODES)[number];
 
 /** How one config-backup login attempt ended (ADR-210 stage 3). Pinned to
  *  `schemas.AttemptOutcome`. */

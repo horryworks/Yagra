@@ -9,12 +9,14 @@
 //! once ([`login_to_force`]) — a person's press is not held back by the limits (decision 25), and
 //! what it spends counts against the loop's.
 //!
-//! The limits (the user's, 2026-10-22): at most [`NODE_FAILURES_PER_HOUR`] failed logins at one
-//! device in an hour, [`GAP_AFTER_FAILURE`] between a failure and the next try, and at most
-//! [`LOGIN_FAILURES_PER_HOUR`] failures of one login across the whole fleet in an hour — the last
-//! one protects an account a TACACS+ or RADIUS server shares between many devices. A candidate a
-//! limit holds back is waited for, never skipped: skipping it would spend another failure at the
-//! same device on a login that is further down the list.
+//! The limits are a node's scan mode's ([`limits_of`], the user's three speeds, decision 27): how
+//! long after a failure the next try waits, how many failed logins one device may see in its
+//! window, how many failures of one login the whole fleet may spend in an hour — that one protects
+//! an account a TACACS+ or RADIUS server shares between many devices, so it is the strictest mode
+//! among the nodes that try the login ([`login_caps`]) — and how long a device that does not answer
+//! is dialled before the node gives up. A candidate a limit holds back is waited for, never
+//! skipped: skipping it would spend another failure at the same device on a login that is further
+//! down the list.
 //!
 //! Only Yagra starts a login with a candidate nobody has confirmed: such a node is in oxidized's
 //! node list only while a fetch Yagra asked for is outstanding (`source::source_nodes`), so
@@ -28,30 +30,86 @@
 //! second one's result recorded against the wrong login. So every reload goes through
 //! [`may_reload`], and this loop starts its batch only when nothing is out.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use yagra_base::config_backup::{Attempt, AttemptOutcome, ConfigBackupRepo, Rotation};
+use yagra_base::config_backup::{Attempt, AttemptOutcome, ConfigBackupRepo, Rotation, ScanMode};
 use yagra_base::secrets::{CredentialStore, KIND_CLI_LOGIN};
 
 use super::client::OxidizedClient;
 use super::source::{readiness, Readiness};
 
-/// Failed logins one device may see in [`WINDOW`].
-pub(crate) const NODE_FAILURES_PER_HOUR: usize = 3;
-/// Failures of one login across the fleet in [`WINDOW`].
-pub(crate) const LOGIN_FAILURES_PER_HOUR: usize = 5;
-/// The window both limits count over.
+/// The window the fleet-wide limit on one login counts over, in every mode.
 pub(crate) const WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(1);
-/// The least time between a failed login and the next try at the same device.
-pub(crate) const GAP_AFTER_FAILURE: chrono::TimeDelta = chrono::TimeDelta::minutes(10);
-/// How long a device that did not answer is left before the same login is tried again. No login
-/// was attempted, so nothing is counted; this only keeps a dead device from being dialled every
-/// minute.
-pub(crate) const UNREACHABLE_RETRY: chrono::TimeDelta = chrono::TimeDelta::hours(1);
+
+/// One scan mode's limits (decision 27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Limits {
+    /// The least time between a failed login and the next try at the same device.
+    pub gap: chrono::TimeDelta,
+    /// Failed logins one device may see in [`Limits::node_window`].
+    pub node_cap: usize,
+    pub node_window: chrono::TimeDelta,
+    /// Failures of one login across the fleet in [`WINDOW`].
+    pub login_cap: usize,
+    /// How long a device that did not answer is left before the same login is tried again. No
+    /// login was attempted, so nothing is counted; this only keeps a dead device from being dialled
+    /// all the time.
+    pub unreachable_retry: chrono::TimeDelta,
+    /// How long a device may go on not answering before the node stops trying.
+    pub give_up: chrono::TimeDelta,
+}
+
+/// The limits of a scan mode. A mode this core does not know is held to the most careful one.
+#[must_use]
+pub(crate) const fn limits_of(mode: ScanMode) -> Limits {
+    use chrono::TimeDelta as D;
+    match mode {
+        ScanMode::Rapid => Limits {
+            gap: D::minutes(1),
+            node_cap: 10,
+            node_window: D::hours(1),
+            login_cap: 30,
+            unreachable_retry: D::minutes(10),
+            give_up: D::hours(6),
+        },
+        ScanMode::Normal => Limits {
+            gap: D::minutes(10),
+            node_cap: 3,
+            node_window: D::hours(1),
+            login_cap: 5,
+            unreachable_retry: D::hours(1),
+            give_up: D::hours(24),
+        },
+        ScanMode::Slow | ScanMode::Unknown => Limits {
+            gap: D::hours(1),
+            node_cap: 3,
+            node_window: D::hours(24),
+            login_cap: 2,
+            unreachable_retry: D::hours(6),
+            give_up: D::hours(72),
+        },
+    }
+}
+
+/// The fleet-wide cap on each login: the smallest of the caps of every node that has it among its
+/// candidates, so a login shared by a rapid node and a slow one is held to the slow one's.
+#[must_use]
+pub(crate) fn login_caps(nodes: &[(Vec<Uuid>, ScanMode)]) -> HashMap<Uuid, usize> {
+    let mut caps: HashMap<Uuid, usize> = HashMap::new();
+    for (cands, mode) in nodes {
+        let cap = limits_of(*mode).login_cap;
+        for c in cands {
+            caps.entry(*c)
+                .and_modify(|v| *v = (*v).min(cap))
+                .or_insert(cap);
+        }
+    }
+    caps
+}
 /// How long a requested fetch may stay unanswered before it is counted as [`AttemptOutcome::Lost`].
 /// oxidized's own time limit for one fetch is five minutes (`config::render`'s `timelimit`).
 pub(crate) const REQUEST_TIMEOUT: chrono::TimeDelta = chrono::TimeDelta::minutes(10);
@@ -94,29 +152,37 @@ pub(crate) enum Step {
     NoCandidate,
 }
 
-/// When `failures` (ascending by time, all within [`WINDOW`] of `now`) next leave room under
-/// `limit`: the moment the oldest one that keeps it full leaves the window.
-fn room_at(failures: &[DateTime<Utc>], limit: usize) -> Option<DateTime<Utc>> {
+/// When `failures` (ascending by time, all within `window` of now) next leave room under `limit`:
+/// the moment the oldest one that keeps it full leaves the window.
+fn room_at(
+    failures: &[DateTime<Utc>],
+    limit: usize,
+    window: chrono::TimeDelta,
+) -> Option<DateTime<Utc>> {
     if failures.len() < limit {
         return None;
     }
-    Some(failures[failures.len() - limit] + WINDOW)
+    Some(failures[failures.len() - limit] + window)
 }
 
-/// The earliest moment `credential` may be tried at this node.
+/// The earliest moment `credential` may be tried at this node, under the node's `limits` and the
+/// login's fleet-wide `login_cap`.
 fn allowed_at(
     credential: Uuid,
-    node: Uuid,
+    limits: &Limits,
+    login_cap: usize,
+    node_attempts: &[Attempt],
     fleet_recent: &[Attempt],
     now: DateTime<Utc>,
 ) -> DateTime<Utc> {
-    let since = now - WINDOW;
-    let mut at_node: Vec<DateTime<Utc>> = fleet_recent
+    let node_since = now - limits.node_window;
+    let mut at_node: Vec<DateTime<Utc>> = node_attempts
         .iter()
-        .filter(|a| a.node_id == node && a.outcome.is_login_failure() && a.at > since)
+        .filter(|a| a.outcome.is_login_failure() && a.at > node_since)
         .map(|a| a.at)
         .collect();
     at_node.sort();
+    let since = now - WINDOW;
     let mut of_login: Vec<DateTime<Utc>> = fleet_recent
         .iter()
         .filter(|a| {
@@ -127,9 +193,9 @@ fn allowed_at(
     of_login.sort();
     [
         Some(now),
-        at_node.last().map(|t| *t + GAP_AFTER_FAILURE),
-        room_at(&at_node, NODE_FAILURES_PER_HOUR),
-        room_at(&of_login, LOGIN_FAILURES_PER_HOUR),
+        at_node.last().map(|t| *t + limits.gap),
+        room_at(&at_node, limits.node_cap, limits.node_window),
+        room_at(&of_login, login_cap, WINDOW),
     ]
     .into_iter()
     .flatten()
@@ -144,24 +210,30 @@ fn allowed_at(
 /// - `node_attempts`: the node's own attempts, newest first, reaching back at least to the start of
 ///   its pass.
 /// - `fleet_recent`: every attempt in the fleet in the last [`WINDOW`], the node's included.
+/// - `limits`: the node's scan mode's; `caps`: each login's fleet-wide cap ([`login_caps`]), the
+///   node's own `login_cap` for a login missing from it.
 ///
 /// A login remembered as working is tried again as long as it is still a candidate. Otherwise the
 /// first candidate that has not failed since the pass began is tried — after a device that did not
-/// answer, the same one again an hour later.
+/// answer, the same one again after `limits.unreachable_retry`, until it has not answered for
+/// `limits.give_up`, when the node stops as if every login had failed.
 #[must_use]
 pub(crate) fn next_step(
-    node: Uuid,
     candidates: &[Uuid],
     rotation: &Rotation,
     node_attempts: &[Attempt],
     fleet_recent: &[Attempt],
+    limits: &Limits,
+    caps: &HashMap<Uuid, usize>,
     now: DateTime<Utc>,
 ) -> Step {
     if candidates.is_empty() {
         return Step::NoCandidate;
     }
     let decide = |credential: Uuid, not_before: Option<DateTime<Utc>>| {
-        let until = allowed_at(credential, node, fleet_recent, now).max(not_before.unwrap_or(now));
+        let cap = caps.get(&credential).copied().unwrap_or(limits.login_cap);
+        let until = allowed_at(credential, limits, cap, node_attempts, fleet_recent, now)
+            .max(not_before.unwrap_or(now));
         if until <= now {
             Step::Fetch(credential)
         } else {
@@ -180,8 +252,17 @@ pub(crate) fn next_step(
         .collect();
     if let Some(last) = in_round.first() {
         if last.outcome == AttemptOutcome::Unreachable {
+            // The oldest of the run of "did not answer" this pass ends with.
+            let since = in_round
+                .iter()
+                .take_while(|a| a.outcome == AttemptOutcome::Unreachable)
+                .last()
+                .map_or(last.at, |a| a.at);
+            if now - since >= limits.give_up {
+                return Step::Exhausted;
+            }
             if let Some(c) = last.credential_id.filter(|c| candidates.contains(c)) {
-                return decide(c, Some(last.at + UNREACHABLE_RETRY));
+                return decide(c, Some(last.at + limits.unreachable_retry));
             }
         }
     }
@@ -268,14 +349,32 @@ pub(crate) async fn step_of(
     }
     let node_attempts = repo.attempts_of(node, ATTEMPTS_PER_NODE).await?;
     let fleet = fleet_recent(repo, now).await?;
+    let caps = login_caps(&candidate_sets(&repo.targets().await?, &logins));
     Ok(Some(next_step(
-        node,
         &cands,
         &rotation,
         &node_attempts,
         &fleet,
+        &limits_of(cfg.scan_mode),
+        &caps,
         now,
     )))
+}
+
+/// Every configured node's candidates and scan mode, for [`login_caps`].
+fn candidate_sets(
+    targets: &[yagra_base::config_backup::BackupTarget],
+    logins: &[Uuid],
+) -> Vec<(Vec<Uuid>, ScanMode)> {
+    targets
+        .iter()
+        .map(|t| {
+            (
+                candidates(t.config.login_order.as_deref(), logins),
+                t.config.scan_mode,
+            )
+        })
+        .collect()
 }
 
 /// Every attempt in the last [`WINDOW`] plus every fetch still out, which the limits count as if it
@@ -298,9 +397,9 @@ pub(crate) async fn may_reload(
     Ok(!repo.any_outstanding(now - REQUEST_TIMEOUT).await?)
 }
 
-/// How many of a node's own attempts are read to find what its pass has tried. More than any pass
-/// can hold at three failures an hour for a day.
-const ATTEMPTS_PER_NODE: i64 = 200;
+/// How many of a node's own attempts are read to find what its pass has tried and what its window
+/// holds. More than a day of the fastest mode's ten failures an hour.
+const ATTEMPTS_PER_NODE: i64 = 300;
 
 /// One tick of the leader loop: count outstanding fetches nobody answered, then start the next
 /// login of every node whose turn it is.
@@ -319,6 +418,7 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &Credenti
     let busy = targets
         .iter()
         .any(|t| in_flight(t.rotation.requested_at, now));
+    let caps = login_caps(&candidate_sets(&targets, &logins));
     let mut started = Vec::new();
     for t in targets {
         if t.rotation.requested_at.is_some() && !in_flight(t.rotation.requested_at, now) {
@@ -365,7 +465,15 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &Credenti
         if rotation.login_confirmed {
             continue;
         }
-        let step = next_step(t.node_id, &cands, &rotation, &node_attempts, &fleet, now);
+        let step = next_step(
+            &cands,
+            &rotation,
+            &node_attempts,
+            &fleet,
+            &limits_of(t.config.scan_mode),
+            &caps,
+            now,
+        );
         let result = match step {
             Step::Fetch(credential) => {
                 // Counted as if it will fail, so two nodes due in the same tick cannot both spend
@@ -490,6 +598,25 @@ mod tests {
         }
     }
 
+    /// [`next_step`] for a node in Normal mode whose logins nobody else limits.
+    fn step(
+        cands: &[Uuid],
+        rot: &Rotation,
+        node: &[Attempt],
+        fleet: &[Attempt],
+        now: DateTime<Utc>,
+    ) -> Step {
+        next_step(
+            cands,
+            rot,
+            node,
+            fleet,
+            &limits_of(ScanMode::Normal),
+            &HashMap::new(),
+            now,
+        )
+    }
+
     fn fresh(round: DateTime<Utc>) -> Rotation {
         Rotation {
             round_started_at: Some(round),
@@ -519,31 +646,25 @@ mod tests {
         let cands = [A, B, C];
         let start = t0();
         let rot = fresh(start);
-        assert_eq!(
-            next_step(NODE, &cands, &rot, &[], &[], start),
-            Step::Fetch(A)
-        );
+        assert_eq!(step(&cands, &rot, &[], &[], start), Step::Fetch(A));
 
         let one = vec![attempt(NODE, A, AttemptOutcome::AuthFailed, start)];
         assert_eq!(
-            next_step(NODE, &cands, &rot, &one, &one, start + minutes(1)),
+            step(&cands, &rot, &one, &one, start + minutes(1)),
             Step::Wait {
                 credential: B,
                 until: start + minutes(10)
             }
         );
         let later = start + minutes(10);
-        assert_eq!(
-            next_step(NODE, &cands, &rot, &one, &one, later),
-            Step::Fetch(B)
-        );
+        assert_eq!(step(&cands, &rot, &one, &one, later), Step::Fetch(B));
 
         let two = newest_first(vec![
             one[0].clone(),
             attempt(NODE, B, AttemptOutcome::Other, later),
         ]);
         assert_eq!(
-            next_step(NODE, &cands, &rot, &two, &two, later + minutes(10)),
+            step(&cands, &rot, &two, &two, later + minutes(10)),
             Step::Fetch(C)
         );
 
@@ -553,7 +674,7 @@ mod tests {
             ..rot
         };
         assert_eq!(
-            next_step(NODE, &cands, &worked, &two, &two, later + minutes(30)),
+            step(&cands, &worked, &two, &two, later + minutes(30)),
             Step::Fetch(C)
         );
     }
@@ -570,14 +691,14 @@ mod tests {
         let rot = fresh(start);
         let d = Uuid::from_u128(0xd);
         assert_eq!(
-            next_step(NODE, &cands, &rot, &fails, &fails, start + minutes(30)),
+            step(&cands, &rot, &fails, &fails, start + minutes(30)),
             Step::Wait {
                 credential: d,
                 until: start + minutes(60)
             }
         );
         assert_eq!(
-            next_step(NODE, &cands, &rot, &fails, &fails, start + minutes(61)),
+            step(&cands, &rot, &fails, &fails, start + minutes(61)),
             Step::Fetch(d)
         );
     }
@@ -599,14 +720,14 @@ mod tests {
             .collect();
         let rot = fresh(start);
         assert_eq!(
-            next_step(NODE, &cands, &rot, &[], &fleet, start + minutes(5)),
+            step(&cands, &rot, &[], &fleet, start + minutes(5)),
             Step::Wait {
                 credential: A,
                 until: start + minutes(60)
             }
         );
         assert_eq!(
-            next_step(NODE, &cands, &rot, &[], &fleet, start + minutes(60)),
+            step(&cands, &rot, &[], &fleet, start + minutes(60)),
             Step::Fetch(A)
         );
     }
@@ -618,20 +739,19 @@ mod tests {
         let silent = vec![attempt(NODE, A, AttemptOutcome::Unreachable, start)];
         let rot = fresh(start);
         assert_eq!(
-            next_step(NODE, &cands, &rot, &silent, &silent, start + minutes(5)),
+            step(&cands, &rot, &silent, &silent, start + minutes(5)),
             Step::Wait {
                 credential: A,
-                until: start + UNREACHABLE_RETRY
+                until: start + limits_of(ScanMode::Normal).unreachable_retry
             }
         );
         assert_eq!(
-            next_step(
-                NODE,
+            step(
                 &cands,
                 &rot,
                 &silent,
                 &silent,
-                start + UNREACHABLE_RETRY
+                start + limits_of(ScanMode::Normal).unreachable_retry
             ),
             Step::Fetch(A)
         );
@@ -647,26 +767,16 @@ mod tests {
         ]);
         let rot = fresh(start);
         assert_eq!(
-            next_step(NODE, &cands, &rot, &fails, &fails, start + minutes(90)),
+            step(&cands, &rot, &fails, &fails, start + minutes(90)),
             Step::Exhausted
         );
         // Restarted: the pass begins after those failures, so A is due again.
         let restarted = fresh(start + minutes(91));
         assert_eq!(
-            next_step(
-                NODE,
-                &cands,
-                &restarted,
-                &fails,
-                &fails,
-                start + minutes(91)
-            ),
+            step(&cands, &restarted, &fails, &fails, start + minutes(91)),
             Step::Fetch(A)
         );
-        assert_eq!(
-            next_step(NODE, &[], &restarted, &[], &[], start),
-            Step::NoCandidate
-        );
+        assert_eq!(step(&[], &restarted, &[], &[], start), Step::NoCandidate);
     }
 
     /// A working login refused later (its password changed) starts a pass at that failure, so the
@@ -683,7 +793,7 @@ mod tests {
             ..Rotation::default()
         };
         assert_eq!(
-            next_step(NODE, &cands, &rot, &refused, &refused, start + minutes(10)),
+            step(&cands, &rot, &refused, &refused, start + minutes(10)),
             Step::Fetch(B)
         );
     }
@@ -703,6 +813,97 @@ mod tests {
         );
         assert_eq!(login_to_force(Step::Exhausted), None);
         assert_eq!(login_to_force(Step::NoCandidate), None);
+    }
+
+    /// Rapid tries a minute after a failure where Normal waits ten and Slow an hour, and Slow's
+    /// three failures hold a device for a day.
+    #[test]
+    fn the_three_modes_wait_their_own_gaps() {
+        let cands = [A, B, C, Uuid::from_u128(0xd)];
+        let start = t0();
+        let one = vec![attempt(NODE, A, AttemptOutcome::AuthFailed, start)];
+        let rot = fresh(start);
+        let none = HashMap::new();
+        let wait = |mode| match next_step(
+            &cands,
+            &rot,
+            &one,
+            &one,
+            &limits_of(mode),
+            &none,
+            start + minutes(1),
+        ) {
+            Step::Fetch(_) => start + minutes(1),
+            Step::Wait { until, .. } => until,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(wait(ScanMode::Rapid), start + minutes(1));
+        assert_eq!(wait(ScanMode::Normal), start + minutes(10));
+        assert_eq!(wait(ScanMode::Slow), start + minutes(60));
+
+        let three = newest_first(vec![
+            attempt(NODE, A, AttemptOutcome::AuthFailed, start),
+            attempt(NODE, B, AttemptOutcome::AuthFailed, start + minutes(60)),
+            attempt(NODE, C, AttemptOutcome::AuthFailed, start + minutes(120)),
+        ]);
+        let slow = next_step(
+            &cands,
+            &rot,
+            &three,
+            &three,
+            &limits_of(ScanMode::Slow),
+            &none,
+            start + minutes(180),
+        );
+        assert_eq!(
+            slow,
+            Step::Wait {
+                credential: Uuid::from_u128(0xd),
+                until: start + chrono::TimeDelta::hours(24)
+            }
+        );
+        // A mode this core does not know is held to the most careful one.
+        assert_eq!(limits_of(ScanMode::Unknown), limits_of(ScanMode::Slow));
+    }
+
+    /// A login shared by a rapid node and a slow one is held to the slow one's fleet-wide cap.
+    #[test]
+    fn a_shared_login_takes_the_strictest_cap() {
+        let caps = login_caps(&[
+            (vec![A, B], ScanMode::Rapid),
+            (vec![A], ScanMode::Slow),
+            (vec![C], ScanMode::Normal),
+        ]);
+        assert_eq!(caps[&A], limits_of(ScanMode::Slow).login_cap);
+        assert_eq!(caps[&B], limits_of(ScanMode::Rapid).login_cap);
+        assert_eq!(caps[&C], limits_of(ScanMode::Normal).login_cap);
+    }
+
+    /// A device that goes on not answering is given up on after the mode's time, as if every login
+    /// had failed.
+    #[test]
+    fn a_device_silent_for_too_long_is_given_up_on() {
+        let cands = [A, B];
+        let start = t0();
+        let silent = newest_first(vec![
+            attempt(NODE, A, AttemptOutcome::Unreachable, start),
+            attempt(NODE, A, AttemptOutcome::Unreachable, start + minutes(60)),
+        ]);
+        let rot = fresh(start);
+        assert!(matches!(
+            step(&cands, &rot, &silent, &silent, start + minutes(120)),
+            Step::Fetch(A)
+        ));
+        assert_eq!(
+            step(
+                &cands,
+                &rot,
+                &silent,
+                &silent,
+                start + chrono::TimeDelta::hours(24)
+            ),
+            Step::Exhausted
+        );
     }
 
     #[test]

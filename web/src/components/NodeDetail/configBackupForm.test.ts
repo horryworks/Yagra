@@ -27,6 +27,7 @@ const view = (over: Partial<ConfigBackupView> = {}): ConfigBackupView => ({
   exhausted: false,
   attempts: [],
   input: 'ssh',
+  scan_mode: 'normal',
   model_override: null,
   profile_model: 'ios',
   readiness: 'off',
@@ -46,25 +47,33 @@ const attempt = (over: Partial<AttemptView>): AttemptView => ({
 describe('config backup form (ADR-210)', () => {
   it('opens as what is stored and sends the default order and "from the profile" as null', () => {
     const form = formOf(view());
-    expect(form).toEqual({ order: null, input: 'ssh', model: '' });
+    expect(form).toEqual({ order: null, input: 'ssh', model: '', scanMode: 'normal' });
     expect(bodyOf(form, true)).toEqual({
       enabled: true,
       login_order: null,
       input: 'ssh',
       model_override: null,
+      scan_mode: 'normal',
     });
-    const picked = { ...form, order: ['c', 'a'], model: 'nxos' };
+    const picked = { ...form, order: ['c', 'a'], model: 'nxos', scanMode: 'rapid' as const };
     expect(bodyOf(picked, false)).toEqual({
       enabled: false,
       login_order: ['c', 'a'],
       input: 'ssh',
       model_override: 'nxos',
+      scan_mode: 'rapid',
     });
   });
 
   it('opens a stored unknown input as the default, which is then a change', () => {
     const v = view({ input: 'unknown' });
     expect(formOf(v).input).toBe('ssh');
+  });
+
+  it('opens a mode it does not know as the most careful one', () => {
+    expect(formOf(view({ scan_mode: 'unknown' })).scanMode).toBe('slow');
+    const v = view({ enabled: true, scan_mode: 'slow' });
+    expect(isDirty({ ...formOf(v), scanMode: 'rapid' }, v)).toBe(true);
   });
 
   it('is dirty only when something differs, the order included', () => {
@@ -125,6 +134,12 @@ describe('the state line', () => {
   it('says no login worked, else what the last attempt did, else that it waits', () => {
     const on = { enabled: true, readiness: 'ready' as const };
     expect(stateLine(view({ ...on, exhausted: true })).key).toBe('config.state.exhausted');
+    // Stopped because the device went on not answering, which is not "no login worked".
+    expect(
+      stateLine(
+        view({ ...on, exhausted: true, attempts: [attempt({ outcome: 'unreachable' })] }),
+      ).key,
+    ).toBe('config.state.gaveUp');
     expect(stateLine(view({ ...on, attempts: [attempt({ new_version: true })] })).key).toBe(
       'config.result.newVersion',
     );

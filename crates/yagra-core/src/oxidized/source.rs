@@ -229,6 +229,7 @@ mod tests {
             login_order: None,
             input,
             model_override: model.map(str::to_owned),
+            scan_mode: yagra_base::config_backup::ScanMode::Normal,
         }
     }
 

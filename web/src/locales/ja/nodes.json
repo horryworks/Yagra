@@ -1223,6 +1223,12 @@
   },
   "config": {
     "connection": "接続",
+    "scanMode": "試す速さ",
+    "scanModes": {
+      "rapid": "速い（1 分おき）",
+      "normal": "標準（10 分おき）",
+      "slow": "慎重（1 時間おき）"
+    },
     "input": {
       "ssh_then_telnet": "SSH、だめなら telnet",
       "ssh": "SSH",
@@ -1251,7 +1257,8 @@
       "trying": "{{login}} で取得中（{{total}} 個中 {{n}} 個目）…",
       "exhausted": "どのログインでも入れません。",
       "waiting": "最初の取得を待っています",
-      "nextTry": "次は {{time}}"
+      "nextTry": "次は {{time}}",
+      "gaveUp": "機器が長く応答しないので止めました。"
     },
     "result": {
       "newVersion": "新しい版を保存しました",

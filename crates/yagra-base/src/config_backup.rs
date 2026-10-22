@@ -48,6 +48,29 @@ impl BackupInput {
     }
 }
 
+/// How fast a node tries its CLI logins: each mode is one set of lockout limits (ADR-210 stage 3
+/// decision 27). The numbers are core's (`oxidized::rotation::limits_of`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanMode {
+    /// A minute apart, for a device nothing locks out.
+    Rapid,
+    /// Ten minutes apart. The default.
+    #[default]
+    Normal,
+    /// An hour apart, three a day, for an account a lockout would hurt.
+    Slow,
+    /// A token a newer core wrote. Enforced as the most careful mode, and refused as input.
+    Unknown,
+}
+
+crate::token_enum!(ScanMode, Unknown, "node_config_backup.scan_mode", [
+    Rapid => "rapid",
+    Normal => "normal",
+    Slow => "slow",
+    Unknown => "unknown",
+]);
+
 /// How one login attempt ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +122,8 @@ pub struct NodeConfigBackup {
     pub input: BackupInput,
     /// The oxidized model a person picked; `None` means "from the node's profile".
     pub model_override: Option<String>,
+    /// How fast it tries its logins.
+    pub scan_mode: ScanMode,
 }
 
 /// Where a node is in trying its logins. Written by Yagra, never by a person.
@@ -188,6 +213,7 @@ fn config_of(r: &sqlx::postgres::PgRow) -> Result<NodeConfigBackup, sqlx::Error>
         login_order: r.try_get("login_order")?,
         input: BackupInput::from_stored(&r.try_get::<String, _>("input")?),
         model_override: r.try_get("model_override")?,
+        scan_mode: ScanMode::from_stored(&r.try_get::<String, _>("scan_mode")?),
     })
 }
 
@@ -223,7 +249,7 @@ impl ConfigBackupRepo {
         node: Uuid,
     ) -> anyhow::Result<Option<(NodeConfigBackup, Rotation)>> {
         let row = sqlx::query(&format!(
-            "SELECT b.enabled, b.login_order, b.input, b.model_override, {ROTATION_COLUMNS} \
+            "SELECT b.enabled, b.login_order, b.input, b.model_override, b.scan_mode, {ROTATION_COLUMNS} \
              FROM node_config_backup b WHERE b.node_id = $1"
         ))
         .bind(node)
@@ -247,11 +273,11 @@ impl ConfigBackupRepo {
         let done = sqlx::query(
             "INSERT INTO node_config_backup \
                (node_id, enabled, login_order, input, model_override, bound_address, \
-                round_started_at) \
-             SELECT id, $2, $3, $4, $5, address, now() FROM nodes WHERE id = $1 \
+                round_started_at, scan_mode) \
+             SELECT id, $2, $3, $4, $5, address, now(), $7 FROM nodes WHERE id = $1 \
              ON CONFLICT (node_id) DO UPDATE SET enabled = EXCLUDED.enabled, \
                login_order = EXCLUDED.login_order, input = EXCLUDED.input, \
-               model_override = EXCLUDED.model_override, \
+               model_override = EXCLUDED.model_override, scan_mode = EXCLUDED.scan_mode, \
                bound_address = EXCLUDED.bound_address, updated_at = now(), \
                credential_id = CASE WHEN $6 THEN NULL ELSE node_config_backup.credential_id END, \
                login_confirmed = node_config_backup.login_confirmed AND NOT $6, \
@@ -266,6 +292,7 @@ impl ConfigBackupRepo {
         .bind(cfg.input.as_str())
         .bind(cfg.model_override.as_deref())
         .bind(restart)
+        .bind(cfg.scan_mode.as_str())
         .execute(&self.pool)
         .await?;
         Ok(done.rows_affected() > 0)
@@ -275,7 +302,7 @@ impl ConfigBackupRepo {
     pub async fn targets(&self) -> anyhow::Result<Vec<BackupTarget>> {
         let rows = sqlx::query(&format!(
             "SELECT b.node_id, host(n.address) AS address, p.name AS profile_name, \
-                    b.enabled, b.login_order, b.input, b.model_override, {ROTATION_COLUMNS}, \
+                    b.enabled, b.login_order, b.input, b.model_override, b.scan_mode, {ROTATION_COLUMNS}, \
                     (b.bound_address IS DISTINCT FROM n.address) AS address_changed \
              FROM node_config_backup b \
              JOIN nodes n ON n.id = b.node_id \
@@ -692,7 +719,18 @@ mod tests {
             login_order: None,
             input,
             model_override: model.map(str::to_owned),
+            scan_mode: ScanMode::Normal,
         }
+    }
+
+    #[test]
+    fn every_scan_mode_round_trips_and_an_unknown_one_is_unknown() {
+        for m in ScanMode::ALL {
+            assert_eq!(ScanMode::from_token(m.as_str()), Some(*m));
+            assert_eq!(serde_json::to_value(m).expect("serialize"), m.as_str());
+        }
+        assert_eq!(ScanMode::from_stored("ludicrous"), ScanMode::Unknown);
+        assert_eq!(ScanMode::default(), ScanMode::Normal);
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -703,6 +741,7 @@ mod tests {
         assert!(repo.get(node).await.expect("get").is_none());
         let mut cfg = on(BackupInput::Telnet, Some("ios"));
         cfg.login_order = Some(vec![Uuid::from_u128(1)]);
+        cfg.scan_mode = ScanMode::Slow;
         assert!(repo.put(node, &cfg, true).await.expect("put"));
         assert_eq!(repo.get(node).await.expect("get"), Some(cfg.clone()));
         let targets = repo.targets().await.expect("targets");

@@ -6978,6 +6978,8 @@ export interface components {
              */
             login_order?: string[] | null;
             model_override?: string | null;
+            /** @description How fast it tries its logins. Omitted: `normal`. */
+            scan_mode?: components["schemas"]["ScanMode"];
         };
         /** @description One node in the fleet-wide list. */
         ConfigBackupRow: {
@@ -7040,6 +7042,8 @@ export interface components {
             profile_model?: string | null;
             /** @description Whether it is fetched, or the one thing to fix. */
             readiness: components["schemas"]["Readiness"];
+            /** @description How fast it tries its logins: one set of lockout limits each (stage 3 decision 27). */
+            scan_mode: components["schemas"]["ScanMode"];
             status?: null | components["schemas"]["BackupStatusView"];
             /**
              * Format: date-time
@@ -13633,6 +13637,12 @@ export interface components {
             tool: string;
             when_label: string;
         };
+        /**
+         * @description How fast a node tries its CLI logins: each mode is one set of lockout limits (ADR-210 stage 3
+         *     decision 27). The numbers are core's (`oxidized::rotation::limits_of`).
+         * @enum {string}
+         */
+        ScanMode: "rapid" | "normal" | "slow" | "unknown";
         /** @description A scan's current status returned by the API. */
         ScanStatus: {
             candidates: components["schemas"]["Candidate"][];

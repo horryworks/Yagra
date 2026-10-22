@@ -3,8 +3,14 @@
 // reaches it: the form's state and the body it sends, the one line that says where the backup
 // stands, which version a version is compared with, and how often the tab reads itself again.
 
-import type { AttemptView, BackupInput, ConfigBackupView, ConfigVersion } from '../../types/api';
-import { BACKUP_INPUTS } from '../../types/api';
+import type {
+  AttemptView,
+  BackupInput,
+  ConfigBackupView,
+  ConfigVersion,
+  ScanMode,
+} from '../../types/api';
+import { BACKUP_INPUTS, SCAN_MODES } from '../../types/api';
 
 /** The settings a person edits. `order` is the node's own order of CLI logins, or null for "every
  *  CLI login in the try order"; `model` is '' for "from the profile", because a `<select>` holds
@@ -13,6 +19,7 @@ export interface ConfigBackupForm {
   order: string[] | null;
   input: BackupInput;
   model: string;
+  scanMode: ScanMode;
 }
 
 /** The form a stored configuration opens as. A stored `unknown` input (a newer core wrote it) opens
@@ -21,10 +28,16 @@ export function formOf(view: ConfigBackupView): ConfigBackupForm {
   const input = (BACKUP_INPUTS as readonly string[]).includes(view.input)
     ? (view.input as BackupInput)
     : 'ssh';
+  // A mode a newer core wrote opens as the most careful one, which is how this core enforces it —
+  // saving then never makes the node faster than it was.
+  const scanMode = (SCAN_MODES as readonly string[]).includes(view.scan_mode)
+    ? (view.scan_mode as ScanMode)
+    : 'slow';
   return {
     order: view.login_order ?? null,
     input,
     model: view.model_override ?? '',
+    scanMode,
   };
 }
 
@@ -37,12 +50,14 @@ export function bodyOf(
   login_order: string[] | null;
   input: BackupInput;
   model_override: string | null;
+  scan_mode: ScanMode;
 } {
   return {
     enabled,
     login_order: form.order,
     input: form.input,
     model_override: form.model === '' ? null : form.model,
+    scan_mode: form.scanMode,
   };
 }
 
@@ -55,7 +70,8 @@ export function isDirty(form: ConfigBackupForm, view: ConfigBackupView): boolean
   return (
     !sameOrder(form.order, stored.order) ||
     form.input !== stored.input ||
-    form.model !== stored.model
+    form.model !== stored.model ||
+    form.scanMode !== stored.scanMode
   );
 }
 
@@ -128,7 +144,11 @@ export function stateLine(view: ConfigBackupView): Line {
       tone: 'busy',
     };
   }
-  if (view.exhausted) return { key: 'config.state.exhausted', tone: 'bad' };
+  if (view.exhausted) {
+    // Given up on because the device stopped answering, not because every login was refused.
+    const gaveUp = view.attempts[0]?.outcome === 'unreachable';
+    return { key: gaveUp ? 'config.state.gaveUp' : 'config.state.exhausted', tone: 'bad' };
+  }
   const last = view.attempts[0];
   if (last) return attemptLine(last);
   return { key: 'config.state.waiting', tone: 'none' };

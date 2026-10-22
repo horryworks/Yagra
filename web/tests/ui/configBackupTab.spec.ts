@@ -31,6 +31,7 @@ const off = {
   exhausted: false,
   attempts: [],
   input: 'ssh',
+  scan_mode: 'normal',
   model_override: null,
   profile_model: 'ios',
   readiness: 'off',
@@ -98,6 +99,7 @@ test.describe('a node not backed up yet', () => {
 
     await picker.getByRole('checkbox', { name: /ymock-second-login/ }).uncheck();
     await page.locator('#cfgb-input').selectOption('telnet');
+    await page.locator('#cfgb-speed').selectOption('rapid');
     const put = page.waitForRequest(
       (r) => r.method() === 'PUT' && new URL(r.url()).pathname.endsWith('/config-backup'),
     );
@@ -110,6 +112,7 @@ test.describe('a node not backed up yet', () => {
       login_order: [LOGIN],
       input: 'telnet',
       model_override: null,
+      scan_mode: 'rapid',
     });
     await fetched;
     expect(errors.uncaught).toEqual([]);

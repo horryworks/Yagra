@@ -1233,6 +1233,12 @@
   },
   "config": {
     "connection": "Connection",
+    "scanMode": "Speed",
+    "scanModes": {
+      "rapid": "Rapid (1 min apart)",
+      "normal": "Normal (10 min apart)",
+      "slow": "Slow (1 hour apart)"
+    },
     "input": {
       "ssh_then_telnet": "SSH, then telnet",
       "ssh": "SSH",
@@ -1261,7 +1267,8 @@
       "trying": "Fetching with {{login}} ({{n}} of {{total}})…",
       "exhausted": "No login worked.",
       "waiting": "Waiting for the first fetch",
-      "nextTry": "next try at {{time}}"
+      "nextTry": "next try at {{time}}",
+      "gaveUp": "Stopped: the device has not answered for too long."
     },
     "result": {
       "newVersion": "New version saved",

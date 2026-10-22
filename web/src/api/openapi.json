@@ -29105,6 +29105,10 @@
               "string",
               "null"
             ]
+          },
+          "scan_mode": {
+            "$ref": "#/components/schemas/ScanMode",
+            "description": "How fast it tries its logins. Omitted: `normal`."
           }
         }
       },
@@ -29176,6 +29180,7 @@
           "exhausted",
           "attempts",
           "input",
+          "scan_mode",
           "readiness",
           "models",
           "available"
@@ -29261,6 +29266,10 @@
           "readiness": {
             "$ref": "#/components/schemas/Readiness",
             "description": "Whether it is fetched, or the one thing to fix."
+          },
+          "scan_mode": {
+            "$ref": "#/components/schemas/ScanMode",
+            "description": "How fast it tries its logins: one set of lockout limits each (stage 3 decision 27)."
           },
           "status": {
             "oneOf": [
@@ -43012,6 +43021,16 @@
             "type": "string"
           }
         }
+      },
+      "ScanMode": {
+        "type": "string",
+        "description": "How fast a node tries its CLI logins: each mode is one set of lockout limits (ADR-210 stage 3\ndecision 27). The numbers are core's (`oxidized::rotation::limits_of`).",
+        "enum": [
+          "rapid",
+          "normal",
+          "slow",
+          "unknown"
+        ]
       },
       "ScanStatus": {
         "type": "object",

@@ -46,6 +46,7 @@ import type {
   ConfigText,
   ConfigDiff,
   BackupInput,
+  ScanMode,
   DiscoveryCandidate,
   DiscoveryScan,
   DiscoveryScanSummary,
@@ -1230,6 +1231,7 @@ export const api = {
       login_order: string[] | null;
       input: BackupInput;
       model_override: string | null;
+      scan_mode: ScanMode;
     },
   ): Promise<void> =>
     apiPut('/api/v1/nodes/{node_id}/config-backup', { path: { node_id: id }, body }),

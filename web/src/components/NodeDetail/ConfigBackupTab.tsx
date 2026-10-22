@@ -28,12 +28,14 @@ import { formatExactTime } from '../../lib/format';
 import { isCliCredentialKind } from '../../lib/credentialKinds';
 import {
   BACKUP_INPUTS,
+  SCAN_MODES,
   type AttemptView,
   type BackupInput,
   type ConfigBackupView,
   type ConfigDiff,
   type ConfigVersion,
   type NodeDetail,
+  type ScanMode,
 } from '../../types/api';
 import {
   attemptLine,
@@ -275,6 +277,23 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                 {BACKUP_INPUTS.map((i) => (
                   <option key={i} value={i}>
                     {t(`config.input.${i}`)}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="modal-field">
+              <label className="modal-field-label" htmlFor="cfgb-speed">
+                {t('config.scanMode')}
+              </label>
+              <Select
+                id="cfgb-speed"
+                value={form.scanMode}
+                disabled={!canStart}
+                onChange={(e) => setForm({ ...form, scanMode: e.target.value as ScanMode })}
+              >
+                {SCAN_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(`config.scanModes.${m}`)}
                   </option>
                 ))}
               </Select>

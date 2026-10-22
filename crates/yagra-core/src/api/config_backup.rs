@@ -45,7 +45,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_backup::{Attempt, AttemptOutcome, BackupInput, NodeConfigBackup};
+use yagra_base::config_backup::{Attempt, AttemptOutcome, BackupInput, NodeConfigBackup, ScanMode};
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{
@@ -250,6 +250,8 @@ pub(crate) struct ConfigBackupView {
     /// The newest attempts, newest first.
     attempts: Vec<AttemptView>,
     input: BackupInput,
+    /// How fast it tries its logins: one set of lockout limits each (stage 3 decision 27).
+    scan_mode: ScanMode,
     /// The model a person picked; `null` means "from the profile".
     model_override: Option<String>,
     /// The model the node's profile maps to, if any.
@@ -302,6 +304,7 @@ async fn get_config_backup(
             login_order: None,
             input: BackupInput::Ssh,
             model_override: None,
+            scan_mode: ScanMode::Normal,
         },
         yagra_base::config_backup::Rotation::default(),
     ));
@@ -332,6 +335,7 @@ async fn get_config_backup(
         exhausted: step == Some(Step::Exhausted),
         attempts: attempts.into_iter().map(AttemptView::from).collect(),
         input: cfg.input,
+        scan_mode: cfg.scan_mode,
         model_override: cfg.model_override,
         profile_model: oxidized::source::model_of(None, profile.as_deref()),
         readiness,
@@ -363,6 +367,9 @@ pub(super) struct ConfigBackupBody {
     input: BackupInput,
     #[serde(default)]
     model_override: Option<String>,
+    /// How fast it tries its logins. Omitted: `normal`.
+    #[serde(default)]
+    scan_mode: ScanMode,
 }
 
 /// The most logins one node's order may name.
@@ -394,6 +401,9 @@ async fn put_config_backup(
     let bad = |m: &str| ApiError::bad_request("invalid_config_backup", m.to_owned());
     if body.input == BackupInput::Unknown {
         return Err(bad("input must be ssh, telnet or ssh_then_telnet"));
+    }
+    if body.scan_mode == ScanMode::Unknown {
+        return Err(bad("scan_mode must be rapid, normal or slow"));
     }
     let model_override = body
         .model_override
@@ -448,6 +458,7 @@ async fn put_config_backup(
         login_order,
         input: body.input,
         model_override,
+        scan_mode: body.scan_mode,
     };
     // A node switched on, or one whose candidates changed, starts its logins afresh.
     let restart = before
@@ -1055,13 +1066,14 @@ mod tests {
 
         let on = serde_json::json!({
             "enabled": true, "login_order": [second, first], "input": "telnet",
-            "model_override": "ios",
+            "model_override": "ios", "scan_mode": "slow",
         });
         let (status, body) = send(&st, "PUT", &path, &operator, Some(on.clone())).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
         let (_, body) = send(&st, "GET", &path, &operator, None).await;
         assert_eq!(body["readiness"], "ready", "{body}");
         assert_eq!(body["input"], "telnet");
+        assert_eq!(body["scan_mode"], "slow");
         assert_eq!(
             body["candidates"],
             serde_json::json!([second.to_string(), first.to_string()])
@@ -1084,6 +1096,7 @@ mod tests {
             serde_json::json!({"enabled": true, "login_order": [first], "credential_id": first,
                                "input": "ssh"}),
             serde_json::json!({"enabled": true, "input": "ssh", "model_override": "ios; rm -rf"}),
+            serde_json::json!({"enabled": true, "input": "ssh", "scan_mode": "unknown"}),
         ] {
             let (status, body) = send(&st, "PUT", &path, &operator, Some(bad)).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
@@ -1164,6 +1177,7 @@ mod tests {
                 login_order: None,
                 input: BackupInput::Ssh,
                 model_override: Some("ios".to_owned()),
+                scan_mode: ScanMode::Normal,
             },
             true,
         )
