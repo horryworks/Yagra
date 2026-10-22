@@ -524,19 +524,27 @@ async fn list_versions(
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ConfigVersion>>> {
     let ox = oxidized_of(&admin)?;
-    // 🚨 A node oxidized is not fetching is not in its list, and oxidized answers its history with a
-    // 500 (`NodeNotFound`), which read as "the config backup service did not answer" under the table
-    // of every node not switched on yet — measured on a lab deployment. Such a node has no history
-    // oxidized can serve, so the answer is none, without asking. Since stage 3 that includes a node
-    // still looking for a login that works: it is in oxidized's list only while a fetch is out.
-    let fetched = admin
+    // 🚨 A node oxidized does not hold answers its history with a 500 (`NodeNotFound`), which read
+    // as "the config backup service did not answer" under the table of every node not switched on
+    // yet — measured on a lab deployment. So the answer is none, without asking, for a node not in
+    // the list: one switched off, or one with no model or connection. A node still looking for a
+    // login is in it, parked (`source::source_nodes`, stage 3 decision 26), so its versions show.
+    let listed = admin
         .config_backup
-        .get_with_rotation(node_id)
+        .get(node_id)
         .await
         .ok()
         .flatten()
-        .is_some_and(|(c, r)| c.enabled && r.login_confirmed);
-    if !fetched {
+        .filter(|c| c.enabled && c.input.oxidized().is_some());
+    let Some(cfg) = listed else {
+        return Ok(Json(Vec::new()));
+    };
+    let profile = admin
+        .config_backup
+        .profile_name(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    if oxidized::source::model_of(cfg.model_override.as_deref(), profile.as_deref()).is_none() {
         return Ok(Json(Vec::new()));
     }
     let versions = ox
@@ -917,6 +925,10 @@ pub(super) struct OxidizedEvent {
     node: String,
     #[serde(default)]
     group: Option<String>,
+    /// The address oxidized dialled. A parked node's (`source::PARKED_IP`) result is not a login
+    /// attempt and is ignored.
+    #[serde(default)]
+    ip: Option<String>,
     /// oxidized's error class, such as `Net::SSH::AuthenticationFailed`; empty on success.
     #[serde(default)]
     err_type: Option<String>,
@@ -941,6 +953,10 @@ async fn oxidized_event(
     let Some(node) = oxidized::source::node_of(&ev.node, ev.group.as_deref()) else {
         return Ok(StatusCode::NO_CONTENT);
     };
+    // A parked node's fetch reached no device and sent no login (stage 3 decision 26).
+    if ev.ip.as_deref() == Some(oxidized::source::PARKED_IP) {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     let Some(outcome) = rotation::classify(&ev.event, ev.err_type.as_deref().unwrap_or("")) else {
         return Ok(StatusCode::NO_CONTENT);
     };
@@ -1162,20 +1178,32 @@ mod tests {
         .await
         .expect("dispatch");
 
-        let post = |presented: &str| {
+        let post_from = |presented: &str, ip: &str| {
             axum::http::Request::builder()
                 .method("POST")
                 .uri("/internal/oxidized/events")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header(oxidized::config::TOKEN_HEADER, presented)
                 .body(Body::from(format!(
-                    "event=node_fail&node={node}&group=yagra&err_type=Net%3A%3ASSH%3A%3AAuthenticationFailed"
+                    "event=node_fail&node={node}&group=yagra&ip={ip}&err_type=Net%3A%3ASSH%3A%3AAuthenticationFailed"
                 )))
                 .expect("request")
         };
+        let post = |presented: &str| post_from(presented, "192.0.2.9");
         let router = crate::api::router(st.clone());
         let res = router.clone().oneshot(post("wrong")).await.expect("send");
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "config_backup_attempts").await,
+            0
+        );
+        // A parked node's fetch reached no device: nothing is recorded (stage 3 decision 26).
+        let res = router
+            .clone()
+            .oneshot(post_from(&token, oxidized::source::PARKED_IP))
+            .await
+            .expect("send");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
         assert_eq!(
             yagra_base::pgtest::rows(&pool, "config_backup_attempts").await,
             0

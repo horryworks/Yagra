@@ -32,7 +32,7 @@ pub(crate) const EVENTS_URL: &str = "http://core:8080/internal/oxidized/events";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 2;
+pub(crate) const CONFIG_REVISION: u32 = 3;
 
 const TOKEN_LEN: usize = 40;
 
@@ -161,7 +161,7 @@ hooks:
     events: [node_success, node_fail]
     async: true
     timeout: 30
-    cmd: '/usr/bin/curl -fsS -m 20 -o /dev/null -X POST -H \"{TOKEN_HEADER}: {token}\" --data-urlencode \"event=$OX_EVENT\" --data-urlencode \"node=$OX_NODE_NAME\" --data-urlencode \"group=$OX_NODE_GROUP\" --data-urlencode \"err_type=$OX_ERR_TYPE\" {events_url}'
+    cmd: '/usr/bin/curl -fsS -m 20 -o /dev/null -X POST -H \"{TOKEN_HEADER}: {token}\" --data-urlencode \"event=$OX_EVENT\" --data-urlencode \"node=$OX_NODE_NAME\" --data-urlencode \"group=$OX_NODE_GROUP\" --data-urlencode \"ip=$OX_NODE_IP\" --data-urlencode \"err_type=$OX_ERR_TYPE\" {events_url}'
 "
     )
 }
@@ -210,7 +210,7 @@ mod tests {
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "40e9fc11624bdc01d994c7a2dd416dd0b05ac8281aaaf20ebc22bd51b520c409",
+            "54990e2fa30c666b9f68fd799f0e5fa34d7d4ca5b2cac067ba215f1b7b791e00",
         )];
         assert_eq!(
             pinned,

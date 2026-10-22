@@ -39502,6 +39502,13 @@
               "null"
             ]
           },
+          "ip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address oxidized dialled. A parked node's (`source::PARKED_IP`) result is not a login\nattempt and is ignored."
+          },
           "node": {
             "type": "string",
             "description": "oxidized's name for the node: its id."

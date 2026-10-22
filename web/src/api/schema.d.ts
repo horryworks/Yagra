@@ -12004,6 +12004,11 @@ export interface components {
             /** @description `node_success` or `node_fail`. */
             event: string;
             group?: string | null;
+            /**
+             * @description The address oxidized dialled. A parked node's (`source::PARKED_IP`) result is not a login
+             *     attempt and is ignored.
+             */
+            ip?: string | null;
             /** @description oxidized's name for the node: its id. */
             node: string;
         };

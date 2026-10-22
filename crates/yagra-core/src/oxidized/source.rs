@@ -86,13 +86,45 @@ pub(crate) struct SourceNode {
     pub enable: Option<String>,
 }
 
-/// Every configured node that is ready and has a login to be fetched with, as oxidized's source.
+/// The address a parked node is handed to oxidized with: its own loopback, where nothing listens,
+/// so a fetch oxidized starts on its own schedule is refused at once and no login leaves it.
+pub(crate) const PARKED_IP: &str = "127.0.0.1";
+/// The login a parked node carries. Never sent anywhere: the connection to [`PARKED_IP`] is refused
+/// before a login is asked for.
+const PARKED_LOGIN: &str = "parked";
+
+/// A configured node as oxidized must not fetch it: in the list, so its stored versions can be read
+/// back (oxidized answers a node's history only for a node it holds), but at [`PARKED_IP`] with no
+/// real login (stage 3 decision 26).
+fn parked(name: String, model: String, input: &'static str) -> SourceNode {
+    SourceNode {
+        name,
+        ip: PARKED_IP.to_owned(),
+        model,
+        input,
+        group: super::GROUP,
+        username: PARKED_LOGIN.to_owned(),
+        password: PARKED_LOGIN.to_owned(),
+        enable: None,
+    }
+}
+
+/// Whether a node's login may be handed to oxidized now: it is known to work, or a fetch Yagra
+/// asked for is out — a login nobody has confirmed is tried only when the limits allowed it, never
+/// by oxidized's own daily schedule — and the node is still at the address it was saved with.
+#[must_use]
+pub(crate) fn hands_login(t: &BackupTarget, now: DateTime<Utc>) -> bool {
+    !t.address_changed
+        && t.rotation.credential_id.is_some()
+        && (t.rotation.login_confirmed || super::rotation::in_flight(t.rotation.requested_at, now))
+}
+
+/// Every configured node with a model and a connection, as oxidized's source.
 ///
-/// A node is handed over with the login its rotation chose (`credential_id`), and only while that
-/// login is known to work or a fetch Yagra asked for is outstanding (`rotation::in_flight`): a
-/// login nobody has confirmed is tried only when the limits allowed it, never by oxidized's own
-/// daily schedule. A node that is not ready is left out; one whose credential fails to open is
-/// left out and logged by id, never by content.
+/// A node whose login may be handed over ([`hands_login`]) gets it and its address. Every other
+/// one is [`parked`]: in the list, so its versions stay readable while it looks for a login, and
+/// unable to reach the device. A login that fails to open, or is no longer a CLI login, parks the
+/// node too, logged by id, never by content.
 pub(crate) async fn source_nodes(
     targets: Vec<BackupTarget>,
     creds: &CredentialStore,
@@ -100,37 +132,6 @@ pub(crate) async fn source_nodes(
 ) -> Vec<SourceNode> {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
-        let Some(cred) = t.rotation.credential_id else {
-            continue;
-        };
-        if !t.rotation.login_confirmed && !super::rotation::in_flight(t.rotation.requested_at, now)
-        {
-            continue;
-        }
-        let opened = match creds.open(cred).await {
-            Ok(Some(o)) => o,
-            Ok(None) => continue,
-            Err(e) => {
-                tracing::warn!(node = %t.node_id, error = %e, "config backup: credential decrypt failed");
-                continue;
-            }
-        };
-        if opened.0 != KIND_CLI_LOGIN {
-            continue;
-        }
-        let ready = readiness(
-            Some(&t.config),
-            t.profile_name.as_deref(),
-            true,
-            t.address_changed,
-        );
-        if ready != Readiness::Ready {
-            continue;
-        }
-        let Ok(login) = CliLoginSecret::parse(&opened.1) else {
-            tracing::warn!(node = %t.node_id, "config backup: the CLI login does not parse");
-            continue;
-        };
         let (Some(model), Some(input)) = (
             model_of(
                 t.config.model_override.as_deref(),
@@ -140,15 +141,36 @@ pub(crate) async fn source_nodes(
         ) else {
             continue;
         };
-        out.push(SourceNode {
-            name: t.node_id.to_string(),
-            ip: t.address.to_string(),
-            model,
-            input,
-            group: super::GROUP,
-            username: login.username,
-            password: login.password,
-            enable: login.enable,
+        let name = t.node_id.to_string();
+        let login = match t.rotation.credential_id.filter(|_| hands_login(&t, now)) {
+            Some(cred) => match creds.open(cred).await {
+                Ok(Some((kind, secret))) if kind == KIND_CLI_LOGIN => {
+                    let parsed = CliLoginSecret::parse(&secret).ok();
+                    if parsed.is_none() {
+                        tracing::warn!(node = %t.node_id, "config backup: the CLI login does not parse");
+                    }
+                    parsed
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(node = %t.node_id, error = %e, "config backup: credential decrypt failed");
+                    None
+                }
+            },
+            None => None,
+        };
+        out.push(match login {
+            Some(login) => SourceNode {
+                name,
+                ip: t.address.to_string(),
+                model,
+                input,
+                group: super::GROUP,
+                username: login.username,
+                password: login.password,
+                enable: login.enable,
+            },
+            None => parked(name, model, input),
         });
     }
     out
@@ -247,6 +269,41 @@ mod tests {
         // Switched off, it is simply off.
         let off = cfg(false, BackupInput::Ssh, Some("ios"));
         assert_eq!(readiness(Some(&off), None, true, true), Readiness::Off);
+    }
+
+    fn target(confirmed: bool, requested: Option<DateTime<Utc>>, moved: bool) -> BackupTarget {
+        BackupTarget {
+            node_id: Uuid::from_u128(1),
+            address: "192.0.2.10".parse().expect("address"),
+            profile_name: None,
+            config: cfg(true, BackupInput::Ssh, Some("ios")),
+            rotation: yagra_base::config_backup::Rotation {
+                credential_id: Some(Uuid::from_u128(2)),
+                login_confirmed: confirmed,
+                requested_at: requested,
+                ..Default::default()
+            },
+            address_changed: moved,
+        }
+    }
+
+    /// A login reaches oxidized only while it works or a fetch for it is out, and never for a node
+    /// that moved; everything else is parked.
+    #[test]
+    fn only_a_working_or_requested_login_is_handed_over() {
+        let now = Utc::now();
+        assert!(hands_login(&target(true, None, false), now));
+        assert!(hands_login(&target(false, Some(now), false), now));
+        assert!(!hands_login(&target(false, None, false), now));
+        assert!(!hands_login(
+            &target(false, Some(now - chrono::TimeDelta::hours(1)), false),
+            now
+        ));
+        assert!(!hands_login(&target(true, None, true), now));
+        let p = parked("n".to_owned(), "ios".to_owned(), "ssh");
+        assert_eq!(p.ip, PARKED_IP);
+        assert_eq!(p.group, super::super::GROUP);
+        assert_eq!(p.enable, None);
     }
 
     #[test]
