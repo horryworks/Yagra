@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { PushStatusView } from '../../types/api';
-import { authForUrl, canSaveRemote, gitRemoteChip, pushLine, remoteBody } from './gitRemote';
+import {
+  authForUrl,
+  canSaveRemote,
+  gitRemoteChip,
+  pushLine,
+  remoteBody,
+  storedTokenUsable,
+} from './gitRemote';
 
 const status = (over: Partial<PushStatusView> = {}): PushStatusView => ({
   configured: true,
@@ -69,6 +76,15 @@ describe('the form', () => {
       auth: 'ssh_key',
     });
     expect(remoteBody({ ...form, url: 'ftp://x' })).toBeNull();
+  });
+
+  it('keeps a stored token only for the host and port it was given for', () => {
+    const was = 'https://GitHub.com/acme/a.git';
+    expect(storedTokenUsable(was, 'https_token', 'https://github.com/acme/b.git')).toBe(true);
+    expect(storedTokenUsable(was, 'https_token', 'https://example.com/acme/a.git')).toBe(false);
+    expect(storedTokenUsable(was, 'https_token', 'https://github.com:8443/acme/a.git')).toBe(false);
+    expect(storedTokenUsable(was, 'ssh_key', 'https://github.com/acme/a.git')).toBe(false);
+    expect(storedTokenUsable(null, null, 'https://github.com/acme/a.git')).toBe(false);
   });
 
   it('can be saved once it says enough', () => {

@@ -13383,7 +13383,10 @@ export interface components {
             auth: components["schemas"]["GitAuth"];
             /** @description The branch pushed to. Omitted: `main`. */
             branch?: string | null;
-            /** @description The HTTPS access token. Omitted: keep the stored one. */
+            /**
+             * @description The HTTPS access token. Omitted: keep the stored one, which is only kept for the same host
+             *     and port.
+             */
             token?: string | null;
             /**
              * @description `https://host/owner/repo.git` for a token, `ssh://git@host/owner/repo.git` or
@@ -17931,7 +17934,7 @@ export interface operations {
                     "application/json": components["schemas"]["RemoteView"];
                 };
             };
-            /** @description A URL, branch, user name or token that is refused (`invalid_config_backup_remote`) */
+            /** @description A URL, branch, user name or token that is refused (`invalid_config_backup_remote`), or a destination moved to another host with no token of its own (`token_required_for_new_address`) */
             400: {
                 headers: {
                     [name: string]: unknown;

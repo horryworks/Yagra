@@ -52,6 +52,22 @@ export function authForUrl(url: string): GitAuth | null {
   return null;
 }
 
+/** The scheme and authority of an HTTPS URL, lower-cased; `null` for any other. The server keeps a
+ *  sealed token only while this stays the same (`config_remote.rs::https_origin`). */
+export function httpsOrigin(url: string): string | null {
+  const u = url.trim();
+  if (!u.startsWith('https://')) return null;
+  return `https://${u.slice('https://'.length).split('/')[0].toLowerCase()}`;
+}
+
+/** Whether the stored token may be kept for `url`: there is one, and the URL still names the host
+ *  and port it was given for. */
+export function storedTokenUsable(storedUrl: string | null, storedAuth: GitAuth | null, url: string) {
+  if (storedAuth !== 'https_token' || !storedUrl) return false;
+  const was = httpsOrigin(storedUrl);
+  return was !== null && was === httpsOrigin(url);
+}
+
 /** The form a person fills in. */
 export interface GitRemoteForm {
   url: string;

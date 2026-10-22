@@ -26,7 +26,14 @@ import { formatTimestamp } from '../../lib/format';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { FormFooter } from '../../components/ui/FormFooter';
-import { authForUrl, canSaveRemote, pushLine, remoteBody, type GitRemoteForm } from './gitRemote';
+import {
+  authForUrl,
+  canSaveRemote,
+  pushLine,
+  remoteBody,
+  storedTokenUsable,
+  type GitRemoteForm,
+} from './gitRemote';
 import './GitRemotePage.css';
 
 function RemoteModal({
@@ -48,6 +55,8 @@ function RemoteModal({
   const submit = useSubmit({ errorFallback: t('git.err.save'), onDone: onSaved });
   const auth = authForUrl(form.url);
   const tokenStored = existing.auth === 'https_token';
+  // A sealed token goes only to the host it was given for; another host needs its own.
+  const tokenUsable = storedTokenUsable(existing.url, existing.auth, form.url);
   const body = remoteBody(form);
   const save = () => {
     if (!body) return;
@@ -64,7 +73,7 @@ function RemoteModal({
           onClose={onClose}
           onSubmit={save}
           submitLabel={t('common:actions.save')}
-          canSubmit={canSaveRemote(form, tokenStored)}
+          canSubmit={canSaveRemote(form, tokenUsable)}
         />
       }
     >
@@ -100,6 +109,7 @@ function RemoteModal({
             <SecretInput
               id="git-token"
               stored={tokenStored}
+              mustReplace={tokenStored && !tokenUsable}
               value={form.token}
               onChange={(token) => setForm({ ...form, token })}
             />

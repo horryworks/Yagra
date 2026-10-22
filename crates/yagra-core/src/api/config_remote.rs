@@ -273,7 +273,8 @@ pub(super) struct RemoteBody {
     /// The HTTPS user name (`x-token-auth` for a Bitbucket repository token).
     #[serde(default)]
     username: Option<String>,
-    /// The HTTPS access token. Omitted: keep the stored one.
+    /// The HTTPS access token. Omitted: keep the stored one, which is only kept for the same host
+    /// and port.
     #[serde(default)]
     token: Option<String>,
 }
@@ -283,7 +284,7 @@ pub(super) struct RemoteBody {
     request_body = RemoteBody,
     responses(
         (status = 200, description = "Set. With an SSH key, the response carries the public half to register as a deploy key", body = RemoteView),
-        (status = 400, description = "A URL, branch, user name or token that is refused (`invalid_config_backup_remote`)", body = super::error::ErrorBody),
+        (status = 400, description = "A URL, branch, user name or token that is refused (`invalid_config_backup_remote`), or a destination moved to another host with no token of its own (`token_required_for_new_address`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "The caller lacks manage-system", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -336,9 +337,24 @@ async fn put_remote(
                 .as_deref()
                 .map(str::trim)
                 .filter(|t| !t.is_empty());
+            // The stored token goes only to the host it was given for: an edit that moves the URL
+            // to another host or port must bring a token, or the sealed one would be sent to a
+            // server it was never meant for (the rule NetBox's edit follows, ADR-178 decision 3).
+            let same_origin = existing.as_ref().is_some_and(|r| {
+                config_remote::https_origin(&r.url).is_some()
+                    && config_remote::https_origin(&r.url) == config_remote::https_origin(&url)
+            });
             let token = match (typed, &stored) {
                 (Some(t), _) => t.to_owned(),
-                (None, Some(GitRemoteSecret::HttpsToken { token, .. })) => token.clone(),
+                (None, Some(GitRemoteSecret::HttpsToken { token, .. })) if same_origin => {
+                    token.clone()
+                }
+                (None, Some(GitRemoteSecret::HttpsToken { .. })) => {
+                    return Err(ApiError::bad_request(
+                        "token_required_for_new_address",
+                        "a destination on another host needs its own token",
+                    ))
+                }
                 (None, Some(GitRemoteSecret::SshKey { .. }) | None) => {
                     return Err(bad("a token is needed"))
                 }
@@ -694,6 +710,15 @@ mod tests {
             .unwrap();
         assert_eq!(again.credential_id, remote.credential_id);
         assert_eq!(again.generation, 2);
+
+        // The sealed token is never sent to another host: moving the URL needs a new one.
+        let moved = serde_json::json!({
+            "url": "https://example.org/acme/configs.git", "auth": "https_token",
+            "username": "bot",
+        });
+        let (status, body) = send(&st, "PUT", PATH, &admin, Some(moved)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "token_required_for_new_address");
 
         for bad in [
             serde_json::json!({"url": "http://example.com/a.git", "auth": "https_token",

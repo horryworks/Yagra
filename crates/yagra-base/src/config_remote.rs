@@ -238,6 +238,15 @@ pub fn host_of(url: &str) -> Option<&str> {
     (ok_host && !path.is_empty() && !path.contains("..")).then_some(name)
 }
 
+/// The scheme and authority of an HTTPS destination (`https://host[:port]`, lower-cased) — what a
+/// sealed token was given for. `None` for any other URL.
+#[must_use]
+pub fn https_origin(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let authority = rest.split('/').next()?;
+    Some(format!("https://{}", authority.to_ascii_lowercase()))
+}
+
 /// The longest branch name accepted.
 pub const BRANCH_MAX: usize = 100;
 
@@ -702,6 +711,16 @@ mod tests {
             Some("git.example.com")
         );
         assert_eq!(host_of("git@gitlab.com:acme/c.git"), Some("gitlab.com"));
+    }
+
+    #[test]
+    fn a_token_belongs_to_the_host_and_port_it_was_given_for() {
+        let a = https_origin("https://GitHub.com/acme/a.git");
+        assert_eq!(a.as_deref(), Some("https://github.com"));
+        assert_eq!(a, https_origin("https://github.com/other/b.git"));
+        assert_ne!(a, https_origin("https://github.com:8443/acme/a.git"));
+        assert_ne!(a, https_origin("https://example.com/acme/a.git"));
+        assert_eq!(https_origin("git@github.com:acme/a.git"), None);
     }
 
     #[test]

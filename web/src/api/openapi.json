@@ -2938,7 +2938,7 @@
             }
           },
           "400": {
-            "description": "A URL, branch, user name or token that is refused (`invalid_config_backup_remote`)",
+            "description": "A URL, branch, user name or token that is refused (`invalid_config_backup_remote`), or a destination moved to another host with no token of its own (`token_required_for_new_address`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -42651,7 +42651,7 @@
               "string",
               "null"
             ],
-            "description": "The HTTPS access token. Omitted: keep the stored one."
+            "description": "The HTTPS access token. Omitted: keep the stored one, which is only kept for the same host\nand port."
           },
           "url": {
             "type": "string",
