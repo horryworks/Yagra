@@ -62,7 +62,11 @@ export function httpsOrigin(url: string): string | null {
 
 /** Whether the stored token may be kept for `url`: there is one, and the URL still names the host
  *  and port it was given for. */
-export function storedTokenUsable(storedUrl: string | null, storedAuth: GitAuth | null, url: string) {
+export function storedTokenUsable(
+  storedUrl: string | null,
+  storedAuth: string | null,
+  url: string,
+): boolean {
   if (storedAuth !== 'https_token' || !storedUrl) return false;
   const was = httpsOrigin(storedUrl);
   return was !== null && was === httpsOrigin(url);

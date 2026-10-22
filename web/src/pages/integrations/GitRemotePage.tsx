@@ -56,7 +56,7 @@ function RemoteModal({
   const auth = authForUrl(form.url);
   const tokenStored = existing.auth === 'https_token';
   // A sealed token goes only to the host it was given for; another host needs its own.
-  const tokenUsable = storedTokenUsable(existing.url, existing.auth, form.url);
+  const tokenUsable = storedTokenUsable(existing.url ?? null, existing.auth ?? null, form.url);
   const body = remoteBody(form);
   const save = () => {
     if (!body) return;
