@@ -1007,6 +1007,30 @@ mod tests {
         }
     }
 
+    /// `yagra-backup.sh` never pulls: its HTTP probes borrow the alpine image the deployment
+    /// already has, which is the one `ipasn-updater` runs. Bump one without the other and the
+    /// probes silently degrade on every box (ADR-211 decision 4).
+    #[test]
+    fn the_backup_borrows_the_alpine_image_the_deployment_runs() {
+        let compose = compose();
+        let updater = compose
+            .split("\n  ipasn-updater:")
+            .nth(1)
+            .expect("the composition has an ipasn-updater service");
+        let image = updater
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("image: "))
+            .expect("ipasn-updater names its image")
+            .trim();
+        assert!(image.starts_with("alpine:"), "ipasn-updater runs {image}");
+        let backup = std::fs::read_to_string("../../scripts/yagra-backup.sh")
+            .expect("the backup script ships beside the composition");
+        assert!(
+            backup.contains(&format!("HTTP_IMAGE=\"${{HTTP_IMAGE:-{image}}}\"")),
+            "yagra-backup.sh's HTTP_IMAGE default must be {image}, the image ipasn-updater pulls"
+        );
+    }
+
     /// The backup is the procedure of record, not a second copy of it (ADR-050 decision 9).
     #[test]
     fn the_relocate_procedure_runs_the_backup_of_record() {

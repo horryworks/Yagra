@@ -24,6 +24,10 @@
 
 - **Every read of a stored secret is in the audit log.** Show secret is a POST, so Settings ▸ Audit log records who read which credential (`POST /api/v1/credentials/{id}/reveal`) and when. The answer is sent with `Cache-Control: no-store`.
 
+- **The WebUI sends security headers, and no longer names its nginx version.** Every response — the page, the scripts, the API, and error answers — now carries `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` (the WebUI can no longer be shown inside another site's frame) and `Referrer-Policy: same-origin`, and the `Server` header says `nginx` without a version. A Content Security Policy is sent in report-only form: it blocks nothing yet and reports in the browser console what it would block, so it can be enforced in a later release once the screens are checked against it. HSTS is not sent, because the default certificate is self-signed and HSTS would stop a browser from continuing past its warning.
+
+- **Dependencies with known vulnerabilities are updated.** The WebUI image moves from nginx 1.27, which no longer receives fixes, to 1.30.6. The IP-to-ASN updater moves from Alpine 3.20, past its support, to 3.24.2; the backup script's probes use the same image. In the Rust build, quinn-proto 0.11.19 (RUSTSEC-2026-0185, -0338, -0339, -0340, -0342; it was in the lock file but compiled into nothing) and event-listener 5.4.2 (RUSTSEC-2026-0221); in the WebUI's tooling, Vitest 4.1.12 (two advisories, development only). Each version had been out for at least a week.
+
 ### Improvements
 
 - **The Nodes menu gives the inventory checks a group of their own.** Duplicates, Subnet overlaps and Subnets missing from IP ranges moved out of Inventory into a new Consistency checks group directly under it: they list what disagrees in the inventory rather than manage it. Their addresses are unchanged, so bookmarks and links keep working.

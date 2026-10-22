@@ -804,7 +804,8 @@ services:
   # unset YAGRA_IPASN_DB on core). Tune cadence via YAGRA_IPASN_REFRESH_SECS (default weekly); it also
   # fetches once on start. $$ escapes keep the shell vars for the container, not compose.
   ipasn-updater:
-    image: alpine:3.20
+    # A patch release, a week old or more (ADR-211 decision 5). 3.20 is past its support window.
+    image: alpine:3.24.2
     restart: unless-stopped
     environment:
       YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}

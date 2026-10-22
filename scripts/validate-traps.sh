@@ -59,7 +59,7 @@ echo "→ firing Net-SNMP trap battery at ${HOST}:${PORT} (community=${COMMUNITY
 
 # One container, net-snmp-tools installed once, whole battery run inside it. --network host so the
 # datagrams reach the host-mapped trap port; TARGET can also be a poller container name on its net.
-docker run --rm --network host alpine:3.20 sh -s <<EOF
+docker run --rm --network host alpine:3.24.2 sh -s <<EOF
 set -e
 apk add --no-cache net-snmp-tools >/dev/null 2>&1
 

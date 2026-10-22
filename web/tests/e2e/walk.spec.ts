@@ -92,4 +92,36 @@ test.describe('what nginx served', () => {
       'id="root"',
     );
   });
+
+  test('every kind of response carries the security headers, and none names the nginx version', async ({
+    page,
+  }) => {
+    // ADR-211. The kinds are not interchangeable: nginx drops the `server`-level headers in any
+    // location that sets its own `add_header`, which `/assets/` and `= /index.html` both do. So the
+    // page and a hashed bundle are the two most likely to come back bare, and a check of the API
+    // alone would pass while they did. The 401 and the 404 are there for `always`.
+    const doc = await page.request.get('/');
+    const bundle = (await doc.text()).match(/\/assets\/[^"']+\.js/)?.[0];
+    expect(bundle, 'the document names no hashed bundle — is this really the built SPA?').toBeTruthy();
+
+    const responses = {
+      document: doc,
+      bundle: await page.request.get(bundle ?? '/assets/'),
+      'API 401': await page.request.get('/api/v1/nodes'),
+      'missing asset 404': await page.request.get('/assets/does-not-exist-ymock.js'),
+    };
+    expect(responses['API 401'].status(), 'the API answered an anonymous caller').toBe(401);
+    expect(responses['missing asset 404'].status()).toBe(404);
+
+    for (const [kind, res] of Object.entries(responses)) {
+      const h = res.headers();
+      expect(h['x-content-type-options'], `${kind}: X-Content-Type-Options`).toBe('nosniff');
+      expect(h['x-frame-options'], `${kind}: X-Frame-Options`).toBe('DENY');
+      expect(h['referrer-policy'], `${kind}: Referrer-Policy`).toBe('same-origin');
+      expect(h['content-security-policy-report-only'], `${kind}: the CSP`).toContain("script-src 'self'");
+      // HSTS stays off on purpose (ADR-044): the default certificate is self-signed.
+      expect(h['strict-transport-security'], `${kind}: HSTS must not be sent`).toBeUndefined();
+      expect(h['server'] ?? '', `${kind}: the Server header names a version`).not.toMatch(/\d/);
+    }
+  });
 });

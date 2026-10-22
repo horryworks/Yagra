@@ -69,8 +69,13 @@ FROM ${WEB_SRC} AS bundle
 #
 # The container port is 8080 whether or not TLS is on (ADR-044): only the scheme changes, so nothing
 # downstream has to track a moving port. The host port defaults to 443.
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+#
+# Pinned to a patch release, not `1.30-alpine`: a dependency is taken only after it has been out a
+# week (ADR-211 decision 5), which a moving tag cannot promise.
+FROM nginxinc/nginx-unprivileged:1.30.6-alpine AS runtime
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# The security headers (ADR-211), included from three places in nginx.conf.
+COPY nginx-security-headers.conf /etc/nginx/yagra-security-headers.conf
 # The proxy directives the three core-facing locations share (ADR-133). An absolute path, matching
 # the listener fragment the entrypoint renders — nginx resolves a relative `include` against its
 # prefix, and two spellings of "where the fragments live" is the kind of thing that only shows up
