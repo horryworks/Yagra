@@ -612,6 +612,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-backup-remote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_remote"];
+        put: operations["put_remote"];
+        post?: never;
+        delete: operations["delete_remote"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-backup-remote/host-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["forget_host_keys"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-backup-remote/ssh-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["regenerate_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config-backup-remote/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["push_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-backups": {
         parameters: {
             query?: never;
@@ -5491,6 +5555,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/oxidized/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["push_ask"];
+        put?: never;
+        post: operations["push_report"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -8739,6 +8819,11 @@ export interface components {
          * @enum {string}
          */
         GeoSource: "own" | "inherited" | "unset";
+        /**
+         * @description How the destination is reached.
+         * @enum {string}
+         */
+        GitAuth: "https_token" | "ssh_key" | "unknown";
         /** @description Create/update body for a group. `group_type` is a validated [`GroupType`] key. */
         GroupBody: {
             group_type: string;
@@ -12752,6 +12837,63 @@ export interface components {
              */
             route_count: number;
         };
+        /**
+         * @description Why a push failed, read from git's output by [`classify_push_output`]. The output itself is
+         *     never reported: it can carry what the destination printed.
+         * @enum {string}
+         */
+        PushFailure: "auth" | "host_key" | "rejected" | "unreachable" | "other" | "unknown";
+        /** @description One push, for the push script: where, as what, and the patterns its output is read by. */
+        PushJob: {
+            auth: components["schemas"]["GitAuth"];
+            branch: string;
+            /**
+             * Format: int64
+             * @description Echoed in the report, so a push made for a destination that has since changed is ignored.
+             */
+            generation: number;
+            /** @description The pinned host keys in known_hosts form; empty before the first SSH push. */
+            known_hosts: string;
+            /** @description `[failure, lower-case text]` pairs, matched in order against git's lower-cased output. */
+            patterns: string[][];
+            /** @description The SSH private key, in plaintext, for this push alone. */
+            private_key?: string | null;
+            /** @description The HTTPS token, in plaintext, for this push alone. */
+            token?: string | null;
+            url: string;
+            username?: string | null;
+        };
+        /** @description How one push went, as the push script reports it. */
+        PushReport: {
+            /** @description Empty when the push succeeded; otherwise the failure core's patterns named. */
+            failure?: string;
+            /** Format: int64 */
+            generation: number;
+            head: string;
+            /** @description The host keys the first SSH push met, in known_hosts form. */
+            known_hosts?: string | null;
+        };
+        /** @description How the last push went. */
+        PushStatusView: {
+            /** @description A destination is set. */
+            configured: boolean;
+            /** Format: date-time */
+            failed_at?: string | null;
+            failure?: null | components["schemas"]["PushFailure"];
+            /**
+             * Format: int32
+             * @description Failed pushes in a row.
+             */
+            failures: number;
+            /** @description The host config backups go to — the URL's host, not its path. */
+            host?: string | null;
+            /**
+             * Format: date-time
+             * @description When a push last succeeded, and the version it delivered.
+             */
+            pushed_at?: string | null;
+            pushed_head?: string | null;
+        };
         /** @description A ranked Top-N result. */
         Ranked_AlertNodeCount: {
             /** @description The ranked rows, highest first, at most the requested `limit`. */
@@ -13235,6 +13377,35 @@ export interface components {
              *     switch — turning upgrades off turns this off too, which is deliberate.
              */
             upgrade_enabled: boolean;
+        };
+        /** @description The destination a person sets. */
+        RemoteBody: {
+            auth: components["schemas"]["GitAuth"];
+            /** @description The branch pushed to. Omitted: `main`. */
+            branch?: string | null;
+            /** @description The HTTPS access token. Omitted: keep the stored one. */
+            token?: string | null;
+            /**
+             * @description `https://host/owner/repo.git` for a token, `ssh://git@host/owner/repo.git` or
+             *     `git@host:owner/repo.git` for a key.
+             */
+            url: string;
+            /** @description The HTTPS user name (`x-token-auth` for a Bitbucket repository token). */
+            username?: string | null;
+        };
+        /** @description The destination, for the person who sets it. */
+        RemoteView: {
+            auth?: null | components["schemas"]["GitAuth"];
+            branch?: string | null;
+            configured: boolean;
+            /** @description The destination's host keys learned on the first SSH push, as `type SHA256:…`. */
+            host_keys: string[];
+            /** @description The public half of the SSH key, to register as a deploy key with write access. */
+            ssh_public_key?: string | null;
+            status: components["schemas"]["PushStatusView"];
+            url?: string | null;
+            /** @description The HTTPS user name. The token is never returned. */
+            username?: string | null;
         };
         /**
          * @description A report's contents: the answer, the evidence it was grounded in, and the language it was
@@ -14222,7 +14393,7 @@ export interface components {
          *     answering the collects of a whole Cisco Meraki organization.
          * @enum {string}
          */
-        SubjectKind: "node" | "pool" | "meraki_org";
+        SubjectKind: "node" | "pool" | "meraki_org" | "config_remote";
         /** @description What Nodes ▸ Subnet overlaps shows. */
         SubnetOverlapsView: {
             counts: components["schemas"]["OverlapCounts"];
@@ -17681,6 +17852,324 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has nowhere to persist the default */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_remote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The config backup destination, `configured: false` when none is set. Never the token or the private key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The caller lacks manage-system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_remote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteBody"];
+            };
+        };
+        responses: {
+            /** @description Set. With an SSH key, the response carries the public half to register as a deploy key */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteView"];
+                };
+            };
+            /** @description A URL, branch, user name or token that is refused (`invalid_config_backup_remote`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The caller lacks manage-system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_remote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed, with its sealed credential. Config backups are kept on the box only */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The caller lacks manage-system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No destination is set (`no_config_backup_remote`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    forget_host_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Forgotten; the next SSH push learns the destination's host keys again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The caller lacks manage-system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No destination is set (`no_config_backup_remote`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    regenerate_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A new key; the old one no longer works and the new public half must be registered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The caller lacks manage-system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No destination is set (`no_config_backup_remote`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The destination uses a token, not a key (`not_ssh_key`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    push_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether config backups are reaching their Git destination: its host, the last push that arrived, the last failure */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushStatusView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -36320,6 +36809,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceNode"][];
+                };
+            };
+            /** @description No token, or the wrong one (`oxidized_token`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    push_ask: {
+        parameters: {
+            query: {
+                /** @description The head of oxidized's repository. */
+                head: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Push this head: the destination with its token or private key in plaintext. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushJob"];
+                };
+            };
+            /** @description Nothing to push: no destination, the head is already there, or a recent push failed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a version id (`invalid_oid`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No token, or the wrong one (`oxidized_token`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    push_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["PushReport"];
+            };
+        };
+        responses: {
+            /** @description Recorded, or ignored when the destination changed since the push was asked for. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token` */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not a version id (`invalid_oid`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No token, or the wrong one (`oxidized_token`) */

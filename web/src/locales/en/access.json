@@ -22,7 +22,8 @@
       "api_token": "API token",
       "meraki_api": "Cisco Meraki API key",
       "netbox_token": "NetBox API token",
-      "cli_login": "CLI login (SSH / telnet)"
+      "cli_login": "CLI login (SSH / telnet)",
+      "git_remote": "Git destination (config backup)"
     },
     "http": {
       "scheme": "Scheme",

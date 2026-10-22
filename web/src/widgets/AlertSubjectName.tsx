@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { EntityName } from '../components/ui/EntityName';
 import { InfoPress, InfoTip } from '../components/ui/InfoTip';
 import { merakiOrgPath, nodeHref } from '../lib/entityHref';
+import { GIT_REMOTE_PATH } from '../pages/integrations/gitRemote';
 import './AlertSubjectName.css';
 
 /** Renders the alert's subject: a node's resolved name (UUID on hover), or the poller pool the
@@ -72,6 +73,10 @@ export function AlertSubjectName({
         </span>
       );
     }
+    case 'config_remote':
+      // One destination for the deployment (ADR-210 stage 4): the link is the page that says why
+      // the last push failed.
+      return <Link to={GIT_REMOTE_PATH}>{t('row.configRemoteSubject')}</Link>;
     default: {
       const unknown: never = subject;
       return unknown;

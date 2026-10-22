@@ -48,6 +48,16 @@ pub const MERAKI_COLLECT_METRIC: &str = "meraki_api_collect";
 /// alert records this as its threshold, so the two read one constant.
 pub const MERAKI_RAISE_AFTER_FAILURES: u32 = 3;
 
+/// What the config-backup destination is called on a screen and in a notification: there is one,
+/// so it has no name of its own (`Subject::ConfigRemote`).
+pub const CONFIG_REMOTE_NAME: &str = "Config backup Git destination";
+
+/// The metric the config-backup destination's alert carries (ADR-210 stage 4 decision 33): the
+/// Git repository config backups are pushed to has stopped accepting them. Not a collected series —
+/// a label for the alert row, like [`POOL_COVERAGE_METRIC`]. Core counts the failed pushes and
+/// decides when; the engine raises and resolves it.
+pub const CONFIG_PUSH_METRIC: &str = "config_backup_push";
+
 /// The metric a "device replaced" alert carries (ADR-208 decision 5): a node's device answered
 /// with a `sysObjectID` other than the one stored, so a different model now answers at its address.
 /// Not a collected series — a label for the alert row, like [`POOL_COVERAGE_METRIC`].
@@ -1759,11 +1769,16 @@ impl AlertManager {
     /// id. One function so the REST views, the SSE frame and the MCP results cannot disagree.
     #[must_use]
     pub fn subject_display_name(&self, subject: &Subject) -> Option<String> {
-        subject.name().map(str::to_owned).or_else(|| {
-            subject
-                .meraki_org()
-                .and_then(|org| self.meraki_org_name(org))
-        })
+        match subject {
+            Subject::ConfigRemote => Some(CONFIG_REMOTE_NAME.to_owned()),
+            Subject::Node(_) | Subject::Pool(_) | Subject::MerakiOrg(_) => {
+                subject.name().map(str::to_owned).or_else(|| {
+                    subject
+                        .meraki_org()
+                        .and_then(|org| self.meraki_org_name(org))
+                })
+            }
+        }
     }
 
     /// What Meraki organization `org` is called, as of the last config generation. `None` for one
@@ -2726,6 +2741,41 @@ impl AlertManager {
             &Subject::MerakiOrg(org),
             MERAKI_COLLECT_METRIC,
         ))
+    }
+
+    /// Raise the config-backup destination's alert (ADR-210 stage 4 decision 33): pushes to the Git
+    /// repository are failing. `failures` is the run of failed pushes, which is what the breach
+    /// carries. `None` when it is already open, so the caller can ask on every tick.
+    ///
+    /// `Warning`: monitoring has not stopped and every version is still kept on the box; what is
+    /// missing is the copy that leaves it. No maintenance window or pause applies, for the reason
+    /// [`Self::raise_pool_coverage_alert`] gives.
+    pub fn raise_config_push_alert(&self, failures: u32, at_unix_ms: i64) -> Option<NotifyAction> {
+        let subject = Subject::ConfigRemote;
+        let check = subject_check_id(&subject, CONFIG_PUSH_METRIC);
+        self.raise_event_alert(Alert {
+            subject,
+            check,
+            severity: Severity::Warning,
+            state: NodeState::Warning,
+            at_unix_ms,
+            root_cause: None,
+            flapping: false,
+            metric: CONFIG_PUSH_METRIC.to_owned(),
+            breach: Some(Breach {
+                value: f64::from(failures),
+                threshold: None,
+                direction: Direction::Above,
+            }),
+            ifindex: None,
+            row: None,
+            row_name: None,
+        })
+    }
+
+    /// Resolve the config-backup destination's alert. `None` if it was not open.
+    pub fn resolve_config_push_alert(&self) -> Option<NotifyAction> {
+        self.resolve_event_alert(subject_check_id(&Subject::ConfigRemote, CONFIG_PUSH_METRIC))
     }
 
     /// Raise the "device replaced" alert on a node (ADR-208 decision 5). `None` when it is already
@@ -5870,6 +5920,30 @@ mod tests {
         let (_, body) = rx.try_recv().expect("the clear reaches it too");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["resolved"], true);
+    }
+
+    #[tokio::test]
+    async fn the_config_push_alert_opens_once_streams_its_subject_and_closes() {
+        let mgr = manager();
+        let mut rx = mgr.subscribe();
+        assert!(mgr.raise_config_push_alert(2, 1_000).is_some());
+        // Asked again on the next tick while it is open: nothing new.
+        assert!(mgr.raise_config_push_alert(3, 2_000).is_none());
+        let (who, body) = rx.try_recv().expect("the alert reaches the stream");
+        assert_eq!(who, Subject::ConfigRemote);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["node"], "config_remote",
+            "the validity gate needs a string"
+        );
+        assert_eq!(v["subject_kind"], "config_remote");
+        assert_eq!(v["severity"], "warning");
+        assert_eq!(
+            mgr.subject_display_name(&Subject::ConfigRemote).as_deref(),
+            Some(CONFIG_REMOTE_NAME)
+        );
+        assert!(mgr.resolve_config_push_alert().is_some());
+        assert!(mgr.resolve_config_push_alert().is_none());
     }
 
     #[test]

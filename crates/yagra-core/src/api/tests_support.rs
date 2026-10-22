@@ -416,6 +416,7 @@ async fn live_state_with(
         // No oxidized unless the test hands one in (`live_state_with_oxidized`): its routes answer
         // 503 otherwise.
         oxidized,
+        config_remote: Arc::new(yagra_base::config_remote::RemoteRepo::new(pool.clone())),
         repo: repo.clone(),
         creds: creds.clone(),
         users: Arc::new(yagra_auth::auth::UserStore::new(pool.clone())),

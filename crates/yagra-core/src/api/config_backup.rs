@@ -112,7 +112,7 @@ fn no_oxidized() -> ApiError {
     )
 }
 
-fn oxidized_of(admin: &super::AdminState) -> Result<&OxidizedHandle, ApiError> {
+pub(super) fn oxidized_of(admin: &super::AdminState) -> Result<&OxidizedHandle, ApiError> {
     admin.oxidized.as_deref().ok_or_else(no_oxidized)
 }
 
@@ -576,7 +576,7 @@ async fn list_versions(
 
 /// A Git object id: 40 lowercase hexadecimal characters. Checked before it reaches oxidized's
 /// query string.
-fn check_oid(oid: &str) -> Result<(), ApiError> {
+pub(super) fn check_oid(oid: &str) -> Result<(), ApiError> {
     if oid.len() == 40
         && oid
             .bytes()
@@ -880,7 +880,7 @@ async fn list_config_backups(
 
 /// The source token, checked in constant time. Read on every call rather than at start-up: the
 /// one-shot that writes it may run after core.
-fn check_source_token(ox: &OxidizedHandle, headers: &HeaderMap) -> Result<(), ApiError> {
+pub(super) fn check_source_token(ox: &OxidizedHandle, headers: &HeaderMap) -> Result<(), ApiError> {
     let refused = || ApiError::unauthorized_with("oxidized_token", "no valid source token");
     let expected = oxidized::config::read_token(&ox.settings.home).map_err(|e| {
         tracing::warn!(error = %e, "config backup: the oxidized source token could not be read");

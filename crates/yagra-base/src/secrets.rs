@@ -280,6 +280,59 @@ impl CliLoginSecret {
     }
 }
 
+/// Credential kind for pushing config backups to a Git repository (ADR-210 stage 4 decision 30).
+/// The secret is a [`GitRemoteSecret`] JSON document. An integration key: never revealed, never
+/// polled with, and read only by `GET /internal/oxidized/push`, which hands it to the bundled
+/// oxidized for one push.
+pub const KIND_GIT_REMOTE: &str = "git_remote";
+
+/// The sealed JSON shape of a `git_remote` credential: an HTTPS token with the user name it is
+/// presented as, or the private half of an SSH key Yagra generated (OpenSSH PEM form).
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(tag = "auth", rename_all = "snake_case")]
+pub enum GitRemoteSecret {
+    HttpsToken { username: String, token: String },
+    SshKey { private_key: String },
+}
+
+// By hand, so a debug print of one can never carry the token or the key.
+impl std::fmt::Debug for GitRemoteSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HttpsToken { username, .. } => f
+                .debug_struct("HttpsToken")
+                .field("username", username)
+                .finish_non_exhaustive(),
+            Self::SshKey { .. } => f.debug_struct("SshKey").finish_non_exhaustive(),
+        }
+    }
+}
+
+impl GitRemoteSecret {
+    /// Parse and structurally validate a Git destination secret. `Err` carries a static
+    /// description only — never any field content.
+    pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
+        let secret: Self = serde_json::from_slice(bytes)
+            .map_err(|_| "not a valid Git destination JSON document")?;
+        match &secret {
+            Self::HttpsToken { username, token } => {
+                if username.trim().is_empty() {
+                    return Err("username must not be empty");
+                }
+                if token.trim().is_empty() {
+                    return Err("token must not be empty");
+                }
+            }
+            Self::SshKey { private_key } => {
+                if !private_key.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----") {
+                    return Err("private_key must be an OpenSSH private key");
+                }
+            }
+        }
+        Ok(secret)
+    }
+}
+
 /// Parse a sealed credential into the [`HttpAuth`] a poll job carries.
 ///
 /// `Err` carries a static description only — never any field content, since the message reaches

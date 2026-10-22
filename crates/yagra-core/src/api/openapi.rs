@@ -128,6 +128,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::reclassify::Doc::openapi(),
         super::rediscover::Doc::openapi(),
         super::config_backup::Doc::openapi(),
+        super::config_remote::Doc::openapi(),
         super::discovery::Doc::openapi(),
         super::notifications::Doc::openapi(),
         super::rca::Doc::openapi(),

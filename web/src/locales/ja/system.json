@@ -453,6 +453,9 @@
     },
     "netbox": {
       "desc": "NetBox の Region と Site をグループのツリーへ読み取り専用で取り込み"
+    },
+    "git": {
+      "desc": "config のバックアップを Git に送る"
     }
   },
   "meraki": {
@@ -798,6 +801,64 @@
     },
     "ownership": {
       "info": "グループの名前・親・地図上の位置は同期が上書きします。グループに設定したポーラープールは残り、NetBox で消えた Site は削除せずに印を付けます。"
+    }
+  },
+  "git": {
+    "name": "Git（config のバックアップ）",
+    "note": "取った config を 1 つの Git リポジトリに送る",
+    "card": {
+      "title": "送り先",
+      "empty": "config のバックアップはこの箱の中にだけあります。",
+      "set": "送り先を決める",
+      "deployKey": "デプロイキー",
+      "newKey": "鍵を作り直す",
+      "hostKeys": "ホスト鍵",
+      "forget": "忘れる"
+    },
+    "form": {
+      "addTitle": "Git の送り先を決める",
+      "editTitle": "Git の送り先を直す",
+      "url": "リポジトリの URL",
+      "branch": "ブランチ",
+      "username": "ユーザー名",
+      "token": "アクセストークン",
+      "urlShape": "https://host/owner/repo.git、ssh://git@host/owner/repo.git、git@host:owner/repo.git のどれかの形にしてください。",
+      "keyMade": "保存すると鍵を作ります。公開鍵を書き込みできるデプロイキーとして登録してください。",
+      "warning": "取った config を全部ここへ送ります。パスワードは機種ごとに消すので消し残しがあります。非公開の空のリポジトリを使ってください。"
+    },
+    "push": {
+      "none": "送り先が決まっていません。",
+      "waiting": "まだ送っていません。次に config を取ったときに送ります。",
+      "ok": "{{at}} に送りました（{{head}}）。",
+      "failed": "{{at}} に送れませんでした: {{why}}"
+    },
+    "failure": {
+      "auth": "ログインが断られたか、リポジトリが見つかりません",
+      "host_key": "ホスト鍵が変わりました",
+      "rejected": "Yagra の知らない版がリポジトリにあります",
+      "unreachable": "相手が応答しません",
+      "other": "git が失敗しました",
+      "unknown": "git が失敗しました"
+    },
+    "status": {
+      "waiting": "まだ送っていない",
+      "ok": "送信中",
+      "failed": "送れていない"
+    },
+    "confirm": {
+      "delete": {
+        "title": "Git の送り先を消しますか？",
+        "action": "消す",
+        "body": "config のバックアップは箱の外へ出なくなります。送った分はリポジトリに残ります。"
+      },
+      "key": {
+        "title": "SSH の鍵を作り直しますか？",
+        "action": "作り直す",
+        "body": "今の鍵は使えなくなります。新しい公開鍵を登録するまで送れません。"
+      }
+    },
+    "err": {
+      "save": "Git の送り先を保存できませんでした。"
     }
   }
 }

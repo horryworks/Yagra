@@ -41,6 +41,9 @@ import type {
   CredentialSummary,
   RevealedCredential,
   ConfigBackupRow,
+  GitAuth,
+  PushStatusView,
+  RemoteView,
   ConfigBackupView,
   ConfigVersion,
   ConfigText,
@@ -1261,6 +1264,35 @@ export const api = {
   /** Every node switched on for config backup that the caller can see (Nodes ▸ Config backups and
    *  the tree's marks). */
   listConfigBackups: (): Promise<ConfigBackupRow[]> => apiGet('/api/v1/config-backups'),
+
+  /** Where config backups are pushed (ADR-210 stage 4), for the administrator who sets it. Never
+   *  its token or private key. */
+  getConfigBackupRemote: (): Promise<RemoteView> => apiGet('/api/v1/config-backup-remote'),
+
+  /** Set or replace the destination. An omitted token keeps the sealed one; an SSH destination
+   *  gets a key made by the server, whose public half comes back. */
+  putConfigBackupRemote: (body: {
+    url: string;
+    branch: string | null;
+    auth: GitAuth;
+    username?: string;
+    token?: string;
+  }): Promise<RemoteView> => apiPut('/api/v1/config-backup-remote', { body }),
+
+  /** Stop pushing, and delete the sealed credential. */
+  deleteConfigBackupRemote: (): Promise<void> => apiDelete('/api/v1/config-backup-remote'),
+
+  /** Replace the SSH key with a new one; the new public half must be registered. */
+  newConfigBackupRemoteKey: (): Promise<RemoteView> =>
+    apiPost('/api/v1/config-backup-remote/ssh-key'),
+
+  /** Forget the destination's host keys, so the next push learns them again. */
+  forgetConfigBackupRemoteHostKeys: (): Promise<void> =>
+    apiDelete('/api/v1/config-backup-remote/host-keys'),
+
+  /** Whether config backups are reaching their Git destination. */
+  getConfigBackupRemoteStatus: (): Promise<PushStatusView> =>
+    apiGet('/api/v1/config-backup-remote/status'),
 
   /** One node's config detail incl. bindings (profile/credential/parent). */
   getNode: (id: string): Promise<NodeDetail> =>

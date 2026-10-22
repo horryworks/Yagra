@@ -2862,6 +2862,338 @@
         }
       }
     },
+    "/api/v1/config-backup-remote": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_remote",
+        "responses": {
+          "200": {
+            "description": "The config backup destination, `configured: false` when none is set. Never the token or the private key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks manage-system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "put_remote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoteBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Set. With an SSH key, the response carries the public half to register as a deploy key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A URL, branch, user name or token that is refused (`invalid_config_backup_remote`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks manage-system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "delete_remote",
+        "responses": {
+          "204": {
+            "description": "Removed, with its sealed credential. Config backups are kept on the box only"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks manage-system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No destination is set (`no_config_backup_remote`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config-backup-remote/host-keys": {
+      "delete": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "forget_host_keys",
+        "responses": {
+          "204": {
+            "description": "Forgotten; the next SSH push learns the destination's host keys again"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks manage-system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No destination is set (`no_config_backup_remote`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config-backup-remote/ssh-key": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "regenerate_key",
+        "responses": {
+          "200": {
+            "description": "A new key; the old one no longer works and the new public half must be registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks manage-system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No destination is set (`no_config_backup_remote`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The destination uses a token, not a key (`not_ssh_key`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config-backup-remote/status": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "push_status",
+        "responses": {
+          "200": {
+            "description": "Whether config backups are reaching their Git destination: its host, the last push that arrived, the last failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushStatusView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config-backups": {
       "get": {
         "tags": [
@@ -26063,6 +26395,121 @@
         }
       }
     },
+    "/internal/oxidized/push": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "push_ask",
+        "parameters": [
+          {
+            "name": "head",
+            "in": "query",
+            "description": "The head of oxidized's repository.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Push this head: the destination with its token or private key in plaintext. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushJob"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Nothing to push: no destination, the head is already there, or a recent push failed"
+          },
+          "400": {
+            "description": "Not a version id (`invalid_oid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or the wrong one (`oxidized_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "push_report",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/PushReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded, or ignored when the destination changed since the push was asked for. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`"
+          },
+          "400": {
+            "description": "Not a version id (`invalid_oid`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or the wrong one (`oxidized_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/readyz": {
       "get": {
         "tags": [
@@ -33230,6 +33677,15 @@
           "own",
           "inherited",
           "unset"
+        ]
+      },
+      "GitAuth": {
+        "type": "string",
+        "description": "How the destination is reached.",
+        "enum": [
+          "https_token",
+          "ssh_key",
+          "unknown"
         ]
       },
       "GroupBody": {
@@ -40920,6 +41376,167 @@
           }
         }
       },
+      "PushFailure": {
+        "type": "string",
+        "description": "Why a push failed, read from git's output by [`classify_push_output`]. The output itself is\nnever reported: it can carry what the destination printed.",
+        "enum": [
+          "auth",
+          "host_key",
+          "rejected",
+          "unreachable",
+          "other",
+          "unknown"
+        ]
+      },
+      "PushJob": {
+        "type": "object",
+        "description": "One push, for the push script: where, as what, and the patterns its output is read by.",
+        "required": [
+          "generation",
+          "url",
+          "branch",
+          "auth",
+          "known_hosts",
+          "patterns"
+        ],
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/GitAuth"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Echoed in the report, so a push made for a destination that has since changed is ignored."
+          },
+          "known_hosts": {
+            "type": "string",
+            "description": "The pinned host keys in known_hosts form; empty before the first SSH push."
+          },
+          "patterns": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "`[failure, lower-case text]` pairs, matched in order against git's lower-cased output."
+          },
+          "private_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The SSH private key, in plaintext, for this push alone."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HTTPS token, in plaintext, for this push alone."
+          },
+          "url": {
+            "type": "string"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PushReport": {
+        "type": "object",
+        "description": "How one push went, as the push script reports it.",
+        "required": [
+          "generation",
+          "head"
+        ],
+        "properties": {
+          "failure": {
+            "type": "string",
+            "description": "Empty when the push succeeded; otherwise the failure core's patterns named."
+          },
+          "generation": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "head": {
+            "type": "string"
+          },
+          "known_hosts": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host keys the first SSH push met, in known_hosts form."
+          }
+        }
+      },
+      "PushStatusView": {
+        "type": "object",
+        "description": "How the last push went.",
+        "required": [
+          "configured",
+          "failures"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "A destination is set."
+          },
+          "failed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PushFailure",
+                "description": "Why the last push failed, when the last one did."
+              }
+            ]
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Failed pushes in a row.",
+            "minimum": 0
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The host config backups go to — the URL's host, not its path."
+          },
+          "pushed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a push last succeeded, and the version it delivered."
+          },
+          "pushed_head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "Ranked_AlertNodeCount": {
         "type": "object",
         "description": "A ranked Top-N result.",
@@ -42008,6 +42625,104 @@
           "upgrade_enabled": {
             "type": "boolean",
             "description": "The operator's switch, as stored. Shared with the upgrade mechanism: one sidecar, one\nswitch — turning upgrades off turns this off too, which is deliberate."
+          }
+        }
+      },
+      "RemoteBody": {
+        "type": "object",
+        "description": "The destination a person sets.",
+        "required": [
+          "url",
+          "auth"
+        ],
+        "properties": {
+          "auth": {
+            "$ref": "#/components/schemas/GitAuth"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The branch pushed to. Omitted: `main`."
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HTTPS access token. Omitted: keep the stored one."
+          },
+          "url": {
+            "type": "string",
+            "description": "`https://host/owner/repo.git` for a token, `ssh://git@host/owner/repo.git` or\n`git@host:owner/repo.git` for a key."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HTTPS user name (`x-token-auth` for a Bitbucket repository token)."
+          }
+        }
+      },
+      "RemoteView": {
+        "type": "object",
+        "description": "The destination, for the person who sets it.",
+        "required": [
+          "configured",
+          "host_keys",
+          "status"
+        ],
+        "properties": {
+          "auth": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GitAuth"
+              }
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "host_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The destination's host keys learned on the first SSH push, as `type SHA256:…`."
+          },
+          "ssh_public_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The public half of the SSH key, to register as a deploy key with write access."
+          },
+          "status": {
+            "$ref": "#/components/schemas/PushStatusView"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The HTTPS user name. The token is never returned."
           }
         }
       },
@@ -44212,7 +44927,8 @@
         "enum": [
           "node",
           "pool",
-          "meraki_org"
+          "meraki_org",
+          "config_remote"
         ]
       },
       "SubnetOverlapsView": {

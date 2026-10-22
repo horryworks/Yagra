@@ -651,6 +651,7 @@ mod tests {
     const FOREIGN_KEYS_WITHOUT_AN_INDEX: &[(&str, &str, &str)] = &[
         ("bus_tls_config", "issued_by", ONE_ROW),
         ("classification_rules", "profile_id", OPERATOR_ROWS),
+        ("config_backup_remote", "credential_id", ONE_ROW),
         ("event_rules", "node_id", OPERATOR_ROWS),
         ("event_rules", "source_id", OPERATOR_ROWS),
         ("event_sources", "node_id", OPERATOR_ROWS),

@@ -21,6 +21,7 @@
     "acked": "ACK 済み",
     "mutedUntil": "ミュート中（{{until}} まで）",
     "poolSubject": "ポーラープール「{{pool}}」",
+    "configRemoteSubject": "config のバックアップの Git の送り先",
     "merakiOrgSubject": "Meraki 組織「{{org}}」",
     "partOfOutage": "このノードの停止に含まれる",
     "poolSubjectWhy": {

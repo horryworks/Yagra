@@ -1888,6 +1888,7 @@ fn json_notification(
         (Subject::MerakiOrg(org), NotifyEvent::Suppress) => {
             format!("rolled up: Meraki organization {org} suppressed")
         }
+        (Subject::ConfigRemote, event) => crate::alerts::notify_text::config_remote_title(event),
     };
     let payload = serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned());
     Notification::for_alert(alert, summary, payload)

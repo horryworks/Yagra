@@ -41,6 +41,7 @@ mod classification;
 pub(crate) mod collection;
 pub(crate) mod config_backup;
 mod config_bundle;
+pub(crate) mod config_remote;
 pub(crate) mod credentials;
 mod dashboard;
 pub(crate) mod discovery;
@@ -157,6 +158,8 @@ pub struct AdminState {
     pub config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
     /// The bundled oxidized; `None` on a deployment without one, where its routes answer 503.
     pub oxidized: Option<Arc<config_backup::OxidizedHandle>>,
+    /// Where config backups are pushed (ADR-210 stage 4).
+    pub config_remote: Arc<yagra_base::config_remote::RemoteRepo>,
     pub repo: Arc<NodeRepo>,
     pub creds: Arc<CredentialStore>,
     pub users: Arc<UserStore>,
@@ -502,6 +505,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(rediscover::routes())
         // Config backup through the bundled oxidized (ADR-210 stage 2), and oxidized's source.
         .merge(config_backup::routes())
+        .merge(config_remote::routes())
         // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
         .merge(openapi::routes())
         .merge(discovery::routes())

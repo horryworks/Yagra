@@ -84,6 +84,8 @@ const schemaEnumPins: {
   BackupReadiness: AssertEqual<BackupReadiness, components['schemas']['Readiness']>;
   AttemptOutcome: AssertEqual<AttemptOutcome, components['schemas']['AttemptOutcome']>;
   ScanMode: AssertEqual<ScanMode, Exclude<components['schemas']['ScanMode'], 'unknown'>>;
+  GitAuth: AssertEqual<GitAuth, Exclude<components['schemas']['GitAuth'], 'unknown'>>;
+  PushFailure: AssertEqual<PushFailure, components['schemas']['PushFailure']>;
   RevealedFieldKey: AssertEqual<RevealedFieldKey, components['schemas']['RevealedFieldKey']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
   DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
@@ -157,6 +159,8 @@ const schemaEnumPins: {
   BackupReadiness: true,
   AttemptOutcome: true,
   ScanMode: true,
+  GitAuth: true,
+  PushFailure: true,
   RevealedFieldKey: true,
   NeighborProto: true,
   NeighborCapability: true,
@@ -422,6 +426,26 @@ export const ATTEMPT_OUTCOMES = [
   'unknown',
 ] as const;
 export type AttemptOutcome = (typeof ATTEMPT_OUTCOMES)[number];
+/** How the config-backup Git destination is reached (ADR-210 stage 4). The server's `unknown` is
+ *  never offered. Pinned to `schemas.GitAuth` minus `unknown`. */
+export const GIT_AUTHS = ['https_token', 'ssh_key'] as const;
+export type GitAuth = (typeof GIT_AUTHS)[number];
+
+/** Why a push to the Git destination failed. Pinned to `schemas.PushFailure`. */
+export const PUSH_FAILURES = [
+  'auth',
+  'host_key',
+  'rejected',
+  'unreachable',
+  'other',
+  'unknown',
+] as const;
+export type PushFailure = (typeof PUSH_FAILURES)[number];
+/** The Git destination as an administrator sets it; never its token or private key. */
+export type RemoteView = components['schemas']['RemoteView'];
+/** How the last push to the Git destination went. */
+export type PushStatusView = components['schemas']['PushStatusView'];
+
 /** One config-backup login attempt. */
 export type AttemptView = components['schemas']['AttemptView'];
 /** One node in Nodes ▸ Config backups. */

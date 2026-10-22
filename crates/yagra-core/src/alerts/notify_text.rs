@@ -102,6 +102,24 @@ pub(crate) fn subject(alert: &Alert, facts: &AlertFacts) -> String {
         (Subject::MerakiOrg(_), NotifyEvent::Suppress) => {
             format!("rolled up: Meraki organization {name} suppressed")
         }
+        (Subject::ConfigRemote, event) => config_remote_title(event),
+    }
+}
+
+/// The config-backup destination's title (ADR-210 stage 4 decision 33). The same in the JSON
+/// built-in and here: there is one destination, so nothing needs resolving.
+#[must_use]
+pub(crate) fn config_remote_title(event: NotifyEvent) -> String {
+    match event {
+        NotifyEvent::Fire => {
+            "config backups are not reaching their Git destination — they are kept on the box only"
+                .to_owned()
+        }
+        NotifyEvent::Resolve => {
+            "resolved: config backups are reaching their Git destination again".to_owned()
+        }
+        // Unreachable today: the alert is raised with no root cause, and roll-ups walk nodes.
+        NotifyEvent::Suppress => "rolled up: config backup Git destination suppressed".to_owned(),
     }
 }
 
@@ -114,6 +132,7 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
         Subject::Node(_) => lines.push(("Node", facts.node_label())),
         Subject::Pool(_) => lines.push(("Poller pool", facts.subject_name.clone())),
         Subject::MerakiOrg(_) => lines.push(("Meraki organization", facts.subject_name.clone())),
+        Subject::ConfigRemote => lines.push(("Destination", facts.subject_name.clone())),
     }
     if let Some(g) = &facts.group {
         lines.push(("Folder", g.clone()));

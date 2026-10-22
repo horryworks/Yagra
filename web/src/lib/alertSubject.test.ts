@@ -75,6 +75,23 @@ describe('a Meraki organization as an alert’s subject (ADR-164 決定 18)', ()
   });
 });
 
+describe('the config backup destination as an alert subject (ADR-210 stage 4)', () => {
+  const alert = {
+    node: 'config_remote',
+    subject_kind: 'config_remote' as const,
+    subject_name: 'Config backup Git destination',
+  };
+
+  it('is the destination, never a node', () => {
+    expect(alertSubject(alert)).toEqual({
+      kind: 'config_remote',
+      name: 'Config backup Git destination',
+    });
+    expect(subjectNodeId(alert)).toBeNull();
+    expect(subjectText({ kind: 'config_remote', name: 'x' })).toBe('x');
+  });
+});
+
 describe('rootCause', () => {
   const node = '11111111-1111-4111-8111-111111111111';
   const other = '22222222-2222-4222-8222-222222222222';

@@ -140,6 +140,7 @@ export const CREDENTIAL_KIND_LABEL_KEYS: Record<string, string> = {
   cli_login: 'cred.kind.cli_login',
   meraki_api: 'cred.kind.meraki_api',
   netbox_token: 'cred.kind.netbox_token',
+  git_remote: 'cred.kind.git_remote',
 };
 
 /** A credential kind's display label, falling back to the raw token for a kind this build does not

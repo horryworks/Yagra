@@ -285,6 +285,7 @@ fn run_oxidized_config() -> anyhow::Result<()> {
         std::path::Path::new(&home),
         oxidized::config::SOURCE_URL,
         oxidized::config::EVENTS_URL,
+        oxidized::config::PUSH_URL,
     )?;
     tracing::info!(
         %home,
@@ -898,6 +899,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .map(|(settings, client)| {
                 Arc::new(api::config_backup::OxidizedHandle { settings, client })
             }),
+        config_remote: Arc::new(yagra_base::config_remote::RemoteRepo::new(repo.pool())),
         repo: repo.clone(),
         creds,
         users,
@@ -1693,6 +1695,16 @@ impl LeaderTasks {
                 self.meraki_inflight.clone(),
                 self.alerts.clone(),
                 self.alert_sink(delivery, "a meraki collect transition"),
+            ),
+        );
+        // Whether config backups are reaching their Git destination (ADR-210 stage 4). Leader-only
+        // because it raises an alert; the pushes report to any core, through the database.
+        spawn_cancellable(
+            &self.shutdown,
+            oxidized::push::run_push_alert_watch(
+                Arc::new(yagra_base::config_remote::RemoteRepo::new(self.repo.pool())),
+                self.alerts.clone(),
+                self.alert_sink(delivery, "a config-backup push transition"),
             ),
         );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).

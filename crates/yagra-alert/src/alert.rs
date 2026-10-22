@@ -24,6 +24,12 @@ const POOL_PREFIX: &str = "pool:";
 /// a pool because it arrives behind `pool:`.
 const MERAKI_ORG_PREFIX: &str = "meraki_org:";
 
+/// The flat form of the config-backup destination subject (ADR-210 stage 4 decision 33). There is
+/// one destination per deployment, so the subject carries nothing and its flat form is a word, not
+/// a prefix. It contains `_` and no `-`, so it cannot be read as a UUID, and it is not a prefix of
+/// either form above.
+const CONFIG_REMOTE_FORM: &str = "config_remote";
+
 /// Namespace for the UUIDv5 identities non-node subjects are stored under.
 ///
 /// A fixed literal rather than a derived value so it is `const` and can never move: every row in
@@ -50,6 +56,8 @@ pub enum SubjectKind {
     Pool,
     /// A Cisco Meraki organization (ADR-164 decision 18).
     MerakiOrg,
+    /// The Git repository config backups are pushed to (ADR-210 stage 4 decision 33).
+    ConfigRemote,
 }
 
 impl SubjectKind {
@@ -59,7 +67,7 @@ impl SubjectKind {
     /// [`Self::from_token`] walks it, so a kind missing here is a stored row nothing can read
     /// back. Such an alert is never restored after a restart, which means nothing owns it and
     /// nothing can close it. `every_subject_kind_is_listed` is what holds the list to the enum.
-    pub const ALL: [Self; 3] = [Self::Node, Self::Pool, Self::MerakiOrg];
+    pub const ALL: [Self; 4] = [Self::Node, Self::Pool, Self::MerakiOrg, Self::ConfigRemote];
 
     /// The stored/serialized token.
     #[must_use]
@@ -68,6 +76,7 @@ impl SubjectKind {
             Self::Node => "node",
             Self::Pool => "pool",
             Self::MerakiOrg => "meraki_org",
+            Self::ConfigRemote => "config_remote",
         }
     }
 
@@ -105,6 +114,10 @@ pub enum Subject {
     /// for the next one. Identified by id rather than by name: a rename must not change the
     /// dedup key, or a renamed organization would leave one alert open and raise a second.
     MerakiOrg(uuid::Uuid),
+    /// The Git repository the deployment pushes its config backups to (ADR-210 stage 4 decision
+    /// 33). One per deployment, so nothing identifies it: the push failing is about Yagra's own
+    /// copy leaving the box, not about any device.
+    ConfigRemote,
 }
 
 impl Subject {
@@ -113,7 +126,7 @@ impl Subject {
     pub const fn node(&self) -> Option<NodeId> {
         match self {
             Self::Node(n) => Some(*n),
-            Self::Pool(_) | Self::MerakiOrg(_) => None,
+            Self::Pool(_) | Self::MerakiOrg(_) | Self::ConfigRemote => None,
         }
     }
 
@@ -128,7 +141,7 @@ impl Subject {
     pub fn pool(&self) -> Option<&str> {
         match self {
             Self::Pool(p) => Some(p.as_str()),
-            Self::Node(_) | Self::MerakiOrg(_) => None,
+            Self::Node(_) | Self::MerakiOrg(_) | Self::ConfigRemote => None,
         }
     }
 
@@ -137,7 +150,7 @@ impl Subject {
     pub const fn meraki_org(&self) -> Option<uuid::Uuid> {
         match self {
             Self::MerakiOrg(org) => Some(*org),
-            Self::Node(_) | Self::Pool(_) => None,
+            Self::Node(_) | Self::Pool(_) | Self::ConfigRemote => None,
         }
     }
 
@@ -148,6 +161,7 @@ impl Subject {
             Self::Node(_) => SubjectKind::Node,
             Self::Pool(_) => SubjectKind::Pool,
             Self::MerakiOrg(_) => SubjectKind::MerakiOrg,
+            Self::ConfigRemote => SubjectKind::ConfigRemote,
         }
     }
 
@@ -157,7 +171,7 @@ impl Subject {
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         match self {
-            Self::Node(_) | Self::MerakiOrg(_) => None,
+            Self::Node(_) | Self::MerakiOrg(_) | Self::ConfigRemote => None,
             Self::Pool(p) => Some(p.as_str()),
         }
     }
@@ -192,6 +206,10 @@ impl Subject {
             // that means "a node" filters on `subject_kind`, the check id is hashed from the flat
             // form (which is prefixed), and the ack key includes that check id.
             Self::MerakiOrg(org) => *org,
+            // Hashed from its flat form like a pool: there is only one, and nothing to rebuild.
+            Self::ConfigRemote => {
+                uuid::Uuid::new_v5(&SUBJECT_NAMESPACE, CONFIG_REMOTE_FORM.as_bytes())
+            }
         }
     }
 
@@ -208,6 +226,7 @@ impl Subject {
                 .filter(|n| !n.is_empty())
                 .map(|n| Self::Pool(n.to_owned())),
             SubjectKind::MerakiOrg => Some(Self::MerakiOrg(id)),
+            SubjectKind::ConfigRemote => Some(Self::ConfigRemote),
         }
     }
 }
@@ -220,6 +239,7 @@ impl fmt::Display for Subject {
             Self::Node(n) => write!(f, "{n}"),
             Self::Pool(p) => write!(f, "{POOL_PREFIX}{p}"),
             Self::MerakiOrg(org) => write!(f, "{MERAKI_ORG_PREFIX}{org}"),
+            Self::ConfigRemote => f.write_str(CONFIG_REMOTE_FORM),
         }
     }
 }
@@ -246,6 +266,9 @@ impl FromStr for Subject {
             return uuid::Uuid::parse_str(org)
                 .map(Self::MerakiOrg)
                 .map_err(|_| ParseSubjectError(s.to_owned()));
+        }
+        if s == CONFIG_REMOTE_FORM {
+            return Ok(Self::ConfigRemote);
         }
         uuid::Uuid::parse_str(s)
             .map(|u| Self::Node(NodeId::from(u)))
@@ -516,6 +539,7 @@ mod tests {
             Subject::Pool("dc 2/edge".to_owned()),
             // Identified by id and carrying no name: the stored id is all there is to read back.
             Subject::MerakiOrg(uuid::Uuid::from_u128(0xACE)),
+            Subject::ConfigRemote,
         ] {
             let restored = Subject::from_storage(s.kind(), s.storage_id(), s.name());
             assert_eq!(restored.as_ref(), Some(&s), "{s}");
@@ -555,6 +579,7 @@ mod tests {
             Subject::Node(NodeId::new()),
             Subject::Pool("tokyo".to_owned()),
             Subject::MerakiOrg(uuid::Uuid::from_u128(0xACE)),
+            Subject::ConfigRemote,
         ] {
             let kind = subject.kind();
             // The exhaustive match is the point: the token each kind is *stored* under, written
@@ -563,6 +588,7 @@ mod tests {
                 SubjectKind::Node => "node",
                 SubjectKind::Pool => "pool",
                 SubjectKind::MerakiOrg => "meraki_org",
+                SubjectKind::ConfigRemote => "config_remote",
             };
             assert!(
                 SubjectKind::ALL.contains(&kind),
@@ -571,7 +597,28 @@ mod tests {
             assert_eq!(kind.as_str(), stored_as);
             assert_eq!(SubjectKind::from_token(stored_as), Some(kind));
         }
-        assert_eq!(SubjectKind::ALL.len(), 3);
+        assert_eq!(SubjectKind::ALL.len(), 4);
+    }
+
+    /// The config-backup destination is one per deployment: its flat form is a word, it reads back
+    /// from it, and it is stored under one fixed id no node can hold by accident (a v5 hash).
+    #[test]
+    fn the_config_backup_destination_is_read_back_from_the_form_it_is_written_in() {
+        let subject = Subject::ConfigRemote;
+        assert_eq!(subject.to_string(), "config_remote");
+        assert_eq!("config_remote".parse::<Subject>().unwrap(), subject);
+        assert_eq!(
+            (
+                subject.node(),
+                subject.pool(),
+                subject.name(),
+                subject.meraki_org()
+            ),
+            (None, None, None, None)
+        );
+        assert_eq!(subject.storage_id(), Subject::ConfigRemote.storage_id());
+        assert_eq!(subject.storage_id().get_version_num(), 5);
+        assert!("config_remote:x".parse::<Subject>().is_err());
     }
 
     /// The third subject is addressed by the flat form this type itself writes — `FromStr` is an

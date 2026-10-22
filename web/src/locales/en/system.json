@@ -465,6 +465,9 @@
     },
     "netbox": {
       "desc": "Read-only import of your NetBox Regions and Sites into the folder tree"
+    },
+    "git": {
+      "desc": "Push config backups to a Git repository"
     }
   },
   "meraki": {
@@ -823,6 +826,64 @@
     },
     "ownership": {
       "info": "A sync owns each folder’s name, parent and map position. The poller pool you set on a folder is kept, and a Site removed in NetBox is flagged, not deleted."
+    }
+  },
+  "git": {
+    "name": "Git (config backup)",
+    "note": "Push every config backup to one Git repository",
+    "card": {
+      "title": "Destination",
+      "empty": "Config backups are kept on this box only.",
+      "set": "Set destination",
+      "deployKey": "Deploy key",
+      "newKey": "New key",
+      "hostKeys": "Host keys",
+      "forget": "Forget"
+    },
+    "form": {
+      "addTitle": "Set the Git destination",
+      "editTitle": "Edit the Git destination",
+      "url": "Repository URL",
+      "branch": "Branch",
+      "username": "User name",
+      "token": "Access token",
+      "urlShape": "Use https://host/owner/repo.git, ssh://git@host/owner/repo.git or git@host:owner/repo.git.",
+      "keyMade": "A key is made on save; register its public half as a deploy key with write access.",
+      "warning": "Every config backup is pushed here. Passwords are removed model by model and one can be missed, so use a private, empty repository."
+    },
+    "push": {
+      "none": "No destination is set.",
+      "waiting": "Nothing pushed yet — the next config fetch pushes.",
+      "ok": "Pushed at {{at}} ({{head}}).",
+      "failed": "Push failed at {{at}}: {{why}}"
+    },
+    "failure": {
+      "auth": "the login was refused or the repository was not found",
+      "host_key": "the host key changed",
+      "rejected": "the repository has versions Yagra does not have",
+      "unreachable": "the host did not answer",
+      "other": "git failed",
+      "unknown": "git failed"
+    },
+    "status": {
+      "waiting": "Not pushed yet",
+      "ok": "Pushing",
+      "failed": "Push failing"
+    },
+    "confirm": {
+      "delete": {
+        "title": "Remove the Git destination?",
+        "action": "Remove",
+        "body": "Config backups stop leaving this box. The repository keeps what was pushed."
+      },
+      "key": {
+        "title": "Replace the SSH key?",
+        "action": "Replace",
+        "body": "The current key stops working. Pushes fail until the new public key is registered."
+      }
+    },
+    "err": {
+      "save": "Could not save the Git destination."
     }
   }
 }

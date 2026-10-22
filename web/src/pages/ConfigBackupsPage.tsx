@@ -6,6 +6,7 @@
 // attention. The state word is `lib/configBackupMarks.ts`, the same one the tree's mark draws.
 
 import { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { useCan } from '../store';
@@ -22,6 +23,8 @@ import { nodeHref } from '../lib/entityHref';
 import { isCliCredentialKind } from '../lib/credentialKinds';
 import { markOf } from '../lib/configBackupMarks';
 import { attemptLine, loginLabel } from '../components/NodeDetail/configBackupForm';
+import { GIT_REMOTE_PATH, pushLine } from './integrations/gitRemote';
+import { formatTimestamp } from '../lib/format';
 import './ConfigBackupsPage.css';
 
 export function ConfigBackupsPage() {
@@ -34,6 +37,13 @@ export function ConfigBackupsPage() {
     errorFallback: t('config.err.list'),
   });
   const creds = useLoad(() => api.listCredentials(), [], { initial: [], enabled: canCreds });
+  // Where the backups go (ADR-210 stage 4). Said only once a destination is set: with none, the
+  // backups simply stay on the box, which is not a fault.
+  const push = useLoad(() => api.getConfigBackupRemoteStatus(), [], {
+    initial: null,
+    intervalMs: 60_000,
+  });
+  const line = push.data?.configured ? pushLine(push.data) : null;
   const names = useMemo(
     () =>
       new Map(creds.data.filter((c) => isCliCredentialKind(c.kind)).map((c) => [c.id, c.name])),
@@ -104,6 +114,21 @@ export function ConfigBackupsPage() {
         title={t('nav:nodes.configBackups')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.configBackups') }]}
       />
+      {line && (
+        <p className={`cfgbl-push ${line.key === 'git.push.failed' ? 'bad' : ''}`}>
+          <Link to={GIT_REMOTE_PATH}>{t('system:git.name')}</Link>
+          {': '}
+          {line.key === 'git.push.ok' &&
+            t(`system:${line.key}`, { at: formatTimestamp(Date.parse(line.at)), head: line.head })}
+          {line.key === 'git.push.failed' &&
+            t(`system:${line.key}`, {
+              at: formatTimestamp(Date.parse(line.at)),
+              why: t(`system:git.failure.${line.failure}`),
+            })}
+          {(line.key === 'git.push.waiting' || line.key === 'git.push.none') &&
+            t(`system:${line.key}`)}
+        </p>
+      )}
       <LoadGate load={list}>
         <DataTable
           tableId="nodes.configBackups"

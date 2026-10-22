@@ -192,6 +192,9 @@ impl NodeScope {
                 yagra_alert::Subject::MerakiOrg(org) => {
                     alerts.meraki_org_is_in_any_group(*org, &s.visible)
                 }
+                // One destination for the whole deployment, set by an administrator: no folder
+                // owns it, so a folder-scoped caller does not see it (ADR-210 stage 4 decision 33).
+                yagra_alert::Subject::ConfigRemote => false,
             },
         }
     }

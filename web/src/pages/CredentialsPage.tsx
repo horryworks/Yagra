@@ -124,6 +124,9 @@ const KIND_ICONS: Record<string, ComponentType> = {
   meraki_api: KeyIcon,
   // Likewise NetBox tokens (ADR-100) — created on the integration page, never here.
   netbox_token: KeyIcon,
+  // The config-backup Git destination's token or key (ADR-210 stage 4) - set on its integration
+  // page, never here.
+  git_remote: KeyIcon,
   // A device's command-line login for config backup (ADR-210 stage 2).
   cli_login: LockIcon,
 };

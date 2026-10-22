@@ -13,3 +13,15 @@
 .cfgbl-mark-busy {
   color: var(--text-secondary);
 }
+
+/* The Git destination's last push (ADR-210 stage 4), one line above the list. */
+.cfgbl-push {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.cfgbl-push.bad {
+  color: var(--text-primary);
+  font-weight: 600;
+}

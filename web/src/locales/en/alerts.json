@@ -21,6 +21,7 @@
     "acked": "acked",
     "mutedUntil": "muted until {{until}}",
     "poolSubject": "Poller pool “{{pool}}”",
+    "configRemoteSubject": "Config backup Git destination",
     "merakiOrgSubject": "Meraki organization “{{org}}”",
     "partOfOutage": "part of this node’s outage",
     "poolSubjectWhy": {

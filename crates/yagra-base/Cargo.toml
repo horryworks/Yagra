@@ -25,6 +25,10 @@ tokio = { workspace = true }
 metrics = { workspace = true }
 async-trait = { workspace = true }
 rand = { workspace = true }
+# The config-backup destination's SSH key and its fingerprints (`config_remote.rs`, ADR-210 stage 4).
+ed25519-dalek = { workspace = true }
+data-encoding = { workspace = true }
+sha2 = { workspace = true }
 # The outbound HTTP client (`http.rs`), shared by core and `yagra-netbox`.
 reqwest = { workspace = true }
 # The TLS client configuration (`tls.rs`): syslog over TLS and directory sign-in.

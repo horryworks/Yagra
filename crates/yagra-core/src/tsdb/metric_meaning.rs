@@ -284,7 +284,7 @@ impl AlertName {
 /// Names for the alerts that come from no threshold rule, so have no row in [`METRIC_MEANINGS`]
 /// (whose test forbids a sentence for a metric no rule can name). Their `metric` strings are owned
 /// by the modules that raise them; the event-rule prefix is handled by [`alert_title`] itself.
-pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 3] = [
+pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 4] = [
     (
         yagra_alert::engine::POOL_COVERAGE_METRIC,
         AlertName::Value("Too few pollers in pool"),
@@ -296,6 +296,10 @@ pub const NON_RULE_ALERT_NAMES: [(&str, AlertName); 3] = [
     (
         yagra_alert::engine::DEVICE_REPLACED_METRIC,
         AlertName::Flag("Device possibly replaced"),
+    ),
+    (
+        yagra_alert::engine::CONFIG_PUSH_METRIC,
+        AlertName::Flag("Config backup not reaching its Git destination"),
     ),
 ];
 

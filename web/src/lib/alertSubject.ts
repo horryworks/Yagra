@@ -24,7 +24,7 @@ const MERAKI_ORG_PREFIX = 'meraki_org:';
 
 /** The subject fields every alert-bearing response and SSE frame carries. */
 export interface HasSubject {
-  /** Flat subject form: a node UUID, `pool:<name>`, or `meraki_org:<id>`. */
+  /** Flat subject form: a node UUID, `pool:<name>`, `meraki_org:<id>` or `config_remote`. */
   node?: string | null;
   subject_kind?: SubjectKind;
   subject_name?: string | null;
@@ -38,7 +38,10 @@ export type AlertSubject =
   /** A Cisco Meraki organization the Dashboard API is not answering (ADR-164 decision 18). `orgId` is
    *  the organization's row id — what its settings page is addressed by. `name` is `null` for an
    *  organization the server could not name yet (added since its last config generation). */
-  | { kind: 'meraki_org'; orgId: string; name: string | null };
+  | { kind: 'meraki_org'; orgId: string; name: string | null }
+  /** The Git repository config backups are pushed to (ADR-210 stage 4). One per deployment, so
+   *  nothing identifies it; `name` is what the server calls it. */
+  | { kind: 'config_remote'; name: string };
 
 /**
  * Resolve an alert or history row's subject.
@@ -67,6 +70,8 @@ export function alertSubject(a: HasSubject): AlertSubject {
         name: a.subject_name ?? null,
       };
     }
+    case 'config_remote':
+      return { kind: 'config_remote', name: a.subject_name ?? '' };
     default: {
       // A kind a newer core wrote, reaching an older bundle mid-upgrade. It is not a node — but
       // every such frame so far has been one, and a row that renders is better than none.
@@ -85,6 +90,8 @@ export function subjectText(subject: Exclude<AlertSubject, { kind: 'node' }>): s
       return subject.name;
     case 'meraki_org':
       return subject.name ?? subject.orgId;
+    case 'config_remote':
+      return subject.name;
     default: {
       const unknown: never = subject;
       return unknown;

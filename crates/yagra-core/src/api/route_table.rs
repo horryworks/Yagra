@@ -1481,6 +1481,35 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_system_health"),
     ),
     (
+        "GET",
+        "/api/v1/config-backup-remote",
+        ADMIN_CFG,
+        Exempt(
+            "the settings form of the config backup destination (its URL and the public half of \
+             its key); whether backups reach it is get_system_health's config_push section",
+        ),
+    ),
+    ("PUT", "/api/v1/config-backup-remote", ADMIN_CFG, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/config-backup-remote", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "POST",
+        "/api/v1/config-backup-remote/ssh-key",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "DELETE",
+        "/api/v1/config-backup-remote/host-keys",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/config-backup-remote/status",
+        DEPLOY_WIDE,
+        Tool("get_system_health"),
+    ),
+    (
         "POST",
         "/api/v1/nodes/:node_id/rediscover/apply",
         NodeScoped,
@@ -2340,6 +2369,28 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/internal/oxidized/push",
+        Global(
+            "the bundled oxidized's push script asking whether to push config backups, for \
+             oxidized alone, behind the source token rather than a person's session (ADR-210 \
+             stage 4)",
+        ),
+        Exempt(
+            "the config backup destination's token or private key in plaintext for one push; \
+             ADR-018 keeps secret material out of every tool result",
+        ),
+    ),
+    (
+        "POST",
+        "/internal/oxidized/push",
+        Global(
+            "the bundled oxidized's push script reporting how a push went, for oxidized alone, \
+             behind the source token (ADR-210 stage 4)",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/internal/oxidized/nodes",
         Global(
             "the bundled oxidized's node list: every node it fetches, for oxidized alone, behind the              source token rather than a person's session (ADR-210)",
@@ -2815,6 +2866,18 @@ mod tests {
             "/internal/oxidized/events",
             "the bundled oxidized's hook (ADR-210 stage 3) - oxidized posts each fetch's result \
              with the source token, never a browser",
+        ),
+        (
+            "GET",
+            "/internal/oxidized/push",
+            "the bundled oxidized's push script (ADR-210 stage 4) - it asks with the source token, \
+             never a browser",
+        ),
+        (
+            "POST",
+            "/internal/oxidized/push",
+            "the bundled oxidized's push script (ADR-210 stage 4) - it reports with the source \
+             token, never a browser",
         ),
         (
             "GET",

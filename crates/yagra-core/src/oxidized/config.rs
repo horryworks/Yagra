@@ -23,6 +23,16 @@ pub(crate) const TOKEN_HEADER: &str = "x-yagra-oxidized-token";
 /// port on the compose network.
 pub(crate) const SOURCE_URL: &str = "http://core:8080/internal/oxidized/nodes";
 pub(crate) const EVENTS_URL: &str = "http://core:8080/internal/oxidized/events";
+/// Where the push script asks whether to push and reports how the push went (ADR-210 stage 4).
+pub(crate) const PUSH_URL: &str = "http://core:8080/internal/oxidized/push";
+
+/// The push script's file name in the shared directory, and the script itself (stage 4 decision 28).
+/// Written beside the configuration file, so the same one-shot owns both and an upgrade replaces
+/// both.
+pub(crate) const PUSH_SCRIPT_FILE: &str = "yagra-push.rb";
+const PUSH_SCRIPT: &str = include_str!("yagra-push.rb");
+/// Where oxidized sees the shared directory (`docker-compose.deploy.yml` mounts it there).
+const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 
 /// The revision of [`render`]'s output, also written as `YAGRA_OXIDIZED_CONFIG_REVISION` on the
 /// `oxidized` service in `docker-compose.deploy.yml`.
@@ -32,7 +42,7 @@ pub(crate) const EVENTS_URL: &str = "http://core:8080/internal/oxidized/events";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 3;
+pub(crate) const CONFIG_REVISION: u32 = 4;
 
 const TOKEN_LEN: usize = 40;
 
@@ -96,11 +106,15 @@ pub(crate) fn read_token(home: &Path) -> std::io::Result<String> {
 /// - The REST API listens on every interface of the container, because core reaches it across the
 ///   compose network; the container publishes no port.
 /// - `group` comes from the source, and `single_repo` keeps every node's file in one Git repository.
+/// - The `yagra-push` hook runs the push script after every fetch that succeeded (stage 4): the
+///   script asks core at [`PUSH_URL`] whether the repository's head needs pushing, so the hook
+///   costs one local request when there is no destination. Its limit is longer than the script's
+///   own (two and a half minutes waiting for another push, two for its own).
 /// - The pid file and crash reports stay in oxidized's own home (its data volume), not in the shared
 ///   directory: the image's start script removes a stale pid file only at that path, so one left
 ///   anywhere else by a crash would stop the next start.
 #[must_use]
-pub(crate) fn render(token: &str, source_url: &str, events_url: &str) -> String {
+pub(crate) fn render(token: &str, source_url: &str, events_url: &str, push_url: &str) -> String {
     format!(
         "---
 # Written by Yagra (yagra-core oxidized-config). Edits here are replaced on the next start.
@@ -162,14 +176,29 @@ hooks:
     async: true
     timeout: 30
     cmd: '/usr/bin/curl -fsS -m 20 -o /dev/null -X POST -H \"{TOKEN_HEADER}: {token}\" --data-urlencode \"event=$OX_EVENT\" --data-urlencode \"node=$OX_NODE_NAME\" --data-urlencode \"group=$OX_NODE_GROUP\" --data-urlencode \"ip=$OX_NODE_IP\" --data-urlencode \"err_type=$OX_ERR_TYPE\" {events_url}'
+  yagra-push:
+    type: exec
+    events: [node_success]
+    async: true
+    timeout: 300
+    cmd: 'YAGRA_TOKEN=\"{token}\" YAGRA_PUSH_URL=\"{push_url}\" /usr/bin/ruby {SHARED_DIR_IN_OXIDIZED}/{PUSH_SCRIPT_FILE}'
 "
     )
 }
 
 /// Write the token (if new) and the configuration file into `home`. Leaves an identical file alone.
-pub(crate) fn write(home: &Path, source_url: &str, events_url: &str) -> anyhow::Result<()> {
+pub(crate) fn write(
+    home: &Path,
+    source_url: &str,
+    events_url: &str,
+    push_url: &str,
+) -> anyhow::Result<()> {
     let token = ensure_token(home)?;
-    let body = render(&token, source_url, events_url);
+    let script = home.join(PUSH_SCRIPT_FILE);
+    if std::fs::read_to_string(&script).ok().as_deref() != Some(PUSH_SCRIPT) {
+        yagra_base::atomic_file::write_atomically(&script, PUSH_SCRIPT.as_bytes(), 0o640)?;
+    }
+    let body = render(&token, source_url, events_url, push_url);
     let path = home.join(CONFIG_FILE);
     if std::fs::read_to_string(&path).ok().as_deref() == Some(body.as_str()) {
         return Ok(());
@@ -185,7 +214,7 @@ mod tests {
 
     #[test]
     fn the_configuration_strips_secrets_and_carries_the_token_and_source() {
-        let body = render("Abc123", SOURCE_URL, EVENTS_URL);
+        let body = render("Abc123", SOURCE_URL, EVENTS_URL, PUSH_URL);
         assert!(body.contains("remove_secret: true"));
         assert!(body.contains("x-yagra-oxidized-token: \"Abc123\""));
         assert!(body.contains("url: http://core:8080/internal/oxidized/nodes"));
@@ -199,6 +228,25 @@ mod tests {
         assert!(body.contains("err_type=$OX_ERR_TYPE"));
         assert!(!body.contains("OX_ERR_REASON"));
         assert!(body.contains(EVENTS_URL));
+        // The push hook runs the script from the shared directory, with the token and core's URL.
+        assert!(body.contains(
+            "cmd: 'YAGRA_TOKEN=\"Abc123\" YAGRA_PUSH_URL=\"http://core:8080/internal/oxidized/push\" \
+             /usr/bin/ruby /var/lib/yagra/oxidized/yagra-push.rb'"
+        ));
+    }
+
+    /// The script carries no rule of its own: it reports only what core's patterns name, never
+    /// git's output, and it never forces a push.
+    #[test]
+    fn the_push_script_reports_a_kind_and_never_the_output() {
+        assert!(PUSH_SCRIPT.contains("job['patterns']"));
+        assert!(PUSH_SCRIPT.contains("'failure' => failure.to_s"));
+        assert!(!PUSH_SCRIPT.contains("'output'"));
+        assert!(!PUSH_SCRIPT.contains("--force"));
+        assert!(!PUSH_SCRIPT.contains("+HEAD"));
+        // The token goes through the environment, never git's arguments.
+        assert!(PUSH_SCRIPT.contains("GIT_CONFIG_VALUE_0"));
+        assert!(PUSH_SCRIPT.contains(&format!("'{TOKEN_HEADER}'")));
     }
 
     /// The rendered text is pinned by its digest, and the digest by [`CONFIG_REVISION`] and the
@@ -206,11 +254,13 @@ mod tests {
     #[test]
     fn the_revision_moves_with_the_configuration() {
         use sha2::Digest;
-        let digest = sha2::Sha256::digest(render("T", "S", "E").as_bytes());
+        // The push script is not in the digest: oxidized runs it afresh on every hook, so a changed
+        // script needs no restart, only the one-shot that rewrites it on every start.
+        let digest = sha2::Sha256::digest(render("T", "S", "E", "P").as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "54990e2fa30c666b9f68fd799f0e5fa34d7d4ca5b2cac067ba215f1b7b791e00",
+            "26ed06794ceea2949a28495e7cf8ba0b1e7ab5f9c6f439818eca985f5f44a2ad",
         )];
         assert_eq!(
             pinned,
@@ -242,9 +292,11 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let first = ensure_token(&dir).expect("create");
         assert_eq!(ensure_token(&dir).expect("reread"), first);
-        write(&dir, SOURCE_URL, EVENTS_URL).expect("write");
+        write(&dir, SOURCE_URL, EVENTS_URL, PUSH_URL).expect("write");
         let cfg = std::fs::read_to_string(dir.join(CONFIG_FILE)).expect("config");
         assert!(cfg.contains(&first));
+        let script = std::fs::read_to_string(dir.join(PUSH_SCRIPT_FILE)).expect("script");
+        assert_eq!(script, PUSH_SCRIPT);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

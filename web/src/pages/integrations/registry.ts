@@ -15,10 +15,11 @@ import { api } from '../../services/api';
 import type { Chip } from './chip';
 import { merakiChip, type MerakiStatus } from './merakiStatus';
 import { netboxChip, type NetboxStatus } from './netboxStatus';
+import { GIT_REMOTE_PATH, gitRemoteChip } from './gitRemote';
 
 /** Every integration with a tile. `as const` so it is iterable at runtime — the property the i18n
  *  key coverage test needs, and the reason `extensibility.md` §4 asks for this shape. */
-export const INTEGRATION_IDS = ['meraki', 'netbox'] as const;
+export const INTEGRATION_IDS = ['meraki', 'netbox', 'git'] as const;
 export type IntegrationId = (typeof INTEGRATION_IDS)[number];
 
 /** One catalogue tile. */
@@ -82,6 +83,13 @@ export const INTEGRATIONS: Record<IntegrationId, IntegrationCard> = {
             };
       return netboxChip(status);
     },
+  },
+  git: {
+    id: 'git',
+    path: GIT_REMOTE_PATH,
+    nameKey: 'git.name',
+    descKey: 'integrations.git.desc',
+    probe: async (): Promise<Chip> => gitRemoteChip(await api.getConfigBackupRemoteStatus()),
   },
 };
 

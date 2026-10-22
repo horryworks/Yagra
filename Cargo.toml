@@ -227,6 +227,9 @@ argon2 = "0.5"
 # (poller-scoped credentials). Already in the tree transitively via async-nats; promoted to a direct
 # workspace dep for yagra-authz. Pure Rust (ed25519-dalek), no NASM.
 nkeys = "0.4"
+# The SSH key Yagra generates for pushing config backups to a Git destination (ADR-210 stage 4
+# decision 30). Already in the tree through nkeys; named directly so the key is ours, not a NATS one.
+ed25519-dalek = "2"
 # RFC 4648 base64url / base32 for the NATS JWT wire format (yagra-authz). Already transitively present.
 data-encoding = "2"
 # External IdP login (OIDC authorization-code + PKCE, ADR-010 Phase 3). Handles discovery, PKCE,

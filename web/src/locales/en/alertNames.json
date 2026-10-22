@@ -23,6 +23,7 @@
   "cisco_ra_sessions": "Remote-access VPN sessions",
   "cisco_ra_users": "Remote-access VPN users",
   "cisco_temp_c": "Chassis temperature",
+  "config_backup_push": "Config backup not reaching its Git destination",
   "device_replaced": "Device possibly replaced",
   "dns_answer_count": "DNS answers",
   "dns_chain_length": "DNS resolution hops",

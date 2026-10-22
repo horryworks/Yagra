@@ -188,6 +188,14 @@ fn check_secret_shape(kind: &str, secret: &[u8]) -> Result<(), ApiError> {
             ));
         }
     }
+    if kind == yagra_base::secrets::KIND_GIT_REMOTE {
+        if let Err(reason) = yagra_base::secrets::GitRemoteSecret::parse(secret) {
+            return Err(ApiError::bad_request(
+                "invalid_credential",
+                format!("invalid Git destination credential: {reason}"),
+            ));
+        }
+    }
     if kind == yagra_base::secrets::KIND_CLI_LOGIN {
         if let Err(reason) = yagra_base::secrets::CliLoginSecret::parse(secret) {
             return Err(ApiError::bad_request(

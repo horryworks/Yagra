@@ -75,6 +75,7 @@ import {
   BACKUP_READINESS,
   ATTEMPT_OUTCOMES,
   SCAN_MODES,
+  PUSH_FAILURES,
 } from './types/api';
 import { BACKUP_MARKS } from './lib/configBackupMarks';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
@@ -365,6 +366,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('config backup mark', locales, 'tree.backupMark.', BACKUP_MARKS);
     expectKeys('config backup list state', locales, 'config.list.mark.', BACKUP_MARKS);
     expectKeys('config backup scan mode', locales, 'config.scanModes.', SCAN_MODES);
+    expectKeys(
+      'config backup push failure',
+      { en: enSystem, ja: jaSystem },
+      'git.failure.',
+      PUSH_FAILURES,
+    );
   });
 
   it('every part of a revealed secret has a label (access:cred.reveal.field.*)', () => {

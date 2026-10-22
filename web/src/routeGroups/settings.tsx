@@ -23,6 +23,7 @@ import { IntegrationsCatalogPage } from '../pages/integrations/IntegrationsCatal
 import { MerakiIntegrationPage } from '../pages/integrations/MerakiIntegrationPage';
 import { MerakiOrgPage } from '../pages/integrations/MerakiOrgPage';
 import { NetboxIntegrationPage } from '../pages/integrations/NetboxIntegrationPage';
+import { GitRemotePage } from '../pages/integrations/GitRemotePage';
 import { AiSettingsPage } from '../pages/AiSettingsPage';
 import { UsersPage } from '../pages/UsersPage';
 import { RolesPage } from '../pages/RolesPage';
@@ -51,6 +52,7 @@ export default function SettingsRoutes() {
           spells this path for a link. */}
       <Route path="integrations/meraki/:orgId" element={<MerakiOrgPage />} />
       <Route path="integrations/netbox" element={<NetboxIntegrationPage />} />
+      <Route path="integrations/git" element={<GitRemotePage />} />
       <Route path="ai" element={<AiSettingsPage />} />
       <Route path="users" element={<UsersPage />} />
       <Route path="roles" element={<RolesPage />} />

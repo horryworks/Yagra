@@ -63,7 +63,7 @@ import { readSources, SRC } from './testSupport/sources';
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06 (Inc.24); lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
-  alertNames: [166, 97],
+  alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
   alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
   alertsConfig: [8368, 4434], // + routing.rules.emptyNoChannels and the port picker's two state lines, - interfaceHint (ADR-209, 2026-10-21)
   auth: [79, 43],
@@ -85,7 +85,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-tokens': [812, 442],
   'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   suppression: [866, 571],
-  system: [12975, 7251], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  system: [13769, 7719], // the config backup Git destination page (ADR-210 stage 4, 2026-10-23)
   topology: [3104, 1758], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   troubleshoot: [3370, 1768], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
 };
@@ -140,6 +140,10 @@ const PAGE_NOTES: Record<string, PageNote> = {
     why: 'one organization, opened from the Meraki page',
   },
   'pages/integrations/NetboxIntegrationPage.tsx': {
+    kind: 'offNav',
+    why: 'a page under Settings > Integrations',
+  },
+  'pages/integrations/GitRemotePage.tsx': {
     kind: 'offNav',
     why: 'a page under Settings > Integrations',
   },

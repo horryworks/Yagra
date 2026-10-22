@@ -13,11 +13,15 @@
 //! - [`rotation`] tries each node's CLI logins in turn and remembers the one that works, within
 //!   the lockout limits (stage 3): the pure choice, and the leader loop that acts on it.
 //!
+//! - [`push`] is the leader loop that opens and closes the alert saying config backups are not
+//!   reaching their Git destination (stage 4). The pushes are the push script's, inside oxidized.
+//!
 //! ⚠️ oxidized's REST API has no authentication. It is reachable only on the compose network,
 //! which holds nothing but this deployment's own containers; that is the whole protection.
 
 pub(crate) mod client;
 pub(crate) mod config;
+pub(crate) mod push;
 pub(crate) mod rotation;
 pub(crate) mod source;
 pub(crate) mod status;
