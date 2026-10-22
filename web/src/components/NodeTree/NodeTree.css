@@ -363,6 +363,29 @@
   height: 16px;
 }
 
+/* A node whose configuration is backed up (ADR-210 stage 3). Display only, like the pin; the colour
+   says how it is going and the name says it in words. */
+.ntree-backup {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--text-tertiary);
+}
+
+.ntree-backup svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ntree-backup-ok {
+  color: var(--status-ok);
+}
+
+.ntree-backup-trouble {
+  color: var(--status-warning);
+}
+
 /* Ungrouped section header row (also the root drop zone). In the flattened/virtualized list it's a
    standalone row, so it carries the separator the old wrapper provided — via an inset line rather
    than a border/margin, so the row height stays exactly --row-h for the virtualizer's estimate. */

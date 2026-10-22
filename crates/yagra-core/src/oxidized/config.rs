@@ -19,6 +19,21 @@ pub(crate) const CONFIG_FILE: &str = "config";
 /// The header oxidized presents the token in.
 pub(crate) const TOKEN_HEADER: &str = "x-yagra-oxidized-token";
 
+/// Where oxidized reads its node list, and where its hook reports how each fetch ended. Core's own
+/// port on the compose network.
+pub(crate) const SOURCE_URL: &str = "http://core:8080/internal/oxidized/nodes";
+pub(crate) const EVENTS_URL: &str = "http://core:8080/internal/oxidized/events";
+
+/// The revision of [`render`]'s output, also written as `YAGRA_OXIDIZED_CONFIG_REVISION` on the
+/// `oxidized` service in `docker-compose.deploy.yml`.
+///
+/// 🚨 oxidized reads its configuration only when it starts, and an upgrade that does not change the
+/// oxidized image does not restart it — the one-shot rewrites the file and the old configuration
+/// keeps running. A changed environment variable is what makes compose recreate the container, so
+/// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
+/// fails until both are bumped.
+pub(crate) const CONFIG_REVISION: u32 = 2;
+
 const TOKEN_LEN: usize = 40;
 
 /// A fresh token: letters and digits, starting with a letter.
@@ -61,6 +76,13 @@ pub(crate) fn read_token(home: &Path) -> std::io::Result<String> {
 
 /// oxidized's configuration file for this deployment.
 ///
+/// - `retries: 0` makes one fetch one login (stage 3): with a retry, a wrong password is sent twice
+///   for every attempt the lockout limits count once.
+/// - The `yagra` hook reports how each fetch ended to `POST /internal/oxidized/events`, with the
+///   source token, the node and oxidized's error type — never its error message, which can carry
+///   what the device printed. `async`, so oxidized does not wait on core. `curl` is named by its
+///   path, which is how it was measured to run from a hook.
+///
 /// - `remove_secret` strips passwords and keys from what is stored, model by model — it is not
 ///   exhaustive, which is why the text stays behind `ManageConfig` and off MCP.
 /// - `interval` is a day; Yagra asks for an earlier fetch with `/node/next`, which
@@ -78,7 +100,7 @@ pub(crate) fn read_token(home: &Path) -> std::io::Result<String> {
 ///   directory: the image's start script removes a stale pid file only at that path, so one left
 ///   anywhere else by a crash would stop the next start.
 #[must_use]
-pub(crate) fn render(token: &str, source_url: &str) -> String {
+pub(crate) fn render(token: &str, source_url: &str, events_url: &str) -> String {
     format!(
         "---
 # Written by Yagra (yagra-core oxidized-config). Edits here are replaced on the next start.
@@ -90,7 +112,7 @@ interval: 86400
 threads: 8
 timeout: 30
 timelimit: 300
-retries: 1
+retries: 0
 next_adds_job: true
 debug: false
 pid: /home/oxidized/.config/oxidized/pid
@@ -133,14 +155,21 @@ source:
       password: password
     vars_map:
       enable: enable
+hooks:
+  yagra:
+    type: exec
+    events: [node_success, node_fail]
+    async: true
+    timeout: 30
+    cmd: '/usr/bin/curl -fsS -m 20 -o /dev/null -X POST -H \"{TOKEN_HEADER}: {token}\" --data-urlencode \"event=$OX_EVENT\" --data-urlencode \"node=$OX_NODE_NAME\" --data-urlencode \"group=$OX_NODE_GROUP\" --data-urlencode \"err_type=$OX_ERR_TYPE\" {events_url}'
 "
     )
 }
 
 /// Write the token (if new) and the configuration file into `home`. Leaves an identical file alone.
-pub(crate) fn write(home: &Path, source_url: &str) -> anyhow::Result<()> {
+pub(crate) fn write(home: &Path, source_url: &str, events_url: &str) -> anyhow::Result<()> {
     let token = ensure_token(home)?;
-    let body = render(&token, source_url);
+    let body = render(&token, source_url, events_url);
     let path = home.join(CONFIG_FILE);
     if std::fs::read_to_string(&path).ok().as_deref() == Some(body.as_str()) {
         return Ok(());
@@ -156,13 +185,45 @@ mod tests {
 
     #[test]
     fn the_configuration_strips_secrets_and_carries_the_token_and_source() {
-        let body = render("Abc123", "http://core:8080/internal/oxidized/nodes");
+        let body = render("Abc123", SOURCE_URL, EVENTS_URL);
         assert!(body.contains("remove_secret: true"));
         assert!(body.contains("x-yagra-oxidized-token: \"Abc123\""));
         assert!(body.contains("url: http://core:8080/internal/oxidized/nodes"));
         assert!(body.contains("pid: /home/oxidized/.config/oxidized/pid"));
         // The session log would hold the password a device was sent.
         assert!(body.contains("  debug: false"));
+        // One fetch, one login.
+        assert!(body.contains("retries: 0"));
+        // The hook reports with the token, and never the error message.
+        assert!(body.contains("x-yagra-oxidized-token: Abc123"));
+        assert!(body.contains("err_type=$OX_ERR_TYPE"));
+        assert!(!body.contains("OX_ERR_REASON"));
+        assert!(body.contains(EVENTS_URL));
+    }
+
+    /// The rendered text is pinned by its digest, and the digest by [`CONFIG_REVISION`] and the
+    /// composition's copy of it: change one and this names the other two.
+    #[test]
+    fn the_revision_moves_with_the_configuration() {
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(render("T", "S", "E").as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let pinned: &[(u32, &str)] = &[(
+            CONFIG_REVISION,
+            "40e9fc11624bdc01d994c7a2dd416dd0b05ac8281aaaf20ebc22bd51b520c409",
+        )];
+        assert_eq!(
+            pinned,
+            &[(CONFIG_REVISION, hex.as_str())],
+            "render() changed: bump CONFIG_REVISION and YAGRA_OXIDIZED_CONFIG_REVISION in \
+             docker-compose.deploy.yml, then pin the new digest here"
+        );
+        let compose = include_str!("../../../../docker-compose.deploy.yml");
+        let line = format!("YAGRA_OXIDIZED_CONFIG_REVISION: \"{CONFIG_REVISION}\"");
+        assert!(
+            compose.contains(&line),
+            "docker-compose.deploy.yml must carry {line} on the oxidized service"
+        );
     }
 
     #[test]
@@ -181,7 +242,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let first = ensure_token(&dir).expect("create");
         assert_eq!(ensure_token(&dir).expect("reread"), first);
-        write(&dir, "http://core:8080/internal/oxidized/nodes").expect("write");
+        write(&dir, SOURCE_URL, EVENTS_URL).expect("write");
         let cfg = std::fs::read_to_string(dir.join(CONFIG_FILE)).expect("config");
         assert!(cfg.contains(&first));
         std::fs::remove_dir_all(&dir).ok();

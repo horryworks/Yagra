@@ -123,7 +123,13 @@ describe('nav IA', () => {
       'groups.consistencyChecks',
       'groups.monitoringConfig',
     ]);
-    expect(nodes.groups[0].items.map((i) => i.path)).toEqual(['/nodes', '/nodes/discovery']);
+    // Config backups (ADR-210 stage 3) is the fleet's view of what the inventory backs up, so it
+    // sits with the inventory rather than among the checks.
+    expect(nodes.groups[0].items.map((i) => i.path)).toEqual([
+      '/nodes',
+      '/nodes/discovery',
+      '/nodes/config-backups',
+    ]);
     expect(nodes.groups[1].items.map((i) => i.path)).toEqual([
       '/nodes/duplicates',
       '/nodes/subnet-overlaps',

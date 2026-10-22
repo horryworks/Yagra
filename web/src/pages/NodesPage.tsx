@@ -30,8 +30,11 @@ import { usePrefsStore } from '../prefs';
 import { setNodeTreePinnedOnly, setNodeTreeWithNodesOnly } from '../serverPrefs';
 import { usePinsStore } from '../pinsStore';
 import { pinnedView } from '../lib/pins';
+import { marksOf } from '../lib/configBackupMarks';
+import { useLoad } from '../lib/useLoad';
 import { useViewportMode } from '../lib/viewport';
 import type {
+  ConfigBackupRow,
   FleetGroupSummary,
   FleetSummary,
   MaintenanceWindow,
@@ -440,6 +443,14 @@ export function NodesPage() {
     () => (pinsReady ? pinnedView(groups, pinGroupIds, pinNodeIds, pinNodes) : undefined),
     [pinsReady, groups, pinGroupIds, pinNodeIds, pinNodes],
   );
+  // Which nodes have their configuration backed up (ADR-210 stage 3), for the tree's marks. Read
+  // slowly: a mark says how the backup is going, and a fetch takes minutes. A deployment without
+  // the list (an older core, skeleton mode) draws no marks.
+  const configBackups = useLoad(() => api.listConfigBackups(), [], {
+    initial: [] as ConfigBackupRow[],
+    intervalMs: 60_000,
+  });
+  const backupMarks = useMemo(() => marksOf(configBackups.data), [configBackups.data]);
   // Re-read on every visit: pins set from another machine since sign-in show up here.
   useEffect(() => {
     void usePinsStore.getState().load();
@@ -1455,6 +1466,7 @@ export function NodesPage() {
                 : undefined
             }
             pins={pins}
+            backups={backupMarks}
             pinnedOnly={pinnedOnly}
             withNodesOnly={withNodesOnly}
             onShowEmptyFolders={() => setNodeTreeWithNodesOnly(false)}

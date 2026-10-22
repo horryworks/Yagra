@@ -104,6 +104,14 @@ export const NAV: NavSection[] = [
             path: '/nodes/discovery',
             implemented: true,
           },
+          // Which nodes the bundled oxidized backs up, and whether it is working (ADR-210 stage 3).
+          // A node's own settings are its Config tab; this is the fleet's view of them.
+          {
+            labelKey: 'nodes.configBackups',
+            descKey: 'descriptions.nodesConfigBackups',
+            path: '/nodes/config-backups',
+            implemented: true,
+          },
         ],
       },
       {

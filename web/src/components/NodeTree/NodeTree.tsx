@@ -75,8 +75,9 @@ import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { ActionMenu } from '../ui/ActionMenu';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
-import { WrenchIcon, BellIcon, BellOffIcon, PinIcon } from '../ui/icons';
+import { WrenchIcon, BellIcon, BellOffIcon, PinIcon, ConfigFileIcon } from '../ui/icons';
 import { nothingPinned, type PinnedView } from '../../lib/pins';
+import type { BackupMark } from '../../lib/configBackupMarks';
 import { HealthBar } from '../HealthBar/HealthBar';
 import {
   dragPreview,
@@ -353,6 +354,9 @@ interface Props {
   pins?: PinnedView;
   /** Show only what `pins` keeps: pinned folders whole, pinned nodes, and the folders above both. */
   pinnedOnly?: boolean;
+  /** The nodes whose configuration is backed up, and how that is going (ADR-210 stage 3). A node
+   *  not in it draws no mark. Omit while the list is unavailable. */
+  backups?: ReadonlyMap<string, BackupMark>;
   /** Hide folders with no node anywhere below them (ADR-159). */
   withNodesOnly?: boolean;
   /** Turn `withNodesOnly` off — the button on the empty pane it leaves when every folder is empty.
@@ -436,6 +440,7 @@ export function NodeTree({
   onSetPool,
   onRunDiscovery,
   pins,
+  backups,
   pinnedOnly,
   withNodesOnly,
   onShowEmptyFolders,
@@ -1347,6 +1352,7 @@ export function NodeTree({
       merakiProductType: node.meraki_product_type,
       merakiRepeater: node.meraki_repeater,
     });
+    const backupMark = backups?.get(node.id);
     return (
       <div
         id={rowDomId({ kind: 'node', id: node.id })}
@@ -1398,6 +1404,16 @@ export function NodeTree({
         {pins?.nodes.has(node.id) && (
           <span className="ntree-pin" role="img" title={t('tree.pinnedMark')} aria-label={t('tree.pinnedMark')}>
             <PinIcon />
+          </span>
+        )}
+        {backupMark && (
+          <span
+            className={`ntree-backup ntree-backup-${backupMark}`}
+            role="img"
+            title={t(`tree.backupMark.${backupMark}`)}
+            aria-label={t(`tree.backupMark.${backupMark}`)}
+          >
+            <ConfigFileIcon />
           </span>
         )}
         {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,

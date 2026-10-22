@@ -352,6 +352,8 @@ async fn update_credential(
         }
         None => None,
     };
+    let new_cli_secret =
+        reseal.is_some_and(|(kind, _)| kind == yagra_base::secrets::KIND_CLI_LOGIN);
     let updated = admin.creds.update(id, name, reseal).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -360,6 +362,14 @@ async fn update_credential(
         )
     })?;
     if updated {
+        // A CLI login with a new password may now work where it failed: every node still looking
+        // for one starts its pass again (ADR-210 stage 3 decision 20). Best effort — the change
+        // is saved, and a pass not restarted only waits for a person to ask.
+        if new_cli_secret {
+            if let Err(e) = admin.config_backup.restart_unconfirmed_rounds().await {
+                tracing::warn!(error = %e, "config backup: passes were not restarted after a login changed");
+            }
+        }
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(

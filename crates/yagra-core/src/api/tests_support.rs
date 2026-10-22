@@ -158,7 +158,7 @@ pub(crate) fn public_board_state(types: &[&str]) -> ApiState {
 /// sweeps — are still asynchronous: assert the accepted `202` and the row that records it, not the
 /// outcome.
 pub(crate) async fn live_state(pool: sqlx::PgPool) -> ApiState {
-    live_state_with(pool, None, None, None, Vec::new()).await
+    live_state_with(pool, None, None, None, Vec::new(), None).await
 }
 
 /// [`live_state`], talking to a Meraki Dashboard the test supplies instead of [`EmptyDashboard`].
@@ -170,7 +170,7 @@ pub(crate) async fn live_state_with_dashboard(
     pool: sqlx::PgPool,
     dashboard: Arc<dyn yagra_meraki::sync::MerakiDirectory>,
 ) -> ApiState {
-    live_state_with(pool, None, None, Some(dashboard), Vec::new()).await
+    live_state_with(pool, None, None, Some(dashboard), Vec::new(), None).await
 }
 
 /// The Meraki Dashboard the live fixture talks to: reachable, and empty.
@@ -249,7 +249,7 @@ pub(crate) async fn live_state_with_upgrade_dir(
     pool: sqlx::PgPool,
     dir: std::path::PathBuf,
 ) -> ApiState {
-    live_state_with(pool, None, Some(dir), None, Vec::new()).await
+    live_state_with(pool, None, Some(dir), None, Vec::new(), None).await
 }
 
 /// [`live_state`], with the deployment-wide SNMP community the scheduler falls back to.
@@ -265,7 +265,7 @@ pub(crate) async fn live_state_with_env_community(
     pool: sqlx::PgPool,
     env_community: Option<String>,
 ) -> ApiState {
-    live_state_with(pool, env_community, None, None, Vec::new()).await
+    live_state_with(pool, env_community, None, None, Vec::new(), None).await
 }
 
 /// [`live_state`], reporting an env default notification route made of `kinds` (ADR-200 Inc.28).
@@ -277,7 +277,19 @@ pub(crate) async fn live_state_with_default_route(
     pool: sqlx::PgPool,
     kinds: Vec<crate::alerts::notify::DefaultRouteKind>,
 ) -> ApiState {
-    live_state_with(pool, None, None, None, kinds).await
+    live_state_with(pool, None, None, None, kinds, None).await
+}
+
+/// [`live_state`], with a bundled oxidized the test describes (ADR-210 stage 3).
+///
+/// Its own entry point so the source token's directory is the test's own: production reads it
+/// from `YAGRA_OXIDIZED_HOME` in the process environment. The client points wherever the test
+/// says; a test that never reaches oxidized can point it at a closed port.
+pub(crate) async fn live_state_with_oxidized(
+    pool: sqlx::PgPool,
+    oxidized: Arc<super::config_backup::OxidizedHandle>,
+) -> ApiState {
+    live_state_with(pool, None, None, None, Vec::new(), Some(oxidized)).await
 }
 
 /// The one live-mode builder the entry points above are shells over.
@@ -291,6 +303,7 @@ async fn live_state_with(
     upgrade_dir: Option<std::path::PathBuf>,
     dashboard: Option<Arc<dyn yagra_meraki::sync::MerakiDirectory>>,
     notify_default_route: Vec<crate::alerts::notify::DefaultRouteKind>,
+    oxidized: Option<Arc<super::config_backup::OxidizedHandle>>,
 ) -> ApiState {
     use crate::alerts::Notifier;
     use crate::fleet::volatile::VolatileStore;
@@ -400,8 +413,9 @@ async fn live_state_with(
         config_backup: Arc::new(yagra_base::config_backup::ConfigBackupRepo::new(
             pool.clone(),
         )),
-        // No oxidized: its routes answer 503 here, and a test that wants one builds the handle.
-        oxidized: None,
+        // No oxidized unless the test hands one in (`live_state_with_oxidized`): its routes answer
+        // 503 otherwise.
+        oxidized,
         repo: repo.clone(),
         creds: creds.clone(),
         users: Arc::new(yagra_auth::auth::UserStore::new(pool.clone())),

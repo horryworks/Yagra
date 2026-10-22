@@ -17,6 +17,7 @@
   "nodes": {
     "all": "All nodes",
     "discovery": "Discovery",
+    "configBackups": "Config backups",
     "duplicates": "Duplicates",
     "subnetOverlaps": "Subnet overlaps",
     "missingPrefixes": "Subnets missing from IP ranges",
@@ -113,6 +114,7 @@
     "dashboardReports": "Scheduled and on-demand PDF reports on availability, capacity and SLA",
     "nodesAll": "Everything Yagra monitors, as a folder tree you can act on",
     "nodesDiscovery": "Scan a range for devices, and see what is on the network but unmonitored",
+    "nodesConfigBackups": "Which devices have their configuration backed up, and whether it works",
     "nodesDuplicates": "Nodes that look like the same device added more than once",
     "nodesSubnetOverlaps": "Address ranges used at more than one site",
     "nodesMissingPrefixes": "Subnets devices carry that none of their site's IP prefixes covers, site by site",

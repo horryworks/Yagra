@@ -72,8 +72,8 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11222, 6750], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
-  nav: [2937, 1384], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
-  nodes: [15958, 9064], // + the Config tab: seven readiness lines, five errors, its labels (ADR-210 stage 2, 2026-10-22)
+  nav: [3007, 1415], // + Nodes ▸ Config backups and its one-line description (ADR-210 stage 3, 2026-10-22)
+  nodes: [16079, 9152], // + the Config tab's state lines, attempt outcomes and the backup list (ADR-210 stage 3, 2026-10-22)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

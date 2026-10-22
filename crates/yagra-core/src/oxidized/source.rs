@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! What each configured node is handed to oxidized as, and why a node is not handed over
-//! (ADR-210 stage 2 decisions 12-14).
+//! (ADR-210 stage 2 decisions 12-14, stage 3 decision 22).
 //!
 //! The judgement is [`readiness`], which is pure: the screen asks it to say why a node is not
 //! fetched, and the source asks it to decide what to send. The two cannot disagree because they
 //! are the same function.
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup};
@@ -21,10 +22,8 @@ pub(crate) enum Readiness {
     Off,
     /// Its profile maps to no oxidized model and nobody picked one.
     NoModel,
-    /// No login is chosen, or the chosen one was deleted.
+    /// There is no CLI login to try: none exists, or the node's own order names none that does.
     NoCredential,
-    /// The chosen credential is not a CLI login.
-    NotCliLogin,
     /// The stored input is a token a newer core wrote.
     UnknownInput,
     /// The node's address changed since the configuration was saved, so its login is withheld
@@ -43,13 +42,13 @@ pub(crate) fn model_of(model_override: Option<&str>, profile_name: Option<&str>)
     }
 }
 
-/// Whether `cfg` is fetched, given the node's profile and the kind of its chosen credential
-/// (`None` when it has none, or the credential no longer exists).
+/// Whether `cfg` is fetched, given the node's profile and whether it has any CLI login to try
+/// (`rotation::candidates`).
 #[must_use]
 pub(crate) fn readiness(
     cfg: Option<&NodeConfigBackup>,
     profile_name: Option<&str>,
-    credential_kind: Option<&str>,
+    has_candidates: bool,
     address_changed: bool,
 ) -> Readiness {
     let Some(cfg) = cfg.filter(|c| c.enabled) else {
@@ -64,10 +63,10 @@ pub(crate) fn readiness(
     if model_of(cfg.model_override.as_deref(), profile_name).is_none() {
         return Readiness::NoModel;
     }
-    match credential_kind {
-        None => Readiness::NoCredential,
-        Some(KIND_CLI_LOGIN) => Readiness::Ready,
-        Some(_) => Readiness::NotCliLogin,
+    if has_candidates {
+        Readiness::Ready
+    } else {
+        Readiness::NoCredential
     }
 }
 
@@ -87,17 +86,27 @@ pub(crate) struct SourceNode {
     pub enable: Option<String>,
 }
 
-/// Every configured node that is ready, as oxidized's source. A node that is not ready is left
-/// out; one whose credential fails to open is left out and logged by id, never by content.
+/// Every configured node that is ready and has a login to be fetched with, as oxidized's source.
+///
+/// A node is handed over with the login its rotation chose (`credential_id`), and only while that
+/// login is known to work or a fetch Yagra asked for is outstanding (`rotation::in_flight`): a
+/// login nobody has confirmed is tried only when the limits allowed it, never by oxidized's own
+/// daily schedule. A node that is not ready is left out; one whose credential fails to open is
+/// left out and logged by id, never by content.
 pub(crate) async fn source_nodes(
     targets: Vec<BackupTarget>,
     creds: &CredentialStore,
+    now: DateTime<Utc>,
 ) -> Vec<SourceNode> {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
-        let Some(cred) = t.credential_id else {
+        let Some(cred) = t.rotation.credential_id else {
             continue;
         };
+        if !t.rotation.login_confirmed && !super::rotation::in_flight(t.rotation.requested_at, now)
+        {
+            continue;
+        }
         let opened = match creds.open(cred).await {
             Ok(Some(o)) => o,
             Ok(None) => continue,
@@ -106,16 +115,13 @@ pub(crate) async fn source_nodes(
                 continue;
             }
         };
-        let cfg = NodeConfigBackup {
-            enabled: true,
-            credential_id: Some(cred),
-            input: t.input,
-            model_override: t.model_override.clone(),
-        };
+        if opened.0 != KIND_CLI_LOGIN {
+            continue;
+        }
         let ready = readiness(
-            Some(&cfg),
+            Some(&t.config),
             t.profile_name.as_deref(),
-            Some(&opened.0),
+            true,
             t.address_changed,
         );
         if ready != Readiness::Ready {
@@ -126,8 +132,11 @@ pub(crate) async fn source_nodes(
             continue;
         };
         let (Some(model), Some(input)) = (
-            model_of(t.model_override.as_deref(), t.profile_name.as_deref()),
-            t.input.oxidized(),
+            model_of(
+                t.config.model_override.as_deref(),
+                t.profile_name.as_deref(),
+            ),
+            t.config.input.oxidized(),
         ) else {
             continue;
         };
@@ -187,15 +196,15 @@ mod tests {
     fn ready_now(
         cfg: Option<&NodeConfigBackup>,
         profile: Option<&str>,
-        kind: Option<&str>,
+        has_candidates: bool,
     ) -> Readiness {
-        readiness(cfg, profile, kind, false)
+        readiness(cfg, profile, has_candidates, false)
     }
 
     fn cfg(enabled: bool, input: BackupInput, model: Option<&str>) -> NodeConfigBackup {
         NodeConfigBackup {
             enabled,
-            credential_id: None,
+            login_order: None,
             input,
             model_override: model.map(str::to_owned),
         }
@@ -205,48 +214,25 @@ mod tests {
     fn readiness_names_the_first_thing_to_fix() {
         let ios = Some("Cisco Catalyst switch (IOS/IOS-XE)");
         let on = cfg(true, BackupInput::Ssh, None);
-        assert_eq!(ready_now(None, ios, Some(KIND_CLI_LOGIN)), Readiness::Off);
+        assert_eq!(ready_now(None, ios, true), Readiness::Off);
         assert_eq!(
-            ready_now(
-                Some(&cfg(false, BackupInput::Ssh, None)),
-                ios,
-                Some(KIND_CLI_LOGIN)
-            ),
+            ready_now(Some(&cfg(false, BackupInput::Ssh, None)), ios, true),
             Readiness::Off
         );
         assert_eq!(
-            ready_now(
-                Some(&cfg(true, BackupInput::Unknown, None)),
-                ios,
-                Some(KIND_CLI_LOGIN)
-            ),
+            ready_now(Some(&cfg(true, BackupInput::Unknown, None)), ios, true),
             Readiness::UnknownInput
         );
         assert_eq!(
-            ready_now(
-                Some(&on),
-                Some("Cisco wireless controller"),
-                Some(KIND_CLI_LOGIN)
-            ),
+            ready_now(Some(&on), Some("Cisco wireless controller"), true),
             Readiness::NoModel
         );
-        assert_eq!(ready_now(Some(&on), ios, None), Readiness::NoCredential);
-        assert_eq!(
-            ready_now(Some(&on), ios, Some("snmp_v2c")),
-            Readiness::NotCliLogin
-        );
-        assert_eq!(
-            ready_now(Some(&on), ios, Some(KIND_CLI_LOGIN)),
-            Readiness::Ready
-        );
+        assert_eq!(ready_now(Some(&on), ios, false), Readiness::NoCredential);
+        assert_eq!(ready_now(Some(&on), ios, true), Readiness::Ready);
         // A person's pick stands in for a profile with no row.
         let picked = cfg(true, BackupInput::Telnet, Some("aireos"));
         assert_eq!(
-            ready_now(
-                Some(&picked),
-                Some("Cisco wireless controller"),
-                Some(KIND_CLI_LOGIN)
-            ),
+            ready_now(Some(&picked), Some("Cisco wireless controller"), true),
             Readiness::Ready
         );
     }
@@ -255,15 +241,12 @@ mod tests {
     fn a_moved_node_has_its_login_withheld() {
         let on = cfg(true, BackupInput::Ssh, Some("ios"));
         assert_eq!(
-            readiness(Some(&on), None, Some(KIND_CLI_LOGIN), true),
+            readiness(Some(&on), None, true, true),
             Readiness::AddressChanged
         );
         // Switched off, it is simply off.
         let off = cfg(false, BackupInput::Ssh, Some("ios"));
-        assert_eq!(
-            readiness(Some(&off), None, Some(KIND_CLI_LOGIN), true),
-            Readiness::Off
-        );
+        assert_eq!(readiness(Some(&off), None, true, true), Readiness::Off);
     }
 
     #[test]

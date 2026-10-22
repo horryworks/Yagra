@@ -40,6 +40,7 @@ import type {
   ConfigBundle,
   CredentialSummary,
   RevealedCredential,
+  ConfigBackupRow,
   ConfigBackupView,
   ConfigVersion,
   ConfigText,
@@ -1215,16 +1216,18 @@ export const api = {
   getNodeStatus: (id: string): Promise<NodeStatus> =>
     apiGet('/api/v1/nodes/{node_id}/status', { path: { node_id: id } }),
 
-  /** A node's config backup (ADR-210 stage 2): configuration, whether it is fetched, last result. */
+  /** A node's config backup (ADR-210): configuration, whether it is fetched, the login being tried
+   *  or that works, the latest attempts. */
   getConfigBackup: (id: string): Promise<ConfigBackupView> =>
     apiGet('/api/v1/nodes/{node_id}/config-backup', { path: { node_id: id } }),
 
-  /** Save a node's config-backup configuration; oxidized re-reads its node list right after. */
+  /** Save a node's config-backup configuration; oxidized re-reads its node list right after.
+   *  `login_order` null means every CLI login in the try order. */
   putConfigBackup: (
     id: string,
     body: {
       enabled: boolean;
-      credential_id: string | null;
+      login_order: string[] | null;
       input: BackupInput;
       model_override: string | null;
     },
@@ -1248,9 +1251,14 @@ export const api = {
       query: { from, to },
     }),
 
-  /** Ask the bundled oxidized to fetch the node now. */
+  /** Ask the bundled oxidized to fetch the node now, with the next login the lockout limits allow.
+   *  A 429 (`config_backup_wait`) means none is allowed yet; the view says until when. */
   fetchConfigNow: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/fetch', { path: { node_id: id } }),
+
+  /** Every node switched on for config backup that the caller can see (Nodes ▸ Config backups and
+   *  the tree's marks). */
+  listConfigBackups: (): Promise<ConfigBackupRow[]> => apiGet('/api/v1/config-backups'),
 
   /** One node's config detail incl. bindings (profile/credential/parent). */
   getNode: (id: string): Promise<NodeDetail> =>

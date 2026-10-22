@@ -882,7 +882,12 @@
     "nameFromDevice": "Name from device…",
     "nameFromDeviceNamed": "Name “{{name}}” from device…",
     "nameFromDeviceSelected": "Name {{count}} selected from device…",
-    "namedFromDevice": "Renamed {{applied}} of {{requested}}."
+    "namedFromDevice": "Renamed {{applied}} of {{requested}}.",
+    "backupMark": {
+      "ok": "Config backed up",
+      "busy": "Config backup in progress",
+      "trouble": "Config backup needs attention"
+    }
   },
   "moveNode": {
     "title": "Move {{name}}",
@@ -1227,9 +1232,6 @@
     }
   },
   "config": {
-    "enabled": "Back up config",
-    "login": "Login",
-    "loginNone": "None",
     "connection": "Connection",
     "input": {
       "ssh_then_telnet": "SSH, then telnet",
@@ -1239,19 +1241,63 @@
     "model": "Model",
     "modelFromProfile": "From profile ({{model}})",
     "modelPick": "Pick a model",
+    "start": "Start backup",
+    "stop": "Stop",
     "fetchNow": "Fetch now",
-    "asked": "Asked. The new version appears here after the fetch.",
     "readiness": {
       "ready": "Fetched daily",
       "off": "Not backed up",
       "no_model": "No model for this device's profile. Pick one.",
-      "no_credential": "No login chosen.",
-      "not_cli_login": "The chosen login is not a CLI login.",
+      "no_credential": "No CLI login to try.",
       "unknown_input": "The stored connection is unknown to this version. Pick one and save.",
       "address_changed": "The address changed since this was saved. Save again to resume."
     },
-    "lastResult": "Last fetch: {{status}}",
-    "stale": "not updated for over 15 min",
+    "logins": "Logins, in the order tried",
+    "defaultOrder": "Use the default order",
+    "loginIndex": "Login {{n}}",
+    "loginGone": "A deleted login",
+    "state": {
+      "fetching": "Fetching with {{login}}…",
+      "trying": "Fetching with {{login}} ({{n}} of {{total}})…",
+      "exhausted": "No login worked.",
+      "waiting": "Waiting for the first fetch",
+      "nextTry": "next try at {{time}}"
+    },
+    "result": {
+      "newVersion": "New version saved",
+      "noChange": "No change since the last version"
+    },
+    "outcome": {
+      "success": "Fetched",
+      "auth_failed": "{{login}} was refused",
+      "unreachable": "Device did not answer",
+      "other": "{{login}} failed",
+      "lost": "The fetch did not report back",
+      "unknown": "{{login}} failed"
+    },
+    "attempts": {
+      "cols": {
+        "at": "Time",
+        "login": "Login",
+        "result": "Result"
+      }
+    },
+    "list": {
+      "cols": {
+        "node": "Node",
+        "state": "State",
+        "last": "Last attempt",
+        "login": "Login",
+        "success": "Last success",
+        "next": "Next try"
+      },
+      "empty": "No device is backed up yet.",
+      "mark": {
+        "ok": "Backed up",
+        "busy": "In progress",
+        "trouble": "Needs attention"
+      }
+    },
     "unavailable": "This deployment has no config backup service.",
     "noVersions": "No versions yet.",
     "cols": {
@@ -1266,7 +1312,8 @@
       "versions": "Could not list versions.",
       "save": "Could not save.",
       "fetch": "Could not ask for a fetch.",
-      "text": "Could not read the version."
+      "text": "Could not read the version.",
+      "list": "Could not list config backups."
     }
   }
 }

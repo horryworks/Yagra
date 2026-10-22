@@ -43,6 +43,7 @@ pub(super) enum HealthSection {
     Version,
     Deployment,
     Upgrade,
+    ConfigBackups,
 }
 
 yagra_base::stored_enum::token_enum!(HealthSection, [
@@ -60,6 +61,7 @@ yagra_base::stored_enum::token_enum!(HealthSection, [
     Version => "version",
     Deployment => "deployment",
     Upgrade => "upgrade",
+    ConfigBackups => "config_backups",
 ]);
 
 impl HealthSection {
@@ -82,6 +84,7 @@ impl HealthSection {
             Self::Version => "version",
             Self::Deployment => "deployment",
             Self::Upgrade => "upgrade",
+            Self::ConfigBackups => "config_backups",
         }
     }
 }
@@ -513,7 +516,9 @@ impl YagraMcp {
                        optional tiers are enabled), upgrade (which binary is actually running — \
                        commit and build profile, not just the version — how much schema is \
                        applied, and whether this deployment could still be taken back to an \
-                       earlier release). Sections require different permissions: most need view, \
+                       earlier release), config_backups (every node whose configuration is backed \
+                       up: whether a login has been found that works, whether a fetch is out, when \
+                       the lockout limits next allow a login, and the last attempt). Sections require different permissions: most need view, \
                        forwarding and upgrade need manage-system, credentials needs \
                        manage-credentials."
     )]
@@ -656,6 +661,13 @@ impl YagraMcp {
                     _ => tool_unavailable(TOOL, "the upgrade view requires live mode"),
                 }
             }
+            HealthSection::ConfigBackups => match admin {
+                Some(a) => match crate::api::config_backup::config_backup_rows(a, scope).await {
+                    Ok(rows) => ok_json(TOOL, &rows),
+                    Err(e) => tool_api_error(TOOL, &e),
+                },
+                None => tool_unavailable(TOOL, "config backups require live mode"),
+            },
         }
     }
 
@@ -1409,7 +1421,7 @@ mod tests {
         }
         assert_eq!(
             HealthSection::NAMES.len(),
-            14,
+            15,
             "the advertised section list changed; check the description and folded.rs together"
         );
     }

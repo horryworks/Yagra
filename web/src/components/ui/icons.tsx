@@ -132,6 +132,16 @@ export function BoxIcon(props: IconProps) {
   );
 }
 
+/** A page of text — a node whose configuration is backed up (ADR-210 stage 3). */
+export function ConfigFileIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5M9 13h6M9 17h6" />
+    </svg>
+  );
+}
+
 /** Calendar — opens the custom date-range popover in RangeControl. */
 export function CalendarIcon(props: IconProps) {
   return (

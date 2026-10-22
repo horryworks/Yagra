@@ -27,6 +27,7 @@
  */
 export const TABLE_IDS = [
   // Node detail
+  'node.configAttempts',
   'node.configVersions',
   'node.dnsHealth',
   'node.events',
@@ -43,6 +44,7 @@ export const TABLE_IDS = [
   // Nodes / monitoring configuration
   'nodes.classification',
   'nodes.collectionTemplates',
+  'nodes.configBackups',
   'nodes.dependencies',
   'nodes.duplicates',
   'nodes.mib',

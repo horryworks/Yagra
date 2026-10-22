@@ -1475,6 +1475,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "GET",
+        "/api/v1/config-backups",
+        GroupFiltered,
+        Tool("get_system_health"),
+    ),
+    (
         "POST",
         "/api/v1/nodes/:node_id/rediscover/apply",
         NodeScoped,
@@ -2324,6 +2330,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Exempt("an unauthenticated container probe; /mcp is never anonymous"),
     ),
     (
+        "POST",
+        "/internal/oxidized/events",
+        Global(
+            "the bundled oxidized's report of how each fetch ended, for oxidized alone, behind the \
+             source token rather than a person's session (ADR-210 stage 3)",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/internal/oxidized/nodes",
         Global(
@@ -2794,6 +2809,12 @@ mod tests {
             "GET",
             "/healthz",
             "liveness probe — compose healthchecks and orchestrators call it, never a browser",
+        ),
+        (
+            "POST",
+            "/internal/oxidized/events",
+            "the bundled oxidized's hook (ADR-210 stage 3) - oxidized posts each fetch's result \
+             with the source token, never a browser",
         ),
         (
             "GET",

@@ -157,6 +157,10 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/dashboard/reports': MARKER,
   '/nodes': MARKER,
   '/nodes/discovery': MARKER,
+  // The node column is resolved by the batch name lookup, whose mock answers the ids it generated
+  // rather than this list's, so no `ymock-` name reaches it. The state word is drawn from the row
+  // the mock served, and an empty list draws none.
+  '/nodes/config-backups': { kind: 'locator', sel: '.cfgbl-mark' },
   '/nodes/profiles': MARKER,
   '/nodes/classification-rules': MARKER,
   '/nodes/reclassify': MARKER,

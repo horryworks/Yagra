@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Nodes ▸ Config backups (ADR-210 stage 3). The table is DataTable's; this is the state word, in the
+   colours the tree's mark uses. */
+
+.cfgbl-mark-ok {
+  color: var(--status-ok);
+}
+
+.cfgbl-mark-trouble {
+  color: var(--status-warning);
+}
+
+.cfgbl-mark-busy {
+  color: var(--text-secondary);
+}

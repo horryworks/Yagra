@@ -612,6 +612,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_config_backups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/bundle": {
         parameters: {
             query?: never;
@@ -5443,6 +5459,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/oxidized/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["oxidized_event"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/internal/oxidized/nodes": {
         parameters: {
             query?: never;
@@ -6040,6 +6072,24 @@ export interface components {
             modified_at: number;
             /** Format: int64 */
             size_bytes: number;
+        };
+        /**
+         * @description How one login attempt ended.
+         * @enum {string}
+         */
+        AttemptOutcome: "success" | "auth_failed" | "unreachable" | "other" | "lost" | "unknown";
+        /** @description One login attempt. */
+        AttemptView: {
+            /** Format: date-time */
+            at: string;
+            /**
+             * Format: uuid
+             * @description The login tried; `null` when it has since been deleted.
+             */
+            credential_id?: string | null;
+            /** @description For a success: whether a new version was stored. `null` otherwise. */
+            new_version?: boolean | null;
+            outcome: components["schemas"]["AttemptOutcome"];
         };
         /**
          * @description What an audit entry was, as the log's filterable vocabulary.
@@ -6914,29 +6964,88 @@ export interface components {
         };
         /** @description A node's config-backup configuration. */
         ConfigBackupBody: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description Deprecated: one login, read as `login_order: [credential_id]`. Refused together with
+             *     `login_order`.
+             */
             credential_id?: string | null;
             enabled: boolean;
             input: components["schemas"]["BackupInput"];
+            /**
+             * @description The node's own order of CLI logins. Omitted or `null`: every CLI login, in the try order of
+             *     Credentials & secrets.
+             */
+            login_order?: string[] | null;
             model_override?: string | null;
+        };
+        /** @description One node in the fleet-wide list. */
+        ConfigBackupRow: {
+            /**
+             * Format: uuid
+             * @description The login being tried or that works.
+             */
+            credential_id?: string | null;
+            last?: null | components["schemas"]["AttemptView"];
+            /**
+             * Format: date-time
+             * @description When a fetch last succeeded.
+             */
+            last_success_at?: string | null;
+            login_confirmed: boolean;
+            /** Format: uuid */
+            node_id: string;
+            /** @description A fetch is out and not yet answered. */
+            pending: boolean;
+            /**
+             * Format: date-time
+             * @description When the lockout limits next allow a try, as the leader last worked it out.
+             */
+            try_after?: string | null;
         };
         /** @description One node's config backup. */
         ConfigBackupView: {
+            /** @description The newest attempts, newest first. */
+            attempts: components["schemas"]["AttemptView"][];
             /** @description Whether this deployment has an oxidized at all. */
             available: boolean;
-            /** Format: uuid */
+            /**
+             * @description The logins this node tries, in order (`login_order` with deleted ones dropped, or every CLI
+             *     login).
+             */
+            candidates: string[];
+            /**
+             * Format: uuid
+             * @description The login handed to oxidized: the one being tried, or the one that works.
+             */
             credential_id?: string | null;
             enabled: boolean;
+            /**
+             * @description Every candidate failed in this pass; nothing is tried until a fetch is asked for, the order
+             *     changes, or a CLI login is added or changed.
+             */
+            exhausted: boolean;
             input: components["schemas"]["BackupInput"];
+            /** @description `credential_id` has fetched successfully. */
+            login_confirmed: boolean;
+            /** @description The node's own order of CLI logins; `null` means every CLI login in the try order. */
+            login_order?: string[] | null;
             /** @description The model a person picked; `null` means "from the profile". */
             model_override?: string | null;
             /** @description The models a person may pick. */
             models: string[];
+            /** @description Yagra asked oxidized for a fetch and has not heard how it ended. */
+            pending: boolean;
             /** @description The model the node's profile maps to, if any. */
             profile_model?: string | null;
             /** @description Whether it is fetched, or the one thing to fix. */
             readiness: components["schemas"]["Readiness"];
             status?: null | components["schemas"]["BackupStatusView"];
+            /**
+             * Format: date-time
+             * @description When the lockout limits allow the next try; `null` when one may be tried now, or none is due.
+             */
+            try_after?: string | null;
         };
         ConfigBody: {
             /** Format: int32 */
@@ -11888,6 +11997,16 @@ export interface components {
          * @enum {string}
          */
         OverlapStatus: "open" | "intentional" | "excluded";
+        /** @description How one fetch ended, as oxidized's hook posts it (`config::render`). */
+        OxidizedEvent: {
+            /** @description oxidized's error class, such as `Net::SSH::AuthenticationFailed`; empty on success. */
+            err_type?: string | null;
+            /** @description `node_success` or `node_fail`. */
+            event: string;
+            group?: string | null;
+            /** @description oxidized's name for the node: its id. */
+            node: string;
+        };
         /**
          * @description A discrete capability checked at the API edge.
          * @enum {string}
@@ -12765,7 +12884,7 @@ export interface components {
          * @description Whether a node is fetched, and if not, the one thing to fix.
          * @enum {string}
          */
-        Readiness: "ready" | "off" | "no_model" | "no_credential" | "not_cli_login" | "unknown_input" | "address_changed";
+        Readiness: "ready" | "off" | "no_model" | "no_credential" | "unknown_input" | "address_changed";
         /** @description What an apply did. The four counts add up to the number of distinct nodes named. */
         ReclassifyApplied: {
             /** @description Nodes moved to the profile the rules choose. */
@@ -17547,6 +17666,44 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has nowhere to persist the default */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_config_backups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every node switched on for config backup that the caller can see, with its login and its last attempt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigBackupRow"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -25372,7 +25529,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The node's config backup: configuration, whether it is fetched, the last result */
+            /** @description The node's config backup: configuration, whether it is fetched, the login being tried or that works, the latest attempts */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -25426,14 +25583,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Saved; the bundled oxidized is asked to re-read its node list */
+            /** @description Saved; the bundled oxidized is asked to re-read its node list. Switching it on, or changing the order, starts the logins afresh */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description An unknown input or model, or a credential that is not a CLI login (`invalid_config_backup`) */
+            /** @description An unknown input or model, a login that is not a CLI login, a repeated one, or both `login_order` and `credential_id` (`invalid_config_backup`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -25451,7 +25608,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig; or a login is named by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`) */
+            /** @description Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -25574,7 +25731,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Asked; the bundled oxidized fetches the node next */
+            /** @description Asked; the bundled oxidized fetches the node next, with the login the lockout limits allow. A pass in which every login failed starts again */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -25601,6 +25758,24 @@ export interface operations {
             };
             /** @description No such node the caller can see */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The lockout limits allow no login yet; `Retry-After` says when (`config_backup_wait`) */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -36079,6 +36254,46 @@ export interface operations {
                 };
                 content: {
                     "text/plain": unknown;
+                };
+            };
+        };
+    };
+    oxidized_event: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["OxidizedEvent"];
+            };
+        };
+        responses: {
+            /** @description Recorded, or ignored when it is not about one of Yagra's nodes. For oxidized alone: it demands the source token in `x-yagra-oxidized-token` */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No token, or the wrong one (`oxidized_token`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
         };

@@ -878,7 +878,12 @@
     "nameFromDevice": "名前を sysName に合わせる…",
     "nameFromDeviceNamed": "「{{name}}」の名前を sysName に合わせる…",
     "nameFromDeviceSelected": "選択した {{count}} 件の名前を sysName に合わせる…",
-    "namedFromDevice": "{{requested}} 件のうち {{applied}} 件の名前を変えました。"
+    "namedFromDevice": "{{requested}} 件のうち {{applied}} 件の名前を変えました。",
+    "backupMark": {
+      "ok": "config バックアップ中",
+      "busy": "config バックアップ進行中",
+      "trouble": "config バックアップに問題あり"
+    }
   },
   "moveNode": {
     "title": "{{name}} を移動",
@@ -1217,9 +1222,6 @@
     }
   },
   "config": {
-    "enabled": "config をバックアップ",
-    "login": "ログイン",
-    "loginNone": "なし",
     "connection": "接続",
     "input": {
       "ssh_then_telnet": "SSH、だめなら telnet",
@@ -1229,19 +1231,63 @@
     "model": "機種",
     "modelFromProfile": "プロファイルから（{{model}}）",
     "modelPick": "機種を選ぶ",
+    "start": "バックアップを始める",
+    "stop": "止める",
     "fetchNow": "今すぐ取得",
-    "asked": "依頼しました。取得が終わるとここに新しい版が出ます。",
     "readiness": {
       "ready": "毎日取得",
       "off": "バックアップしない",
       "no_model": "この機器のプロファイルに機種がありません。選んでください。",
-      "no_credential": "ログインが選ばれていません。",
-      "not_cli_login": "選んだログインは CLI 用ではありません。",
+      "no_credential": "試せる CLI ログインがありません。",
       "unknown_input": "保存されている接続はこの版では分かりません。選び直して保存してください。",
       "address_changed": "保存した後にアドレスが変わりました。もう一度保存すると再開します。"
     },
-    "lastResult": "最後の取得: {{status}}",
-    "stale": "15 分以上更新されていない",
+    "logins": "試すログインと順番",
+    "defaultOrder": "既定の順に戻す",
+    "loginIndex": "ログイン {{n}}",
+    "loginGone": "削除されたログイン",
+    "state": {
+      "fetching": "{{login}} で取得中…",
+      "trying": "{{login}} で取得中（{{total}} 個中 {{n}} 個目）…",
+      "exhausted": "どのログインでも入れません。",
+      "waiting": "最初の取得を待っています",
+      "nextTry": "次は {{time}}"
+    },
+    "result": {
+      "newVersion": "新しい版を保存しました",
+      "noChange": "前の版から変更なし"
+    },
+    "outcome": {
+      "success": "取得しました",
+      "auth_failed": "{{login}} は拒否されました",
+      "unreachable": "機器が応答しません",
+      "other": "{{login}} で失敗しました",
+      "lost": "取得の結果が返ってきませんでした",
+      "unknown": "{{login}} で失敗しました"
+    },
+    "attempts": {
+      "cols": {
+        "at": "日時",
+        "login": "ログイン",
+        "result": "結果"
+      }
+    },
+    "list": {
+      "cols": {
+        "node": "ノード",
+        "state": "状態",
+        "last": "最後の試行",
+        "login": "ログイン",
+        "success": "最後の成功",
+        "next": "次の試行"
+      },
+      "empty": "まだバックアップしている機器はありません。",
+      "mark": {
+        "ok": "取得できている",
+        "busy": "進行中",
+        "trouble": "要対応"
+      }
+    },
     "unavailable": "この環境には config バックアップがありません。",
     "noVersions": "版はまだありません。",
     "cols": {
@@ -1256,7 +1302,8 @@
       "versions": "版の一覧を読めませんでした。",
       "save": "保存できませんでした。",
       "fetch": "取得を依頼できませんでした。",
-      "text": "版を読めませんでした。"
+      "text": "版を読めませんでした。",
+      "list": "config バックアップの一覧を読めませんでした。"
     }
   }
 }

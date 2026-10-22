@@ -82,6 +82,7 @@ const schemaEnumPins: {
   TokenSurface: AssertEqual<TokenSurface, components['schemas']['TokenSurface']>;
   BackupInput: AssertEqual<BackupInput, Exclude<components['schemas']['BackupInput'], 'unknown'>>;
   BackupReadiness: AssertEqual<BackupReadiness, components['schemas']['Readiness']>;
+  AttemptOutcome: AssertEqual<AttemptOutcome, components['schemas']['AttemptOutcome']>;
   RevealedFieldKey: AssertEqual<RevealedFieldKey, components['schemas']['RevealedFieldKey']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
   DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
@@ -153,6 +154,7 @@ const schemaEnumPins: {
   TokenSurface: true,
   BackupInput: true,
   BackupReadiness: true,
+  AttemptOutcome: true,
   RevealedFieldKey: true,
   NeighborProto: true,
   NeighborCapability: true,
@@ -396,11 +398,26 @@ export const BACKUP_READINESS = [
   'off',
   'no_model',
   'no_credential',
-  'not_cli_login',
   'unknown_input',
   'address_changed',
 ] as const;
 export type BackupReadiness = (typeof BACKUP_READINESS)[number];
+
+/** How one config-backup login attempt ended (ADR-210 stage 3). Pinned to
+ *  `schemas.AttemptOutcome`. */
+export const ATTEMPT_OUTCOMES = [
+  'success',
+  'auth_failed',
+  'unreachable',
+  'other',
+  'lost',
+  'unknown',
+] as const;
+export type AttemptOutcome = (typeof ATTEMPT_OUTCOMES)[number];
+/** One config-backup login attempt. */
+export type AttemptView = components['schemas']['AttemptView'];
+/** One node in Nodes ▸ Config backups. */
+export type ConfigBackupRow = components['schemas']['ConfigBackupRow'];
 
 /** A credential's secret in plaintext (`POST /api/v1/credentials/{id}/reveal`, ADR-210). Held only
  *  while the dialog that asked for it is open; never stored. */

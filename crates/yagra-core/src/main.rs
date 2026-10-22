@@ -283,9 +283,14 @@ fn run_oxidized_config() -> anyhow::Result<()> {
     };
     oxidized::config::write(
         std::path::Path::new(&home),
-        "http://core:8080/internal/oxidized/nodes",
+        oxidized::config::SOURCE_URL,
+        oxidized::config::EVENTS_URL,
     )?;
-    tracing::info!(%home, "oxidized configuration written");
+    tracing::info!(
+        %home,
+        revision = oxidized::config::CONFIG_REVISION,
+        "oxidized configuration written"
+    );
     Ok(())
 }
 
@@ -1253,11 +1258,20 @@ impl LeaderTasks {
         self.spawn_flow_pipeline().await?;
         self.spawn_schedulers();
         self.spawn_refresh_loops(&delivery);
-        // Config backup (ADR-210 stage 2). Leader-only for the reason `oxidized/status.rs` gives.
+        // Config backup (ADR-210 stages 2 and 3). Leader-only for the reasons `oxidized/status.rs`
+        // and `oxidized/rotation.rs` give.
         if let Some(client) = self.oxidized.clone() {
             spawn_cancellable(
                 &self.shutdown,
-                oxidized::status::run_status_loop(client, self.config_backup.clone()),
+                oxidized::status::run_status_loop(client.clone(), self.config_backup.clone()),
+            );
+            spawn_cancellable(
+                &self.shutdown,
+                oxidized::rotation::run_rotation_loop(
+                    client,
+                    self.config_backup.clone(),
+                    self.creds.clone(),
+                ),
             );
         }
         self.reconcile_orphaned_jobs().await;

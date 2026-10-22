@@ -1,12 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import type { ConfigBackupView } from '../../types/api';
-import { bodyOf, formOf, isDirty, isStale, previousOf, resultTone, shortOid } from './configBackupForm';
+import type { AttemptView, ConfigBackupView } from '../../types/api';
+import {
+  attemptLine,
+  bodyOf,
+  formOf,
+  isDirty,
+  isQuietFetchRefusal,
+  loginLabel,
+  pickedLogins,
+  previousOf,
+  refreshMs,
+  shortOid,
+  stateLine,
+} from './configBackupForm';
 
 const view = (over: Partial<ConfigBackupView> = {}): ConfigBackupView => ({
   available: true,
   enabled: false,
+  login_order: null,
+  candidates: ['a', 'b', 'c'],
   credential_id: null,
+  login_confirmed: false,
+  pending: false,
+  try_after: null,
+  exhausted: false,
+  attempts: [],
   input: 'ssh',
   model_override: null,
   profile_model: 'ios',
@@ -16,19 +35,31 @@ const view = (over: Partial<ConfigBackupView> = {}): ConfigBackupView => ({
   ...over,
 });
 
-describe('config backup form (ADR-210 stage 2)', () => {
-  it('opens as what is stored and sends "none" and "from the profile" as null', () => {
+const attempt = (over: Partial<AttemptView>): AttemptView => ({
+  at: '2026-10-22T10:00:00Z',
+  credential_id: 'b',
+  outcome: 'success',
+  new_version: null,
+  ...over,
+});
+
+describe('config backup form (ADR-210)', () => {
+  it('opens as what is stored and sends the default order and "from the profile" as null', () => {
     const form = formOf(view());
-    expect(form).toEqual({ enabled: false, credentialId: '', input: 'ssh', model: '' });
-    expect(bodyOf(form)).toEqual({
-      enabled: false,
-      credential_id: null,
+    expect(form).toEqual({ order: null, input: 'ssh', model: '' });
+    expect(bodyOf(form, true)).toEqual({
+      enabled: true,
+      login_order: null,
       input: 'ssh',
       model_override: null,
     });
-    const picked = { ...form, enabled: true, credentialId: 'c1', model: 'nxos' };
-    expect(bodyOf(picked).model_override).toBe('nxos');
-    expect(bodyOf(picked).credential_id).toBe('c1');
+    const picked = { ...form, order: ['c', 'a'], model: 'nxos' };
+    expect(bodyOf(picked, false)).toEqual({
+      enabled: false,
+      login_order: ['c', 'a'],
+      input: 'ssh',
+      model_override: 'nxos',
+    });
   });
 
   it('opens a stored unknown input as the default, which is then a change', () => {
@@ -36,10 +67,100 @@ describe('config backup form (ADR-210 stage 2)', () => {
     expect(formOf(v).input).toBe('ssh');
   });
 
-  it('is dirty only when something differs', () => {
-    const v = view({ enabled: true, credential_id: 'c1' });
+  it('is dirty only when something differs, the order included', () => {
+    const v = view({ enabled: true, login_order: ['a', 'b'] });
     expect(isDirty(formOf(v), v)).toBe(false);
     expect(isDirty({ ...formOf(v), input: 'telnet' }, v)).toBe(true);
+    expect(isDirty({ ...formOf(v), order: ['b', 'a'] }, v)).toBe(true);
+    expect(isDirty({ ...formOf(v), order: null }, v)).toBe(true);
+  });
+
+  it('ticks every candidate until the node has an order of its own', () => {
+    const v = view();
+    expect(pickedLogins(formOf(v), v)).toEqual(['a', 'b', 'c']);
+    expect(pickedLogins({ ...formOf(v), order: ['c'] }, v)).toEqual(['c']);
+  });
+});
+
+describe('naming a login', () => {
+  it('uses the name when it is known, else its place in the order, else says it is gone', () => {
+    const names = new Map([['a', 'ops-a']]);
+    expect(loginLabel('a', names, ['a', 'b'])).toEqual({ kind: 'name', name: 'ops-a' });
+    expect(loginLabel('b', names, ['a', 'b'])).toEqual({ kind: 'index', index: 2 });
+    expect(loginLabel('z', names, ['a', 'b'])).toEqual({ kind: 'gone' });
+    expect(loginLabel(null, names, ['a'])).toEqual({ kind: 'gone' });
+  });
+});
+
+describe('the state line', () => {
+  it('says off, then why it is not fetched, before anything else', () => {
+    expect(stateLine(view()).key).toBe('config.readiness.off');
+    expect(stateLine(view({ enabled: true, readiness: 'no_model' })).key).toBe(
+      'config.readiness.no_model',
+    );
+  });
+
+  it('names the login being tried and its place among the candidates', () => {
+    const line = stateLine(
+      view({ enabled: true, readiness: 'ready', pending: true, credential_id: 'b' }),
+    );
+    expect(line).toEqual({
+      key: 'config.state.trying',
+      login: 'b',
+      params: { n: 2, total: 3 },
+      tone: 'busy',
+    });
+    const known = stateLine(
+      view({
+        enabled: true,
+        readiness: 'ready',
+        pending: true,
+        credential_id: 'b',
+        login_confirmed: true,
+      }),
+    );
+    expect(known.key).toBe('config.state.fetching');
+  });
+
+  it('says no login worked, else what the last attempt did, else that it waits', () => {
+    const on = { enabled: true, readiness: 'ready' as const };
+    expect(stateLine(view({ ...on, exhausted: true })).key).toBe('config.state.exhausted');
+    expect(stateLine(view({ ...on, attempts: [attempt({ new_version: true })] })).key).toBe(
+      'config.result.newVersion',
+    );
+    expect(stateLine(view(on)).key).toBe('config.state.waiting');
+  });
+});
+
+describe('an attempt', () => {
+  it('tells a new version from no change, and names the login that was refused', () => {
+    expect(attemptLine(attempt({ new_version: true })).key).toBe('config.result.newVersion');
+    expect(attemptLine(attempt({ new_version: false })).key).toBe('config.result.noChange');
+    expect(attemptLine(attempt({})).key).toBe('config.outcome.success');
+    expect(attemptLine(attempt({ outcome: 'auth_failed' }))).toEqual({
+      key: 'config.outcome.auth_failed',
+      login: 'b',
+      tone: 'bad',
+    });
+    // A device that did not answer is not a failed login.
+    expect(attemptLine(attempt({ outcome: 'unreachable' })).tone).toBe('none');
+  });
+});
+
+describe('reading again', () => {
+  it('is fast while a fetch is out, slow while a login is looked for, off once settled', () => {
+    expect(refreshMs(null)).toBeUndefined();
+    expect(refreshMs(view())).toBeUndefined();
+    expect(refreshMs(view({ enabled: true, pending: true }))).toBe(3_000);
+    expect(refreshMs(view({ enabled: true }))).toBe(30_000);
+    expect(refreshMs(view({ enabled: true, login_confirmed: true }))).toBeUndefined();
+    expect(refreshMs(view({ enabled: true, exhausted: true }))).toBeUndefined();
+  });
+
+  it('treats a held-back or already-running fetch as nothing to report', () => {
+    expect(isQuietFetchRefusal(429)).toBe(true);
+    expect(isQuietFetchRefusal(409)).toBe(true);
+    expect(isQuietFetchRefusal(502)).toBe(false);
   });
 });
 
@@ -54,22 +175,5 @@ describe('versions', () => {
     expect(previousOf(versions, 'a'.repeat(40))).toBeNull();
     expect(previousOf(versions, 'z')).toBeNull();
     expect(shortOid('abcdef0123456789')).toBe('abcdef01');
-  });
-});
-
-describe('status', () => {
-  it('is stale after three missed reads, and an unparseable time is not', () => {
-    const now = Date.parse('2026-10-22T10:00:00Z');
-    expect(isStale('2026-10-22T09:50:00Z', now)).toBe(false);
-    expect(isStale('2026-10-22T09:40:00Z', now)).toBe(true);
-    expect(isStale('not a time', now)).toBe(false);
-  });
-
-  it('draws success as ok, never as nothing, and every other word as a failure', () => {
-    expect(resultTone('success')).toBe('ok');
-    expect(resultTone('never')).toBe('none');
-    expect(resultTone(null)).toBe('none');
-    expect(resultTone('no_connection')).toBe('bad');
-    expect(resultTone('timelimit')).toBe('bad');
   });
 });

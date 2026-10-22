@@ -1,26 +1,38 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Config backup through the bundled oxidized (ADR-210 stage 2).
+//! Config backup through the bundled oxidized (ADR-210 stages 2 and 3).
 //!
 //! Per node, addressed by path (`NodeScoped`):
 //!
-//! - `GET …/config-backup` — what is configured, whether the node is fetched and why not, and what
-//!   oxidized last reported. `View`.
-//! - `PUT …/config-backup` — switch it on or off, pick the CLI login, SSH or telnet, the model.
-//!   `ManageConfig`. oxidized is asked to re-read its node list straight after.
+//! - `GET …/config-backup` — what is configured, whether the node is fetched and why not, which
+//!   login is being tried or has worked, when the next one may be, and the latest attempts. `View`.
+//!   Logins are named by id: a credential's name is `ManageCredentials` reading, so the WebUI
+//!   resolves names only for a caller who may list them.
+//! - `PUT …/config-backup` — switch it on or off, the node's own order of CLI logins (or the try
+//!   order of Credentials & secrets), SSH or telnet, the model. `ManageConfig`, and switching it on
+//!   also takes `RevealCredentials` and a fleet-wide caller, because it hands logins to the node's
+//!   address. oxidized is asked to re-read its node list straight after.
 //! - `GET …/config-backup/versions` — the stored versions. `View`.
 //! - `GET …/config-backup/versions/{oid}` and `GET …/config-backup/diff` — the text, and two
 //!   versions side by side. **`ManageConfig`** (decision 10): oxidized's `remove_secret` is model by
 //!   model and can miss one, so a Viewer does not read device configuration. Neither has an MCP
 //!   tool, for the same reason (decision 16).
-//! - `POST …/config-backup/fetch` — fetch now. `ManageConfig`.
+//! - `POST …/config-backup/fetch` — fetch now, with the next login the lockout limits allow; `429`
+//!   with the time when they allow none yet. `ManageConfig`.
 //!
-//! And one route for oxidized itself, outside `/api/v1`: `GET /internal/oxidized/nodes`, the HTTP
-//! source oxidized reads its node list from. **It returns device logins in plaintext** — the second
-//! reader of plaintext after `POST /credentials/{id}/reveal` (security.md). nginx forwards only
-//! `/api/` and `/mcp`, so the TLS edge never serves it; core's own port is on the LAN, so it demands
-//! the source token the one-shot `oxidized-config` wrote, compared in constant time. It is not
-//! audited per call (oxidized reads it every few minutes); `yagra_oxidized_source_reads_total`
-//! counts it instead.
+//! Fleet-wide, `GET /api/v1/config-backups`: every node switched on that the caller can see, with
+//! its rotation and its last attempt — the Nodes ▸ Config backups list and the tree's marks.
+//!
+//! And two routes for oxidized itself, outside `/api/v1`, both behind the source token the
+//! one-shot `oxidized-config` wrote (compared in constant time). nginx forwards only `/api/` and
+//! `/mcp`, so the TLS edge never serves them; core's own port is on the LAN, so the token is what
+//! keeps a neighbour out.
+//!
+//! - `GET /internal/oxidized/nodes`, the HTTP source oxidized reads its node list from. **It returns
+//!   device logins in plaintext** — the second reader of plaintext after
+//!   `POST /credentials/{id}/reveal` (security.md). It is not audited per call (oxidized reads it
+//!   every few minutes); `yagra_oxidized_source_reads_total` counts it instead.
+//! - `POST /internal/oxidized/events`, where oxidized's hook reports how each fetch ended (stage 3
+//!   decision 21). It takes the node, the event and oxidized's error type, never the message.
 
 use std::sync::Arc;
 
@@ -28,19 +40,24 @@ use axum::{
     extract::{Path, Query},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
-    Json, Router,
+    Form, Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_backup::{BackupInput, NodeConfigBackup};
+use yagra_base::config_backup::{Attempt, AttemptOutcome, BackupInput, NodeConfigBackup};
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{
     Admin, RequireManageConfig, RequireRevealCredentials, RequireView, Scoped, VisibleNode,
 };
 use super::ApiState;
-use crate::oxidized::{self, client::OxidizedClient, source::Readiness};
+use crate::oxidized::{
+    self,
+    client::OxidizedClient,
+    rotation::{self, Step},
+    source::Readiness,
+};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -51,7 +68,9 @@ use crate::oxidized::{self, client::OxidizedClient, source::Readiness};
     get_version,
     get_diff,
     fetch_now,
-    oxidized_source
+    list_config_backups,
+    oxidized_source,
+    oxidized_event
 ))]
 pub(super) struct Doc;
 
@@ -75,7 +94,9 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/nodes/:node_id/config-backup/fetch",
             post(fetch_now),
         )
+        .route("/api/v1/config-backups", get(list_config_backups))
         .route("/internal/oxidized/nodes", get(oxidized_source))
+        .route("/internal/oxidized/events", post(oxidized_event))
 }
 
 /// What this core holds to reach the bundled oxidized.
@@ -103,6 +124,10 @@ fn oxidized_failed(e: &anyhow::Error) -> ApiError {
     )
 }
 
+fn read_failed(e: &anyhow::Error) -> ApiError {
+    ApiError::from_internal(e.as_ref(), "config backup", "failed to read config backup")
+}
+
 /// What oxidized last reported.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct BackupStatusView {
@@ -120,6 +145,10 @@ pub(crate) struct ConfigBackupSummary {
     /// oxidized's word for the last fetch; `null` ⇒ never reported.
     last_status: Option<String>,
     last_end: Option<DateTime<Utc>>,
+    /// A login has fetched successfully and is the one used.
+    login_confirmed: bool,
+    /// How the newest login attempt ended; `null` ⇒ none yet.
+    last_outcome: Option<AttemptOutcome>,
 }
 
 impl ConfigBackupSummary {
@@ -130,8 +159,28 @@ impl ConfigBackupSummary {
             readiness: Readiness::Ready,
             last_status: Some("success".to_owned()),
             last_end: Some(DateTime::<Utc>::UNIX_EPOCH),
+            login_confirmed: true,
+            last_outcome: Some(AttemptOutcome::Success),
         }
     }
+}
+
+/// Whether a node is fetched, read from the same stores the source reads.
+async fn readiness_of(
+    admin: &super::AdminState,
+    node: Uuid,
+    cfg: Option<&NodeConfigBackup>,
+) -> anyhow::Result<Readiness> {
+    let profile = admin.config_backup.profile_name(node).await?;
+    let moved = admin.config_backup.address_changed(node).await?;
+    let logins = rotation::cli_logins(&admin.creds).await?;
+    let has = !rotation::candidates(cfg.and_then(|c| c.login_order.as_deref()), &logins).is_empty();
+    Ok(oxidized::source::readiness(
+        cfg,
+        profile.as_deref(),
+        has,
+        moved,
+    ))
 }
 
 /// The summary for one node, from the same reads the REST view makes. `None` when a read failed.
@@ -139,30 +188,67 @@ pub(crate) async fn summary_of(
     admin: &super::AdminState,
     node: Uuid,
 ) -> Option<ConfigBackupSummary> {
-    let cfg = admin.config_backup.get(node).await.ok()?;
-    let profile = admin.config_backup.profile_name(node).await.ok()?;
-    let kind = credential_kind(admin, cfg.as_ref().and_then(|c| c.credential_id))
-        .await
-        .ok()?;
+    let row = admin.config_backup.get_with_rotation(node).await.ok()?;
+    let cfg = row.as_ref().map(|(c, _)| c.clone());
+    let readiness = readiness_of(admin, node, cfg.as_ref()).await.ok()?;
     let status = admin.config_backup.status(node).await.ok()?;
-    let moved = admin.config_backup.address_changed(node).await.ok()?;
+    let last = admin.config_backup.attempts_of(node, 1).await.ok()?;
     Some(ConfigBackupSummary {
-        readiness: oxidized::source::readiness(
-            cfg.as_ref(),
-            profile.as_deref(),
-            kind.as_deref(),
-            moved,
-        ),
+        readiness,
         last_status: status.as_ref().map(|s| s.status.clone()),
         last_end: status.and_then(|s| s.last_end),
+        login_confirmed: row.is_some_and(|(_, r)| r.login_confirmed),
+        last_outcome: last.first().map(|a| a.outcome),
     })
 }
+
+/// One login attempt.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct AttemptView {
+    at: DateTime<Utc>,
+    /// The login tried; `null` when it has since been deleted.
+    credential_id: Option<Uuid>,
+    outcome: AttemptOutcome,
+    /// For a success: whether a new version was stored. `null` otherwise.
+    new_version: Option<bool>,
+}
+
+impl From<Attempt> for AttemptView {
+    fn from(a: Attempt) -> Self {
+        Self {
+            at: a.at,
+            credential_id: a.credential_id,
+            outcome: a.outcome,
+            new_version: a.new_version,
+        }
+    }
+}
+
+/// How many attempts the node view carries.
+const VIEW_ATTEMPTS: i64 = 10;
 
 /// One node's config backup.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ConfigBackupView {
     enabled: bool,
+    /// The node's own order of CLI logins; `null` means every CLI login in the try order.
+    login_order: Option<Vec<Uuid>>,
+    /// The logins this node tries, in order (`login_order` with deleted ones dropped, or every CLI
+    /// login).
+    candidates: Vec<Uuid>,
+    /// The login handed to oxidized: the one being tried, or the one that works.
     credential_id: Option<Uuid>,
+    /// `credential_id` has fetched successfully.
+    login_confirmed: bool,
+    /// Yagra asked oxidized for a fetch and has not heard how it ended.
+    pending: bool,
+    /// When the lockout limits allow the next try; `null` when one may be tried now, or none is due.
+    try_after: Option<DateTime<Utc>>,
+    /// Every candidate failed in this pass; nothing is tried until a fetch is asked for, the order
+    /// changes, or a CLI login is added or changed.
+    exhausted: bool,
+    /// The newest attempts, newest first.
+    attempts: Vec<AttemptView>,
     input: BackupInput,
     /// The model a person picked; `null` means "from the profile".
     model_override: Option<String>,
@@ -177,23 +263,11 @@ pub(crate) struct ConfigBackupView {
     available: bool,
 }
 
-/// The kind of a stored credential, or `None` when it no longer exists.
-async fn credential_kind(
-    admin: &super::AdminState,
-    id: Option<Uuid>,
-) -> Result<Option<String>, ApiError> {
-    let Some(id) = id else { return Ok(None) };
-    let list = admin.creds.list().await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "list credentials", "failed to read credentials")
-    })?;
-    Ok(list.into_iter().find(|c| c.id == id).map(|c| c.kind))
-}
-
 #[utoipa::path(
     get, path = "/api/v1/nodes/{node_id}/config-backup", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     responses(
-        (status = 200, description = "The node's config backup: configuration, whether it is fetched, the last result", body = ConfigBackupView),
+        (status = 200, description = "The node's config backup: configuration, whether it is fetched, the login being tried or that works, the latest attempts", body = ConfigBackupView),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -205,33 +279,58 @@ async fn get_config_backup(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<ConfigBackupView>> {
-    let read = |e: anyhow::Error| {
-        ApiError::from_internal(e.as_ref(), "config backup", "failed to read config backup")
-    };
-    let cfg = admin.config_backup.get(node_id).await.map_err(read)?;
-    let profile = admin
-        .config_backup
+    let repo = &admin.config_backup;
+    let row = repo
+        .get_with_rotation(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    let profile = repo
         .profile_name(node_id)
         .await
-        .map_err(read)?;
-    let kind = credential_kind(&admin, cfg.as_ref().and_then(|c| c.credential_id)).await?;
-    let status = admin.config_backup.status(node_id).await.map_err(read)?;
-    let moved = admin
-        .config_backup
-        .address_changed(node_id)
+        .map_err(|e| read_failed(&e))?;
+    let status = repo.status(node_id).await.map_err(|e| read_failed(&e))?;
+    let attempts = repo
+        .attempts_of(node_id, VIEW_ATTEMPTS)
         .await
-        .map_err(read)?;
-    let readiness =
-        oxidized::source::readiness(cfg.as_ref(), profile.as_deref(), kind.as_deref(), moved);
-    let cfg = cfg.unwrap_or(NodeConfigBackup {
-        enabled: false,
-        credential_id: None,
-        input: BackupInput::Ssh,
-        model_override: None,
-    });
+        .map_err(|e| read_failed(&e))?;
+    let logins = rotation::cli_logins(&admin.creds)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    let (cfg, rot) = row.unwrap_or((
+        NodeConfigBackup {
+            enabled: false,
+            login_order: None,
+            input: BackupInput::Ssh,
+            model_override: None,
+        },
+        yagra_base::config_backup::Rotation::default(),
+    ));
+    let candidates = rotation::candidates(cfg.login_order.as_deref(), &logins);
+    let readiness = readiness_of(&admin, node_id, Some(&cfg))
+        .await
+        .map_err(|e| read_failed(&e))?;
+    let now = Utc::now();
+    let pending = rotation::in_flight(rot.requested_at, now);
+    let step = if readiness == Readiness::Ready && !pending {
+        rotation::step_of(repo, &admin.creds, node_id, now)
+            .await
+            .map_err(|e| read_failed(&e))?
+    } else {
+        None
+    };
     Ok(Json(ConfigBackupView {
         enabled: cfg.enabled,
-        credential_id: cfg.credential_id,
+        login_order: cfg.login_order,
+        candidates,
+        credential_id: rot.credential_id,
+        login_confirmed: rot.login_confirmed,
+        pending,
+        try_after: match step {
+            Some(Step::Wait { until, .. }) => Some(until),
+            _ => None,
+        },
+        exhausted: step == Some(Step::Exhausted),
+        attempts: attempts.into_iter().map(AttemptView::from).collect(),
         input: cfg.input,
         model_override: cfg.model_override,
         profile_model: oxidized::source::model_of(None, profile.as_deref()),
@@ -253,6 +352,12 @@ async fn get_config_backup(
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(super) struct ConfigBackupBody {
     enabled: bool,
+    /// The node's own order of CLI logins. Omitted or `null`: every CLI login, in the try order of
+    /// Credentials & secrets.
+    #[serde(default)]
+    login_order: Option<Vec<Uuid>>,
+    /// Deprecated: one login, read as `login_order: [credential_id]`. Refused together with
+    /// `login_order`.
     #[serde(default)]
     credential_id: Option<Uuid>,
     input: BackupInput,
@@ -260,22 +365,25 @@ pub(super) struct ConfigBackupBody {
     model_override: Option<String>,
 }
 
+/// The most logins one node's order may name.
+const MAX_ORDER: usize = 200;
+
 #[utoipa::path(
     put, path = "/api/v1/nodes/{node_id}/config-backup", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     request_body = ConfigBackupBody,
     responses(
-        (status = 204, description = "Saved; the bundled oxidized is asked to re-read its node list"),
-        (status = 400, description = "An unknown input or model, or a credential that is not a CLI login (`invalid_config_backup`)", body = super::error::ErrorBody),
+        (status = 204, description = "Saved; the bundled oxidized is asked to re-read its node list. Switching it on, or changing the order, starts the logins afresh"),
+        (status = 400, description = "An unknown input or model, a login that is not a CLI login, a repeated one, or both `login_order` and `credential_id` (`invalid_config_backup`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig; or a login is named by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn put_config_backup(
     _perm: RequireManageConfig,
-    // Optional: needed only to choose a login (below). An API token never holds it.
+    // Optional: needed only to switch the backup on (below). An API token never holds it.
     reveal: Option<RequireRevealCredentials>,
     _visible: VisibleNode,
     Scoped(scope): Scoped,
@@ -296,39 +404,66 @@ async fn put_config_backup(
             return Err(bad("model is not one Yagra offers"));
         }
     }
-    if body.credential_id.is_some() {
+    let login_order = match (body.login_order, body.credential_id) {
+        (Some(_), Some(_)) => return Err(bad("send login_order or credential_id, not both")),
+        (Some(order), None) => Some(order),
+        (None, Some(one)) => Some(vec![one]),
+        (None, None) => None,
+    };
+    if let Some(order) = login_order.as_deref() {
+        if order.len() > MAX_ORDER {
+            return Err(bad("too many logins in the order"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !order.iter().all(|id| seen.insert(*id)) {
+            return Err(bad("a login appears twice in the order"));
+        }
+        let logins = rotation::cli_logins(&admin.creds)
+            .await
+            .map_err(|e| read_failed(&e))?;
+        if !order.iter().all(|id| logins.contains(id)) {
+            return Err(bad("every login in the order must be a CLI login"));
+        }
+    }
+    if body.enabled {
         refuse_scoped_login(&scope)?;
-        // Choosing a login hands it to the node's address, so it takes what reading one back takes:
-        // a caller that may not see the password must not be able to send it somewhere it chose.
+        // Switching it on hands every login in the order to the node's address, so it takes what
+        // reading one back takes: a caller that may not see a password must not be able to send
+        // it somewhere it chose.
         if reveal.is_none() {
             return Err(ApiError::forbidden_code(
                 "login_not_permitted",
-                "choosing a CLI login needs the Reveal credentials permission, which an API token \
-                 never holds",
+                "switching config backup on hands CLI logins to the device and needs the Reveal \
+                 credentials permission, which an API token never holds",
             ));
         }
-        match credential_kind(&admin, body.credential_id)
-            .await?
-            .as_deref()
-        {
-            Some(yagra_base::secrets::KIND_CLI_LOGIN) => {}
-            Some(_) => return Err(bad("the credential must be a CLI login")),
-            None => return Err(bad("no such credential")),
-        }
     }
+    let before = admin
+        .config_backup
+        .get(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
     let cfg = NodeConfigBackup {
         enabled: body.enabled,
-        credential_id: body.credential_id,
+        login_order,
         input: body.input,
         model_override,
     };
-    let saved = admin.config_backup.put(node_id, &cfg).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "save config backup",
-            "failed to save config backup",
-        )
-    })?;
+    // A node switched on, or one whose candidates changed, starts its logins afresh.
+    let restart = before
+        .as_ref()
+        .is_none_or(|b| (!b.enabled && cfg.enabled) || b.login_order != cfg.login_order);
+    let saved = admin
+        .config_backup
+        .put(node_id, &cfg, restart)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "save config backup",
+                "failed to save config backup",
+            )
+        })?;
     if !saved {
         return Err(ApiError::not_found(
             "node_not_found",
@@ -347,14 +482,13 @@ async fn put_config_backup(
 }
 
 /// A CLI login is shared by every folder, like every credential (`credentials_are_deployment_wide`).
-/// A folder-scoped caller could otherwise bind one to a node of theirs whose address they control,
-/// and oxidized would hand that node's address the password. Switching off, or saving with no
-/// login, stays theirs.
+/// A folder-scoped caller could otherwise switch the backup on for a node of theirs whose address
+/// they control, and oxidized would hand that address the passwords. Switching off stays theirs.
 fn refuse_scoped_login(scope: &super::scope::NodeScope) -> Result<(), ApiError> {
     super::scope::require_fleet_wide(
         scope,
         "a CLI login is shared by every folder, so an account restricted to folders cannot \
-         choose one for config backup",
+         switch config backup on",
     )
 }
 
@@ -387,11 +521,16 @@ async fn list_versions(
     // 🚨 A node oxidized is not fetching is not in its list, and oxidized answers its history with a
     // 500 (`NodeNotFound`), which read as "the config backup service did not answer" under the table
     // of every node not switched on yet — measured on a lab deployment. Such a node has no history
-    // oxidized can serve, so the answer is none, without asking.
-    let ready = summary_of(&admin, node_id)
+    // oxidized can serve, so the answer is none, without asking. Since stage 3 that includes a node
+    // still looking for a login that works: it is in oxidized's list only while a fetch is out.
+    let fetched = admin
+        .config_backup
+        .get_with_rotation(node_id)
         .await
-        .is_some_and(|s| s.readiness == Readiness::Ready);
-    if !ready {
+        .ok()
+        .flatten()
+        .is_some_and(|(c, r)| c.enabled && r.login_confirmed);
+    if !fetched {
         return Ok(Json(Vec::new()));
     }
     let versions = ox
@@ -558,10 +697,12 @@ async fn get_diff(
     post, path = "/api/v1/nodes/{node_id}/config-backup/fetch", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     responses(
-        (status = 202, description = "Asked; the bundled oxidized fetches the node next"),
+        (status = 202, description = "Asked; the bundled oxidized fetches the node next, with the login the lockout limits allow. A pass in which every login failed starts again"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
+        (status = 409, description = "The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`)", body = super::error::ErrorBody),
+        (status = 429, description = "The lockout limits allow no login yet; `Retry-After` says when (`config_backup_wait`)", body = super::error::ErrorBody),
         (status = 502, description = "The bundled oxidized did not answer (`oxidized_unreachable`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
     ),
@@ -573,13 +714,149 @@ async fn fetch_now(
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     let ox = oxidized_of(&admin)?;
-    // Reload first, so a node switched on a moment ago is in oxidized's list to be queued.
-    ox.client.reload().await.map_err(|e| oxidized_failed(&e))?;
-    ox.client
-        .fetch_now(node_id)
+    let repo = &admin.config_backup;
+    let now = Utc::now();
+    let rot = repo
+        .get_with_rotation(node_id)
         .await
-        .map_err(|e| oxidized_failed(&e))?;
-    Ok(StatusCode::ACCEPTED)
+        .map_err(|e| read_failed(&e))?
+        .map(|(_, r)| r);
+    if rot
+        .as_ref()
+        .is_some_and(|r| rotation::in_flight(r.requested_at, now))
+    {
+        return Err(ApiError::conflict(
+            "config_backup_pending",
+            "a fetch is already out for this node",
+        ));
+    }
+    let not_ready = || {
+        ApiError::conflict(
+            "config_backup_not_ready",
+            "this node is not switched on for config backup, or has nothing to fetch with",
+        )
+    };
+    let mut step = rotation::step_of(repo, &admin.creds, node_id, now)
+        .await
+        .map_err(|e| read_failed(&e))?
+        .ok_or_else(not_ready)?;
+    if step == Step::Exhausted {
+        // Asked for by a person: every login gets one more pass.
+        repo.restart_round(node_id)
+            .await
+            .map_err(|e| read_failed(&e))?;
+        step = rotation::step_of(repo, &admin.creds, node_id, now)
+            .await
+            .map_err(|e| read_failed(&e))?
+            .ok_or_else(not_ready)?;
+    }
+    match step {
+        Step::Fetch(credential) => {
+            repo.dispatch(node_id, credential, now)
+                .await
+                .map_err(|e| read_failed(&e))?;
+            let asked = async {
+                ox.client.reload().await?;
+                ox.client.fetch_now(node_id).await
+            }
+            .await;
+            if let Err(e) = asked {
+                // oxidized never got the request, so nothing may later count it as a login.
+                repo.clear_request(node_id).await.ok();
+                return Err(oxidized_failed(&e));
+            }
+            Ok(StatusCode::ACCEPTED)
+        }
+        Step::Wait { until, .. } => {
+            let secs = (until - now).num_seconds().max(1);
+            Err(ApiError::too_many_requests(
+                "config_backup_wait",
+                format!(
+                    "the lockout limits allow the next login at {}",
+                    until.to_rfc3339()
+                ),
+            )
+            .retry_after(u64::try_from(secs).unwrap_or(1)))
+        }
+        Step::Exhausted | Step::NoCandidate => Err(not_ready()),
+    }
+}
+
+/// One node in the fleet-wide list.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct ConfigBackupRow {
+    node_id: Uuid,
+    /// The login being tried or that works.
+    credential_id: Option<Uuid>,
+    login_confirmed: bool,
+    /// A fetch is out and not yet answered.
+    pending: bool,
+    /// When the lockout limits next allow a try, as the leader last worked it out.
+    try_after: Option<DateTime<Utc>>,
+    /// The newest attempt; `null` when none has been made.
+    last: Option<AttemptView>,
+    /// When a fetch last succeeded.
+    last_success_at: Option<DateTime<Utc>>,
+}
+
+/// Every node switched on that the caller can see. Shared by REST and MCP.
+pub(crate) async fn config_backup_rows(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+) -> Result<Vec<ConfigBackupRow>, ApiError> {
+    let now = Utc::now();
+    let rows = admin
+        .config_backup
+        .overview(scope.group_filter())
+        .await
+        .map_err(|e| read_failed(&e))?;
+    Ok(rows
+        .into_iter()
+        .map(|r| ConfigBackupRow {
+            node_id: r.node_id,
+            credential_id: r.rotation.credential_id,
+            login_confirmed: r.rotation.login_confirmed,
+            pending: rotation::in_flight(r.rotation.requested_at, now),
+            try_after: r.rotation.next_try_at.filter(|t| *t > now),
+            last: r.last.map(AttemptView::from),
+            last_success_at: r.last_success_at,
+        })
+        .collect())
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/config-backups", tag = "nodes",
+    responses(
+        (status = 200, description = "Every node switched on for config backup that the caller can see, with its login and its last attempt", body = Vec<ConfigBackupRow>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_config_backups(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    admin: Admin,
+) -> ApiResult<Json<Vec<ConfigBackupRow>>> {
+    Ok(Json(config_backup_rows(&admin, &scope).await?))
+}
+
+/// The source token, checked in constant time. Read on every call rather than at start-up: the
+/// one-shot that writes it may run after core.
+fn check_source_token(ox: &OxidizedHandle, headers: &HeaderMap) -> Result<(), ApiError> {
+    let refused = || ApiError::unauthorized_with("oxidized_token", "no valid source token");
+    let expected = oxidized::config::read_token(&ox.settings.home).map_err(|e| {
+        tracing::warn!(error = %e, "config backup: the oxidized source token could not be read");
+        refused()
+    })?;
+    let presented = headers
+        .get(oxidized::config::TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(refused)?;
+    if !crate::events::constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+        metrics::counter!("yagra_oxidized_source_refusals_total").increment(1);
+        return Err(refused());
+    }
+    Ok(())
 }
 
 #[utoipa::path(
@@ -595,20 +872,7 @@ async fn oxidized_source(
     headers: HeaderMap,
 ) -> ApiResult<Json<Vec<oxidized::source::SourceNode>>> {
     let ox = oxidized_of(&admin)?;
-    let refused = || ApiError::unauthorized_with("oxidized_token", "no valid source token");
-    // Read on every call rather than at start-up: the one-shot that writes it may run after core.
-    let expected = oxidized::config::read_token(&ox.settings.home).map_err(|e| {
-        tracing::warn!(error = %e, "config backup: the oxidized source token could not be read");
-        refused()
-    })?;
-    let presented = headers
-        .get(oxidized::config::TOKEN_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(refused)?;
-    if !crate::events::constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
-        metrics::counter!("yagra_oxidized_source_refusals_total").increment(1);
-        return Err(refused());
-    }
+    check_source_token(ox, &headers)?;
     let targets = admin.config_backup.targets().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -617,12 +881,76 @@ async fn oxidized_source(
         )
     })?;
     metrics::counter!("yagra_oxidized_source_reads_total").increment(1);
-    let mut nodes = oxidized::source::source_nodes(targets, &admin.creds).await;
+    let mut nodes = oxidized::source::source_nodes(targets, &admin.creds, Utc::now()).await;
     if nodes.is_empty() {
         // oxidized will not start on an empty list (`source::placeholder`).
         nodes.push(oxidized::source::placeholder());
     }
     Ok(Json(nodes))
+}
+
+/// How one fetch ended, as oxidized's hook posts it (`config::render`).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct OxidizedEvent {
+    /// `node_success` or `node_fail`.
+    event: String,
+    /// oxidized's name for the node: its id.
+    node: String,
+    #[serde(default)]
+    group: Option<String>,
+    /// oxidized's error class, such as `Net::SSH::AuthenticationFailed`; empty on success.
+    #[serde(default)]
+    err_type: Option<String>,
+}
+
+#[utoipa::path(
+    post, path = "/internal/oxidized/events", tag = "nodes",
+    request_body(content = OxidizedEvent, content_type = "application/x-www-form-urlencoded"),
+    responses(
+        (status = 204, description = "Recorded, or ignored when it is not about one of Yagra's nodes. For oxidized alone: it demands the source token in `x-yagra-oxidized-token`"),
+        (status = 401, description = "No token, or the wrong one (`oxidized_token`)", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn oxidized_event(
+    admin: Admin,
+    headers: HeaderMap,
+    Form(ev): Form<OxidizedEvent>,
+) -> ApiResult<StatusCode> {
+    let ox = oxidized_of(&admin)?;
+    check_source_token(ox, &headers)?;
+    let Some(node) = oxidized::source::node_of(&ev.node, ev.group.as_deref()) else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    let Some(outcome) = rotation::classify(&ev.event, ev.err_type.as_deref().unwrap_or("")) else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
+    // The newest version tells a new one from an unchanged one. Best effort: without it the success
+    // is recorded and the screen says only that it succeeded.
+    let oid = if outcome == AttemptOutcome::Success {
+        ox.client
+            .versions(node)
+            .await
+            .ok()
+            .and_then(|v| v.into_iter().next())
+            .map(|v| v.oid)
+    } else {
+        None
+    };
+    admin
+        .config_backup
+        .record_result(node, outcome, oid.as_deref())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "record config backup attempt",
+                "failed to record the attempt",
+            )
+        })?;
+    metrics::counter!("yagra_config_backup_attempts_total", "outcome" => outcome.as_str())
+        .increment(1);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -643,11 +971,11 @@ mod tests {
         );
     }
 
-    /// A folder-scoped caller may not hand the shared login to a node of theirs. Tested here rather
-    /// than through the router: the route's `VisibleNode` reads the folder of a node from the alert
-    /// engine's snapshot, which the live test state never loads.
+    /// A folder-scoped caller may not hand the shared logins to a node of theirs. Tested here
+    /// rather than through the router: the route's `VisibleNode` reads the folder of a node from
+    /// the alert engine's snapshot, which the live test state never loads.
     #[test]
-    fn a_scoped_caller_cannot_choose_a_login() {
+    fn a_scoped_caller_cannot_switch_the_backup_on() {
         use crate::api::scope::{NodeScope, ScopeSet};
         assert!(refuse_scoped_login(&NodeScope::All).is_ok());
         let scoped = NodeScope::Groups(Arc::new(ScopeSet {
@@ -670,11 +998,12 @@ mod tests {
     /// A configuration written by a person is accepted and read back; a Viewer cannot write one.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn a_node_is_switched_on_with_a_cli_login_and_a_viewer_cannot(pool: sqlx::PgPool) {
+    async fn a_node_is_switched_on_with_its_logins_and_a_viewer_cannot(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
-        let login = yagra_base::pgtest::credential(&pool, "ops", "cli_login").await;
+        let first = yagra_base::pgtest::credential(&pool, "ops-a", "cli_login").await;
+        let second = yagra_base::pgtest::credential(&pool, "ops-b", "cli_login").await;
         let community = yagra_base::pgtest::credential(&pool, "lab", "snmp_v2c").await;
         let path = format!("/api/v1/nodes/{node}/config-backup");
         let operator = token(&st, yagra_common::Role::Operator);
@@ -683,19 +1012,42 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["readiness"], "off");
         assert_eq!(body["available"], false);
+        // With no order of its own, a node tries every CLI login in the try order.
+        assert_eq!(
+            body["candidates"],
+            serde_json::json!([first.to_string(), second.to_string()])
+        );
 
         let on = serde_json::json!({
-            "enabled": true, "credential_id": login, "input": "telnet", "model_override": "ios",
+            "enabled": true, "login_order": [second, first], "input": "telnet",
+            "model_override": "ios",
         });
         let (status, body) = send(&st, "PUT", &path, &operator, Some(on.clone())).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
         let (_, body) = send(&st, "GET", &path, &operator, None).await;
         assert_eq!(body["readiness"], "ready", "{body}");
         assert_eq!(body["input"], "telnet");
+        assert_eq!(
+            body["candidates"],
+            serde_json::json!([second.to_string(), first.to_string()])
+        );
+        assert_eq!(body["login_confirmed"], false);
+        assert_eq!(body["exhausted"], false);
 
-        // A community is not a CLI login, and a model Yagra does not offer is refused.
+        // The stage-2 body still works: one login becomes the whole order.
+        let one = serde_json::json!({"enabled": true, "credential_id": first, "input": "ssh"});
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(one)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let (_, body) = send(&st, "GET", &path, &operator, None).await;
+        assert_eq!(body["login_order"], serde_json::json!([first.to_string()]));
+
+        // A community is not a CLI login; a login twice, both spellings and an unknown model are
+        // refused.
         for bad in [
-            serde_json::json!({"enabled": true, "credential_id": community, "input": "ssh"}),
+            serde_json::json!({"enabled": true, "login_order": [community], "input": "ssh"}),
+            serde_json::json!({"enabled": true, "login_order": [first, first], "input": "ssh"}),
+            serde_json::json!({"enabled": true, "login_order": [first], "credential_id": first,
+                               "input": "ssh"}),
             serde_json::json!({"enabled": true, "input": "ssh", "model_override": "ios; rm -rf"}),
         ] {
             let (status, body) = send(&st, "PUT", &path, &operator, Some(bad)).await;
@@ -706,6 +1058,12 @@ mod tests {
         let viewer = token(&st, yagra_common::Role::Viewer);
         let (status, _) = send(&st, "PUT", &path, &viewer, Some(on)).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // The fleet list carries the node for a Viewer too.
+        let (status, body) = send(&st, "GET", "/api/v1/config-backups", &viewer, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+        assert_eq!(body[0]["node_id"], node.to_string());
     }
 
     /// A CLI login is never handed to an SNMP sweep as a community (ADR-210).
@@ -722,14 +1080,88 @@ mod tests {
         assert_eq!(err.code(), "invalid_credential");
     }
 
-    /// The source refuses a caller without the token, and with a deployment that has no oxidized
-    /// it says so rather than serving logins.
+    /// The two oxidized routes refuse a caller without the token, and with a deployment that has no
+    /// oxidized they say so rather than serving logins or recording anything.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn the_source_is_closed_without_oxidized(pool: sqlx::PgPool) {
+    async fn the_oxidized_routes_are_closed_without_oxidized(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send};
         let st = live_state(pool.clone()).await;
         let (status, body) = send(&st, "GET", "/internal/oxidized/nodes", "nonsense", None).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        let (status, body) = send(&st, "POST", "/internal/oxidized/events", "nonsense", None).await;
+        assert_ne!(status, StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "config_backup_attempts").await,
+            0
+        );
+    }
+
+    /// With the token, a reported failure is recorded against the login the node was handed, and
+    /// a wrong token records nothing.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_reported_fetch_is_recorded_only_with_the_token(pool: sqlx::PgPool) {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        let home = std::env::temp_dir().join(format!("yagra-ox-ev-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("dir");
+        let token = oxidized::config::ensure_token(&home).expect("token");
+        // A closed port: a failure is recorded without asking oxidized for anything.
+        let st = crate::api::tests_support::live_state_with_oxidized(
+            pool.clone(),
+            Arc::new(OxidizedHandle {
+                settings: oxidized::Settings {
+                    url: "http://127.0.0.1:9".to_owned(),
+                    home: home.clone(),
+                },
+                client: Arc::new(OxidizedClient::new("http://127.0.0.1:9")),
+            }),
+        )
+        .await;
+        let node = yagra_base::pgtest::node(&pool, "sw-09", 9, None).await;
+        let login = yagra_base::pgtest::credential(&pool, "ops", "cli_login").await;
+        let repo = yagra_base::config_backup::ConfigBackupRepo::new(pool.clone());
+        repo.put(
+            node,
+            &NodeConfigBackup {
+                enabled: true,
+                login_order: None,
+                input: BackupInput::Ssh,
+                model_override: Some("ios".to_owned()),
+            },
+            true,
+        )
+        .await
+        .expect("put");
+        repo.dispatch(node, login, Utc::now())
+            .await
+            .expect("dispatch");
+
+        let post = |presented: &str| {
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/internal/oxidized/events")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header(oxidized::config::TOKEN_HEADER, presented)
+                .body(Body::from(format!(
+                    "event=node_fail&node={node}&group=yagra&err_type=Net%3A%3ASSH%3A%3AAuthenticationFailed"
+                )))
+                .expect("request")
+        };
+        let router = crate::api::router(st.clone());
+        let res = router.clone().oneshot(post("wrong")).await.expect("send");
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "config_backup_attempts").await,
+            0
+        );
+        let res = router.oneshot(post(&token)).await.expect("send");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        let attempts = repo.attempts_of(node, 5).await.expect("attempts");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].outcome, AttemptOutcome::AuthFailed);
+        assert_eq!(attempts[0].credential_id, Some(login));
+        std::fs::remove_dir_all(&home).ok();
     }
 }

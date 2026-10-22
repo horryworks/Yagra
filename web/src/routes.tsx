@@ -32,6 +32,7 @@ import { ProfilesPage } from './pages/ProfilesPage';
 import { ClassificationRulesPage } from './pages/ClassificationRulesPage';
 import { ReclassifyPage } from './pages/ReclassifyPage';
 import { DuplicateNodesPage } from './pages/DuplicateNodesPage';
+import { ConfigBackupsPage } from './pages/ConfigBackupsPage';
 import { SubnetOverlapsPage } from './pages/SubnetOverlapsPage';
 import { MissingPrefixesPage } from './pages/MissingPrefixesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
@@ -105,6 +106,7 @@ export function AppRoutes() {
         <Route path="nodes" element={<NodesPage />} />
         <Route path="nodes/discovery" element={<DiscoveryPage />} />
         <Route path="nodes/duplicates" element={<DuplicateNodesPage />} />
+        <Route path="nodes/config-backups" element={<ConfigBackupsPage />} />
         <Route path="nodes/subnet-overlaps" element={<SubnetOverlapsPage />} />
         <Route path="nodes/missing-prefixes" element={<MissingPrefixesPage />} />
         {/* Dependencies live under Topology now; keep this path as a redirect so old links/bookmarks

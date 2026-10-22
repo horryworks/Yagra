@@ -2862,6 +2862,49 @@
         }
       }
     },
+    "/api/v1/config-backups": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "list_config_backups",
+        "responses": {
+          "200": {
+            "description": "Every node switched on for config backup that the caller can see, with its login and its last attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfigBackupRow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config/bundle": {
       "get": {
         "tags": [
@@ -12743,7 +12786,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The node's config backup: configuration, whether it is fetched, the last result",
+            "description": "The node's config backup: configuration, whether it is fetched, the login being tried or that works, the latest attempts",
             "content": {
               "application/json": {
                 "schema": {
@@ -12813,10 +12856,10 @@
         },
         "responses": {
           "204": {
-            "description": "Saved; the bundled oxidized is asked to re-read its node list"
+            "description": "Saved; the bundled oxidized is asked to re-read its node list. Switching it on, or changing the order, starts the logins afresh"
           },
           "400": {
-            "description": "An unknown input or model, or a credential that is not a CLI login (`invalid_config_backup`)",
+            "description": "An unknown input or model, a login that is not a CLI login, a repeated one, or both `login_order` and `credential_id` (`invalid_config_backup`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12836,7 +12879,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig; or a login is named by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)",
+            "description": "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -12998,7 +13041,7 @@
         ],
         "responses": {
           "202": {
-            "description": "Asked; the bundled oxidized fetches the node next"
+            "description": "Asked; the bundled oxidized fetches the node next, with the login the lockout limits allow. A pass in which every login failed starts again"
           },
           "401": {
             "description": "No valid bearer token",
@@ -13022,6 +13065,26 @@
           },
           "404": {
             "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The lockout limits allow no login yet; `Retry-After` says when (`config_backup_wait`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -25924,6 +25987,49 @@
         ]
       }
     },
+    "/internal/oxidized/events": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "oxidized_event",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/OxidizedEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded, or ignored when it is not about one of Yagra's nodes. For oxidized alone: it demands the source token in `x-yagra-oxidized-token`"
+          },
+          "401": {
+            "description": "No token, or the wrong one (`oxidized_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/oxidized/nodes": {
       "get": {
         "tags": [
@@ -27203,6 +27309,50 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "AttemptOutcome": {
+        "type": "string",
+        "description": "How one login attempt ended.",
+        "enum": [
+          "success",
+          "auth_failed",
+          "unreachable",
+          "other",
+          "lost",
+          "unknown"
+        ]
+      },
+      "AttemptView": {
+        "type": "object",
+        "description": "One login attempt.",
+        "required": [
+          "at",
+          "outcome"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The login tried; `null` when it has since been deleted."
+          },
+          "new_version": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For a success: whether a new version was stored. `null` otherwise."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AttemptOutcome"
           }
         }
       },
@@ -28940,13 +29090,25 @@
               "string",
               "null"
             ],
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Deprecated: one login, read as `login_order: [credential_id]`. Refused together with\n`login_order`."
           },
           "enabled": {
             "type": "boolean"
           },
           "input": {
             "$ref": "#/components/schemas/BackupInput"
+          },
+          "login_order": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The node's own order of CLI logins. Omitted or `null`: every CLI login, in the try order of\nCredentials & secrets."
           },
           "model_override": {
             "type": [
@@ -28956,33 +29118,130 @@
           }
         }
       },
+      "ConfigBackupRow": {
+        "type": "object",
+        "description": "One node in the fleet-wide list.",
+        "required": [
+          "node_id",
+          "login_confirmed",
+          "pending"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The login being tried or that works."
+          },
+          "last": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AttemptView",
+                "description": "The newest attempt; `null` when none has been made."
+              }
+            ]
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a fetch last succeeded."
+          },
+          "login_confirmed": {
+            "type": "boolean"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "A fetch is out and not yet answered."
+          },
+          "try_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the lockout limits next allow a try, as the leader last worked it out."
+          }
+        }
+      },
       "ConfigBackupView": {
         "type": "object",
         "description": "One node's config backup.",
         "required": [
           "enabled",
+          "candidates",
+          "login_confirmed",
+          "pending",
+          "exhausted",
+          "attempts",
           "input",
           "readiness",
           "models",
           "available"
         ],
         "properties": {
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttemptView"
+            },
+            "description": "The newest attempts, newest first."
+          },
           "available": {
             "type": "boolean",
             "description": "Whether this deployment has an oxidized at all."
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The logins this node tries, in order (`login_order` with deleted ones dropped, or every CLI\nlogin)."
           },
           "credential_id": {
             "type": [
               "string",
               "null"
             ],
-            "format": "uuid"
+            "format": "uuid",
+            "description": "The login handed to oxidized: the one being tried, or the one that works."
           },
           "enabled": {
             "type": "boolean"
           },
+          "exhausted": {
+            "type": "boolean",
+            "description": "Every candidate failed in this pass; nothing is tried until a fetch is asked for, the order\nchanges, or a CLI login is added or changed."
+          },
           "input": {
             "$ref": "#/components/schemas/BackupInput"
+          },
+          "login_confirmed": {
+            "type": "boolean",
+            "description": "`credential_id` has fetched successfully."
+          },
+          "login_order": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The node's own order of CLI logins; `null` means every CLI login in the try order."
           },
           "model_override": {
             "type": [
@@ -28997,6 +29256,10 @@
               "type": "string"
             },
             "description": "The models a person may pick."
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "Yagra asked oxidized for a fetch and has not heard how it ended."
           },
           "profile_model": {
             "type": [
@@ -29018,6 +29281,14 @@
                 "$ref": "#/components/schemas/BackupStatusView"
               }
             ]
+          },
+          "try_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the lockout limits allow the next try; `null` when one may be tried now, or none is due."
           }
         }
       },
@@ -39216,6 +39487,37 @@
           "excluded"
         ]
       },
+      "OxidizedEvent": {
+        "type": "object",
+        "description": "How one fetch ended, as oxidized's hook posts it (`config::render`).",
+        "required": [
+          "event",
+          "node"
+        ],
+        "properties": {
+          "err_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "oxidized's error class, such as `Net::SSH::AuthenticationFailed`; empty on success."
+          },
+          "event": {
+            "type": "string",
+            "description": "`node_success` or `node_fail`."
+          },
+          "group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "node": {
+            "type": "string",
+            "description": "oxidized's name for the node: its id."
+          }
+        }
+      },
       "Permission": {
         "type": "string",
         "description": "A discrete capability checked at the API edge.",
@@ -40906,7 +41208,6 @@
           "off",
           "no_model",
           "no_credential",
-          "not_cli_login",
           "unknown_input",
           "address_changed"
         ]

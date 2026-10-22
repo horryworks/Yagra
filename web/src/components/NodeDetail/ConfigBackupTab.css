@@ -1,11 +1,41 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* NodeDetail ▸ Config (ADR-210 stage 2). Colours and fonts come from theme variables. */
+/* NodeDetail ▸ Config (ADR-210 stages 2 and 3). Colours and fonts come from theme variables. */
 
 .cfgb {
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px 0;
+}
+
+.cfgb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+/* The one line that says where the backup stands. Its tone is the colour; the words say it too. */
+.cfgb-state {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.cfgb-tone-ok {
+  color: var(--status-ok);
+}
+
+.cfgb-tone-bad {
+  color: var(--status-warning);
+}
+
+.cfgb-tone-busy {
+  color: var(--accent-color);
+}
+
+.cfgb-tone-none {
+  color: var(--text-secondary);
 }
 
 .cfgb-settings {
@@ -15,45 +45,29 @@
   align-items: end;
 }
 
-.cfgb-check {
+.cfgb-logins {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 520px;
+}
+
+.cfgb-logins-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 14px;
-  color: var(--text-primary);
 }
 
 .cfgb-buttons {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 14px;
 }
 
 .cfgb-actions {
   display: inline-flex;
   gap: 6px;
-}
-
-.cfgb-readiness-ready,
-.cfgb-result-ok {
-  color: var(--status-ok);
-}
-
-.cfgb-readiness-off,
-.cfgb-result-none {
-  color: var(--text-secondary);
-}
-
-.cfgb-readiness-no_model,
-.cfgb-readiness-no_credential,
-.cfgb-readiness-not_cli_login,
-.cfgb-readiness-unknown_input,
-.cfgb-readiness-address_changed {
-  color: var(--status-warning);
-}
-
-.cfgb-result-bad {
-  color: var(--status-critical);
 }
 
 .cfgb-viewer {

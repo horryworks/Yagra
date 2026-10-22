@@ -73,7 +73,9 @@ import {
   REVEALED_FIELD_KEYS,
   BACKUP_INPUTS,
   BACKUP_READINESS,
+  ATTEMPT_OUTCOMES,
 } from './types/api';
+import { BACKUP_MARKS } from './lib/configBackupMarks';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
   NODE_EDIT_KIND_SPEC,
@@ -357,6 +359,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enNodes, ja: jaNodes };
     expectKeys('config backup input', locales, 'config.input.', BACKUP_INPUTS);
     expectKeys('config backup readiness', locales, 'config.readiness.', BACKUP_READINESS);
+    // Stage 3: how each login attempt ended, and the tree's mark for a backed-up node.
+    expectKeys('config backup outcome', locales, 'config.outcome.', ATTEMPT_OUTCOMES);
+    expectKeys('config backup mark', locales, 'tree.backupMark.', BACKUP_MARKS);
+    expectKeys('config backup list state', locales, 'config.list.mark.', BACKUP_MARKS);
   });
 
   it('every part of a revealed secret has a label (access:cred.reveal.field.*)', () => {

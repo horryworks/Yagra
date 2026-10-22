@@ -10,12 +10,15 @@
 //! - [`client`] reads oxidized's REST API: the node list, the versions, a version's text.
 //! - [`status`] is the leader loop that asks oxidized to re-read the node list and copies what it
 //!   last reported into `config_backup_status`.
+//! - [`rotation`] tries each node's CLI logins in turn and remembers the one that works, within
+//!   the lockout limits (stage 3): the pure choice, and the leader loop that acts on it.
 //!
 //! ⚠️ oxidized's REST API has no authentication. It is reachable only on the compose network,
 //! which holds nothing but this deployment's own containers; that is the whole protection.
 
 pub(crate) mod client;
 pub(crate) mod config;
+pub(crate) mod rotation;
 pub(crate) mod source;
 pub(crate) mod status;
 
