@@ -5,7 +5,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 12px 0;
+  /* The side gutter every other node-detail tab keeps (`NeighborsTab.css`). */
+  padding: var(--space-3) var(--space-4);
 }
 
 .cfgb-head {
@@ -38,11 +39,13 @@
   color: var(--text-secondary);
 }
 
+/* Two short choices side by side at a width that fits their values, not stretched across the pane;
+   the tops line up so the two labels sit on one line. */
 .cfgb-settings {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
   gap: 0 16px;
-  align-items: end;
+  align-items: start;
 }
 
 .cfgb-logins {

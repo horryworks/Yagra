@@ -153,8 +153,9 @@ export function previousOf(versions: readonly ConfigVersion[], oid: string): str
   return i >= 0 && i + 1 < versions.length ? versions[i + 1].oid : null;
 }
 
-/** Whether a refused "fetch now" is nothing to report: the limits hold the next login back (429) or
- *  a fetch is already out or the node cannot be fetched (409). The state line says which. */
+/** Whether a refused "fetch now" is nothing to report: a fetch is already out, or the node has
+ *  nothing to fetch with (409). The state line says which. The lockout limits never refuse it —
+ *  a press tries at once (ADR-210 stage 3 decision 25). */
 export function isQuietFetchRefusal(status: number): boolean {
-  return status === 429 || status === 409;
+  return status === 409;
 }

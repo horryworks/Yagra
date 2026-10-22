@@ -1251,8 +1251,8 @@ export const api = {
       query: { from, to },
     }),
 
-  /** Ask the bundled oxidized to fetch the node now, with the next login the lockout limits allow.
-   *  A 429 (`config_backup_wait`) means none is allowed yet; the view says until when. */
+  /** Ask the bundled oxidized to fetch the node now with its next login, at once — a press is not
+   *  held back by the lockout limits. A 409 means a fetch is already out. */
   fetchConfigNow: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/fetch', { path: { node_id: id } }),
 

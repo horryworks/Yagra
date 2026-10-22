@@ -157,9 +157,9 @@ describe('reading again', () => {
     expect(refreshMs(view({ enabled: true, exhausted: true }))).toBeUndefined();
   });
 
-  it('treats a held-back or already-running fetch as nothing to report', () => {
-    expect(isQuietFetchRefusal(429)).toBe(true);
+  it('treats an already-running fetch as nothing to report, and anything else as an error', () => {
     expect(isQuietFetchRefusal(409)).toBe(true);
+    expect(isQuietFetchRefusal(429)).toBe(false);
     expect(isQuietFetchRefusal(502)).toBe(false);
   });
 });

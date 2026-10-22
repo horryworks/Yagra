@@ -16,8 +16,8 @@
 //!   versions side by side. **`ManageConfig`** (decision 10): oxidized's `remove_secret` is model by
 //!   model and can miss one, so a Viewer does not read device configuration. Neither has an MCP
 //!   tool, for the same reason (decision 16).
-//! - `POST …/config-backup/fetch` — fetch now, with the next login the lockout limits allow; `429`
-//!   with the time when they allow none yet. `ManageConfig`.
+//! - `POST …/config-backup/fetch` — fetch now, with the node's next login, at once: a person's
+//!   press does not wait for the lockout limits (stage 3 decision 25, the user's). `ManageConfig`.
 //!
 //! Fleet-wide, `GET /api/v1/config-backups`: every node switched on that the caller can see, with
 //! its rotation and its last attempt — the Nodes ▸ Config backups list and the tree's marks.
@@ -697,12 +697,11 @@ async fn get_diff(
     post, path = "/api/v1/nodes/{node_id}/config-backup/fetch", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     responses(
-        (status = 202, description = "Asked; the bundled oxidized fetches the node next, with the login the lockout limits allow. A pass in which every login failed starts again"),
+        (status = 202, description = "Asked; the bundled oxidized fetches the node now with its next login, without waiting for the lockout limits — they hold back only the automatic rotation. A pass in which every login failed starts again"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
         (status = 409, description = "The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`)", body = super::error::ErrorBody),
-        (status = 429, description = "The lockout limits allow no login yet; `Retry-After` says when (`config_backup_wait`)", body = super::error::ErrorBody),
         (status = 502, description = "The bundled oxidized did not answer (`oxidized_unreachable`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
     ),
@@ -750,8 +749,8 @@ async fn fetch_now(
             .map_err(|e| read_failed(&e))?
             .ok_or_else(not_ready)?;
     }
-    match step {
-        Step::Fetch(credential) => {
+    match rotation::login_to_force(step) {
+        Some(credential) => {
             let started = repo
                 .dispatch(node_id, credential, now, now - rotation::REQUEST_TIMEOUT)
                 .await
@@ -774,18 +773,7 @@ async fn fetch_now(
             }
             Ok(StatusCode::ACCEPTED)
         }
-        Step::Wait { until, .. } => {
-            let secs = (until - now).num_seconds().max(1);
-            Err(ApiError::too_many_requests(
-                "config_backup_wait",
-                format!(
-                    "the lockout limits allow the next login at {}",
-                    until.to_rfc3339()
-                ),
-            )
-            .retry_after(u64::try_from(secs).unwrap_or(1)))
-        }
-        Step::Exhausted | Step::NoCandidate => Err(not_ready()),
+        None => Err(not_ready()),
     }
 }
 

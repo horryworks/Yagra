@@ -4,9 +4,10 @@
 //!
 //! The judgement is [`next_step`], which is pure and takes the time as an argument: given a node's
 //! candidates, where it is in its pass through them and every recent attempt, it says which login
-//! to try now, or until when to wait. The leader loop at the bottom ([`run_rotation_loop`]) and
-//! `POST …/config-backup/fetch` both ask it, so "fetch now" cannot step past a limit the loop
-//! honours.
+//! to try now, or until when to wait. The leader loop at the bottom ([`run_rotation_loop`]) acts on
+//! it and waits; `POST …/config-backup/fetch` asks it which login is next and tries that one at
+//! once ([`login_to_force`]) — a person's press is not held back by the limits (decision 25), and
+//! what it spends counts against the loop's.
 //!
 //! The limits (the user's, 2026-10-22): at most [`NODE_FAILURES_PER_HOUR`] failed logins at one
 //! device in an hour, [`GAP_AFTER_FAILURE`] between a failure and the next try, and at most
@@ -184,6 +185,18 @@ pub(crate) fn next_step(
     match candidates.iter().find(|c| !tried.contains(c)) {
         Some(c) => decide(*c, None),
         None => Step::Exhausted,
+    }
+}
+
+/// The login a person's "fetch now" tries: the one [`next_step`] would try, now, whatever the
+/// limits say (stage 3 decision 25, the user's: "try at once, forced"). The limits hold back only
+/// the leader's automatic rotation; the forced attempt is recorded like any other and counts
+/// against it. `None` when there is nothing to try.
+#[must_use]
+pub(crate) const fn login_to_force(step: Step) -> Option<Uuid> {
+    match step {
+        Step::Fetch(credential) | Step::Wait { credential, .. } => Some(credential),
+        Step::Exhausted | Step::NoCandidate => None,
     }
 }
 
@@ -651,6 +664,23 @@ mod tests {
             next_step(NODE, &cands, &rot, &refused, &refused, start + minutes(10)),
             Step::Fetch(B)
         );
+    }
+
+    /// A person's press tries the login a limit is holding back, at once; with nothing left to try
+    /// it tries nothing.
+    #[test]
+    fn fetch_now_forces_the_held_back_login() {
+        let until = t0() + minutes(10);
+        assert_eq!(login_to_force(Step::Fetch(A)), Some(A));
+        assert_eq!(
+            login_to_force(Step::Wait {
+                credential: B,
+                until
+            }),
+            Some(B)
+        );
+        assert_eq!(login_to_force(Step::Exhausted), None);
+        assert_eq!(login_to_force(Step::NoCandidate), None);
     }
 
     #[test]

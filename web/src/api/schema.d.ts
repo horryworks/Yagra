@@ -25731,7 +25731,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Asked; the bundled oxidized fetches the node next, with the login the lockout limits allow. A pass in which every login failed starts again */
+            /** @description Asked; the bundled oxidized fetches the node now with its next login, without waiting for the lockout limits — they hold back only the automatic rotation. A pass in which every login failed starts again */
             202: {
                 headers: {
                     [name: string]: unknown;
@@ -25767,15 +25767,6 @@ export interface operations {
             };
             /** @description The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`) */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description The lockout limits allow no login yet; `Retry-After` says when (`config_backup_wait`) */
-            429: {
                 headers: {
                     [name: string]: unknown;
                 };
