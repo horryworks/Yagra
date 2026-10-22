@@ -145,6 +145,31 @@ pub(crate) async fn source_nodes(
     out
 }
 
+/// The group the placeholder is filed under. Not [`super::GROUP`], so nothing Yagra reads back from
+/// oxidized ever names it.
+pub(crate) const PLACEHOLDER_GROUP: &str = "yagra-placeholder";
+
+/// What the source answers when no node is switched on.
+///
+/// 🚨 oxidized refuses to start on an empty node list (`core.rb`: "source returns no usable nodes")
+/// and restarts forever; an empty list on a later reload is fine. So the source is never empty: with
+/// nothing to fetch it carries one entry no one will see — the container's own loopback, where
+/// nothing listens on port 22, so its daily fetch fails at once and costs nothing. Measured on a lab
+/// deployment with no node switched on.
+#[must_use]
+pub(crate) fn placeholder() -> SourceNode {
+    SourceNode {
+        name: "no-node-switched-on".to_owned(),
+        ip: "127.0.0.1".to_owned(),
+        model: "linuxgeneric".to_owned(),
+        input: "ssh",
+        group: PLACEHOLDER_GROUP,
+        username: "none".to_owned(),
+        password: "none".to_owned(),
+        enable: None,
+    }
+}
+
 /// The node an oxidized name refers to, when it is one of Yagra's.
 #[must_use]
 pub(crate) fn node_of(name: &str, group: Option<&str>) -> Option<Uuid> {
@@ -239,6 +264,12 @@ mod tests {
             readiness(Some(&off), None, Some(KIND_CLI_LOGIN), true),
             Readiness::Off
         );
+    }
+
+    #[test]
+    fn the_placeholder_is_never_read_back_as_a_node() {
+        let p = placeholder();
+        assert_eq!(node_of(&p.name, Some(p.group)), None);
     }
 
     #[test]

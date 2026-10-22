@@ -607,9 +607,12 @@ async fn oxidized_source(
         )
     })?;
     metrics::counter!("yagra_oxidized_source_reads_total").increment(1);
-    Ok(Json(
-        oxidized::source::source_nodes(targets, &admin.creds).await,
-    ))
+    let mut nodes = oxidized::source::source_nodes(targets, &admin.creds).await;
+    if nodes.is_empty() {
+        // oxidized will not start on an empty list (`source::placeholder`).
+        nodes.push(oxidized::source::placeholder());
+    }
+    Ok(Json(nodes))
 }
 
 #[cfg(test)]
