@@ -470,13 +470,19 @@ async fn put_config_backup(
             format!("no node {node_id}"),
         ));
     }
-    // Best effort, off the request: the status loop reloads within five minutes anyway.
+    // Best effort, off the request: the status loop reloads within five minutes anyway. Never
+    // while a fetch is out, which a reload would start a second time (`rotation::may_reload`).
     if let Some(ox) = admin.oxidized.clone() {
-        tokio::spawn(async move {
-            if let Err(e) = ox.client.reload().await {
-                tracing::warn!(error = %e, "config backup: oxidized did not reload after a change");
-            }
-        });
+        if rotation::may_reload(&admin.config_backup, Utc::now())
+            .await
+            .unwrap_or(false)
+        {
+            tokio::spawn(async move {
+                if let Err(e) = ox.client.reload().await {
+                    tracing::warn!(error = %e, "config backup: oxidized did not reload after a change");
+                }
+            });
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -701,7 +707,7 @@ async fn get_diff(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
-        (status = 409, description = "The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`)", body = super::error::ErrorBody),
+        (status = 409, description = "The node is not switched on or not ready, a fetch is already out for it, or the login it needs cannot be handed to oxidized while another node's fetch is out (`config_backup_not_ready`, `config_backup_pending`, `config_backup_busy`)", body = super::error::ErrorBody),
         (status = 502, description = "The bundled oxidized did not answer (`oxidized_unreachable`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
     ),
@@ -751,6 +757,22 @@ async fn fetch_now(
     }
     match rotation::login_to_force(step) {
         Some(credential) => {
+            // A node fetched again with the login that already works is in oxidized's list as it
+            // is, so it needs no reload. Any other login has to reach the list first, and the list
+            // may not be read again while another fetch is out (`rotation::may_reload`).
+            let reload = !rot
+                .as_ref()
+                .is_some_and(|r| r.login_confirmed && r.credential_id == Some(credential));
+            if reload
+                && !rotation::may_reload(repo, now)
+                    .await
+                    .map_err(|e| read_failed(&e))?
+            {
+                return Err(ApiError::conflict(
+                    "config_backup_busy",
+                    "another node's fetch is out; this one can start when it has answered",
+                ));
+            }
             let started = repo
                 .dispatch(node_id, credential, now, now - rotation::REQUEST_TIMEOUT)
                 .await
@@ -762,7 +784,9 @@ async fn fetch_now(
                 ));
             }
             let asked = async {
-                ox.client.reload().await?;
+                if reload {
+                    ox.client.reload().await?;
+                }
                 ox.client.fetch_now(node_id).await
             }
             .await;

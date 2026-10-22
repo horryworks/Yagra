@@ -397,6 +397,17 @@ impl ConfigBackupRepo {
         Ok(done.rows_affected() > 0)
     }
 
+    /// Whether any fetch asked for after `after` is still unanswered, at any node.
+    pub async fn any_outstanding(&self, after: DateTime<Utc>) -> anyhow::Result<bool> {
+        let out: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM node_config_backup WHERE requested_at > $1)",
+        )
+        .bind(after)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(out)
+    }
+
     /// Every fetch asked for after `after` and not yet answered, as an attempt with the login it
     /// was handed. The limits count these as if they will fail: until oxidized reports, a login
     /// sent to a device may be the one that locks it.
@@ -829,7 +840,8 @@ mod tests {
         assert_eq!(rot.last_version_oid.as_deref(), Some("aaa"));
     }
 
-    /// A second dispatch while one is out changes nothing, and the one out counts as an attempt.
+    /// A second dispatch while one is out changes nothing, and the one out counts as an attempt
+    /// and keeps oxidized's node list from being read again.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn one_fetch_at_a_time_and_it_counts_until_answered(pool: PgPool) {
@@ -843,7 +855,9 @@ mod tests {
             .expect("put"));
         let now = Utc::now();
         let cutoff = now - chrono::TimeDelta::minutes(10);
+        assert!(!repo.any_outstanding(cutoff).await.expect("idle"));
         assert!(repo.dispatch(node, a, now, cutoff).await.expect("first"));
+        assert!(repo.any_outstanding(cutoff).await.expect("busy"));
         assert!(!repo.dispatch(node, b, now, cutoff).await.expect("second"));
         let out = repo.outstanding(cutoff).await.expect("outstanding");
         assert_eq!(out.len(), 1);

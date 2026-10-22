@@ -158,9 +158,11 @@ describe('reading again', () => {
   });
 
   it('treats an already-running fetch as nothing to report, and anything else as an error', () => {
-    expect(isQuietFetchRefusal(409)).toBe(true);
-    expect(isQuietFetchRefusal(429)).toBe(false);
-    expect(isQuietFetchRefusal(502)).toBe(false);
+    expect(isQuietFetchRefusal(409, 'config_backup_pending')).toBe(true);
+    expect(isQuietFetchRefusal(409, 'config_backup_not_ready')).toBe(true);
+    expect(isQuietFetchRefusal(409, 'config_backup_busy')).toBe(false);
+    expect(isQuietFetchRefusal(429, 'config_backup_wait')).toBe(false);
+    expect(isQuietFetchRefusal(502, 'oxidized_unreachable')).toBe(false);
   });
 });
 

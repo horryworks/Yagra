@@ -19,6 +19,14 @@
 //! Only Yagra starts a login with a candidate nobody has confirmed: such a node is in oxidized's
 //! node list only while a fetch Yagra asked for is outstanding (`source::source_nodes`), so
 //! oxidized's own daily schedule cannot spend an attempt the limits did not allow.
+//!
+//! 🚨 **oxidized's node list is never re-read while a fetch is out** ([`may_reload`]). oxidized
+//! 0.37 rebuilds every node object on a reload and does not carry the running mark across
+//! (`Nodes#update_nodes` copies `last` and `stats` only), and `/node/next` has already set `last` to
+//! nothing — so a node being fetched reads as never fetched and a second job starts with whatever
+//! login the list now holds. Measured on a lab deployment: one fetch-now, two logins, and the
+//! second one's result recorded against the wrong login. So every reload goes through
+//! [`may_reload`], and this loop starts its batch only when nothing is out.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -281,6 +289,15 @@ pub(crate) async fn fleet_recent(
     Ok(all)
 }
 
+/// Whether oxidized's node list may be read again now: only while no fetch is out anywhere. See the
+/// module doc for what a reload during a fetch does.
+pub(crate) async fn may_reload(
+    repo: &ConfigBackupRepo,
+    now: DateTime<Utc>,
+) -> anyhow::Result<bool> {
+    Ok(!repo.any_outstanding(now - REQUEST_TIMEOUT).await?)
+}
+
 /// How many of a node's own attempts are read to find what its pass has tried. More than any pass
 /// can hold at three failures an hour for a day.
 const ATTEMPTS_PER_NODE: i64 = 200;
@@ -297,6 +314,11 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &Credenti
                 return;
             }
         };
+    // A batch starts only when the last one has answered (`may_reload`). Lost fetches are still
+    // counted below, and they are what frees a batch whose answer never came.
+    let busy = targets
+        .iter()
+        .any(|t| in_flight(t.rotation.requested_at, now));
     let mut started = Vec::new();
     for t in targets {
         if t.rotation.requested_at.is_some() && !in_flight(t.rotation.requested_at, now) {
@@ -315,7 +337,7 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &Credenti
             continue;
         }
         // A working login is fetched on oxidized's own schedule.
-        if t.rotation.login_confirmed && t.rotation.requested_at.is_none() {
+        if busy || (t.rotation.login_confirmed && t.rotation.requested_at.is_none()) {
             continue;
         }
         let cands = candidates(t.config.login_order.as_deref(), &logins);

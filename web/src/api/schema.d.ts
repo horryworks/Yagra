@@ -25765,7 +25765,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The node is not switched on or not ready, or a fetch is already out (`config_backup_not_ready`, `config_backup_pending`) */
+            /** @description The node is not switched on or not ready, a fetch is already out for it, or the login it needs cannot be handed to oxidized while another node's fetch is out (`config_backup_not_ready`, `config_backup_pending`, `config_backup_busy`) */
             409: {
                 headers: {
                     [name: string]: unknown;

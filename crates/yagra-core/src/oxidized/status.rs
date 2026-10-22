@@ -41,12 +41,22 @@ pub(crate) fn status_rows(
         .collect()
 }
 
-/// One tick: reload, then copy the statuses.
+/// One tick: reload — unless a fetch is out, which a reload would start a second time
+/// (`rotation::may_reload`) — then copy the statuses.
 async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo) {
-    if let Err(e) = client.reload().await {
-        tracing::warn!(error = %e, "config backup: oxidized did not reload its node list");
-        metrics::counter!("yagra_oxidized_errors_total", "op" => "reload").increment(1);
-        return;
+    match super::rotation::may_reload(repo, chrono::Utc::now()).await {
+        Ok(true) => {
+            if let Err(e) = client.reload().await {
+                tracing::warn!(error = %e, "config backup: oxidized did not reload its node list");
+                metrics::counter!("yagra_oxidized_errors_total", "op" => "reload").increment(1);
+                return;
+            }
+        }
+        Ok(false) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "config backup: could not tell whether a fetch is out");
+            return;
+        }
     }
     match client.nodes().await {
         Ok(nodes) => {

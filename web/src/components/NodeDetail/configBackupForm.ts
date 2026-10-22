@@ -153,9 +153,10 @@ export function previousOf(versions: readonly ConfigVersion[], oid: string): str
   return i >= 0 && i + 1 < versions.length ? versions[i + 1].oid : null;
 }
 
-/** Whether a refused "fetch now" is nothing to report: a fetch is already out, or the node has
- *  nothing to fetch with (409). The state line says which. The lockout limits never refuse it —
- *  a press tries at once (ADR-210 stage 3 decision 25). */
-export function isQuietFetchRefusal(status: number): boolean {
-  return status === 409;
+/** Whether a refused "fetch now" is nothing to report: a fetch is already out for this node, or the
+ *  node has nothing to fetch with — the state line already says which. Another node's fetch holding
+ *  this one back (`config_backup_busy`) is reported, with the server's sentence. The lockout limits
+ *  never refuse it: a press tries at once (ADR-210 stage 3 decision 25). */
+export function isQuietFetchRefusal(status: number, code: string): boolean {
+  return status === 409 && (code === 'config_backup_pending' || code === 'config_backup_not_ready');
 }

@@ -118,7 +118,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
    *  says until when. */
   const fetchQuietly = () =>
     api.fetchConfigNow(node.id).catch((e: unknown) => {
-      if (!(e instanceof ApiError && isQuietFetchRefusal(e.status))) throw e;
+      if (!(e instanceof ApiError && isQuietFetchRefusal(e.status, e.code))) throw e;
     });
   const start = () => {
     if (!form) return;
