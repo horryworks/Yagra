@@ -70,6 +70,7 @@ import {
   MERAKI_LISTINGS,
   CLAIM_PORT_STATES,
   CHANNEL_KINDS,
+  REVEALED_FIELD_KEYS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -346,6 +347,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enAccess, ja: jaAccess };
     expectKeys('audit action', locales, 'audit.action.', AUDIT_ACTIONS);
     expectKeys('audit status class', locales, 'audit.statusClass.', AUDIT_STATUS_CLASSES);
+  });
+
+  it('every part of a revealed secret has a label (access:cred.reveal.field.*)', () => {
+    // The reveal dialog (ADR-210) labels each value from the token the server sent. A part added
+    // without strings would show a raw key beside a password, where the label is what says which
+    // of the values on screen is the one to type.
+    expectKeys(
+      'revealed field',
+      { en: enAccess, ja: jaAccess },
+      'cred.reveal.field.',
+      REVEALED_FIELD_KEYS,
+    );
   });
 
   it('every HTTP auth scheme has a label (access:cred.http.schemeName.*)', () => {

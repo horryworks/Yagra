@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### 新機能
+
+- **登録した機器の認証情報を、画面で表示してコピーできるようになりました。** Nodes ▸ Credentials & secrets で、SNMP と HTTP の認証情報の行に「秘密を表示」が出ます。コミュニティ、SNMPv3 のユーザーとパスフレーズ、HTTP のログイン情報を、項目ごとのコピーボタンつきで表示します。窓は 1 分で自動で閉じます。使うには新しい権限 Reveal credentials が要り、オペレーターと管理者が持っています。連携の鍵（Meraki・NetBox）は表示しません。API クライアント向け: `POST /api/v1/credentials/{id}/reveal` を追加しました。API トークンとフォルダを絞られたアカウントからは使えず、MCP のツールもありません。`GET /api/v1/roles` の権限は 9 つ目の `reveal_credentials` が増えました。
+
+### セキュリティ
+
+- **秘密を読み出すたびに監査ログに残ります。** 「秘密を表示」は POST なので、誰がどの認証情報をいつ読んだかが Settings ▸ Audit log に記録されます（`POST /api/v1/credentials/{id}/reveal`）。応答には `Cache-Control: no-store` を付けています。
+
 ### 改善
 
 - **Nodes のメニューで、インベントリの点検の画面を 1 つのグループにまとめました。** Duplicates・Subnet overlaps・Subnets missing from IP ranges を Inventory から出し、そのすぐ下の新しいグループ「整合性チェック」に移しました。3 つとも、インベントリを管理する画面ではなく、食い違いを並べる画面だからです。アドレスは変えていないので、ブックマークやリンクはそのまま使えます。

@@ -13,6 +13,7 @@ import {
   credentialGroupOf,
   integrationSecret,
   isHttpCredentialKind,
+  isRevealableCredentialKind,
   isSnmpCredentialKind,
   secretReplacementFor,
 } from './credentialKinds';
@@ -128,5 +129,15 @@ describe('the tabs of Credentials & secrets (ADR-205 Inc.1)', () => {
     expect(creatableKindsIn('http')).toEqual(['http_auth', 'api_token']);
     expect(creatableKindsIn('integration')).toEqual([]);
     expect(creatableKindsIn('other')).toEqual([]);
+  });
+});
+
+describe('isRevealableCredentialKind', () => {
+  it('reads back the device kinds and nothing else (ADR-210)', () => {
+    for (const kind of CREDENTIAL_KINDS) expect(isRevealableCredentialKind(kind)).toBe(true);
+    // An integration key is Yagra's own key to another API, not a device login.
+    for (const kind of INTEGRATION_CREDENTIAL_KINDS) expect(isRevealableCredentialKind(kind)).toBe(false);
+    // A kind a newer core wrote might be anything, so it is not offered.
+    for (const kind of ['ssh_login', '', 'SNMP_V2C']) expect(isRevealableCredentialKind(kind)).toBe(false);
   });
 });

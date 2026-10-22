@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### New Features
+
+- **A stored device credential can be shown and copied.** On Nodes ▸ Credentials & secrets, an SNMP or HTTP credential's row now offers Show secret: it opens the community, the SNMPv3 user and passphrases, or the HTTP login, each with a Copy button, and closes by itself after a minute. It needs the new Reveal credentials permission, which Operators and Admins hold. Integration keys (Meraki, NetBox) are never shown. For API clients: `POST /api/v1/credentials/{id}/reveal` is new; it is refused to API tokens and to accounts restricted to folders, and has no MCP tool. `GET /api/v1/roles` lists a ninth permission, `reveal_credentials`.
+
+### Security
+
+- **Every read of a stored secret is in the audit log.** Show secret is a POST, so Settings ▸ Audit log records who read which credential (`POST /api/v1/credentials/{id}/reveal`) and when. The answer is sent with `Cache-Control: no-store`.
+
 ### Improvements
 
 - **The Nodes menu gives the inventory checks a group of their own.** Duplicates, Subnet overlaps and Subnets missing from IP ranges moved out of Inventory into a new Consistency checks group directly under it: they list what disagrees in the inventory rather than manage it. Their addresses are unchanged, so bookmarks and links keep working.

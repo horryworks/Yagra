@@ -80,6 +80,7 @@ const schemaEnumPins: {
   UserKind: AssertEqual<UserKind, components['schemas']['UserKind']>;
   OidcProviderKind: AssertEqual<OidcProviderKind, components['schemas']['OidcProviderKind']>;
   TokenSurface: AssertEqual<TokenSurface, components['schemas']['TokenSurface']>;
+  RevealedFieldKey: AssertEqual<RevealedFieldKey, components['schemas']['RevealedFieldKey']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
   DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
   DuplicateConfidence: AssertEqual<DuplicateConfidence, components['schemas']['DuplicateConfidence']>;
@@ -148,6 +149,7 @@ const schemaEnumPins: {
   UserKind: true,
   OidcProviderKind: true,
   TokenSurface: true,
+  RevealedFieldKey: true,
   NeighborProto: true,
   NeighborCapability: true,
   NeighborPeerState: true,
@@ -368,6 +370,30 @@ export type NodeStatus = components['schemas']['NodeStatus'];
 
 /** Credential metadata (never the secret value). */
 export type CredentialSummary = components['schemas']['CredentialSummary'];
+
+/** A credential's secret in plaintext (`POST /api/v1/credentials/{id}/reveal`, ADR-210). Held only
+ *  while the dialog that asked for it is open; never stored. */
+export type RevealedCredential = components['schemas']['RevealedCredential'];
+
+/** The parts a revealed secret is made of, in the order a person types them into a device. */
+export const REVEALED_FIELD_KEYS = [
+  'community',
+  'user',
+  'security_level',
+  'auth_protocol',
+  'auth_key',
+  'priv_protocol',
+  'priv_key',
+  'scheme',
+  'username',
+  'password',
+  'token',
+  'header_name',
+  'header_value',
+] as const;
+
+/** One part of a revealed secret. Pinned to `schemas.RevealedFieldKey`. */
+export type RevealedFieldKey = (typeof REVEALED_FIELD_KEYS)[number];
 
 /** A page of the keyset-paginated node list (`GET /api/v1/nodes`). */
 export type NodePage = components['schemas']['NodePage'];

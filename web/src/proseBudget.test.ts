@@ -62,7 +62,7 @@ import { readSources, SRC } from './testSupport/sources';
 
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06 (Inc.24); lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
-  access: [1367, 747],
+  access: [1398, 755],
   alertNames: [166, 97],
   alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
   alertsConfig: [8368, 4434], // + routing.rules.emptyNoChannels and the port picker's two state lines, - interfaceHint (ADR-209, 2026-10-21)

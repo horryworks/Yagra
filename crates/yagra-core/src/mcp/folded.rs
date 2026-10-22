@@ -1213,6 +1213,7 @@ mod tests {
             Permission::ManageMaintenance => "RequireManageMaintenance",
             Permission::ManageConfig => "RequireManageConfig",
             Permission::ManageCredentials => "RequireManageCredentials",
+            Permission::RevealCredentials => "RequireRevealCredentials",
             Permission::ManageSystem => "RequireManageSystem",
             Permission::ManageUsers => "RequireManageUsers",
             Permission::ViewAudit => "RequireViewAudit",

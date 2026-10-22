@@ -713,6 +713,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/credentials/{id}/reveal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Show a stored credential's secret, for a person signing in to the device (ADR-210).
+         * @description **A POST although it changes nothing**, so `audit_mw` writes a row naming who read which
+         *     credential — the same reason the relocation download is one. The answer is never cached
+         *     (`Cache-Control: no-store`). Refused to an API token (`token_not_permitted`) and to an account
+         *     restricted to folders (`scope_unsupported`): the shelf belongs to no folder, so a scoped caller
+         *     could otherwise read the login of a site it cannot see. An integration key and a kind this
+         *     server does not know are refused (`not_revealable`).
+         */
+        post: operations["reveal_credential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard": {
         parameters: {
             query?: never;
@@ -11698,7 +11723,7 @@ export interface components {
          * @description A discrete capability checked at the API edge.
          * @enum {string}
          */
-        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "manage_system" | "manage_users" | "view_audit";
+        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "reveal_credentials" | "manage_system" | "manage_users" | "view_audit";
         /** @description One permission in the role/privilege matrix. */
         PermissionInfo: {
             description: string;
@@ -13125,6 +13150,29 @@ export interface components {
              */
             unmatched_event_hours: number;
         };
+        /** @description A credential's secret, in plaintext. */
+        RevealedCredential: {
+            /** @description The parts of the secret, in the order a person types them into a device. */
+            fields: components["schemas"]["RevealedField"][];
+            /** Format: uuid */
+            id: string;
+            kind: string;
+        };
+        /** @description One part of a revealed secret and its value. */
+        RevealedField: {
+            field: components["schemas"]["RevealedFieldKey"];
+            /**
+             * @description Whether the value is itself secret (a passphrase, a password, a token) rather than a
+             *     setting beside it (a protocol, a user name).
+             */
+            secret: boolean;
+            value: string;
+        };
+        /**
+         * @description One part of a revealed secret. Which parts a credential has depends on its kind.
+         * @enum {string}
+         */
+        RevealedFieldKey: "community" | "user" | "security_level" | "auth_protocol" | "auth_key" | "priv_protocol" | "priv_key" | "scheme" | "username" | "password" | "token" | "header_name" | "header_value";
         /**
          * @description Predefined roles, ordered least → most privileged.
          * @enum {string}
@@ -17795,6 +17843,83 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    reveal_credential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Credential id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The secret in plaintext. Every call is recorded in the audit log */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevealedCredential"];
+                };
+            };
+            /** @description An integration key or an unknown kind, which is not revealed (`not_revealable`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role does not hold RevealCredentials, the caller is an API token (`token_not_permitted`), or the account is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such credential */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The stored secret cannot be decrypted or does not parse for its kind */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no credential store */
             503: {
                 headers: {
                     [name: string]: unknown;

@@ -10,7 +10,7 @@
 //! `credentials` is the one table named here that the bundle does not carry. It is read, never
 //! written — a bundle holds credential *ids* only, and a reference is kept exactly when the target
 //! already holds that id (ADR-018: no code path in this repository turns a sealed secret back into
-//! transportable plaintext).
+//! transportable plaintext; ADR-210's reveal shows one on screen and is not a file).
 //!
 //! Two second passes are deliberate. A profile tree and a folder tree can each list a child before
 //! its parent, and no single ordering fixes that for an arbitrary graph — so `parent_id` is applied

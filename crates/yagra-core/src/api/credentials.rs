@@ -4,23 +4,26 @@
 //! `ManageCredentials`, its own permission rather than `ManageConfig`: these are what the whole
 //! fleet is polled with, so holding them is a strictly larger power than editing what gets polled.
 //!
-//! **The secret is write-only and never leaves this process in the clear.** It is sealed with
-//! envelope encryption before it reaches the database (ADR-018), the listing carries metadata only,
-//! and nothing here logs or echoes a secret — including the validation errors, which name a static
-//! reason and never any field content (security.md).
+//! **The secret leaves this process in the clear through one door only**: `POST
+//! /credentials/{id}/reveal` (ADR-210), which takes its own permission (`RevealCredentials`), is
+//! refused to API tokens and to folder-scoped callers, is a POST so `audit_mw` records every call,
+//! and answers only the kinds a person signs in to a device with. Everywhere else the secret is
+//! write-only: sealed with envelope encryption before it reaches the database (ADR-018), the
+//! listing carries metadata only, and nothing here logs or echoes a secret — including the
+//! validation errors, which name a static reason and never any field content (security.md).
 //!
 //! An update with no `secret` is a rename: the stored secret is left intact rather than cleared.
 //! With one, `kind` must accompany it, because the secret's *format* is kind-specific and re-sealing
 //! a v3 document as a community string would produce a credential that silently fails every poll.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageCredentials, Scoped};
+use super::extract::{Admin, RequireManageCredentials, RequireRevealCredentials, Scoped};
 use super::util::CreatedId;
 use super::ApiState;
 use axum::{
     extract::Path,
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::Deserialize;
@@ -34,7 +37,8 @@ use uuid::Uuid;
     create_credential,
     update_credential,
     delete_credential,
-    set_credential_order
+    set_credential_order,
+    reveal_credential
 ))]
 pub(super) struct Doc;
 
@@ -51,6 +55,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/credentials/:id",
             put(update_credential).delete(delete_credential),
         )
+        .route("/api/v1/credentials/:id/reveal", post(reveal_credential))
 }
 
 /// A credential the current KEK cannot open. Carries identity only — never a length, a `key_id`,
@@ -462,6 +467,188 @@ async fn set_credential_order(
     }
 }
 
+/// One part of a revealed secret. Which parts a credential has depends on its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RevealedFieldKey {
+    /// An SNMP v1/v2c community string.
+    Community,
+    /// The SNMPv3 USM user name.
+    User,
+    /// The SNMPv3 security level: `noauth`, `auth` or `authpriv`.
+    SecurityLevel,
+    /// The SNMPv3 authentication protocol.
+    AuthProtocol,
+    /// The SNMPv3 authentication passphrase.
+    AuthKey,
+    /// The SNMPv3 privacy protocol.
+    PrivProtocol,
+    /// The SNMPv3 privacy passphrase.
+    PrivKey,
+    /// The HTTP authentication scheme: `basic`, `bearer` or `header`.
+    Scheme,
+    /// The HTTP Basic user name.
+    Username,
+    /// The HTTP Basic password.
+    Password,
+    /// A bearer token.
+    Token,
+    /// The name of a custom HTTP header.
+    HeaderName,
+    /// The value of a custom HTTP header.
+    HeaderValue,
+}
+
+/// One part of a revealed secret and its value.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct RevealedField {
+    field: RevealedFieldKey,
+    value: String,
+    /// Whether the value is itself secret (a passphrase, a password, a token) rather than a
+    /// setting beside it (a protocol, a user name).
+    secret: bool,
+}
+
+/// A credential's secret, in plaintext.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct RevealedCredential {
+    id: Uuid,
+    kind: String,
+    /// The parts of the secret, in the order a person types them into a device.
+    fields: Vec<RevealedField>,
+}
+
+/// The parts of a stored secret, or `None` for a kind that is not revealed.
+///
+/// Only the kinds a person signs in to a device with (ADR-210 decision 5). An integration key —
+/// Meraki, NetBox — is Yagra's own key to someone else's API rather than a device login, and a
+/// kind this core does not know might be anything, so neither is opened for a person. `Err`
+/// carries a static reason only, never field content.
+fn revealed_fields(kind: &str, secret: &[u8]) -> Option<Result<Vec<RevealedField>, &'static str>> {
+    use yagra_base::secrets::{KIND_API_TOKEN, KIND_HTTP_AUTH, KIND_SNMP_V3};
+    use yagra_common::url_check::HttpAuth;
+    use RevealedFieldKey as K;
+    let field = |field, value: &str, secret| RevealedField {
+        field,
+        value: value.to_owned(),
+        secret,
+    };
+    let fields = match kind {
+        "snmp_v2c" => std::str::from_utf8(secret)
+            .map(|c| vec![field(K::Community, c, true)])
+            .map_err(|_| "the community is not valid UTF-8"),
+        KIND_SNMP_V3 => yagra_base::secrets::SnmpV3Secret::parse(secret).map(|v3| {
+            let mut out = vec![
+                field(K::User, &v3.user, false),
+                field(K::SecurityLevel, &v3.security_level, false),
+            ];
+            let optional = [
+                (K::AuthProtocol, &v3.auth_protocol, false),
+                (K::AuthKey, &v3.auth_key, true),
+                (K::PrivProtocol, &v3.priv_protocol, false),
+                (K::PrivKey, &v3.priv_key, true),
+            ];
+            for (key, value, is_secret) in optional {
+                if let Some(value) = value.as_deref().filter(|v| !v.is_empty()) {
+                    out.push(field(key, value, is_secret));
+                }
+            }
+            out
+        }),
+        KIND_HTTP_AUTH | KIND_API_TOKEN => {
+            yagra_base::secrets::parse_http_auth(kind, secret).map(|auth| {
+                let scheme = field(K::Scheme, auth.scheme(), false);
+                match &auth {
+                    HttpAuth::Basic { username, password } => vec![
+                        scheme,
+                        field(K::Username, username, false),
+                        field(K::Password, password, true),
+                    ],
+                    HttpAuth::Bearer { token } => vec![scheme, field(K::Token, token, true)],
+                    HttpAuth::Header { name, value } => vec![
+                        scheme,
+                        field(K::HeaderName, name, false),
+                        field(K::HeaderValue, value, true),
+                    ],
+                }
+            })
+        }
+        _ => return None,
+    };
+    Some(fields)
+}
+
+/// Show a stored credential's secret, for a person signing in to the device (ADR-210).
+///
+/// **A POST although it changes nothing**, so `audit_mw` writes a row naming who read which
+/// credential — the same reason the relocation download is one. The answer is never cached
+/// (`Cache-Control: no-store`). Refused to an API token (`token_not_permitted`) and to an account
+/// restricted to folders (`scope_unsupported`): the shelf belongs to no folder, so a scoped caller
+/// could otherwise read the login of a site it cannot see. An integration key and a kind this
+/// server does not know are refused (`not_revealable`).
+#[utoipa::path(
+    post, path = "/api/v1/credentials/{id}/reveal", tag = "credentials",
+    params(("id" = Uuid, Path, description = "Credential id")),
+    responses(
+        (status = 200, description = "The secret in plaintext. Every call is recorded in the audit log", body = RevealedCredential),
+        (status = 400, description = "An integration key or an unknown kind, which is not revealed (`not_revealable`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role does not hold RevealCredentials, the caller is an API token (`token_not_permitted`), or the account is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 404, description = "No such credential", body = super::error::ErrorBody),
+        (status = 500, description = "The stored secret cannot be decrypted or does not parse for its kind", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no credential store", body = super::error::ErrorBody),
+    ),
+)]
+async fn reveal_credential(
+    _guard: RequireRevealCredentials,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+) -> ApiResult<(
+    [(axum::http::header::HeaderName, &'static str); 1],
+    Json<RevealedCredential>,
+)> {
+    super::scope::require_fleet_wide(
+        &scope,
+        "monitoring credentials are shared by every folder, so an account restricted to folders \
+         cannot read one back",
+    )?;
+    let (kind, secret) = admin
+        .creds
+        .open(id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "reveal credential",
+                "failed to decrypt credential",
+            )
+        })?
+        .ok_or_else(|| {
+            ApiError::not_found("credential_not_found", format!("no credential {id}"))
+        })?;
+    let fields = match revealed_fields(&kind, &secret) {
+        None => {
+            return Err(ApiError::bad_request(
+                "not_revealable",
+                "only device credentials (SNMP and HTTP) can be shown; an integration key cannot",
+            ))
+        }
+        Some(Err(reason)) => {
+            // The reason is static text; the stored bytes never reach the log.
+            tracing::error!(credential = %id, %kind, reason, "a stored credential does not parse");
+            return Err(ApiError::internal(
+                "the stored secret does not parse for its kind",
+            ));
+        }
+        Some(Ok(fields)) => fields,
+    };
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(RevealedCredential { id, kind, fields }),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +663,7 @@ mod tests {
             ("POST", "/api/v1/credentials".to_owned()),
             ("PUT", format!("/api/v1/credentials/{ID}")),
             ("DELETE", format!("/api/v1/credentials/{ID}")),
+            ("POST", format!("/api/v1/credentials/{ID}/reveal")),
         ]
     }
 
@@ -994,5 +1182,217 @@ mod tests {
             assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
         }
         assert_eq!(listed_names(&st, &operator).await, ["a", "b"]);
+    }
+
+    // ── Reading a credential back (ADR-210) ─────────────────────────────────────────
+
+    /// The `(field, value, secret)` triples `revealed_fields` answers, for compact assertions.
+    fn triples(kind: &str, secret: &[u8]) -> Vec<(RevealedFieldKey, String, bool)> {
+        revealed_fields(kind, secret)
+            .expect("a revealed kind")
+            .expect("a well-formed secret")
+            .into_iter()
+            .map(|f| (f.field, f.value, f.secret))
+            .collect()
+    }
+
+    #[test]
+    fn every_device_kind_is_revealed_as_the_parts_a_person_types() {
+        use RevealedFieldKey as K;
+        assert_eq!(
+            triples("snmp_v2c", b"s3cr3t"),
+            [(K::Community, "s3cr3t".to_owned(), true)]
+        );
+        assert_eq!(
+            triples(
+                "snmp_v3",
+                br#"{"user":"ops","security_level":"authpriv","auth_protocol":"sha","auth_key":"a-pass","priv_protocol":"aes","priv_key":"p-pass"}"#
+            ),
+            [
+                (K::User, "ops".to_owned(), false),
+                (K::SecurityLevel, "authpriv".to_owned(), false),
+                (K::AuthProtocol, "sha".to_owned(), false),
+                (K::AuthKey, "a-pass".to_owned(), true),
+                (K::PrivProtocol, "aes".to_owned(), false),
+                (K::PrivKey, "p-pass".to_owned(), true),
+            ]
+        );
+        // A noauth user has no keys to show, and shows none rather than empty rows.
+        assert_eq!(
+            triples("snmp_v3", br#"{"user":"ro","security_level":"noauth"}"#),
+            [
+                (K::User, "ro".to_owned(), false),
+                (K::SecurityLevel, "noauth".to_owned(), false),
+            ]
+        );
+        assert_eq!(
+            triples(
+                "http_auth",
+                br#"{"scheme":"basic","username":"admin","password":"pw"}"#
+            ),
+            [
+                (K::Scheme, "basic".to_owned(), false),
+                (K::Username, "admin".to_owned(), false),
+                (K::Password, "pw".to_owned(), true),
+            ]
+        );
+        assert_eq!(
+            triples(
+                "http_auth",
+                br#"{"scheme":"header","name":"X-API-Key","value":"k"}"#
+            ),
+            [
+                (K::Scheme, "header".to_owned(), false),
+                (K::HeaderName, "X-API-Key".to_owned(), false),
+                (K::HeaderValue, "k".to_owned(), true),
+            ]
+        );
+        // The legacy kind is a bare bearer token.
+        assert_eq!(
+            triples("api_token", b"tok"),
+            [
+                (K::Scheme, "bearer".to_owned(), false),
+                (K::Token, "tok".to_owned(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_integration_key_or_an_unknown_kind_is_not_revealed() {
+        for kind in [
+            yagra_base::secrets::KIND_MERAKI_API,
+            yagra_base::secrets::KIND_NETBOX_TOKEN,
+            "ssh_login_from_a_newer_core",
+        ] {
+            assert!(
+                revealed_fields(kind, br#"{"api_key":"k","token":"t"}"#).is_none(),
+                "{kind} must not be revealed"
+            );
+        }
+        // A device kind whose stored bytes do not parse is an error, never a guess.
+        assert!(matches!(
+            revealed_fields("snmp_v3", b"not json"),
+            Some(Err(_))
+        ));
+    }
+
+    /// The WebUI offers "Show secret" for `CREDENTIAL_KINDS` (`lib/credentialKinds.ts`,
+    /// `isRevealableCredentialKind`), and this server reveals the kinds `revealed_fields` answers.
+    /// Two lists in two languages: a kind the screen offers and the server refuses is a menu item
+    /// that only ever errors, and one the server reveals with no item is a door nobody sees.
+    #[test]
+    fn the_kinds_the_webui_offers_to_reveal_are_the_kinds_revealed_here() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/src/lib/credentialKinds.ts");
+        let src = std::fs::read_to_string(&path).expect("read credentialKinds.ts");
+        let line = src
+            .lines()
+            .find(|l| l.starts_with("export const CREDENTIAL_KINDS = ["))
+            .expect("CREDENTIAL_KINDS is declared on one line");
+        let offered: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+        assert!(offered.len() >= 4, "parsed too few kinds: {offered:?}");
+        // A well-formed secret for each, so the answer is about the kind rather than the bytes.
+        let sample = |kind: &str| -> &'static [u8] {
+            match kind {
+                "snmp_v3" => br#"{"user":"u","security_level":"noauth"}"#,
+                "http_auth" => br#"{"scheme":"bearer","token":"t"}"#,
+                _ => b"x",
+            }
+        };
+        for kind in &offered {
+            assert!(
+                matches!(revealed_fields(kind, sample(kind)), Some(Ok(_))),
+                "the WebUI offers to reveal {kind}, which this server refuses"
+            );
+        }
+        for kind in [
+            yagra_base::secrets::KIND_MERAKI_API,
+            yagra_base::secrets::KIND_NETBOX_TOKEN,
+        ] {
+            assert!(!offered.contains(&kind), "{kind} must not be offered");
+        }
+    }
+
+    /// An Operator reads a credential back, and the read leaves an audit row naming it (ADR-210).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_operator_reveals_a_credential_and_the_audit_log_records_it(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Operator);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/credentials",
+            &tok,
+            Some(serde_json::json!({
+                "name": "lab community", "kind": "snmp_v2c", "secret": "s3cr3t-community",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        let id = body["id"].as_str().expect("an id").to_owned();
+        let audit_before = yagra_base::pgtest::rows(&pool, "audit_log").await;
+
+        let path = format!("/api/v1/credentials/{id}/reveal");
+        let (status, body) = send(&st, "POST", &path, &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["kind"], "snmp_v2c");
+        assert_eq!(
+            body["fields"],
+            serde_json::json!([{ "field": "community", "value": "s3cr3t-community", "secret": true }])
+        );
+
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "audit_log").await,
+            audit_before + 1,
+            "the read left no audit row"
+        );
+        let action: String =
+            sqlx::query_scalar("SELECT action FROM audit_log ORDER BY at DESC, id DESC LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .expect("the audit row");
+        assert_eq!(action, format!("POST {path}"));
+    }
+
+    /// Who may not read a credential back: a Viewer, an account restricted to folders, and anyone
+    /// asking for an integration key or a credential that does not exist.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_reveal_is_refused_to_a_viewer_a_scoped_caller_and_an_integration_key(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool.clone()).await;
+        let community = yagra_base::pgtest::credential(&pool, "lab", "snmp_v2c").await;
+        let key = yagra_base::pgtest::credential(&pool, "meraki key", "meraki_api").await;
+        let folder = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        let reveal = |id: Uuid| format!("/api/v1/credentials/{id}/reveal");
+        // Assembled rather than written out, for the reason given in the scoped-write test above.
+        let refusal = format!("{}_unsupported", "scope");
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let (status, answer) = send(&st, "POST", &reveal(community), &viewer, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+
+        let scoped = scoped_token(&st, &[folder]);
+        let (status, answer) = send(&st, "POST", &reveal(community), &scoped, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+        assert_eq!(answer["error"]["code"].as_str(), Some(refusal.as_str()));
+
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, answer) = send(&st, "POST", &reveal(key), &operator, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+        assert_eq!(answer["error"]["code"], "not_revealable");
+        assert!(
+            !answer.to_string().contains("a-test-secret"),
+            "a refusal carried the secret"
+        );
+
+        let (status, answer) = send(&st, "POST", &reveal(Uuid::new_v4()), &operator, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+        assert_eq!(answer["error"]["code"], "credential_not_found");
     }
 }

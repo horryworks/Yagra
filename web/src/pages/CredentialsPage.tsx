@@ -14,9 +14,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
+import { useCopy } from '../lib/useCopy';
+import { rowActionsWidth } from '../lib/rowActions';
 import { moveWithinGroup } from '../lib/reorder';
 import { useCan } from '../store';
-import type { CredentialSummary } from '../types/api';
+import type { CredentialSummary, RevealedCredential } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -33,7 +35,7 @@ import { sortRows } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
 import { ClippedText } from '../components/ui/ClippedText';
-import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon } from '../components/ui/icons';
+import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon, LockIcon } from '../components/ui/icons';
 import { Tabs } from '../components/ui/Tabs';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useEnumParam } from '../lib/useEnumParam';
@@ -70,6 +72,8 @@ import {
   creatableKindsIn,
   credentialGroupOf,
   integrationSecret,
+  isRevealableCredentialKind,
+  REVEAL_AUTO_CLOSE_MS,
   secretReplacementFor,
   type CredentialGroup,
   type CredentialKind,
@@ -529,6 +533,60 @@ function EditCredentialModal({
   );
 }
 
+/** A device credential's secret, read back for a person signing in to the device (ADR-210).
+ *
+ *  Asked for when the dialog opens — the server writes an audit row for every ask — and held only
+ *  in this component, so closing the dialog drops it. It closes by itself after
+ *  `REVEAL_AUTO_CLOSE_MS`, so a secret is not left on an unattended screen. */
+function RevealCredentialModal({ cred, onClose }: { cred: CredentialSummary; onClose: () => void }) {
+  const { t } = useTranslation('access');
+  const { copied, copy } = useCopy();
+  const [revealed, setRevealed] = useState<RevealedCredential | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    api
+      .revealCredential(cred.id)
+      .then((r) => live && setRevealed(r))
+      .catch((e: unknown) => live && setError(errMsg(e, t('cred.err.reveal'))));
+    const timer = setTimeout(onClose, REVEAL_AUTO_CLOSE_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [cred.id, onClose, t]);
+
+  return (
+    <Modal
+      title={t('cred.reveal.title', { name: cred.name })}
+      onClose={onClose}
+      footer={
+        <Button variant="primary" onClick={onClose}>
+          {t('common:actions.close')}
+        </Button>
+      }
+    >
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {!revealed && !error && <p className="form-status">{t('common:loading')}</p>}
+      {revealed?.fields.map((f) => (
+        <div className="modal-field" key={f.field}>
+          <label className="modal-field-label">{t(`cred.reveal.field.${f.field}`)}</label>
+          <div className="cred-reveal-row">
+            <code className="cred-reveal-value mono">{f.value}</code>
+            <Button variant="outline" onClick={() => copy(f.value, f.field)}>
+              {copied === f.field ? t('common:copy.copied') : t('cred.reveal.copy')}
+            </Button>
+          </div>
+        </div>
+      ))}
+    </Modal>
+  );
+}
+
 /** Confirm + delete a credential (destructive-consent modal) — or, for one an integration still
  *  uses, say that it cannot be deleted and where it has to be released first.
  *
@@ -658,12 +716,15 @@ function CredentialGroupTable({
 }) {
   const { t } = useTranslation('access');
   const canCredentials = useCan('manage_credentials');
+  const canReveal = useCan('reveal_credentials');
   // In the URL (ADR-153), so a reload keeps the order. One sort for the route: the tabs share it.
   const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
   const applied = credentialSortIn(group, sort);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
   const [deleting, setDeleting] = useState<CredentialSummary | null>(null);
+  const [revealing, setRevealing] = useState<CredentialSummary | null>(null);
+  const closeReveal = useCallback(() => setRevealing(null), []);
   const creatable = creatableKindsIn(group);
   const addTitleKey = CREDENTIAL_ADD_TITLE_KEYS[group];
   const [moving, setMoving] = useState(false);
@@ -813,33 +874,51 @@ function CredentialGroupTable({
       {
         key: 'actions',
         header: t('cred.cols.actions'),
-        width: '92px',
+        // Show secret, Edit and Delete on a device row; the integration tab's rows draw two.
+        width: rowActionsWidth(3),
         align: 'right',
-        render: (c) =>
-          canCredentials ? (
+        render: (c) => {
+          // Each item is gated on its own permission, and the menu is drawn while one survives.
+          const reveal = canReveal && isRevealableCredentialKind(c.kind);
+          if (!canCredentials && !reveal) return null;
+          return (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
-                  {
-                    label: t('common:actions.edit'),
-                    icon: <EditIcon />,
-                    onClick: () => setEditing(c),
-                  },
-                  {
-                    label: t('common:actions.delete'),
-                    icon: <TrashIcon />,
-                    danger: true,
-                    onClick: () => setDeleting(c),
-                  },
+                  ...(reveal
+                    ? [
+                        {
+                          label: t('cred.reveal.action'),
+                          icon: <LockIcon />,
+                          onClick: () => setRevealing(c),
+                        },
+                      ]
+                    : []),
+                  ...(canCredentials
+                    ? [
+                        {
+                          label: t('common:actions.edit'),
+                          icon: <EditIcon />,
+                          onClick: () => setEditing(c),
+                        },
+                        {
+                          label: t('common:actions.delete'),
+                          icon: <TrashIcon />,
+                          danger: true,
+                          onClick: () => setDeleting(c),
+                        },
+                      ]
+                    : []),
                 ]}
               />
             </span>
-          ) : null,
+          );
+        },
       },
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, canCredentials, rows, group, place, reorderable, moving, move]);
+  }, [t, canCredentials, canReveal, rows, group, place, reorderable, moving, move]);
 
   // URL-backed, one table per tab, each under its own key prefix (ADR-153 decision 3).
   const filtering = useClientFilters(columns, rows, { prefix: CREDENTIAL_TABLE_PREFIX[group] });
@@ -925,6 +1004,7 @@ function CredentialGroupTable({
       {editing && (
         <EditCredentialModal cred={editing} onClose={() => setEditing(null)} onSaved={onChanged} />
       )}
+      {revealing && <RevealCredentialModal cred={revealing} onClose={closeReveal} />}
       {deleting && (
         <DeleteCredentialModal
           cred={deleting}

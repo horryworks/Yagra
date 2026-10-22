@@ -102,7 +102,28 @@
       "add": "failed to add credential",
       "update": "failed to update",
       "delete": "failed to delete",
-      "order": "failed to save the order"
+      "order": "failed to save the order",
+      "reveal": "Could not read the secret back."
+    },
+    "reveal": {
+      "action": "Show secret",
+      "title": "Secret of {{name}}",
+      "copy": "Copy",
+      "field": {
+        "community": "Community",
+        "user": "User",
+        "security_level": "Security level",
+        "auth_protocol": "Auth protocol",
+        "auth_key": "Auth passphrase",
+        "priv_protocol": "Privacy protocol",
+        "priv_key": "Privacy passphrase",
+        "scheme": "Scheme",
+        "username": "Username",
+        "password": "Password",
+        "token": "Token",
+        "header_name": "Header name",
+        "header_value": "Header value"
+      }
     }
   },
   "users": {

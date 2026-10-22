@@ -3418,6 +3418,100 @@
         }
       }
     },
+    "/api/v1/credentials/{id}/reveal": {
+      "post": {
+        "tags": [
+          "credentials"
+        ],
+        "summary": "Show a stored credential's secret, for a person signing in to the device (ADR-210).",
+        "description": "**A POST although it changes nothing**, so `audit_mw` writes a row naming who read which\ncredential — the same reason the relocation download is one. The answer is never cached\n(`Cache-Control: no-store`). Refused to an API token (`token_not_permitted`) and to an account\nrestricted to folders (`scope_unsupported`): the shelf belongs to no folder, so a scoped caller\ncould otherwise read the login of a site it cannot see. An integration key and a kind this\nserver does not know are refused (`not_revealable`).",
+        "operationId": "reveal_credential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Credential id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The secret in plaintext. Every call is recorded in the audit log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealedCredential"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An integration key or an unknown kind, which is not revealed (`not_revealable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role does not hold RevealCredentials, the caller is an API token (`token_not_permitted`), or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The stored secret cannot be decrypted or does not parse for its kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no credential store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dashboard": {
       "get": {
         "tags": [
@@ -38368,6 +38462,7 @@
           "manage_maintenance",
           "manage_config",
           "manage_credentials",
+          "reveal_credentials",
           "manage_system",
           "manage_users",
           "view_audit"
@@ -41384,6 +41479,71 @@
             "minimum": 0
           }
         }
+      },
+      "RevealedCredential": {
+        "type": "object",
+        "description": "A credential's secret, in plaintext.",
+        "required": [
+          "id",
+          "kind",
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevealedField"
+            },
+            "description": "The parts of the secret, in the order a person types them into a device."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "RevealedField": {
+        "type": "object",
+        "description": "One part of a revealed secret and its value.",
+        "required": [
+          "field",
+          "value",
+          "secret"
+        ],
+        "properties": {
+          "field": {
+            "$ref": "#/components/schemas/RevealedFieldKey"
+          },
+          "secret": {
+            "type": "boolean",
+            "description": "Whether the value is itself secret (a passphrase, a password, a token) rather than a\nsetting beside it (a protocol, a user name)."
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "RevealedFieldKey": {
+        "type": "string",
+        "description": "One part of a revealed secret. Which parts a credential has depends on its kind.",
+        "enum": [
+          "community",
+          "user",
+          "security_level",
+          "auth_protocol",
+          "auth_key",
+          "priv_protocol",
+          "priv_key",
+          "scheme",
+          "username",
+          "password",
+          "token",
+          "header_name",
+          "header_value"
+        ]
       },
       "Role": {
         "type": "string",

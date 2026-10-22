@@ -705,6 +705,12 @@ fn changes_monitoring_config(path: &str) -> bool {
         // The same blind spot as the move preview: it demands ManageConfig, so the read-shape check
         // cannot see it, and the test beside this function is what holds it.
         || path == "/api/v1/nodes/name-from-device/preview"
+        // Reading a stored credential back for a person (ADR-210). A POST only so `audit_mw`
+        // records who read which one; it writes nothing. The read-shape check cannot see it — it
+        // demands RevealCredentials, not a read permission — so the test beside this function is
+        // what holds it. The trailing segment keeps `PUT /credentials/{id}` (a real re-seal,
+        // which the scheduler must pick up) dirty.
+        || (path.starts_with("/api/v1/credentials/") && path.ends_with("/reveal"))
         // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the
@@ -1552,7 +1558,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
-        assert_eq!(json["permissions"].as_array().unwrap().len(), 8);
+        assert_eq!(json["permissions"].as_array().unwrap().len(), 9);
         let roles = json["roles"].as_array().unwrap();
         assert_eq!(roles.len(), 3);
         let admin = roles.iter().find(|r| r["key"] == "admin").unwrap();
@@ -1904,6 +1910,13 @@ mod tests {
         assert!(
             !changes_monitoring_config("/api/v1/credentials/order"),
             "the credential order is read by no rebuild"
+        );
+        // ADR-210: reading a secret back writes nothing.
+        assert!(
+            !changes_monitoring_config(
+                "/api/v1/credentials/00000000-0000-4000-8000-000000000001/reveal"
+            ),
+            "revealing a credential is read by no rebuild"
         );
         for dirty in [
             "/api/v1/credentials",

@@ -97,6 +97,17 @@ export function isHttpCredentialKind(kind: string): boolean {
   return (HTTP_CREDENTIAL_KINDS as readonly string[]).includes(kind);
 }
 
+/** Whether a credential's secret can be read back on screen (ADR-210): the device kinds an
+ *  operator creates, never an integration's key and never a kind this build does not know.
+ *  `api/credentials.rs::revealed_fields` answers the same set, and a Rust test reads
+ *  `CREDENTIAL_KINDS` above to keep the two equal. */
+export function isRevealableCredentialKind(kind: string): boolean {
+  return (CREDENTIAL_KINDS as readonly string[]).includes(kind);
+}
+
+/** How long a revealed secret stays on screen before its dialog closes by itself (ADR-210). */
+export const REVEAL_AUTO_CLOSE_MS = 60_000;
+
 /** The tabs of Nodes ▸ Credentials & secrets (ADR-205 Inc.1), in the order they are drawn. The
  *  first is what a bare URL opens. `other` holds a kind this build does not know — a newer core can
  *  store one — and is drawn only while such a row exists, so no row is ever silently left out. */

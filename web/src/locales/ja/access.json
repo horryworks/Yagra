@@ -99,7 +99,28 @@
       "add": "認証情報の追加に失敗しました",
       "update": "更新に失敗しました",
       "delete": "削除に失敗しました",
-      "order": "順の保存に失敗しました"
+      "order": "順の保存に失敗しました",
+      "reveal": "秘密を読み出せませんでした。"
+    },
+    "reveal": {
+      "action": "秘密を表示",
+      "title": "{{name}} の秘密",
+      "copy": "コピー",
+      "field": {
+        "community": "コミュニティ",
+        "user": "ユーザー",
+        "security_level": "セキュリティレベル",
+        "auth_protocol": "認証方式",
+        "auth_key": "認証パスフレーズ",
+        "priv_protocol": "暗号化方式",
+        "priv_key": "暗号化パスフレーズ",
+        "scheme": "方式",
+        "username": "ユーザー名",
+        "password": "パスワード",
+        "token": "トークン",
+        "header_name": "ヘッダー名",
+        "header_value": "ヘッダーの値"
+      }
     }
   },
   "users": {

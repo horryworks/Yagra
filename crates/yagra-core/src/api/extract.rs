@@ -166,7 +166,23 @@ impl FromRequestParts<ApiState> for Actor {
 /// another would be able to issue its own successor, which quietly defeats both expiry and the
 /// owner binding: revoke the credential you know about and the one it made lives on. So user
 /// administration stays something a person does while signed in.
-const TOKEN_DENIED_PERMISSIONS: [Permission; 1] = [Permission::ManageUsers];
+///
+/// Reading a credential back is here for a different reason (ADR-210): a token is unattended and
+/// copyable, so one that could reveal would let whoever holds it walk off with every device login
+/// in a loop, and the audit log would name only the token's owner. A person reads a secret, one
+/// at a time, while signed in.
+const TOKEN_DENIED_PERMISSIONS: [Permission; 2] =
+    [Permission::ManageUsers, Permission::RevealCredentials];
+
+/// What a token is told when [`TOKEN_DENIED_PERMISSIONS`] refuses it.
+fn token_denied_message(perm: Permission) -> &'static str {
+    match perm {
+        Permission::RevealCredentials => {
+            "an API token cannot read a credential back — sign in to do this"
+        }
+        _ => "an API token cannot administer users — sign in to do this",
+    }
+}
 
 /// The permission a [`Require`] guard demands. Implemented by the marker types below so the
 /// permission is part of the handler's type, visible in its signature.
@@ -237,6 +253,16 @@ impl RequiredPermission for ManageCredentialsPerm {
     const PERMISSION: Permission = Permission::ManageCredentials;
 }
 
+/// Read a stored device credential's secret back in plaintext (ADR-210).
+///
+/// Its own permission rather than [`ManageCredentialsPerm`]: replacing a secret and reading one
+/// back are different trusts, even while the same role holds both. API tokens never hold it
+/// ([`TOKEN_DENIED_PERMISSIONS`]).
+pub struct RevealCredentialsPerm;
+impl RequiredPermission for RevealCredentialsPerm {
+    const PERMISSION: Permission = Permission::RevealCredentials;
+}
+
 /// Read the audit log — who did what, across the whole system, including actions taken in domains
 /// the caller cannot otherwise see. Its own permission rather than `ManageConfig` for that reason.
 pub struct ViewAuditPerm;
@@ -262,6 +288,8 @@ pub type RequireAckAlerts = Require<AckAlertsPerm>;
 pub type RequireManageMaintenance = Require<ManageMaintenancePerm>;
 /// Gated on managing stored monitoring credentials.
 pub type RequireManageCredentials = Require<ManageCredentialsPerm>;
+/// Gated on reading a stored credential's secret back.
+pub type RequireRevealCredentials = Require<RevealCredentialsPerm>;
 /// Gated on reading the audit log.
 pub type RequireViewAudit = Require<ViewAuditPerm>;
 
@@ -276,14 +304,15 @@ impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {
         let Some(auth) = parts.extensions.get::<Authenticated>() else {
             return Err(ApiError::unauthorized());
         };
-        // An API token is refused the user-administration permissions before its role is even
-        // consulted, so an Admin-role token is still not a way to mint another credential.
+        // An API token is refused the user-administration and reveal permissions before its role
+        // is even consulted, so an Admin-role token is still not a way to mint another credential
+        // or to read one back.
         if matches!(auth, Authenticated::Token(_))
             && TOKEN_DENIED_PERMISSIONS.contains(&P::PERMISSION)
         {
             return Err(ApiError::forbidden_code(
                 "token_not_permitted",
-                "an API token cannot administer users — sign in to do this",
+                token_denied_message(P::PERMISSION),
             ));
         }
         if auth.principal().can(P::PERMISSION) {
@@ -912,6 +941,24 @@ mod tests {
             .expect("user administration is closed to tokens");
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
         assert_eq!(err.code(), "token_not_permitted");
+    }
+
+    // ADR-210: a token cannot read a credential back either, though its role could — a person
+    // reads a secret, one at a time, while signed in. The message names the act it refused.
+    #[tokio::test]
+    async fn an_api_token_cannot_reveal_a_credential_even_as_admin() {
+        let st = private_state();
+        let err =
+            RequireRevealCredentials::from_request_parts(&mut token_parts(Role::Admin, "ci"), &st)
+                .await
+                .err()
+                .expect("reading a credential back is closed to tokens");
+        assert_eq!(err.status(), StatusCode::FORBIDDEN);
+        assert_eq!(err.code(), "token_not_permitted");
+        assert_eq!(
+            token_denied_message(Permission::RevealCredentials),
+            "an API token cannot read a credential back — sign in to do this"
+        );
     }
 
     // Account-scoped endpoints have no meaning for an unattended credential. 403 rather than 401:

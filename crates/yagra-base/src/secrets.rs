@@ -515,7 +515,9 @@ impl CredentialStore {
     }
 
     /// Decrypt a credential's secret in memory along with its `kind`, so the caller can
-    /// pick the protocol path (v2c community vs v3 USM doc). Never exposed via the API.
+    /// pick the protocol path (v2c community vs v3 USM doc). Exposed via the API at exactly one
+    /// door: `POST /api/v1/credentials/{id}/reveal` (ADR-210), which answers a signed-in person
+    /// holding `RevealCredentials`, device kinds only, and is audited on every call.
     pub async fn open(&self, id: Uuid) -> anyhow::Result<Option<(String, Vec<u8>)>> {
         let row = sqlx::query(
             "SELECT kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce \

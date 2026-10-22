@@ -39,6 +39,7 @@ import type {
   CollectionTemplate,
   ConfigBundle,
   CredentialSummary,
+  RevealedCredential,
   DiscoveryCandidate,
   DiscoveryScan,
   DiscoveryScanSummary,
@@ -2081,6 +2082,11 @@ export const api = {
    *  a 409 means one was added or deleted since the list was read. */
   setCredentialOrder: (ids: string[]): Promise<void> =>
     apiPut('/api/v1/credentials/order', { body: { ids } }),
+
+  /** Read a device credential's secret back in plaintext (ADR-210). Every call leaves an audit row;
+   *  an integration key answers `400 not_revealable`, an API token `403 token_not_permitted`. */
+  revealCredential: (id: string): Promise<RevealedCredential> =>
+    apiPost('/api/v1/credentials/{id}/reveal', { path: { id } }),
 
   /** Delete a credential. Node bindings are cleared with it; a Meraki organization or a NetBox
    *  server that uses it refuses the delete instead (`409 credential_in_use`), which is why the

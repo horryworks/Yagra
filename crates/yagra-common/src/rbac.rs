@@ -54,6 +54,8 @@ pub enum Permission {
     ManageConfig,
     /// Create/rotate monitoring credentials.
     ManageCredentials,
+    /// Read a stored monitoring credential's secret back in plaintext.
+    RevealCredentials,
     /// Change the deployment itself, and anything that leaves the box (ADR-057).
     ManageSystem,
     /// Manage users and role assignments.
@@ -258,8 +260,8 @@ impl Role {
             // matrix renders it verbatim, so a stale sentence here is a wrong answer on screen.
             Role::Operator => {
                 "Runs the monitoring: everything a Viewer sees, plus the inventory, profiles, \
-                 thresholds, collection, discovery, event rules, monitoring credentials, alert \
-                 response and maintenance windows."
+                 thresholds, collection, discovery, event rules, monitoring credentials (and \
+                 reading them back), alert response and maintenance windows."
             }
             Role::Admin => {
                 "Owns the deployment: everything an Operator does, plus notification delivery, \
@@ -283,7 +285,8 @@ impl Role {
             Permission::AckAlerts
             | Permission::ManageMaintenance
             | Permission::ManageConfig
-            | Permission::ManageCredentials => self >= Role::Operator,
+            | Permission::ManageCredentials
+            | Permission::RevealCredentials => self >= Role::Operator,
             Permission::ManageSystem | Permission::ManageUsers | Permission::ViewAudit => {
                 self == Role::Admin
             }
@@ -293,12 +296,13 @@ impl Role {
 
 impl Permission {
     /// Every permission, in display order (for the role/privilege matrix).
-    pub const ALL: [Permission; 8] = [
+    pub const ALL: [Permission; 9] = [
         Permission::View,
         Permission::AckAlerts,
         Permission::ManageMaintenance,
         Permission::ManageConfig,
         Permission::ManageCredentials,
+        Permission::RevealCredentials,
         Permission::ManageSystem,
         Permission::ManageUsers,
         Permission::ViewAudit,
@@ -313,6 +317,7 @@ impl Permission {
             Permission::ManageMaintenance => "manage_maintenance",
             Permission::ManageConfig => "manage_config",
             Permission::ManageCredentials => "manage_credentials",
+            Permission::RevealCredentials => "reveal_credentials",
             Permission::ManageSystem => "manage_system",
             Permission::ManageUsers => "manage_users",
             Permission::ViewAudit => "view_audit",
@@ -328,6 +333,7 @@ impl Permission {
             Permission::ManageMaintenance => "Manage maintenance",
             Permission::ManageConfig => "Manage monitoring",
             Permission::ManageCredentials => "Manage credentials",
+            Permission::RevealCredentials => "Reveal credentials",
             Permission::ManageSystem => "Manage the deployment",
             Permission::ManageUsers => "Manage users",
             Permission::ViewAudit => "View audit log",
@@ -354,6 +360,13 @@ impl Permission {
                  collection, discovery, event rules, and reports."
             }
             Permission::ManageCredentials => "Create, edit, and rotate monitoring credentials.",
+            // A permission of its own rather than part of ManageCredentials (ADR-210): both go to
+            // Operator today, but "may replace a secret" and "may read one back" are different
+            // trusts, and keeping them apart is what lets a later role split separate them.
+            Permission::RevealCredentials => {
+                "Show a stored device credential's secret, for signing in to the device. \
+                 Every view is recorded in the audit log."
+            }
             // Named for the boundary rather than for a list: everything here either changes the
             // deployment itself or sends its data somewhere else. Keep it in step with every
             // `RequireManageSystem` call site — the privilege matrix renders this verbatim.
@@ -473,6 +486,10 @@ mod tests {
         // operator could not add a node.
         assert!(Role::Operator.grants(Permission::ManageConfig));
         assert!(Role::Operator.grants(Permission::ManageCredentials));
+        // ADR-210: reading a device credential back is the operator's too — they are the ones
+        // who sign in to the device — and never a viewer's.
+        assert!(Role::Operator.grants(Permission::RevealCredentials));
+        assert!(!Role::Viewer.grants(Permission::RevealCredentials));
         // …but not the deployment itself. This is the assertion that keeps the split meaningful:
         // drop it and `ManageSystem` quietly becomes a synonym for `ManageConfig`.
         assert!(!Role::Operator.grants(Permission::ManageSystem));

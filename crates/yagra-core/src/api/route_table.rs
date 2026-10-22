@@ -568,6 +568,18 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/credentials/:id/reveal",
+        Refused(
+            "monitoring credentials are shared by every folder, so a scoped caller could read \
+             the login of a site it cannot see (ADR-210)",
+        ),
+        Exempt(
+            "a secret in plaintext, which ADR-018 keeps out of every tool result; reading one back \
+             is for a person signed in to the WebUI, never an AI client (ADR-210)",
+        ),
+    ),
+    (
         "GET",
         "/api/v1/dashboard",
         Global("the caller's own widget layout; the widgets' queries are scoped individually"),
