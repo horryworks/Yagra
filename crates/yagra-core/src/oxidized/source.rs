@@ -13,7 +13,7 @@ use uuid::Uuid;
 use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup};
 use yagra_base::secrets::{CliLoginSecret, CredentialStore, KIND_CLI_LOGIN};
 
-use super::relay::{self, Route};
+use super::relay::Route;
 
 /// Whether a node is fetched, and if not, the one thing to fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -95,7 +95,7 @@ pub(crate) struct SourceNode {
     pub password: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable: Option<String>,
-    /// The relay port oxidized logs in over SSH on, at [`relay::RELAY_HOST`] (stage 5 decision 43).
+    /// The relay port oxidized logs in over SSH on, at core's own address (stage 5 decision 43).
     /// Absent for a parked node.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_port: Option<u16>,
@@ -142,8 +142,9 @@ pub(crate) fn hands_login(t: &BackupTarget, now: DateTime<Utc>) -> bool {
 /// Every configured node with a model and a connection, as oxidized's source.
 ///
 /// A node whose login may be handed over ([`hands_login`]) and that has a relay port gets the
-/// login and its relay: [`relay::RELAY_HOST`] and the two ports (stage 5 decision 43). oxidized
-/// never sees a device's own address.
+/// login and its relay: `relay_ip`, core's own address beside oxidized
+/// ([`super::relay::relay_address`]), and the two ports (stage 5 decision 43). With no such address
+/// every node is parked. oxidized never sees a device's own address.
 ///
 /// ⚠️ Whether a poller can carry the session is deliberately **not** asked here. oxidized keeps
 /// the list it read until it is told to read it again, and a list read the moment core started —
@@ -158,6 +159,7 @@ pub(crate) async fn source_nodes(
     creds: &CredentialStore,
     now: DateTime<Utc>,
     ports: &HashMap<Uuid, u16>,
+    relay_ip: Option<std::net::IpAddr>,
 ) -> Vec<SourceNode> {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
@@ -171,7 +173,10 @@ pub(crate) async fn source_nodes(
             continue;
         };
         let name = t.node_id.to_string();
-        let port = ports.get(&t.node_id).copied();
+        let port = ports
+            .get(&t.node_id)
+            .copied()
+            .filter(|_| relay_ip.is_some());
         let login = match t
             .rotation
             .credential_id
@@ -193,10 +198,10 @@ pub(crate) async fn source_nodes(
             },
             None => None,
         };
-        out.push(match (login, port) {
-            (Some(login), Some(port)) => SourceNode {
+        out.push(match (login, port, relay_ip) {
+            (Some(login), Some(port), Some(ip)) => SourceNode {
                 name,
-                ip: relay::RELAY_HOST.to_owned(),
+                ip: ip.to_string(),
                 model,
                 input,
                 group: super::GROUP,

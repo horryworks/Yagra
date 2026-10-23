@@ -960,7 +960,17 @@ async fn oxidized_source(
             "failed to read config backup",
         )
     })?;
-    let mut nodes = oxidized::source::source_nodes(targets, &admin.creds, Utc::now(), &ports).await;
+    let relay_ip = match oxidized::relay::host_of(&ox.settings.url) {
+        Some(host) => oxidized::relay::relay_address(&host).await,
+        None => None,
+    };
+    if relay_ip.is_none() {
+        tracing::warn!(
+            "config backup: core's own address beside oxidized is unknown; every node is parked"
+        );
+    }
+    let mut nodes =
+        oxidized::source::source_nodes(targets, &admin.creds, Utc::now(), &ports, relay_ip).await;
     if nodes.is_empty() {
         // oxidized will not start on an empty list (`source::placeholder`).
         nodes.push(oxidized::source::placeholder());
@@ -1356,7 +1366,8 @@ mod tests {
             .iter()
             .find(|n| n["name"] == node.to_string())
             .expect("the node is listed");
-        assert_eq!(entry["ip"], oxidized::relay::RELAY_HOST);
+        // Core's own address on the route to oxidized: loopback here, where oxidized's URL is.
+        assert_eq!(entry["ip"], "127.0.0.1");
         assert_eq!(entry["username"], "ops");
         let ssh = entry["ssh_port"].as_u64().expect("an SSH relay port");
         assert_eq!(entry["telnet_port"].as_u64(), Some(ssh + 1));

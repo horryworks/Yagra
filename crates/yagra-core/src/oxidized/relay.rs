@@ -39,9 +39,27 @@ use yagra_common::NodeId;
 
 use crate::fleet::coordinator::Coordinator;
 
-/// The host oxidized is handed for every node it may log in to: this core, by its service name on
-/// the compose network the two share.
-pub(crate) const RELAY_HOST: &str = "core";
+/// This core's own address on the network it shares with oxidized: what oxidized is handed for
+/// every node it may log in to (decision 43).
+///
+/// ⚠️ An address, never a name. oxidized 0.37 keeps `ip` only when it parses as an IP literal; a
+/// name such as `core` is replaced by the node's own name (its uuid) when `resolve_dns` is off, so
+/// the connection never leaves oxidized and the fetch fails as a refused login would (measured on
+/// a lab deployment, 2026-10-23). Found by asking which local address the route to oxidized leaves
+/// from: a UDP `connect` sends nothing, it only chooses the route.
+pub(crate) async fn relay_address(oxidized_host: &str) -> Option<IpAddr> {
+    let target = tokio::net::lookup_host((oxidized_host, 8888))
+        .await
+        .ok()?
+        .next()?;
+    let bind = match target {
+        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
+        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0),
+    };
+    let sock = tokio::net::UdpSocket::bind(bind).await.ok()?;
+    sock.connect(target).await.ok()?;
+    Some(sock.local_addr().ok()?.ip())
+}
 
 /// The device ports, in the order of a node's two relay ports: SSH on the even one, telnet on the
 /// one after it.
@@ -517,6 +535,15 @@ mod tests {
         fn route(&self, _node: Uuid) -> Route {
             self.0.clone()
         }
+    }
+
+    #[tokio::test]
+    async fn the_relay_address_is_the_one_the_route_to_oxidized_leaves_from() {
+        assert_eq!(
+            relay_address("127.0.0.1").await,
+            Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        );
+        assert_eq!(relay_address("name.invalid").await, None);
     }
 
     #[test]
