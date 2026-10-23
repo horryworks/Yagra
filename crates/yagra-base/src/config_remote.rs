@@ -351,24 +351,40 @@ pub fn host_of(url: &str) -> Option<&str> {
         // look the same to git when the host part contains a slash, and a local path is refused.
         let (user_host, path) = url.split_once(':')?;
         let (user, host) = user_host.split_once('@')?;
-        if user.is_empty() || host.contains('/') || path.starts_with('/') && path.len() == 1 {
+        if user.is_empty() || host.contains('/') {
             return None;
         }
-        (host, path)
+        // An absolute path is the scp form's own spelling (`git@host:/srv/git/x.git`), not an
+        // empty segment.
+        (host, path.strip_prefix('/').unwrap_or(path))
     };
-    // The host, without a port.
-    let name = host.rsplit_once(':').map_or(host, |(h, port)| {
-        if port.chars().all(|c| c.is_ascii_digit()) {
-            h
-        } else {
-            host
+    // The host, without a port. A port, when there is a `:`, is a number from 1 to 65535 — an empty
+    // one is how `https://https://host/…` used to pass, read as the host `https` (2026-10-23).
+    let port_ok = |port: &str| port.parse::<u16>().is_ok_and(|p| p > 0);
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        // An IPv6 literal: `[addr]` or `[addr]:port`.
+        let (addr, after) = rest.split_once(']')?;
+        match after {
+            "" => {}
+            _ => port_ok(after.strip_prefix(':')?).then_some(())?,
         }
-    });
+        if addr.is_empty() || !addr.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
+            return None;
+        }
+        &host[..addr.len() + 2]
+    } else {
+        match host.split_once(':') {
+            Some((h, port)) => port_ok(port).then_some(h)?,
+            None => host,
+        }
+    };
     let ok_host = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '[' | ']' | ':' | '_'));
-    (ok_host && !path.is_empty() && !path.contains("..")).then_some(name)
+        && (name.starts_with('[')
+            || name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')));
+    // A path starting with `/` is an empty segment: what a scheme typed twice leaves behind.
+    (ok_host && !path.is_empty() && !path.starts_with('/') && !path.contains("..")).then_some(name)
 }
 
 /// The scheme and authority of an HTTPS destination (`https://host[:port]`, lower-cased) — what a
@@ -957,6 +973,7 @@ mod tests {
             "ssh://git@bitbucket.org/acme/configs.git",
             "ssh://git@[2001:db8::1]:2222/acme/configs.git",
             "git@gitlab.com:acme/configs.git",
+            "git@git.example.com:/srv/git/configs.git",
         ] {
             assert!(check_url(ok).is_ok(), "{ok}");
         }
@@ -972,6 +989,13 @@ mod tests {
             "https://github.com/acme/configs .git",
             "https://github.com",
             "git@host/x:y",
+            "https://https://github.com/acme/configs.git",
+            "https://github.com:/acme/configs.git",
+            "https://github.com:0/acme/configs.git",
+            "https://github.com:99999/acme/configs.git",
+            "ssh://git@host:/acme/configs.git",
+            "https://[2001:db8::1/acme/configs.git",
+            "https://[nothex]/acme/configs.git",
         ] {
             assert!(check_url(bad).is_err(), "{bad}");
         }
