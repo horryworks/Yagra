@@ -44646,7 +44646,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "The relay port oxidized logs in over SSH on, at [`relay::RELAY_HOST`] (stage 5 decision 43).\nAbsent for a parked node.",
+            "description": "The relay port oxidized logs in over SSH on, at core's own address (stage 5 decision 43).\nAbsent for a parked node.",
             "minimum": 0
           },
           "telnet_port": {

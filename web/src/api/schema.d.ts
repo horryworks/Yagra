@@ -14277,7 +14277,7 @@ export interface components {
             password: string;
             /**
              * Format: int32
-             * @description The relay port oxidized logs in over SSH on, at [`relay::RELAY_HOST`] (stage 5 decision 43).
+             * @description The relay port oxidized logs in over SSH on, at core's own address (stage 5 decision 43).
              *     Absent for a parked node.
              */
             ssh_port?: number | null;
