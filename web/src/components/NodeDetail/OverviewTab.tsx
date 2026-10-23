@@ -185,7 +185,7 @@ export function OverviewTab({
       )}
 
       <div className="nd-facts">
-        {visibleFactRows(node.kind).map((row) => {
+        {visibleFactRows(node.kind, node.snmp_configured).map((row) => {
           const f = facts[row];
           return (
             <div key={row}>
@@ -997,7 +997,7 @@ interface Fact {
  *  maker/model, the profile/credential names (looked up by id), the parent-node name, uptime and
  *  the DNS resolver.
  *
- *  Returns all of them keyed by [`FactRow`] — the caller renders `visibleFactRows(kind)`. Building
+ *  Returns all of them keyed by [`FactRow`] — the caller renders `visibleFactRows(kind, snmpConfigured)`. Building
  *  the full record and filtering at render (rather than assembling a per-kind array here) is what
  *  makes the map exhaustive to the compiler: a new row cannot be added without a value. */
 function useFacts(
@@ -1015,7 +1015,7 @@ function useFacts(
 
   // The rows a kind does not show are not fetched for. `visibleFactRows` is the one place that
   // decides, so a row and the request that fills it cannot disagree about whether it is needed.
-  const rows = visibleFactRows(node.kind);
+  const rows = visibleFactRows(node.kind, node.snmp_configured);
   const wantsCredential = rows.includes('credential');
   const wantsUptime = rows.includes('uptime');
 
@@ -1063,7 +1063,8 @@ function useFacts(
   }, [node.parent_id, nodes]);
 
   // Uptime from the SNMP sysUpTime scalar (TimeTicks). Only asked for when the row is shown — the
-  // monitor kinds are never SNMP-walked, so this could only ever 404 for them.
+  // monitor kinds and a device with no SNMP binding are never SNMP-walked, so this could only ever
+  // 404 for them.
   useEffect(() => {
     let cancelled = false;
     setUptime(null);

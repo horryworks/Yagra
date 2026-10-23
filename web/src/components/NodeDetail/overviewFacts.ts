@@ -73,11 +73,15 @@ export const FACT_ROWS_BY_KIND: Record<NodeKind, readonly FactRow[]> = {
   dns: [...PLACEMENT, 'resolver'],
 };
 
-/** The rows this kind shows, in `FACT_ROWS` order. Derived from the registry so the grid's reading
- *  order cannot drift between kinds. */
-export function visibleFactRows(kind: NodeKind): readonly FactRow[] {
+/** The rows this node shows, in `FACT_ROWS` order. Derived from the registry so the grid's reading
+ *  order cannot drift between kinds.
+ *
+ *  `snmpConfigured` is the server's answer (`NodeDetail.snmp_configured`). A device with no SNMP
+ *  binding is pinged and never walked, so sysUpTime can only answer 404: its Uptime row is dropped,
+ *  and with it the read that fills it. Required rather than defaulted, so a caller decides. */
+export function visibleFactRows(kind: NodeKind, snmpConfigured: boolean): readonly FactRow[] {
   const allowed = FACT_ROWS_BY_KIND[kind];
-  return FACT_ROWS.filter((row) => allowed.includes(row));
+  return FACT_ROWS.filter((row) => allowed.includes(row) && (row !== 'uptime' || snmpConfigured));
 }
 
 /** Whether the Overview leads with the ICMP RTT sparkline.

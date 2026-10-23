@@ -32,6 +32,8 @@
 
 - **The Nodes menu gives the inventory checks a group of their own.** Duplicates, Subnet overlaps and Subnets missing from IP ranges moved out of Inventory into a new Consistency checks group directly under it: they list what disagrees in the inventory rather than manage it. Their addresses are unchanged, so bookmarks and links keep working.
 
+- **A device monitored by ping alone no longer shows an Uptime row.** Uptime is read over SNMP, so on a device with no SNMP credential the row could only ever show a dash, and the page asked for it every time it opened (a 404 in the browser console). The row and its request now appear only on a device with SNMP configured.
+
 ## v0.3.57 — The node tree stays where you left it, and a breadcrumb folder is shown in it
 
 ### Improvements

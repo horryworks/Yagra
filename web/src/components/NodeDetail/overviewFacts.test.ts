@@ -32,7 +32,7 @@ describe('overview fact rows', () => {
   });
 
   it('pins the per-kind fact rows', () => {
-    expect([...visibleFactRows('device')]).toEqual([
+    expect([...visibleFactRows('device', true)]).toEqual([
       'group',
       'pool',
       'polledBy',
@@ -46,7 +46,7 @@ describe('overview fact rows', () => {
       'parent',
       'uptime',
     ]);
-    expect([...visibleFactRows('meraki')]).toEqual([
+    expect([...visibleFactRows('meraki', true)]).toEqual([
       'group',
       'pool',
       'polledBy',
@@ -59,7 +59,7 @@ describe('overview fact rows', () => {
       'parent',
     ]);
     // An AP carries no row of its own: `polledBy` is relabelled to name its controller.
-    expect([...visibleFactRows('wireless_ap')]).toEqual([
+    expect([...visibleFactRows('wireless_ap', true)]).toEqual([
       'group',
       'pool',
       'polledBy',
@@ -69,8 +69,8 @@ describe('overview fact rows', () => {
       'profile',
       'parent',
     ]);
-    expect([...visibleFactRows('url')]).toEqual(['group', 'pool', 'polledBy', 'profile', 'parent']);
-    expect([...visibleFactRows('dns')]).toEqual([
+    expect([...visibleFactRows('url', true)]).toEqual(['group', 'pool', 'polledBy', 'profile', 'parent']);
+    expect([...visibleFactRows('dns', true)]).toEqual([
       'group',
       'pool',
       'polledBy',
@@ -83,7 +83,7 @@ describe('overview fact rows', () => {
   // Where a node is filed and which poller owns it are true of a monitor exactly as of a switch.
   it('keeps the placement facts for every kind', () => {
     for (const kind of NODE_KINDS) {
-      const rows = visibleFactRows(kind);
+      const rows = visibleFactRows(kind, true);
       for (const r of ['group', 'pool', 'polledBy', 'profile', 'parent'] as const) {
         expect(rows, `${kind}/${r}`).toContain(r);
       }
@@ -92,32 +92,47 @@ describe('overview fact rows', () => {
 
   it('drops the SNMP-derived rows from the kinds that are never SNMP-walked', () => {
     for (const kind of ['url', 'dns'] as const) {
-      const rows = visibleFactRows(kind);
+      const rows = visibleFactRows(kind, true);
       for (const r of ['maker', 'model', 'serialNumber', 'credential', 'uptime', 'address'] as const) {
         expect(rows, `${kind}/${r}`).not.toContain(r);
       }
     }
     // A Meraki device has a real management address and reported maker/model, but no sysUpTime.
-    expect(visibleFactRows('meraki')).not.toContain('uptime');
+    expect(visibleFactRows('meraki', true)).not.toContain('uptime');
     // The OS version comes from the SNMP identity probe (ADR-138), which only a device runs.
     for (const kind of NODE_KINDS) {
-      expect(visibleFactRows(kind).includes('osVersion'), kind).toBe(kind === 'device');
+      expect(visibleFactRows(kind, true).includes('osVersion'), kind).toBe(kind === 'device');
     }
-    expect(visibleFactRows('meraki')).toContain('address');
+    expect(visibleFactRows('meraki', true)).toContain('address');
     // A Meraki node shows the serial it was imported with, a device the one ENTITY-MIB reports
     // (ADR-147).
-    expect(visibleFactRows('meraki')).toContain('serialNumber');
-    expect(visibleFactRows('device')).toContain('serialNumber');
+    expect(visibleFactRows('meraki', true)).toContain('serialNumber');
+    expect(visibleFactRows('device', true)).toContain('serialNumber');
     // Only the DNS monitor names its resolver.
     for (const kind of NODE_KINDS) {
-      expect(visibleFactRows(kind).includes('resolver'), kind).toBe(kind === 'dns');
+      expect(visibleFactRows(kind, true).includes('resolver'), kind).toBe(kind === 'dns');
+    }
+  });
+
+  // A device with no SNMP binding is only pinged: sysUpTime can only 404, so neither the row nor
+  // its read exists. Nothing else about the device changes.
+  it('drops Uptime, and only Uptime, from a device with no SNMP binding', () => {
+    const withSnmp = visibleFactRows('device', true);
+    const pingOnly = visibleFactRows('device', false);
+    expect(withSnmp).toContain('uptime');
+    expect(pingOnly).not.toContain('uptime');
+    expect(pingOnly).toEqual(withSnmp.filter((r) => r !== 'uptime'));
+    // The flag never adds Uptime to a kind that does not have it.
+    for (const kind of NODE_KINDS) {
+      if (kind === 'device') continue;
+      expect(visibleFactRows(kind, true), kind).toEqual(visibleFactRows(kind, false));
     }
   });
 
   // Order comes from FACT_ROWS, so no kind can reshuffle the grid relative to another.
   it('renders rows in the registry order, not the per-kind order', () => {
     for (const kind of NODE_KINDS) {
-      const positions = visibleFactRows(kind).map((r) => FACT_ROWS.indexOf(r));
+      const positions = visibleFactRows(kind, true).map((r) => FACT_ROWS.indexOf(r));
       expect(positions, kind).toEqual([...positions].sort((a, b) => a - b));
     }
   });
