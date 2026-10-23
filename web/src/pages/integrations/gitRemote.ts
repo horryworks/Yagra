@@ -22,8 +22,8 @@ export type PushLine =
 export function pushLine(s: PushStatusView): PushLine {
   if (!s.configured) return { key: 'git.push.none' };
   if (s.failure && s.failed_at) return { key: 'git.push.failed', at: s.failed_at, failure: s.failure };
-  if (s.pushed_at && s.pushed_head) {
-    return { key: 'git.push.ok', at: s.pushed_at, head: s.pushed_head.slice(0, 7) };
+  if (s.pushed_at && s.pushed_commit) {
+    return { key: 'git.push.ok', at: s.pushed_at, head: s.pushed_commit.slice(0, 7) };
   }
   return { key: 'git.push.waiting' };
 }

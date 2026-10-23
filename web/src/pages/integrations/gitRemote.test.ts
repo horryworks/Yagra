@@ -14,7 +14,7 @@ const status = (over: Partial<PushStatusView> = {}): PushStatusView => ({
   configured: true,
   host: 'example.com',
   pushed_at: null,
-  pushed_head: null,
+  pushed_commit: null,
   failure: null,
   failed_at: null,
   failures: 0,
@@ -26,14 +26,14 @@ describe('the last push', () => {
     expect(pushLine(status({ configured: false })).key).toBe('git.push.none');
     expect(pushLine(status()).key).toBe('git.push.waiting');
     expect(
-      pushLine(status({ pushed_at: '2026-10-23T05:20:00Z', pushed_head: 'a1b2c3d4e5f6' })),
+      pushLine(status({ pushed_at: '2026-10-23T05:20:00Z', pushed_commit: 'a1b2c3d4e5f6' })),
     ).toEqual({ key: 'git.push.ok', at: '2026-10-23T05:20:00Z', head: 'a1b2c3d' });
     // A failure outranks an earlier success.
     expect(
       pushLine(
         status({
           pushed_at: '2026-10-23T05:20:00Z',
-          pushed_head: 'a1b2c3d',
+          pushed_commit: 'a1b2c3d',
           failure: 'auth',
           failed_at: '2026-10-23T06:00:00Z',
         }),
@@ -44,7 +44,7 @@ describe('the last push', () => {
   it('gives the catalogue tile a chip for each', () => {
     expect(gitRemoteChip(status({ configured: false })).tone).toBe('idle');
     expect(gitRemoteChip(status()).labelKey).toBe('git.status.waiting');
-    expect(gitRemoteChip(status({ pushed_at: 'x', pushed_head: 'y' })).labelKey).toBe('git.status.ok');
+    expect(gitRemoteChip(status({ pushed_at: 'x', pushed_commit: 'y' })).labelKey).toBe('git.status.ok');
     expect(gitRemoteChip(status({ failure: 'unreachable', failed_at: 'x' })).labelKey).toBe(
       'git.status.failed',
     );

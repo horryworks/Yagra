@@ -919,6 +919,11 @@ async fn oxidized_source(
         )
     })?;
     metrics::counter!("yagra_oxidized_source_reads_total").increment(1);
+    // The names configurations are pushed under outlive their nodes (ADR-210 stage 4 decision 39).
+    // Best effort: a failure here must not stop oxidized from reading its list.
+    if let Err(e) = admin.config_backup.remember_names().await {
+        tracing::warn!(error = %e, "config backup: node names could not be remembered");
+    }
     let mut nodes = oxidized::source::source_nodes(targets, &admin.creds, Utc::now()).await;
     if nodes.is_empty() {
         // oxidized will not start on an empty list (`source::placeholder`).

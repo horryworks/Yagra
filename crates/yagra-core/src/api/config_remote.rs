@@ -112,9 +112,10 @@ pub(crate) struct PushStatusView {
     configured: bool,
     /// The host config backups go to — the URL's host, not its path.
     host: Option<String>,
-    /// When a push last succeeded, and the version it delivered.
+    /// When a push last succeeded, and the commit the destination then held: the one a person
+    /// finds there.
     pushed_at: Option<DateTime<Utc>>,
-    pushed_head: Option<String>,
+    pushed_commit: Option<String>,
     /// Why the last push failed, when the last one did.
     failure: Option<PushFailure>,
     failed_at: Option<DateTime<Utc>>,
@@ -130,7 +131,7 @@ impl PushStatusView {
                 .and_then(|r| config_remote::host_of(&r.url))
                 .map(str::to_owned),
             pushed_at: remote.and_then(|r| r.pushed_at),
-            pushed_head: remote.and_then(|r| r.pushed_head.clone()),
+            pushed_commit: remote.and_then(|r| r.pushed_commit.clone()),
             failure: remote.and_then(|r| r.failure),
             failed_at: remote.and_then(|r| r.failed_at),
             failures: remote.map_or(0, |r| r.failures),
@@ -532,6 +533,12 @@ pub(crate) struct PushJob {
     known_hosts: String,
     /// `[failure, lower-case text]` pairs, matched in order against git's lower-cased output.
     patterns: Vec<Vec<String>>,
+    /// `[node id, path]` pairs: the file each node's configuration is pushed as (stage 4 decision
+    /// 38). A node oxidized has a file for and this does not name is pushed as
+    /// `deleted/<id>.txt`.
+    files: Vec<Vec<String>>,
+    /// The digest of `files`, echoed in the report.
+    layout: String,
 }
 
 #[utoipa::path(
@@ -559,9 +566,24 @@ async fn push_ask(
         .get()
         .await
         .map_err(|e| read_failed(&e))?;
-    let Some(remote) = remote.filter(|r| config_remote::should_push(r, &q.head, Utc::now())) else {
+    let Some(remote) = remote else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    // The names the files are pushed under, as of now: a node renamed or deleted since the last
+    // push changes them without a new version (decision 40).
+    if let Err(e) = admin.config_backup.remember_names().await {
+        tracing::warn!(error = %e, "config backup: node names could not be remembered");
+    }
+    let names = admin
+        .config_backup
+        .export_names()
+        .await
+        .map_err(|e| read_failed(&e))?;
+    let files = config_remote::export_paths(&names);
+    let layout = config_remote::layout_digest(&files);
+    if !config_remote::should_push(&remote, &q.head, &layout, Utc::now()) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     let Some(secret) = sealed_secret(&admin, &remote).await? else {
         tracing::warn!("config backup: the Git destination's credential cannot be opened");
         return Ok(StatusCode::NO_CONTENT.into_response());
@@ -584,6 +606,11 @@ async fn push_ask(
             .iter()
             .map(|(kind, needle)| vec![kind.as_str().to_owned(), (*needle).to_owned()])
             .collect(),
+        files: files
+            .into_iter()
+            .map(|(id, path)| vec![id.to_string(), path])
+            .collect(),
+        layout,
     };
     Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(job)).into_response())
 }
@@ -599,6 +626,12 @@ pub(super) struct PushReport {
     /// The host keys the first SSH push met, in known_hosts form.
     #[serde(default)]
     known_hosts: Option<String>,
+    /// The job's `layout`, echoed.
+    #[serde(default)]
+    layout: String,
+    /// The commit pushed; required when the push succeeded.
+    #[serde(default)]
+    commit: String,
 }
 
 #[utoipa::path(
@@ -606,7 +639,7 @@ pub(super) struct PushReport {
     request_body(content = PushReport, content_type = "application/x-www-form-urlencoded"),
     responses(
         (status = 204, description = "Recorded, or ignored when the destination changed since the push was asked for. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`"),
-        (status = 400, description = "Not a version id (`invalid_oid`)", body = super::error::ErrorBody),
+        (status = 400, description = "Not a version id (`invalid_oid`), or a success with no layout digest (`invalid_layout`)", body = super::error::ErrorBody),
         (status = 401, description = "No token, or the wrong one (`oxidized_token`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
     ),
@@ -627,9 +660,30 @@ async fn push_report(
         .known_hosts
         .as_deref()
         .and_then(config_remote::check_known_hosts);
+    let pushed = if failure.is_none() {
+        check_oid(&report.commit)?;
+        if report.layout.len() != 64 || !report.layout.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(ApiError::bad_request(
+                "invalid_layout",
+                "not a layout digest",
+            ));
+        }
+        Some(config_remote::Pushed {
+            head: &report.head,
+            layout: &report.layout,
+            commit: &report.commit,
+        })
+    } else {
+        None
+    };
     let recorded = admin
         .config_remote
-        .record_push(report.generation, &report.head, failure, learned.as_deref())
+        .record_push(
+            report.generation,
+            pushed.as_ref(),
+            failure,
+            learned.as_deref(),
+        )
         .await
         .map_err(|e| write_failed(&e))?;
     let outcome = failure.map_or("success", PushFailure::as_str);
@@ -816,6 +870,23 @@ mod tests {
         });
         let (status, _) = send(&st, "PUT", PATH, &admin, Some(set)).await;
         assert_eq!(status, StatusCode::OK);
+        // A backed-up node, so the job carries a file name for it.
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        let backups = yagra_base::config_backup::ConfigBackupRepo::new(pool.clone());
+        backups
+            .put(
+                node,
+                &yagra_base::config_backup::NodeConfigBackup {
+                    enabled: true,
+                    login_order: None,
+                    input: yagra_base::config_backup::BackupInput::Ssh,
+                    model_override: Some("ios".to_owned()),
+                    scan_mode: yagra_base::config_backup::ScanMode::Normal,
+                },
+                true,
+            )
+            .await
+            .expect("put");
 
         let head = "a".repeat(40);
         let router = crate::api::router(st.clone());
@@ -839,6 +910,11 @@ mod tests {
         assert_eq!(job["token"], "tok-SECRET-2");
         assert_eq!(job["generation"], 1);
         assert_eq!(job["patterns"][0][0], "host_key");
+        assert_eq!(
+            job["files"],
+            serde_json::json!([[node.to_string(), "sw-01.txt"]])
+        );
+        let layout = job["layout"].as_str().expect("layout").to_owned();
 
         let report = |form: String| {
             axum::http::Request::builder()
@@ -869,9 +945,19 @@ mod tests {
         let res = router.clone().oneshot(ask(&ox_token)).await.expect("send");
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
+        // A success names the commit the destination now holds and the layout it was made with.
         let res = router
             .clone()
             .oneshot(report(format!("generation=1&head={head}&failure=")))
+            .await
+            .expect("send");
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "no commit");
+        let commit = "c".repeat(40);
+        let res = router
+            .clone()
+            .oneshot(report(format!(
+                "generation=1&head={head}&failure=&layout={layout}&commit={commit}"
+            )))
             .await
             .expect("send");
         assert_eq!(res.status(), StatusCode::NO_CONTENT);
@@ -888,8 +974,35 @@ mod tests {
             (remote.pushed_head.as_deref(), remote.failure),
             (Some(head.as_str()), None)
         );
-        let res = router.oneshot(ask(&ox_token)).await.expect("send");
+        assert_eq!(remote.pushed_commit.as_deref(), Some(commit.as_str()));
+        let res = router.clone().oneshot(ask(&ox_token)).await.expect("send");
         assert_eq!(res.status(), StatusCode::NO_CONTENT, "already there");
+
+        // A rename changes where the file goes, so the same head is pushed again under the new
+        // name; once the node is deleted it moves to `deleted/`.
+        sqlx::query("UPDATE nodes SET name = 'sw-01a' WHERE id = $1")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("rename");
+        let res = router.clone().oneshot(ask(&ox_token)).await.expect("send");
+        assert_eq!(res.status(), StatusCode::OK, "a rename is pushed");
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let job: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(job["files"][0][1], "sw-01a.txt");
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("delete");
+        let res = router.oneshot(ask(&ox_token)).await.expect("send");
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        let job: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(job["files"][0][1], "deleted/sw-01a.txt");
         std::fs::remove_dir_all(&home).ok();
     }
 }

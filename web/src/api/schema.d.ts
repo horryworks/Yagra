@@ -12848,12 +12848,20 @@ export interface components {
             auth: components["schemas"]["GitAuth"];
             branch: string;
             /**
+             * @description `[node id, path]` pairs: the file each node's configuration is pushed as (stage 4 decision
+             *     38). A node oxidized has a file for and this does not name is pushed as
+             *     `deleted/<id>.txt`.
+             */
+            files: string[][];
+            /**
              * Format: int64
              * @description Echoed in the report, so a push made for a destination that has since changed is ignored.
              */
             generation: number;
             /** @description The pinned host keys in known_hosts form; empty before the first SSH push. */
             known_hosts: string;
+            /** @description The digest of `files`, echoed in the report. */
+            layout: string;
             /** @description `[failure, lower-case text]` pairs, matched in order against git's lower-cased output. */
             patterns: string[][];
             /** @description The SSH private key, in plaintext, for this push alone. */
@@ -12865,6 +12873,8 @@ export interface components {
         };
         /** @description How one push went, as the push script reports it. */
         PushReport: {
+            /** @description The commit pushed; required when the push succeeded. */
+            commit?: string;
             /** @description Empty when the push succeeded; otherwise the failure core's patterns named. */
             failure?: string;
             /** Format: int64 */
@@ -12872,6 +12882,8 @@ export interface components {
             head: string;
             /** @description The host keys the first SSH push met, in known_hosts form. */
             known_hosts?: string | null;
+            /** @description The job's `layout`, echoed. */
+            layout?: string;
         };
         /** @description How the last push went. */
         PushStatusView: {
@@ -12889,10 +12901,11 @@ export interface components {
             host?: string | null;
             /**
              * Format: date-time
-             * @description When a push last succeeded, and the version it delivered.
+             * @description When a push last succeeded, and the commit the destination then held: the one a person
+             *     finds there.
              */
             pushed_at?: string | null;
-            pushed_head?: string | null;
+            pushed_commit?: string | null;
         };
         /** @description A ranked Top-N result. */
         Ranked_AlertNodeCount: {
@@ -36911,7 +36924,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not a version id (`invalid_oid`) */
+            /** @description Not a version id (`invalid_oid`), or a success with no layout digest (`invalid_layout`) */
             400: {
                 headers: {
                     [name: string]: unknown;

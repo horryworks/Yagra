@@ -61,7 +61,13 @@ mod tests {
 
     use super::*;
     use yagra_alert::action::NotifyAction;
-    use yagra_base::config_remote::{GitAuth, PushFailure, RemoteSettings};
+    use yagra_base::config_remote::{GitAuth, PushFailure, Pushed, RemoteSettings};
+
+    const PUSHED: Pushed<'static> = Pushed {
+        head: "a1",
+        layout: "L",
+        commit: "c1",
+    };
 
     #[derive(Default)]
     struct Captured(Mutex<Vec<NotifyAction>>);
@@ -116,13 +122,13 @@ mod tests {
         assert!(sink.take().is_empty(), "nothing has failed");
 
         remote
-            .record_push(1, "a1", Some(PushFailure::Unreachable), None)
+            .record_push(1, None, Some(PushFailure::Unreachable), None)
             .await
             .unwrap();
         tick(&remote, &alerts, &sink).await;
         assert!(sink.take().is_empty(), "one dropped push is not an alert");
         remote
-            .record_push(1, "a1", Some(PushFailure::Unreachable), None)
+            .record_push(1, None, Some(PushFailure::Unreachable), None)
             .await
             .unwrap();
         tick(&remote, &alerts, &sink).await;
@@ -130,12 +136,15 @@ mod tests {
         tick(&remote, &alerts, &sink).await;
         assert!(sink.take().is_empty(), "open once");
 
-        remote.record_push(1, "a1", None, None).await.unwrap();
+        remote
+            .record_push(1, Some(&PUSHED), None, None)
+            .await
+            .unwrap();
         tick(&remote, &alerts, &sink).await;
         assert_eq!(sink.take(), ["resolve"]);
 
         remote
-            .record_push(1, "b2", Some(PushFailure::Auth), None)
+            .record_push(1, None, Some(PushFailure::Auth), None)
             .await
             .unwrap();
         tick(&remote, &alerts, &sink).await;

@@ -26478,7 +26478,7 @@
             "description": "Recorded, or ignored when the destination changed since the push was asked for. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`"
           },
           "400": {
-            "description": "Not a version id (`invalid_oid`)",
+            "description": "Not a version id (`invalid_oid`), or a success with no layout digest (`invalid_layout`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -41397,7 +41397,9 @@
           "branch",
           "auth",
           "known_hosts",
-          "patterns"
+          "patterns",
+          "files",
+          "layout"
         ],
         "properties": {
           "auth": {
@@ -41405,6 +41407,16 @@
           },
           "branch": {
             "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "`[node id, path]` pairs: the file each node's configuration is pushed as (stage 4 decision\n38). A node oxidized has a file for and this does not name is pushed as\n`deleted/<id>.txt`."
           },
           "generation": {
             "type": "integer",
@@ -41414,6 +41426,10 @@
           "known_hosts": {
             "type": "string",
             "description": "The pinned host keys in known_hosts form; empty before the first SSH push."
+          },
+          "layout": {
+            "type": "string",
+            "description": "The digest of `files`, echoed in the report."
           },
           "patterns": {
             "type": "array",
@@ -41458,6 +41474,10 @@
           "head"
         ],
         "properties": {
+          "commit": {
+            "type": "string",
+            "description": "The commit pushed; required when the push succeeded."
+          },
           "failure": {
             "type": "string",
             "description": "Empty when the push succeeded; otherwise the failure core's patterns named."
@@ -41475,6 +41495,10 @@
               "null"
             ],
             "description": "The host keys the first SSH push met, in known_hosts form."
+          },
+          "layout": {
+            "type": "string",
+            "description": "The job's `layout`, echoed."
           }
         }
       },
@@ -41527,9 +41551,9 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When a push last succeeded, and the version it delivered."
+            "description": "When a push last succeeded, and the commit the destination then held: the one a person\nfinds there."
           },
-          "pushed_head": {
+          "pushed_commit": {
             "type": [
               "string",
               "null"

@@ -662,6 +662,42 @@ impl ConfigBackupRepo {
             .collect()
     }
 
+    /// Remember the name of every node that has a backup configuration (ADR-210 stage 4 decision 39),
+    /// so its configuration can still be filed under that name after the node is deleted. Called
+    /// when oxidized reads its node list, every few minutes. A row is never deleted with its node.
+    pub async fn remember_names(&self) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO config_backup_names (node_id, name, seen_at) \
+             SELECT b.node_id, n.name, now() FROM node_config_backup b \
+             JOIN nodes n ON n.id = b.node_id \
+             ON CONFLICT (node_id) DO UPDATE SET name = EXCLUDED.name, seen_at = EXCLUDED.seen_at",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every node a configuration may be filed under: each remembered one, with its current name
+    /// while it exists and its last known name once it does not.
+    pub async fn export_names(&self) -> anyhow::Result<Vec<crate::config_remote::NameEntry>> {
+        let rows = sqlx::query(
+            "SELECT c.node_id, COALESCE(n.name, c.name) AS name, (n.id IS NOT NULL) AS registered \
+             FROM config_backup_names c LEFT JOIN nodes n ON n.id = c.node_id \
+             ORDER BY c.node_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(crate::config_remote::NameEntry {
+                    node_id: r.try_get("node_id")?,
+                    name: r.try_get("name")?,
+                    registered: r.try_get("registered")?,
+                })
+            })
+            .collect()
+    }
+
     /// Delete attempts older than [`ATTEMPT_RETENTION_DAYS`].
     pub async fn prune_attempts(&self) -> anyhow::Result<u64> {
         let done = sqlx::query(
@@ -731,6 +767,55 @@ mod tests {
         }
         assert_eq!(ScanMode::from_stored("ludicrous"), ScanMode::Unknown);
         assert_eq!(ScanMode::default(), ScanMode::Normal);
+    }
+
+    /// A node's name is remembered, follows a rename, and outlives the node (ADR-210 stage 4
+    /// decision 39).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_name_is_remembered_after_its_node_is_deleted(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let off = crate::pgtest::node(&pool, "sw-02", 2, None).await;
+        assert!(repo
+            .put(node, &on(BackupInput::Ssh, Some("ios")), true)
+            .await
+            .expect("put"));
+        let mut stopped = on(BackupInput::Ssh, Some("ios"));
+        stopped.enabled = false;
+        assert!(repo.put(off, &stopped, false).await.expect("put"));
+        repo.remember_names().await.expect("remember");
+        let names = repo.export_names().await.expect("names");
+        assert_eq!(
+            names.len(),
+            2,
+            "a node with backup switched off is still filed by name"
+        );
+        assert!(names.iter().all(|e| e.registered));
+
+        sqlx::query("UPDATE nodes SET name = 'sw-01a' WHERE id = $1")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("rename");
+        let renamed = repo.export_names().await.expect("names");
+        assert!(renamed
+            .iter()
+            .any(|e| e.node_id == node && e.name == "sw-01a"));
+
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("delete");
+        let after = repo.export_names().await.expect("names");
+        let gone = after
+            .iter()
+            .find(|e| e.node_id == node)
+            .expect("still there");
+        assert!(!gone.registered);
+        // The last name it was remembered under, not the one it had for a moment after.
+        assert_eq!(gone.name, "sw-01");
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

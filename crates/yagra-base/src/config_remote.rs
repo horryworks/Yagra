@@ -142,7 +142,12 @@ pub struct ConfigRemote {
     pub ssh_public_key: Option<String>,
     pub known_hosts: Option<String>,
     pub generation: i64,
+    /// The head of oxidized's repository that was last pushed.
     pub pushed_head: Option<String>,
+    /// The digest of the file-name map that was last pushed ([`layout_digest`]).
+    pub pushed_layout: Option<String>,
+    /// The commit the destination holds after the last push: what a person finds there.
+    pub pushed_commit: Option<String>,
     pub pushed_at: Option<DateTime<Utc>>,
     pub failure: Option<PushFailure>,
     pub failed_at: Option<DateTime<Utc>>,
@@ -150,14 +155,17 @@ pub struct ConfigRemote {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Whether the repository at `head` still needs pushing to `remote`: not when that head is the one
-/// last pushed, and not within [`RETRY_AFTER`] of a failure.
+/// Whether the repository at `head`, filed under the names `layout` digests, still needs pushing
+/// to `remote`: not when both are what was last pushed, and not within [`RETRY_AFTER`] of a
+/// failure. A rename or a deletion changes `layout` without a new version (decision 40).
 #[must_use]
-pub fn should_push(remote: &ConfigRemote, head: &str, now: DateTime<Utc>) -> bool {
+pub fn should_push(remote: &ConfigRemote, head: &str, layout: &str, now: DateTime<Utc>) -> bool {
     if remote.auth == GitAuth::Unknown {
         return false;
     }
-    if remote.pushed_head.as_deref() == Some(head) {
+    if remote.pushed_head.as_deref() == Some(head)
+        && remote.pushed_layout.as_deref() == Some(layout)
+    {
         return false;
     }
     let retry =
@@ -173,6 +181,117 @@ pub fn alert_due(remote: Option<&ConfigRemote>) -> Option<u32> {
     let failure = remote.failure?;
     (failure.is_permanent() || remote.failures >= TRANSIENT_FAILURES_BEFORE_ALERT)
         .then_some(remote.failures)
+}
+
+/// A node a configuration may be filed under: its id, the name it had (its current one while it
+/// exists), and whether it still exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameEntry {
+    pub node_id: Uuid,
+    pub name: String,
+    pub registered: bool,
+}
+
+/// The folder a deleted node's configuration is filed in (decision 38).
+pub const DELETED_DIR: &str = "deleted";
+/// The longest file name stem kept, in characters.
+pub const FILE_STEM_MAX: usize = 100;
+
+/// A node name made safe as one file name on every system a clone may land on: letters, digits,
+/// `-`, `_` and `.` are kept, anything else (a path separator, a colon, a space) becomes `_`, a
+/// leading `.` does too (a hidden file), it is cut to [`FILE_STEM_MAX`] characters, and a name
+/// Windows reserves gets a leading `_`. `None` when nothing is left.
+#[must_use]
+pub fn file_stem(name: &str) -> Option<String> {
+    let mut stem: String = name
+        .trim()
+        .chars()
+        .take(FILE_STEM_MAX)
+        .map(|c| {
+            if c.is_ascii_alphanumeric()
+                || matches!(c, '-' | '_' | '.')
+                || (!c.is_ascii() && c.is_alphanumeric())
+            {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem.starts_with('.') {
+        stem.replace_range(0..1, "_");
+    }
+    while stem.ends_with('.') {
+        stem.pop();
+    }
+    if stem.is_empty() {
+        return None;
+    }
+    const RESERVED: &[&str] = &[
+        "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+        "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    ];
+    let lower = stem.to_lowercase();
+    let base = lower.split('.').next().unwrap_or("");
+    if RESERVED.contains(&base) {
+        stem.insert(0, '_');
+    }
+    Some(stem)
+}
+
+/// The path each node's configuration is pushed under (decision 38): `<name>.txt`, or
+/// `deleted/<name>.txt` for a node that no longer exists. Names that clash in one folder — compared
+/// without case, since a clone onto Windows or macOS would fold them — all get `__<first 8 of the
+/// id>`, so no device silently takes another's file. A name with nothing usable in it is the id.
+/// Sorted by node id, so the same inventory always gives the same map.
+#[must_use]
+pub fn export_paths(entries: &[NameEntry]) -> Vec<(Uuid, String)> {
+    use std::collections::HashMap;
+    let stems: Vec<(Uuid, bool, String)> = entries
+        .iter()
+        .map(|e| {
+            let stem = file_stem(&e.name).unwrap_or_else(|| e.node_id.to_string());
+            (e.node_id, e.registered, stem)
+        })
+        .collect();
+    let mut counts: HashMap<(bool, String), usize> = HashMap::new();
+    for (_, registered, stem) in &stems {
+        *counts
+            .entry((*registered, stem.to_lowercase()))
+            .or_default() += 1;
+    }
+    let mut out: Vec<(Uuid, String)> = stems
+        .into_iter()
+        .map(|(id, registered, stem)| {
+            let clash = counts[&(registered, stem.to_lowercase())] > 1;
+            let file = if clash {
+                format!("{stem}__{}.txt", &id.simple().to_string()[..8])
+            } else {
+                format!("{stem}.txt")
+            };
+            let path = if registered {
+                file
+            } else {
+                format!("{DELETED_DIR}/{file}")
+            };
+            (id, path)
+        })
+        .collect();
+    out.sort_by_key(|(id, _)| *id);
+    out
+}
+
+/// One digest of the file-name map, so a rename or a deletion is noticed without storing the map.
+#[must_use]
+pub fn layout_digest(paths: &[(Uuid, String)]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for (id, path) in paths {
+        hasher.update(id.as_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update(b"\n");
+    }
+    data_encoding::HEXLOWER.encode(&hasher.finalize())
 }
 
 /// The longest destination URL accepted.
@@ -403,6 +522,17 @@ fn openssh_ed25519(seed: &[u8; 32], check: u32) -> (String, String) {
     (pem, public_line)
 }
 
+/// What a successful push delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pushed<'a> {
+    /// The head of oxidized's repository it was made from.
+    pub head: &'a str,
+    /// The digest of the file-name map it was made with.
+    pub layout: &'a str,
+    /// The commit the destination now holds.
+    pub commit: &'a str,
+}
+
 /// What a person sets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteSettings {
@@ -414,7 +544,8 @@ pub struct RemoteSettings {
 }
 
 const COLUMNS: &str = "url, branch, auth, credential_id, ssh_public_key, known_hosts, generation, \
-                       pushed_head, pushed_at, failure, failed_at, failures, updated_at";
+                       pushed_head, pushed_layout, pushed_commit, pushed_at, failure, failed_at, \
+                       failures, updated_at";
 
 fn remote_of(r: &sqlx::postgres::PgRow) -> Result<ConfigRemote, sqlx::Error> {
     Ok(ConfigRemote {
@@ -426,6 +557,8 @@ fn remote_of(r: &sqlx::postgres::PgRow) -> Result<ConfigRemote, sqlx::Error> {
         known_hosts: r.try_get("known_hosts")?,
         generation: r.try_get("generation")?,
         pushed_head: r.try_get("pushed_head")?,
+        pushed_layout: r.try_get("pushed_layout")?,
+        pushed_commit: r.try_get("pushed_commit")?,
         pushed_at: r.try_get("pushed_at")?,
         failure: r
             .try_get::<Option<String>, _>("failure")?
@@ -475,8 +608,8 @@ impl RemoteRepo {
                  known_hosts = CASE WHEN config_backup_remote.url = EXCLUDED.url \
                                     THEN config_backup_remote.known_hosts END, \
                  generation = config_backup_remote.generation + 1, \
-                 pushed_head = NULL, pushed_at = NULL, failure = NULL, failed_at = NULL, \
-                 failures = 0, updated_at = now()",
+                 pushed_head = NULL, pushed_layout = NULL, pushed_at = NULL, failure = NULL, \
+                 failed_at = NULL, failures = 0, updated_at = now()",
         )
         .bind(&s.url)
         .bind(&s.branch)
@@ -512,31 +645,37 @@ impl RemoteRepo {
     }
 
     /// Record how one push went, if it was made for the current `generation` — a push that was
-    /// running when the destination changed is ignored. `failure` is `None` for a push that
-    /// succeeded. `learned` is the host keys an SSH push met, kept only when none are pinned yet.
-    /// Returns whether it was recorded.
+    /// running when the destination changed is ignored. `pushed` is `None` for a push that failed
+    /// with `failure`; for one that succeeded it is what was pushed. `learned` is the host keys an
+    /// SSH push met, kept only when none are pinned yet. Returns whether it was recorded.
     pub async fn record_push(
         &self,
         generation: i64,
-        head: &str,
+        pushed: Option<&Pushed<'_>>,
         failure: Option<PushFailure>,
         learned: Option<&str>,
     ) -> anyhow::Result<bool> {
-        let done = match failure {
-            None => {
+        let done = match (pushed, failure) {
+            (Some(p), None) => {
                 sqlx::query(
-                    "UPDATE config_backup_remote SET pushed_head = $2, pushed_at = now(), \
+                    "UPDATE config_backup_remote SET pushed_head = $2, pushed_layout = $3, \
+                         pushed_commit = $4, pushed_at = now(), \
                          failure = NULL, failed_at = NULL, failures = 0, \
-                         known_hosts = COALESCE(known_hosts, $3) \
+                         known_hosts = COALESCE(known_hosts, $5) \
                      WHERE generation = $1",
                 )
                 .bind(generation)
-                .bind(head)
+                .bind(p.head)
+                .bind(p.layout)
+                .bind(p.commit)
                 .bind(learned)
                 .execute(&self.pool)
                 .await?
             }
-            Some(f) => {
+            (None, None) => {
+                anyhow::bail!("a push report names neither what was pushed nor why not")
+            }
+            (_, Some(f)) => {
                 sqlx::query(
                     "UPDATE config_backup_remote SET failure = $2, failed_at = now(), \
                          failures = failures + 1, known_hosts = COALESCE(known_hosts, $3) \
@@ -567,12 +706,108 @@ mod tests {
             known_hosts: None,
             generation: 1,
             pushed_head: None,
+            pushed_layout: None,
+            pushed_commit: None,
             pushed_at: None,
             failure: None,
             failed_at: None,
             failures: 0,
             updated_at: Utc::now(),
         }
+    }
+
+    fn entry(n: u128, name: &str, registered: bool) -> NameEntry {
+        NameEntry {
+            node_id: Uuid::from_u128(n),
+            name: name.to_owned(),
+            registered,
+        }
+    }
+
+    #[test]
+    fn a_node_is_filed_under_its_name_and_a_deleted_one_apart() {
+        let paths = export_paths(&[
+            entry(1, "sw-01", true),
+            entry(2, "a/b:c d", true),
+            entry(3, "", true),
+            entry(4, "sw-02", false),
+            entry(5, ".hidden.", true),
+            entry(6, "CON", true),
+            entry(7, "東京-sw", true),
+        ]);
+        let by_id = |n: u128| {
+            paths
+                .iter()
+                .find(|(id, _)| *id == Uuid::from_u128(n))
+                .unwrap()
+                .1
+                .clone()
+        };
+        assert_eq!(by_id(1), "sw-01.txt");
+        assert_eq!(by_id(2), "a_b_c_d.txt");
+        assert_eq!(by_id(3), format!("{}.txt", Uuid::from_u128(3)));
+        assert_eq!(by_id(4), "deleted/sw-02.txt");
+        assert_eq!(by_id(5), "_hidden.txt");
+        assert_eq!(by_id(6), "_CON.txt");
+        assert_eq!(by_id(7), "東京-sw.txt");
+        assert!(paths.windows(2).all(|w| w[0].0 < w[1].0), "sorted by id");
+    }
+
+    #[test]
+    fn names_that_clash_in_one_folder_all_carry_their_id() {
+        let a = Uuid::parse_str("aaaaaaaa-0000-4000-8000-000000000001").unwrap();
+        let b = Uuid::parse_str("bbbbbbbb-0000-4000-8000-000000000002").unwrap();
+        let c = Uuid::parse_str("cccccccc-0000-4000-8000-000000000003").unwrap();
+        let paths = export_paths(&[
+            NameEntry {
+                node_id: a,
+                name: "SW-01".to_owned(),
+                registered: true,
+            },
+            NameEntry {
+                node_id: b,
+                name: "sw-01".to_owned(),
+                registered: true,
+            },
+            // A deleted namesake is in another folder, so it clashes with nobody.
+            NameEntry {
+                node_id: c,
+                name: "sw-01".to_owned(),
+                registered: false,
+            },
+        ]);
+        assert_eq!(
+            paths.iter().map(|(_, p)| p.as_str()).collect::<Vec<_>>(),
+            [
+                "SW-01__aaaaaaaa.txt",
+                "sw-01__bbbbbbbb.txt",
+                "deleted/sw-01.txt"
+            ]
+        );
+        let long = export_paths(&[entry(9, &"x".repeat(300), true)]);
+        assert_eq!(long[0].1.len(), FILE_STEM_MAX + 4);
+    }
+
+    #[test]
+    fn a_rename_or_a_deletion_changes_the_layout_and_so_is_pushed() {
+        let before = export_paths(&[entry(1, "sw-01", true)]);
+        let renamed = export_paths(&[entry(1, "sw-01a", true)]);
+        let deleted = export_paths(&[entry(1, "sw-01", false)]);
+        let digest = layout_digest(&before);
+        assert_eq!(digest, layout_digest(&before));
+        assert_ne!(digest, layout_digest(&renamed));
+        assert_ne!(digest, layout_digest(&deleted));
+
+        let mut r = remote();
+        r.pushed_head = Some("a1".to_owned());
+        r.pushed_layout = Some(digest.clone());
+        let now = Utc::now();
+        assert!(!should_push(&r, "a1", &digest, now), "nothing changed");
+        assert!(
+            should_push(&r, "a1", &layout_digest(&renamed), now),
+            "a rename"
+        );
+        assert!(should_push(&r, "b2", &digest, now), "a new version");
     }
 
     #[test]
@@ -591,18 +826,19 @@ mod tests {
     fn a_head_is_pushed_once_and_a_failure_waits_ten_minutes() {
         let now = Utc::now();
         let mut r = remote();
-        assert!(should_push(&r, "a1", now));
+        assert!(should_push(&r, "a1", "L", now));
         r.pushed_head = Some("a1".to_owned());
-        assert!(!should_push(&r, "a1", now), "already there");
-        assert!(should_push(&r, "b2", now), "a newer head");
+        r.pushed_layout = Some("L".to_owned());
+        assert!(!should_push(&r, "a1", "L", now), "already there");
+        assert!(should_push(&r, "b2", "L", now), "a newer head");
         r.failure = Some(PushFailure::Unreachable);
         r.failed_at = Some(now - chrono::Duration::minutes(3));
-        assert!(!should_push(&r, "b2", now), "inside the wait");
+        assert!(!should_push(&r, "b2", "L", now), "inside the wait");
         r.failed_at = Some(now - chrono::Duration::minutes(11));
-        assert!(should_push(&r, "b2", now), "after it");
+        assert!(should_push(&r, "b2", "L", now), "after it");
         r.auth = GitAuth::Unknown;
         assert!(
-            !should_push(&r, "b2", now),
+            !should_push(&r, "b2", "L", now),
             "a way of pushing this core does not know"
         );
     }
@@ -802,6 +1038,11 @@ mod tests {
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_destination_is_set_pushed_to_and_replaced(pool: PgPool) {
+        const PUSHED: Pushed<'static> = Pushed {
+            head: "a1",
+            layout: "L",
+            commit: "c1",
+        };
         let repo = RemoteRepo::new(pool.clone());
         assert_eq!(repo.get().await.unwrap(), None);
         let first = crate::pgtest::credential(&pool, "git-a", "git_remote").await;
@@ -820,20 +1061,24 @@ mod tests {
         // A push for this generation is recorded, with the host key it met.
         let kh = "example.com ssh-ed25519 AAAA\n";
         assert!(repo
-            .record_push(1, "a1", Some(PushFailure::Unreachable), Some(kh))
+            .record_push(1, None, Some(PushFailure::Unreachable), Some(kh))
             .await
             .unwrap());
         let r = repo.get().await.unwrap().unwrap();
         assert_eq!((r.failure, r.failures), (Some(PushFailure::Unreachable), 1));
         assert_eq!(r.known_hosts.as_deref(), Some(kh));
         assert!(repo
-            .record_push(1, "a1", None, Some("other"))
+            .record_push(1, Some(&PUSHED), None, Some("other"))
             .await
             .unwrap());
         let r = repo.get().await.unwrap().unwrap();
         assert_eq!(
             (r.pushed_head.as_deref(), r.failure, r.failures),
             (Some("a1"), None, 0)
+        );
+        assert_eq!(
+            (r.pushed_layout.as_deref(), r.pushed_commit.as_deref()),
+            (Some("L"), Some("c1"))
         );
         assert_eq!(
             r.known_hosts.as_deref(),
@@ -851,7 +1096,10 @@ mod tests {
         assert_eq!((r.generation, r.pushed_head), (2, None));
         assert_eq!(r.known_hosts.as_deref(), Some(kh));
         // A push from before the change is not recorded against the new one.
-        assert!(!repo.record_push(1, "b2", None, None).await.unwrap());
+        assert!(!repo
+            .record_push(1, Some(&PUSHED), None, None)
+            .await
+            .unwrap());
 
         // A new URL forgets the keys; forgetting by hand moves the generation too.
         let moved = RemoteSettings {
