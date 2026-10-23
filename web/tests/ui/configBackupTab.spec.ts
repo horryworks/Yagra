@@ -106,7 +106,7 @@ test.describe('a node not backed up yet', () => {
     const fetched = page.waitForRequest(
       (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/fetch'),
     );
-    await page.getByRole('button', { name: 'Start backup' }).click();
+    await page.getByRole('group', { name: 'Backup' }).getByRole('button', { name: 'On' }).click();
     expect((await put).postDataJSON()).toEqual({
       enabled: true,
       login_order: [LOGIN],
@@ -131,7 +131,10 @@ test.describe('a node whose login was refused', () => {
     await expect(state).toContainText('next try at');
     // The attempt is in the list too, with the same words.
     await expect(page.locator('.cfgb-tone-bad', { hasText: 'was refused' })).toHaveCount(2);
-    await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
+    // A backup that is on says so on its switch; there is no Stop beside Fetch now to misread.
+    const backup = page.getByRole('group', { name: 'Backup' });
+    await expect(backup.getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0);
   });
 
   test('a version opens as text, and Compare pairs it with the one before', async ({ page }) => {

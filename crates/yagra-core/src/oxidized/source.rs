@@ -36,6 +36,8 @@ pub(crate) enum Readiness {
     NoPoller,
     /// The poller that polls the node predates the config-backup relay.
     PollerTooOld,
+    /// The poller carries the relay, and the bus refuses it the subscription (stage 5 decision 52).
+    RelayRefused,
 }
 
 /// The model a node is fetched with: the person's pick, else its profile's row.
@@ -78,6 +80,7 @@ pub(crate) fn readiness(
         Route::Via(_) => Readiness::Ready,
         Route::NoPoller => Readiness::NoPoller,
         Route::PollerTooOld => Readiness::PollerTooOld,
+        Route::RelayRefused => Readiness::RelayRefused,
     }
 }
 
@@ -334,6 +337,10 @@ mod tests {
         assert_eq!(
             readiness(Some(&on), None, true, false, &Route::PollerTooOld),
             Readiness::PollerTooOld
+        );
+        assert_eq!(
+            readiness(Some(&on), None, true, false, &Route::RelayRefused),
+            Readiness::RelayRefused
         );
         assert_eq!(
             readiness(Some(&on), None, false, false, &Route::NoPoller),

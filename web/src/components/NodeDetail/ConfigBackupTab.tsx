@@ -18,6 +18,7 @@ import { useCan } from '../../store';
 import { useLoad } from '../../lib/useLoad';
 import { LoadGate } from '../ui/LoadGate';
 import { Button } from '../ui/Button';
+import { Segmented } from '../ui/Segmented';
 import { Select } from '../ui/Field';
 import { DataTable, type Column } from '../ui/DataTable';
 import { EmptyState } from '../ui/EmptyState';
@@ -227,6 +228,27 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
         <div className="cfgb">
           {!v.available && <p className="form-status">{t('config.unavailable')}</p>}
           <div className="cfgb-head">
+            {canStart && v.available && (
+              <span className="cfgb-switch">
+                <span className="modal-field-label">{t('config.switch.label')}</span>
+                {/* On saves and fetches once; Off stops the backup and keeps every version. One
+                    control, so stopping cannot be read as stopping the fetch beside it (ADR-210
+                    stage 5 decision 53). */}
+                <Segmented
+                  ariaLabel={t('config.switch.label')}
+                  options={[
+                    { value: 'on', label: t('config.switch.on') },
+                    { value: 'off', label: t('config.switch.off') },
+                  ]}
+                  value={v.enabled ? 'on' : 'off'}
+                  onChange={(next) => {
+                    if (busy || (next === 'on') === v.enabled) return;
+                    if (next === 'on') start();
+                    else stop();
+                  }}
+                />
+              </span>
+            )}
             <p className={`cfgb-state cfgb-tone-${line.tone}`} role="status">
               {t(line.key, { ...line.params, login: loginText(line.login) })}
               {v.try_after && <> · {t('config.state.nextTry', { time: formatExactTime(v.try_after) })}</>}
@@ -237,23 +259,11 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                 </>
               )}
             </p>
-            {canConfig && v.available && (
+            {canConfig && v.available && v.enabled && v.readiness === 'ready' && !v.pending && (
               <div className="cfgb-buttons">
-                {!v.enabled && canStart && (
-                  <Button variant="primary" onClick={start} disabled={busy}>
-                    {t('config.start')}
-                  </Button>
-                )}
-                {v.enabled && v.readiness === 'ready' && !v.pending && (
-                  <Button onClick={fetchNow} disabled={busy}>
-                    {t('config.fetchNow')}
-                  </Button>
-                )}
-                {v.enabled && (
-                  <Button variant="outline" onClick={stop} disabled={busy}>
-                    {t('config.stop')}
-                  </Button>
-                )}
+                <Button onClick={fetchNow} disabled={busy}>
+                  {t('config.fetchNow')}
+                </Button>
               </div>
             )}
           </div>

@@ -1247,8 +1247,6 @@
     "model": "Model",
     "modelFromProfile": "From profile ({{model}})",
     "modelPick": "Pick a model",
-    "start": "Start backup",
-    "stop": "Stop",
     "fetchNow": "Fetch now",
     "readiness": {
       "ready": "Fetched daily",
@@ -1258,7 +1256,8 @@
       "unknown_input": "The stored connection is unknown to this version. Pick one and save.",
       "address_changed": "The address changed since this was saved. Save again to resume.",
       "no_poller": "No poller polls this device.",
-      "poller_too_old": "Its poller is too old for config backup. Upgrade it."
+      "poller_too_old": "Its poller is too old for config backup. Upgrade it.",
+      "relay_refused": "The bus refuses this poller the relay. Restart the bus (nats)."
     },
     "logins": "Logins, in the order tried",
     "defaultOrder": "Use the default order",
@@ -1323,6 +1322,11 @@
       "fetch": "Could not ask for a fetch.",
       "text": "Could not read the version.",
       "list": "Could not list config backups."
+    },
+    "switch": {
+      "label": "Backup",
+      "on": "On",
+      "off": "Off"
     }
   }
 }

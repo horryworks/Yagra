@@ -40460,7 +40460,8 @@
         "enum": [
           "ready",
           "no_poller",
-          "poller_too_old"
+          "poller_too_old",
+          "relay_refused"
         ]
       },
       "PollerTokenRequest": {
@@ -41932,7 +41933,8 @@
           "unknown_input",
           "address_changed",
           "no_poller",
-          "poller_too_old"
+          "poller_too_old",
+          "relay_refused"
         ]
       },
       "ReclassifyApplied": {

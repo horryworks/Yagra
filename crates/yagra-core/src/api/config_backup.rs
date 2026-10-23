@@ -850,6 +850,8 @@ pub(crate) enum PollerReach {
     NoPoller,
     /// The poller that polls it predates the relay.
     PollerTooOld,
+    /// The poller carries the relay and the bus refuses it the subscription.
+    RelayRefused,
 }
 
 impl From<&oxidized::relay::Route> for PollerReach {
@@ -858,6 +860,7 @@ impl From<&oxidized::relay::Route> for PollerReach {
             oxidized::relay::Route::Via(_) => Self::Ready,
             oxidized::relay::Route::NoPoller => Self::NoPoller,
             oxidized::relay::Route::PollerTooOld => Self::PollerTooOld,
+            oxidized::relay::Route::RelayRefused => Self::RelayRefused,
         }
     }
 }

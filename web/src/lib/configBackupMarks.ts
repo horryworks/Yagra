@@ -27,6 +27,7 @@ export function stateKeyOf(row: ConfigBackupRow): string {
       return `config.list.mark.${markOf(row)}`;
     case 'no_poller':
     case 'poller_too_old':
+    case 'relay_refused':
       return `config.readiness.${row.poller}`;
   }
 }

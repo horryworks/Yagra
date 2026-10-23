@@ -26,6 +26,7 @@ describe('config backup marks', () => {
     expect(markOf(row({ ...fine, poller: 'no_poller' }))).toBe('trouble');
     expect(stateKeyOf(row({ ...fine, poller: 'no_poller' }))).toBe('config.readiness.no_poller');
     expect(stateKeyOf(row({ pending: true, poller: 'poller_too_old' }))).toBe('config.readiness.poller_too_old');
+    expect(stateKeyOf(row({ ...fine, poller: 'relay_refused' }))).toBe('config.readiness.relay_refused');
     expect(stateKeyOf(row(fine))).toBe('config.list.mark.ok');
   });
 

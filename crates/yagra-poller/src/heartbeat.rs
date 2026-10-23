@@ -74,6 +74,8 @@ pub(crate) fn start(
         // Taken here, where the bus is still the concrete `NatsBus`: the loop is generic over
         // `SyncBus`, and the counter is a fact about this transport, not about the trait (ADR-137).
         bus.byte_counters(),
+        // The subjects the broker refused, for the same reason: a fact about this transport.
+        bus.refused_subscriptions(),
         // Read once at startup rather than per beat: enumerating interfaces is a syscall, and an
         // address change on a poller host is a restart-level event in every deployment shape we
         // support (a container gets a new address by being recreated).
@@ -99,6 +101,7 @@ async fn run_heartbeat_loop<B>(
     listeners: Vec<String>,
     host_collector: Arc<yagra_hoststats::HostCollector>,
     bus_bytes: Arc<yagra_bus::BusBytes>,
+    refused: Arc<yagra_bus::RefusedSubscriptions>,
     mgmt_addrs: Vec<std::net::IpAddr>,
     shutdown: CancellationToken,
 ) where
@@ -188,10 +191,6 @@ async fn run_heartbeat_loop<B>(
                 yagra_bus::CAP_MERAKI_SWITCH_PORTS.to_owned(),
                 // …and the wireless tier (ADR-168), withheld from a pool for the same reason.
                 yagra_bus::CAP_MERAKI_WIRELESS.to_owned(),
-                // This build carries the config-backup relay (ADR-210 stage 5). Unconditional, like
-                // the subscription. Core fetches no configuration from a node whose poller does not
-                // claim it, and says so on the node rather than counting a failed login.
-                yagra_bus::CAP_CONFIG_RELAY.to_owned(),
             ]
             .into_iter()
             // Unlike the ten above, these two are conditional and come from the same read: the
@@ -208,6 +207,13 @@ async fn run_heartbeat_loop<B>(
             // Claiming it unconditionally would turn "there is nothing to send" into an empty reply
             // core cannot distinguish from a deliberate one.
             .chain(log_ship_cap())
+            // The config-backup relay (ADR-210 stage 5): this build always carries it, and the
+            // claim says whether the bus lets it hear (decision 52). A subscribe returns before the
+            // broker answers, so this is read per beat, and the first beat after a refusal arrives
+            // corrects the claim.
+            .chain(std::iter::once(relay_cap(
+                refused.contains(&yagra_bus::subjects::relay_for(&poller_id)),
+            )))
             .collect(),
             // The interface total comes from the collector; this process's share of it that crossed
             // the bus comes from the bus itself, and the page subtracts one from the other (ADR-137).
@@ -341,6 +347,17 @@ fn upgrade_report() -> Option<yagra_bus::UpgradeReport> {
     serde_json::from_str(&raw).ok()
 }
 
+/// [`yagra_bus::CAP_CONFIG_RELAY`], or [`yagra_bus::CAP_CONFIG_RELAY_REFUSED`] while the broker
+/// refuses the relay subscription. Core asks only a poller claiming the first, and tells the
+/// operator about one claiming the second.
+fn relay_cap(refused: bool) -> String {
+    if refused {
+        yagra_bus::CAP_CONFIG_RELAY_REFUSED.to_owned()
+    } else {
+        yagra_bus::CAP_CONFIG_RELAY.to_owned()
+    }
+}
+
 /// [`yagra_bus::CAP_LOG_SHIP`], but only when there is a log file to ship (ADR-045 Inc.4).
 ///
 /// One condition, and it is the same one the subscribe above is gated on, deliberately read from the
@@ -353,6 +370,14 @@ fn log_ship_cap() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A poller whose relay subscription the bus refused says so instead of claiming the relay
+    /// (ADR-210 stage 5 decision 52), and exactly one of the two is ever claimed.
+    #[test]
+    fn the_relay_is_claimed_only_while_the_bus_lets_this_poller_hear_it() {
+        assert_eq!(super::relay_cap(false), yagra_bus::CAP_CONFIG_RELAY);
+        assert_eq!(super::relay_cap(true), yagra_bus::CAP_CONFIG_RELAY_REFUSED);
+    }
+
     /// The `leaving` beat is the one publish in the process with no successor, so it is the one that
     /// must be flushed. Nothing in the type system says so — `publish` returning `Ok` reads like
     /// delivery — hence a test that reads the source and pins the call.

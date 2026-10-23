@@ -12330,7 +12330,7 @@ export interface components {
          * @description Whether a node's config-backup login has a poller to go through (ADR-210 stage 5).
          * @enum {string}
          */
-        PollerReach: "ready" | "no_poller" | "poller_too_old";
+        PollerReach: "ready" | "no_poller" | "poller_too_old" | "relay_refused";
         /** @description What a new site needs, beyond its own name. */
         PollerTokenRequest: {
             /**
@@ -13071,7 +13071,7 @@ export interface components {
          * @description Whether a node is fetched, and if not, the one thing to fix.
          * @enum {string}
          */
-        Readiness: "ready" | "off" | "no_model" | "no_credential" | "unknown_input" | "address_changed" | "no_poller" | "poller_too_old";
+        Readiness: "ready" | "off" | "no_model" | "no_credential" | "unknown_input" | "address_changed" | "no_poller" | "poller_too_old" | "relay_refused";
         /** @description What an apply did. The four counts add up to the number of distinct nodes named. */
         ReclassifyApplied: {
             /** @description Nodes moved to the profile the rules choose. */

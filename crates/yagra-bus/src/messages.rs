@@ -164,6 +164,12 @@ pub const CAP_LOG_SHIP: &str = "log-ship";
 /// screen says why rather than counting the silence as a failed login.
 pub const CAP_CONFIG_RELAY: &str = "config-relay";
 
+/// Claimed **instead of** [`CAP_CONFIG_RELAY`] while the broker refuses this poller its relay
+/// subscription (ADR-210 stage 5 decision 52): the build carries the relay, and the bus will not
+/// let it hear. Core says so on the node rather than "too old" or "no poller", because the fix is
+/// on the bus — its allow-list is older than the poller.
+pub const CAP_CONFIG_RELAY_REFUSED: &str = "config-relay-refused";
+
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it honours a
 /// [`DiscoveryCancel`] (ADR-068 Increment 2).
 ///

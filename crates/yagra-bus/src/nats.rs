@@ -174,6 +174,70 @@ impl BusBytes {
     }
 }
 
+/// The subjects the broker has refused this connection a subscription to, since it last connected
+/// (ADR-210 stage 5 decision 52).
+///
+/// A subscribe returns `Ok` whatever the broker thinks of it: the refusal arrives later, as a
+/// server error naming the subject, and nothing else in the client hears it. So a poller that
+/// subscribed to a subject its account does not grant kept claiming the capability that subject
+/// serves, and core kept sending into a subscription that did not exist — measured on a lab
+/// deployment whose broker ran an allow-list two days old. Forgotten on every (re)connect, when the
+/// client subscribes again and the broker answers again.
+#[derive(Debug, Default)]
+pub struct RefusedSubscriptions(std::sync::Mutex<std::collections::HashSet<String>>);
+
+impl RefusedSubscriptions {
+    /// Whether the broker refused `subject` since the connection was last made.
+    #[must_use]
+    pub fn contains(&self, subject: &str) -> bool {
+        self.0.lock().is_ok_and(|s| s.contains(subject))
+    }
+
+    fn record(&self, subject: String) {
+        if let Ok(mut s) = self.0.lock() {
+            s.insert(subject);
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut s) = self.0.lock() {
+            s.clear();
+        }
+    }
+
+    /// Hear the client's connection events. Returns the callback `ConnectOptions` takes.
+    fn listen(self: Arc<Self>) -> impl Fn(async_nats::Event) -> std::future::Ready<()> {
+        move |event| {
+            match event {
+                async_nats::Event::Connected => self.clear(),
+                async_nats::Event::ServerError(async_nats::ServerError::Other(msg)) => {
+                    if let Some(subject) = refused_subscription(&msg) {
+                        tracing::warn!(%subject, "the bus refused a subscription");
+                        self.record(subject);
+                    }
+                }
+                async_nats::Event::Disconnected
+                | async_nats::Event::LameDuckMode
+                | async_nats::Event::Draining
+                | async_nats::Event::Closed
+                | async_nats::Event::SlowConsumer(_)
+                | async_nats::Event::ServerError(_)
+                | async_nats::Event::ClientError(_) => {}
+            }
+            std::future::ready(())
+        }
+    }
+}
+
+/// The subject a broker's `Permissions Violation for Subscription to "…"` names, or `None` for any
+/// other error.
+fn refused_subscription(msg: &str) -> Option<String> {
+    let (_, rest) = msg.split_once("Permissions Violation for Subscription to ")?;
+    let subject = rest.trim().trim_matches(|c| c == '"' || c == '\'');
+    let subject = subject.split(['"', ' ']).next()?;
+    (!subject.is_empty()).then(|| subject.to_owned())
+}
+
 /// A [`Bus`] over NATS.
 pub struct NatsBus {
     client: Client,
@@ -181,6 +245,8 @@ pub struct NatsBus {
     /// Counted in [`Self::publish_json`] and [`decoded`] — the only place a payload leaves and the
     /// only place one arrives.
     bytes: Arc<BusBytes>,
+    /// What the broker refused this connection a subscription to.
+    refused: Arc<RefusedSubscriptions>,
 }
 
 impl NatsBus {
@@ -200,7 +266,8 @@ impl NatsBus {
         url: &str,
         ca_file: Option<&std::path::Path>,
     ) -> Result<Self, BusError> {
-        let mut opts = async_nats::ConnectOptions::new();
+        let refused = Arc::new(RefusedSubscriptions::default());
+        let mut opts = async_nats::ConnectOptions::new().event_callback(refused.clone().listen());
         if let Some(ca) = ca_file {
             opts = opts.add_root_certificates(ca.to_path_buf());
         }
@@ -217,6 +284,7 @@ impl NatsBus {
             client,
             job_subject: subjects::jobs_for_pool(DEFAULT_POOL),
             bytes: Arc::default(),
+            refused,
         })
     }
 
@@ -245,7 +313,10 @@ impl NatsBus {
         username: &str,
         pool: &str,
     ) -> Result<Self, BusError> {
-        let mut opts = async_nats::ConnectOptions::new().name(pool.to_owned());
+        let refused = Arc::new(RefusedSubscriptions::default());
+        let mut opts = async_nats::ConnectOptions::new()
+            .name(pool.to_owned())
+            .event_callback(refused.clone().listen());
         if let Some(ca) = ca_file {
             opts = opts.add_root_certificates(ca.to_path_buf());
         }
@@ -271,6 +342,7 @@ impl NatsBus {
             client,
             job_subject: subjects::jobs_for_pool(DEFAULT_POOL),
             bytes: Arc::default(),
+            refused,
         })
     }
 
@@ -308,6 +380,14 @@ impl NatsBus {
     #[must_use]
     pub fn byte_counters(&self) -> Arc<BusBytes> {
         Arc::clone(&self.bytes)
+    }
+
+    /// The subjects the broker refused this connection a subscription to (ADR-210 stage 5
+    /// decision 52). Taken by the poller's heartbeat, which stops claiming what a refused subject
+    /// serves.
+    #[must_use]
+    pub fn refused_subscriptions(&self) -> Arc<RefusedSubscriptions> {
+        Arc::clone(&self.refused)
     }
 
     /// Encode `value` as JSON, publish it on `subject`, and count the payload once the client has
@@ -904,7 +984,41 @@ impl PeerBus for NatsBus {
 
 #[cfg(test)]
 mod tests {
-    use super::{install_tls_crypto_provider, redact_url, split_userinfo_password};
+    use super::{
+        install_tls_crypto_provider, redact_url, refused_subscription, split_userinfo_password,
+        RefusedSubscriptions,
+    };
+
+    /// The broker's words, measured against nats-server 2.15.1 refusing a subscription
+    /// (2026-10-24): `-ERR 'Permissions Violation for Subscription to "<subject>"'`. The subject is
+    /// quoted, and no other error is read as a refused subscription.
+    #[test]
+    fn a_refused_subscription_is_read_out_of_the_brokers_error() {
+        assert_eq!(
+            refused_subscription(
+                r#"Permissions Violation for Subscription to "yagra.poller.relay.local""#
+            )
+            .as_deref(),
+            Some("yagra.poller.relay.local")
+        );
+        assert_eq!(
+            refused_subscription(
+                r#"'Permissions Violation for Subscription to "yagra.poller.relay.local" using queue "q"'"#
+            )
+            .as_deref(),
+            Some("yagra.poller.relay.local")
+        );
+        assert_eq!(
+            refused_subscription(r#"Permissions Violation for Publish to "yagra.results""#),
+            None
+        );
+        assert_eq!(refused_subscription("maximum payload exceeded"), None);
+        let refused = RefusedSubscriptions::default();
+        refused.record("a.b".to_owned());
+        assert!(refused.contains("a.b"));
+        refused.clear();
+        assert!(!refused.contains("a.b"));
+    }
 
     #[test]
     fn bus_bytes_reports_what_was_added_in_each_direction() {

@@ -32,8 +32,8 @@ use tokio::time::{timeout, Instant};
 use uuid::Uuid;
 use yagra_base::config_backup::ConfigBackupRepo;
 use yagra_bus::{
-    encode_raw, RelayBus, RelayFrame, RelayTarget, CAP_CONFIG_RELAY, RELAY_CHUNK_BYTES,
-    RELAY_CONNECT_SECS, RELAY_IDLE_SECS, RELAY_MAX_BYTES, RELAY_MAX_SECS,
+    encode_raw, RelayBus, RelayFrame, RelayTarget, CAP_CONFIG_RELAY, CAP_CONFIG_RELAY_REFUSED,
+    RELAY_CHUNK_BYTES, RELAY_CONNECT_SECS, RELAY_IDLE_SECS, RELAY_MAX_BYTES, RELAY_MAX_SECS,
 };
 use yagra_common::NodeId;
 
@@ -84,6 +84,9 @@ pub(crate) enum Route {
     NoPoller,
     /// The poller that polls it predates the relay (no `config-relay` in its heartbeat).
     PollerTooOld,
+    /// The poller carries the relay and the bus refuses it the subscription (decision 52): the
+    /// bus's allow-list is older than the poller.
+    RelayRefused,
 }
 
 /// Where a node's relay goes. A trait so the relay can be driven without a coordinator.
@@ -97,11 +100,11 @@ impl Routes for Coordinator {
         let Some(poller) = self.owner_of(NodeId::from(node), now) else {
             return Route::NoPoller;
         };
-        let claims = self
-            .caps_of(&poller, now)
-            .is_some_and(|caps| caps.iter().any(|c| c == CAP_CONFIG_RELAY));
-        if claims {
+        let caps = self.caps_of(&poller, now).unwrap_or_default();
+        if caps.iter().any(|c| c == CAP_CONFIG_RELAY) {
             Route::Via(poller)
+        } else if caps.iter().any(|c| c == CAP_CONFIG_RELAY_REFUSED) {
+            Route::RelayRefused
         } else {
             Route::PollerTooOld
         }
@@ -191,6 +194,7 @@ enum Outcome {
     Closed,
     NoPoller,
     PollerTooOld,
+    RelayRefused,
     /// The poller refused, did not answer, or could not reach the device.
     NotOpened,
     /// A limit, a lost frame, or the bus.
@@ -205,6 +209,7 @@ impl Outcome {
             Self::Closed => "closed",
             Self::NoPoller => "no_poller",
             Self::PollerTooOld => "poller_too_old",
+            Self::RelayRefused => "relay_refused",
             Self::NotOpened => "not_opened",
             Self::Cut => "cut",
             Self::Stranger => "stranger",
@@ -216,7 +221,11 @@ impl Outcome {
     fn is_relay_failure(self) -> bool {
         match self {
             Self::Closed | Self::Stranger => false,
-            Self::NoPoller | Self::PollerTooOld | Self::NotOpened | Self::Cut => true,
+            Self::NoPoller
+            | Self::PollerTooOld
+            | Self::RelayRefused
+            | Self::NotOpened
+            | Self::Cut => true,
         }
     }
 }
@@ -399,6 +408,7 @@ async fn serve(
         Route::Via(p) => p,
         Route::NoPoller => return Outcome::NoPoller,
         Route::PollerTooOld => return Outcome::PollerTooOld,
+        Route::RelayRefused => return Outcome::RelayRefused,
     };
     let session = Uuid::new_v4();
     let mut rx = relay.open_session(session);
@@ -560,6 +570,7 @@ mod tests {
             Outcome::Closed,
             Outcome::NoPoller,
             Outcome::PollerTooOld,
+            Outcome::RelayRefused,
             Outcome::NotOpened,
             Outcome::Cut,
             Outcome::Stranger,

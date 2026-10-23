@@ -410,6 +410,7 @@ export const BACKUP_READINESS = [
   'address_changed',
   'no_poller',
   'poller_too_old',
+  'relay_refused',
 ] as const;
 export type BackupReadiness = (typeof BACKUP_READINESS)[number];
 
