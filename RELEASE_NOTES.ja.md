@@ -24,7 +24,7 @@
 
 - **秘密を読み出すたびに監査ログに残ります。** 「秘密を表示」は POST なので、誰がどの認証情報をいつ読んだかが Settings ▸ Audit log に記録されます（`POST /api/v1/credentials/{id}/reveal`）。応答には `Cache-Control: no-store` を付けています。
 
-- **WebUI がセキュリティヘッダを付け、nginx の版を名乗らなくなりました。** ページ・スクリプト・API・エラーの応答のすべてに、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`（ほかのサイトの枠の中に WebUI を出せなくなります）、`Referrer-Policy: same-origin` を付けます。`Server` ヘッダは版を付けずに `nginx` とだけ言います。Content Security Policy は報告だけの形で送ります。まだ何も止めず、止めるはずだった物をブラウザのコンソールに出します。画面を確かめてから、後のリリースで強制に切り替えます。HSTS は送りません。既定の証明書は自己署名で、HSTS を送るとブラウザが警告画面から先へ進めなくなるからです。
+- **WebUI がセキュリティヘッダを付け、nginx の版を名乗らなくなりました。** ページ・スクリプト・API・エラーの応答のすべてに、`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`（ほかのサイトの枠の中に WebUI を出せなくなります）、`Referrer-Policy: same-origin` を付けます。`Server` ヘッダは版を付けずに `nginx` とだけ言います。Content Security Policy を強制します。WebUI は自分のスクリプトだけを動かし、自分のサーバーにだけ接続します。機器から来る文字（ポートの説明や syslog の本文）にスクリプトが仕込まれても、ブラウザが動かさずに止めます。強制する前に、全部の画面で違反が無いことを確かめました。HSTS は送りません。既定の証明書は自己署名で、HSTS を送るとブラウザが警告画面から先へ進めなくなるからです。
 
 - **既知の脆弱性がある依存を上げました。** WebUI のイメージの土台を、修正がもう出ない nginx 1.27 から 1.30.6 にしました。IP→ASN の更新コンテナを、サポートが切れた Alpine 3.20 から 3.24.2 にしました。バックアップスクリプトの確認も同じイメージを使います。Rust 側は quinn-proto 0.11.19（RUSTSEC-2026-0185・-0338・-0339・-0340・-0342。ロックファイルに載っていただけで、ビルドには入っていませんでした）と event-listener 5.4.2（RUSTSEC-2026-0221）。WebUI の開発用の道具は Vitest 4.1.12（アドバイザリ 2 件、開発時だけ）。どの版も、出てから 1 週間以上たっています。
 

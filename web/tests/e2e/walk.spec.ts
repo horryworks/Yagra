@@ -118,7 +118,9 @@ test.describe('what nginx served', () => {
       expect(h['x-content-type-options'], `${kind}: X-Content-Type-Options`).toBe('nosniff');
       expect(h['x-frame-options'], `${kind}: X-Frame-Options`).toBe('DENY');
       expect(h['referrer-policy'], `${kind}: Referrer-Policy`).toBe('same-origin');
-      expect(h['content-security-policy-report-only'], `${kind}: the CSP`).toContain("script-src 'self'");
+      // Enforced, not report-only (ADR-211 decision 8).
+      expect(h['content-security-policy'], `${kind}: the CSP`).toContain("script-src 'self'");
+      expect(h['content-security-policy-report-only'], `${kind}: a leftover report-only CSP`).toBeUndefined();
       // HSTS stays off on purpose (ADR-044): the default certificate is self-signed.
       expect(h['strict-transport-security'], `${kind}: HSTS must not be sent`).toBeUndefined();
       expect(h['server'] ?? '', `${kind}: the Server header names a version`).not.toMatch(/\d/);

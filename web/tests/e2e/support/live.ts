@@ -258,9 +258,9 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
       page.on('pageerror', (e) => errors.uncaught.push(String(e)));
       page.on('console', (msg) => {
         const text = msg.text();
-        // A report-only CSP violation (ADR-211) reaches the console as `info`, not `error` —
-        // measured with Playwright's Chromium — so a type filter alone would let every one through
-        // and the walk could never say the policy is safe to enforce.
+        // A CSP violation (ADR-211) is caught by its text, not its console type: a report-only one
+        // reaches the console as `info` (measured with Playwright's Chromium), so a type filter
+        // alone would let it through — and that is the form a policy is tried in before enforcing.
         const cspViolation = /violates the following Content Security Policy/.test(text);
         if (msg.type() !== 'error' && !cspViolation) return;
         if (ALLOWED_CONSOLE_ERRORS.some((a) => a.pattern.test(text))) return;
