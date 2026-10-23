@@ -717,6 +717,11 @@ services:
       # against an empty directory.
       bus-cert-init: { condition: service_completed_successfully }
     environment:
+      # Read by nothing inside the container. nats-server reads its configuration only when it
+      # starts, and an upgrade that keeps this image would leave it on the old allow-list; a new
+      # value here is what makes compose recreate it. Moves with
+      # `certs::bus_callout::NATS_CONFIG_REVISION`, and a test fails until both do (ADR-210 stage 5).
+      YAGRA_NATS_CONFIG_REVISION: "1"
       # Referenced by the shipped configuration. nats-server EXITS on a referenced-and-unset
       # variable (fail-closed — it never starts with an anonymous password), so these carry
       # placeholder defaults that are only ever *used* once the switch has replaced them: with

@@ -43,6 +43,19 @@ use yagra_base::secrets::Kek;
 /// What `nats-server.conf` includes. Sits beside it on the bus volume, one level above `certs/`.
 pub const CONF_FILE: &str = "callout.conf";
 
+/// The revision of the broker's configuration — the shipped `nats-server.conf` and the
+/// [`render_conf`] template — also written as `YAGRA_NATS_CONFIG_REVISION` on the `nats` service in
+/// `docker-compose.deploy.yml` (ADR-210 stage 5 decision 51).
+///
+/// 🚨 nats-server reads its configuration only when it starts, and an upgrade that keeps the
+/// `nats` image does not restart it: `bus-cert-init` rewrites both files and the old allow-list
+/// keeps running. A changed environment variable is what makes compose recreate the container.
+/// Missing that cost a lab deployment its config-backup relay: the co-located poller, which
+/// authenticates against the static `poller` account, had its subscription to the new relay
+/// subject refused for two days while every screen said the poller was ready (2026-10-23).
+/// `the_revision_moves_with_the_broker_configuration` fails until both are bumped.
+pub const NATS_CONFIG_REVISION: u32 = 1;
+
 /// The static accounts that skip the callout, in the order the generated file lists them.
 ///
 /// 🚨 `poller` is here and its absence is a silent outage. The co-located poller in
@@ -196,7 +209,7 @@ impl BusCalloutRepo {
         write_atomically(&dst, render_conf(id).as_bytes(), 0o644)
             .map_err(|e| anyhow::anyhow!("write {} : {e}", dst.display()))?;
         tracing::info!(path = %dst.display(), issuer = %id.issuer,
-            "installed the Auth Callout configuration");
+            revision = NATS_CONFIG_REVISION, "installed the Auth Callout configuration");
         Ok(())
     }
 }
@@ -359,6 +372,44 @@ mod tests {
             "an upsert would let a losing core overwrite the key the server was told to trust"
         );
         assert!(!SAVE_SQL.to_lowercase().contains("do update"), "{SAVE_SQL}");
+    }
+
+    /// The shipped configuration and the generated one are pinned by their digest, and the digest
+    /// by [`NATS_CONFIG_REVISION`] and the composition's copy of it: change one and this names the
+    /// other two.
+    #[test]
+    fn the_revision_moves_with_the_broker_configuration() {
+        use sha2::Digest;
+        // Line endings normalised: a Windows checkout and the Linux build must agree.
+        let server = shipped("docker/nats/nats-server.conf").replace('\r', "");
+        // A fixed identity: the issuer differs per deployment and is not part of the template.
+        let generated = render_conf(&CalloutIdentity {
+            issuer: "A".repeat(56),
+            account: "$G".to_owned(),
+        });
+        let digest = sha2::Sha256::digest(format!("{server}\0{generated}").as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let pinned: &[(u32, &str)] = &[(
+            NATS_CONFIG_REVISION,
+            "f28714241c6c008cdf88c50b58cb181b762c6743a8e1aebbad2339158aa5f7e8",
+        )];
+        assert_eq!(
+            pinned,
+            &[(NATS_CONFIG_REVISION, hex.as_str())],
+            "the broker's configuration changed: bump NATS_CONFIG_REVISION and \
+             YAGRA_NATS_CONFIG_REVISION in docker-compose.deploy.yml, then pin the new digest here"
+        );
+        let compose = shipped("docker-compose.deploy.yml").replace('\r', "");
+        let nats = compose
+            .split("\n  nats:\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n  victoriametrics:").next())
+            .expect("docker-compose.deploy.yml has a nats service");
+        let line = format!("YAGRA_NATS_CONFIG_REVISION: \"{NATS_CONFIG_REVISION}\"");
+        assert!(
+            nats.contains(&line),
+            "the nats service in docker-compose.deploy.yml must carry {line}"
+        );
     }
 
     fn shipped(path: &str) -> String {
