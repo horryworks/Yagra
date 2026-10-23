@@ -8,7 +8,9 @@ import {
   pushLine,
   remoteBody,
   storedTokenUsable,
+  testPassed,
 } from './gitRemote';
+import { REMOTE_TEST_RESULTS } from '../../types/api';
 
 const status = (over: Partial<PushStatusView> = {}): PushStatusView => ({
   configured: true,
@@ -48,6 +50,12 @@ describe('the last push', () => {
     expect(gitRemoteChip(status({ failure: 'unreachable', failed_at: 'x' })).labelKey).toBe(
       'git.status.failed',
     );
+  });
+});
+
+describe('a connection test', () => {
+  it('passes only when the destination would take a push or answered over SSH', () => {
+    expect(REMOTE_TEST_RESULTS.filter(testPassed)).toEqual(['can_push', 'answered']);
   });
 });
 

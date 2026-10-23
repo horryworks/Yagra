@@ -838,7 +838,8 @@
       "deployKey": "Deploy key",
       "newKey": "New key",
       "hostKeys": "Host keys",
-      "forget": "Forget"
+      "forget": "Forget",
+      "test": "Test connection"
     },
     "form": {
       "addTitle": "Set the Git destination",
@@ -883,7 +884,18 @@
       }
     },
     "err": {
-      "save": "Could not save the Git destination."
+      "save": "Could not save the Git destination.",
+      "test": "Could not run the connection test."
+    },
+    "test": {
+      "can_push": "Connection OK — the token may push here.",
+      "answered": "The host answered over SSH. The key is checked on the next push.",
+      "auth_failed": "The token was refused.",
+      "no_write": "The token works but may not write to this repository.",
+      "not_found": "No repository here, or the token cannot see it.",
+      "unreachable": "The host did not answer.",
+      "blocked": "This address is one Yagra does not reach.",
+      "unexpected": "The answer was not from a Git server."
     }
   }
 }

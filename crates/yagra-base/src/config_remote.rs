@@ -396,6 +396,87 @@ pub fn https_origin(url: &str) -> Option<String> {
     Some(format!("https://{}", authority.to_ascii_lowercase()))
 }
 
+/// What a connection test found (decision 42). A test is a question to the destination, asked from
+/// core: it changes nothing a push records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteTestResult {
+    /// HTTPS: the destination took the token and offered to receive a push.
+    CanPush,
+    /// SSH: the destination answered with an SSH greeting. The key and the host key are checked by
+    /// the next push, not here.
+    Answered,
+    /// HTTPS: the token was refused (401).
+    AuthFailed,
+    /// HTTPS: the token is valid but may not write to this repository (403).
+    NoWrite,
+    /// HTTPS: no repository there, or one this token cannot see (404).
+    NotFound,
+    /// The destination did not answer, or its name did not resolve.
+    Unreachable,
+    /// The destination resolves to a loopback, link-local or metadata address, which Yagra does
+    /// not reach (`url_check::is_ssrf_blocked`).
+    Blocked,
+    /// Anything else: an answer that is not git's.
+    Unexpected,
+}
+
+/// Where an HTTPS destination answers git's "may I push?" question: the same request git sends
+/// before a push (`info/refs?service=git-receive-pack`).
+#[must_use]
+pub fn receive_pack_url(url: &str) -> String {
+    format!(
+        "{}/info/refs?service=git-receive-pack",
+        url.trim_end_matches('/')
+    )
+}
+
+/// What git's push advertisement answer means.
+#[must_use]
+pub fn receive_pack_result(status: u16, content_type: Option<&str>) -> RemoteTestResult {
+    match status {
+        200 if content_type
+            .is_some_and(|c| c.contains("application/x-git-receive-pack-advertisement")) =>
+        {
+            RemoteTestResult::CanPush
+        }
+        401 => RemoteTestResult::AuthFailed,
+        403 => RemoteTestResult::NoWrite,
+        404 => RemoteTestResult::NotFound,
+        _ => RemoteTestResult::Unexpected,
+    }
+}
+
+/// The host and port an SSH destination is dialled at: `ssh://[user@]host[:port]/…` or the scp form
+/// `user@host:path` (always port 22). An IPv6 literal comes back without its brackets. `None` for
+/// anything else.
+#[must_use]
+pub fn ssh_endpoint(url: &str) -> Option<(String, u16)> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let authority = rest.split('/').next()?;
+        let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+        if let Some(inner) = host_port.strip_prefix('[') {
+            let (addr, after) = inner.split_once(']')?;
+            let port = match after.strip_prefix(':') {
+                Some(p) => p.parse().ok()?,
+                None if after.is_empty() => 22,
+                None => return None,
+            };
+            return Some((addr.to_owned(), port));
+        }
+        return match host_port.split_once(':') {
+            Some((h, p)) => Some((h.to_owned(), p.parse().ok()?)),
+            None => Some((host_port.to_owned(), 22)),
+        };
+    }
+    if url.contains("://") {
+        return None;
+    }
+    let (user_host, _) = url.split_once(':')?;
+    let (_, host) = user_host.split_once('@')?;
+    (!host.is_empty()).then(|| (host.to_owned(), 22))
+}
+
 /// The longest branch name accepted.
 pub const BRANCH_MAX: usize = 100;
 
@@ -1018,6 +1099,50 @@ mod tests {
         assert_ne!(a, https_origin("https://github.com:8443/acme/a.git"));
         assert_ne!(a, https_origin("https://example.com/acme/a.git"));
         assert_eq!(https_origin("git@github.com:acme/a.git"), None);
+    }
+
+    #[test]
+    fn a_connection_test_reads_gits_own_answer() {
+        assert_eq!(
+            receive_pack_url("https://github.com/acme/configs.git/"),
+            "https://github.com/acme/configs.git/info/refs?service=git-receive-pack"
+        );
+        let advert = Some("application/x-git-receive-pack-advertisement");
+        assert_eq!(receive_pack_result(200, advert), RemoteTestResult::CanPush);
+        // A login page or a proxy's answer is not git's, whatever its status.
+        assert_eq!(
+            receive_pack_result(200, Some("text/html")),
+            RemoteTestResult::Unexpected
+        );
+        assert_eq!(receive_pack_result(401, None), RemoteTestResult::AuthFailed);
+        assert_eq!(receive_pack_result(403, None), RemoteTestResult::NoWrite);
+        assert_eq!(receive_pack_result(404, None), RemoteTestResult::NotFound);
+        assert_eq!(receive_pack_result(301, None), RemoteTestResult::Unexpected);
+    }
+
+    #[test]
+    fn an_ssh_destination_is_dialled_at_its_host_and_port() {
+        let at = |h: &str, p: u16| Some((h.to_owned(), p));
+        assert_eq!(
+            ssh_endpoint("git@github.com:acme/c.git"),
+            at("github.com", 22)
+        );
+        assert_eq!(ssh_endpoint("git@host:/srv/git/c.git"), at("host", 22));
+        assert_eq!(ssh_endpoint("ssh://git@host/acme/c.git"), at("host", 22));
+        assert_eq!(
+            ssh_endpoint("ssh://git@host:2222/acme/c.git"),
+            at("host", 2222)
+        );
+        assert_eq!(
+            ssh_endpoint("ssh://[2001:db8::1]:2222/c.git"),
+            at("2001:db8::1", 2222)
+        );
+        assert_eq!(
+            ssh_endpoint("ssh://[2001:db8::1]/c.git"),
+            at("2001:db8::1", 22)
+        );
+        assert_eq!(ssh_endpoint("https://github.com/acme/c.git"), None);
+        assert_eq!(ssh_endpoint("ssh://host:x/c.git"), None);
     }
 
     #[test]

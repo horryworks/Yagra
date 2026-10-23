@@ -76,6 +76,7 @@ import {
   ATTEMPT_OUTCOMES,
   SCAN_MODES,
   PUSH_FAILURES,
+  REMOTE_TEST_RESULTS,
 } from './types/api';
 import { BACKUP_MARKS } from './lib/configBackupMarks';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
@@ -371,6 +372,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSystem, ja: jaSystem },
       'git.failure.',
       PUSH_FAILURES,
+    );
+    expectKeys(
+      'config backup connection test',
+      { en: enSystem, ja: jaSystem },
+      'git.test.',
+      REMOTE_TEST_RESULTS,
     );
   });
 

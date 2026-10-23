@@ -3194,6 +3194,66 @@
         }
       }
     },
+    "/api/v1/config-backup-remote/test": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "test_remote",
+        "responses": {
+          "200": {
+            "description": "What the destination answered: over HTTPS whether the stored token may push (`can_push`, `auth_failed`, `no_write`, `not_found`), over SSH whether the host answers (`answered`); `unreachable`, `blocked` (an address Yagra does not reach) or `unexpected` otherwise. Nothing a push records changes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteTestView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller lacks manage-system",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No destination is set (`no_config_backup_remote`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config-backups": {
       "get": {
         "tags": [
@@ -42687,6 +42747,32 @@
               "null"
             ],
             "description": "The HTTPS user name (`x-token-auth` for a Bitbucket repository token)."
+          }
+        }
+      },
+      "RemoteTestResult": {
+        "type": "string",
+        "description": "What a connection test found (decision 42). A test is a question to the destination, asked from\ncore: it changes nothing a push records.",
+        "enum": [
+          "can_push",
+          "answered",
+          "auth_failed",
+          "no_write",
+          "not_found",
+          "unreachable",
+          "blocked",
+          "unexpected"
+        ]
+      },
+      "RemoteTestView": {
+        "type": "object",
+        "description": "What a connection test found.",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "$ref": "#/components/schemas/RemoteTestResult"
           }
         }
       },

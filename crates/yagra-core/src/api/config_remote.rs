@@ -12,6 +12,9 @@
 //! - `POST /api/v1/config-backup-remote/ssh-key` — replace the SSH key with a new one.
 //! - `DELETE /api/v1/config-backup-remote/host-keys` — forget the destination's host keys, so the
 //!   next push learns them again (decision 31).
+//! - `POST /api/v1/config-backup-remote/test` — ask the destination, from core, whether a push
+//!   would get in (decision 42): over HTTPS git's own "may I push?" question with the stored
+//!   token, over SSH only whether the host answers. Nothing a push records changes.
 //!
 //! `GET /api/v1/config-backup-remote/status` is the same "how did the last push go", for anyone with
 //! `View`: the host the backups go to and when they last arrived, without the path or the key.
@@ -34,7 +37,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_remote::{self, ConfigRemote, GitAuth, PushFailure, RemoteSettings};
+use yagra_base::config_remote::{
+    self, ConfigRemote, GitAuth, PushFailure, RemoteSettings, RemoteTestResult,
+};
 use yagra_base::secrets::{GitRemoteSecret, KIND_GIT_REMOTE};
 
 use super::config_backup::{check_oid, check_source_token, oxidized_of};
@@ -50,6 +55,7 @@ use super::ApiState;
     delete_remote,
     regenerate_key,
     forget_host_keys,
+    test_remote,
     push_status,
     push_ask,
     push_report
@@ -68,6 +74,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/config-backup-remote/host-keys",
             delete(forget_host_keys),
         )
+        .route("/api/v1/config-backup-remote/test", post(test_remote))
         .route("/api/v1/config-backup-remote/status", get(push_status))
         .route("/internal/oxidized/push", get(push_ask).post(push_report))
 }
@@ -487,6 +494,139 @@ async fn forget_host_keys(_perm: RequireManageSystem, admin: Admin) -> ApiResult
     }
 }
 
+/// What a connection test found.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct RemoteTestView {
+    result: RemoteTestResult,
+}
+
+/// How long a connection test may take, end to end.
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The addresses `host` resolves to, if every one of them is one Yagra may reach: a name that
+/// resolves to a loopback, link-local or metadata address is not dialled at all, the rule NetBox
+/// and the URL monitor follow (`url_check::is_ssrf_blocked`).
+async fn resolve_allowed(
+    host: &str,
+    port: u16,
+) -> Result<Vec<std::net::SocketAddr>, RemoteTestResult> {
+    let found = tokio::time::timeout(TEST_TIMEOUT, tokio::net::lookup_host((host, port)))
+        .await
+        .map_err(|_| RemoteTestResult::Unreachable)?
+        .map_err(|_| RemoteTestResult::Unreachable)?
+        .collect::<Vec<_>>();
+    if found.is_empty() {
+        return Err(RemoteTestResult::Unreachable);
+    }
+    if found
+        .iter()
+        .any(|a| yagra_common::url_check::is_ssrf_blocked(a.ip()))
+    {
+        return Err(RemoteTestResult::Blocked);
+    }
+    Ok(found)
+}
+
+/// Ask an HTTPS destination git's push question with the stored token. The client is pinned to the
+/// address that was checked, so a second lookup cannot land somewhere else, and follows no
+/// redirect.
+async fn test_https(url: &str, username: &str, token: &str) -> RemoteTestResult {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return RemoteTestResult::Unexpected;
+    };
+    let Some(host) = parsed
+        .host_str()
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_owned())
+    else {
+        return RemoteTestResult::Unexpected;
+    };
+    // A name is pinned to the address checked; a literal address is already that address.
+    let pinned = host.parse::<std::net::IpAddr>().is_err();
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let addrs = match resolve_allowed(&host, port).await {
+        Ok(a) => a,
+        Err(result) => return result,
+    };
+    let mut builder = yagra_base::http::builder(TEST_TIMEOUT, yagra_base::http::Redirects::None);
+    if pinned {
+        builder = builder.resolve(&host, addrs[0]);
+    }
+    let Ok(client) = builder.build() else {
+        return RemoteTestResult::Unexpected;
+    };
+    match client
+        .get(config_remote::receive_pack_url(url))
+        .basic_auth(username, Some(token))
+        .send()
+        .await
+    {
+        Ok(res) => {
+            let content_type = res
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            config_remote::receive_pack_result(res.status().as_u16(), content_type.as_deref())
+        }
+        Err(_) => RemoteTestResult::Unreachable,
+    }
+}
+
+/// Dial an SSH destination and wait for its greeting. The key and the host key are the next push's
+/// to check: this has neither an SSH client nor the private key.
+async fn test_ssh(url: &str) -> RemoteTestResult {
+    use tokio::io::AsyncReadExt;
+    let Some((host, port)) = config_remote::ssh_endpoint(url) else {
+        return RemoteTestResult::Unexpected;
+    };
+    let addrs = match resolve_allowed(&host, port).await {
+        Ok(a) => a,
+        Err(result) => return result,
+    };
+    let dialled = tokio::time::timeout(TEST_TIMEOUT, async {
+        let mut stream = tokio::net::TcpStream::connect(addrs[0]).await.ok()?;
+        let mut greeting = [0u8; 64];
+        let read = stream.read(&mut greeting).await.ok()?;
+        Some(greeting[..read].starts_with(b"SSH-"))
+    })
+    .await;
+    match dialled {
+        Ok(Some(true)) => RemoteTestResult::Answered,
+        Ok(Some(false)) => RemoteTestResult::Unexpected,
+        Ok(None) | Err(_) => RemoteTestResult::Unreachable,
+    }
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/config-backup-remote/test", tag = "nodes",
+    responses(
+        (status = 200, description = "What the destination answered: over HTTPS whether the stored token may push (`can_push`, `auth_failed`, `no_write`, `not_found`), over SSH whether the host answers (`answered`); `unreachable`, `blocked` (an address Yagra does not reach) or `unexpected` otherwise. Nothing a push records changes", body = RemoteTestView),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "The caller lacks manage-system", body = super::error::ErrorBody),
+        (status = 404, description = "No destination is set (`no_config_backup_remote`)", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn test_remote(_perm: RequireManageSystem, admin: Admin) -> ApiResult<Json<RemoteTestView>> {
+    let remote = admin
+        .config_remote
+        .get()
+        .await
+        .map_err(|e| read_failed(&e))?
+        .ok_or_else(no_destination)?;
+    let result = match remote.auth {
+        GitAuth::HttpsToken => match sealed_secret(&admin, &remote).await? {
+            Some(GitRemoteSecret::HttpsToken { username, token }) => {
+                test_https(&remote.url, &username, &token).await
+            }
+            Some(GitRemoteSecret::SshKey { .. }) | None => RemoteTestResult::Unexpected,
+        },
+        GitAuth::SshKey => test_ssh(&remote.url).await,
+        GitAuth::Unknown => RemoteTestResult::Unexpected,
+    };
+    Ok(Json(RemoteTestView { result }))
+}
+
 /// How the last push went. Shared by REST and MCP.
 pub(crate) async fn push_status_of(admin: &super::AdminState) -> ApiResult<PushStatusView> {
     let remote = admin
@@ -810,6 +950,32 @@ mod tests {
         assert_eq!(body["configured"], false);
         let (status, _) = send(&st, "DELETE", PATH, &admin, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    /// A connection test never dials an address Yagra does not reach, over either way in; it needs
+    /// a destination, and an Operator cannot run one.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_connection_test_answers_without_reaching_a_loopback_address(pool: sqlx::PgPool) {
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let test = format!("{PATH}/test");
+        let (status, _) = send(&st, "POST", &test, &admin, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        for set in [
+            serde_json::json!({"url": "https://127.0.0.1/acme/configs.git", "auth": "https_token",
+                               "username": "bot", "token": "t"}),
+            serde_json::json!({"url": "git@localhost:acme/configs.git", "auth": "ssh_key"}),
+        ] {
+            let (status, body) = send(&st, "PUT", PATH, &admin, Some(set)).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            let (status, body) = send(&st, "POST", &test, &admin, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["result"], "blocked", "{body}");
+        }
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, _) = send(&st, "POST", &test, &operator, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     /// An SSH destination gets a key Yagra made, shows only its public half, keeps it across an

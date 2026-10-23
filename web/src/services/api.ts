@@ -43,6 +43,7 @@ import type {
   ConfigBackupRow,
   GitAuth,
   PushStatusView,
+  RemoteTestResult,
   RemoteView,
   ConfigBackupView,
   ConfigVersion,
@@ -1289,6 +1290,10 @@ export const api = {
   /** Forget the destination's host keys, so the next push learns them again. */
   forgetConfigBackupRemoteHostKeys: (): Promise<void> =>
     apiDelete('/api/v1/config-backup-remote/host-keys'),
+
+  /** Ask the destination, from core, whether a push would get in. Changes nothing. */
+  testConfigBackupRemote: (): Promise<{ result: RemoteTestResult }> =>
+    apiPost('/api/v1/config-backup-remote/test'),
 
   /** Whether config backups are reaching their Git destination. */
   getConfigBackupRemoteStatus: (): Promise<PushStatusView> =>

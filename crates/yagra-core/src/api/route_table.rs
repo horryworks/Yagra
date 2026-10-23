@@ -1504,6 +1504,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/config-backup-remote/test",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/config-backup-remote/status",
         DEPLOY_WIDE,

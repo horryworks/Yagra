@@ -5,7 +5,7 @@
 // A `.ts` because Vitest never loads a `.tsx` (`testing.md`): what the last push means, which chip
 // the tile wears, and what the form may send are all here.
 
-import type { GitAuth, PushFailure, PushStatusView } from '../../types/api';
+import type { GitAuth, PushFailure, PushStatusView, RemoteTestResult } from '../../types/api';
 import type { Chip } from './chip';
 
 /** The page's route; the alert row and the Config backups line link here. */
@@ -26,6 +26,23 @@ export function pushLine(s: PushStatusView): PushLine {
     return { key: 'git.push.ok', at: s.pushed_at, head: s.pushed_commit.slice(0, 7) };
   }
   return { key: 'git.push.waiting' };
+}
+
+/** Whether a connection test's answer is good news: the line is then drawn plainly, otherwise as a
+ *  fault. */
+export function testPassed(result: RemoteTestResult): boolean {
+  switch (result) {
+    case 'can_push':
+    case 'answered':
+      return true;
+    case 'auth_failed':
+    case 'no_write':
+    case 'not_found':
+    case 'unreachable':
+    case 'blocked':
+    case 'unexpected':
+      return false;
+  }
 }
 
 /** The catalogue tile's chip. */

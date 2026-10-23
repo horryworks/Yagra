@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
-import type { RemoteView } from '../../types/api';
+import type { RemoteTestResult, RemoteView } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -32,6 +32,7 @@ import {
   pushLine,
   remoteBody,
   storedTokenUsable,
+  testPassed,
   type GitRemoteForm,
 } from './gitRemote';
 import './GitRemotePage.css';
@@ -131,6 +132,20 @@ export function GitRemotePage() {
   const canManage = useCan('manage_system');
   const [editing, setEditing] = useState(false);
   const [confirm, setConfirm] = useState<'delete' | 'key' | null>(null);
+  // A test changes nothing, so it is neither confirmed nor reloads the page.
+  const [testing, setTesting] = useState(false);
+  const [tested, setTested] = useState<RemoteTestResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+  const runTest = () => {
+    setTesting(true);
+    setTested(null);
+    setTestError(null);
+    api
+      .testConfigBackupRemote()
+      .then((r) => setTested(r.result))
+      .catch((e: unknown) => setTestError(errMsg(e, t('git.err.test'))))
+      .finally(() => setTesting(false));
+  };
   const [forgetError, setForgetError] = useState<string | null>(null);
   // Not confirmed: the next push learns the keys again, so nothing is lost.
   const forget = () => {
@@ -185,6 +200,9 @@ export function GitRemotePage() {
             title={t('git.card.title')}
             actions={
               <>
+                <Button onClick={runTest} disabled={testing}>
+                  {t('git.card.test')}
+                </Button>
                 <Button onClick={() => setEditing(true)}>{t('common:actions.edit')}</Button>
                 <Button onClick={() => setConfirm('delete')}>{t('common:actions.delete')}</Button>
               </>
@@ -202,6 +220,12 @@ export function GitRemotePage() {
                 {(line.key === 'git.push.waiting' || line.key === 'git.push.none') && t(line.key)}
               </p>
             )}
+            {tested && (
+              <p className={`git-line ${testPassed(tested) ? '' : 'bad'}`} role="status">
+                {t(`git.test.${tested}`)}
+              </p>
+            )}
+            {testError && <FieldError>{testError}</FieldError>}
             <dl className="git-facts">
               <dt>{t('git.form.url')}</dt>
               <dd className="mono">{remote.url}</dd>

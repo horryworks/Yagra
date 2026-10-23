@@ -86,6 +86,7 @@ const schemaEnumPins: {
   ScanMode: AssertEqual<ScanMode, Exclude<components['schemas']['ScanMode'], 'unknown'>>;
   GitAuth: AssertEqual<GitAuth, Exclude<components['schemas']['GitAuth'], 'unknown'>>;
   PushFailure: AssertEqual<PushFailure, components['schemas']['PushFailure']>;
+  RemoteTestResult: AssertEqual<RemoteTestResult, components['schemas']['RemoteTestResult']>;
   RevealedFieldKey: AssertEqual<RevealedFieldKey, components['schemas']['RevealedFieldKey']>;
   NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
   DuplicateEvidenceKind: AssertEqual<DuplicateEvidenceKind, components['schemas']['DuplicateEvidenceKind']>;
@@ -161,6 +162,7 @@ const schemaEnumPins: {
   ScanMode: true,
   GitAuth: true,
   PushFailure: true,
+  RemoteTestResult: true,
   RevealedFieldKey: true,
   NeighborProto: true,
   NeighborCapability: true,
@@ -441,6 +443,20 @@ export const PUSH_FAILURES = [
   'unknown',
 ] as const;
 export type PushFailure = (typeof PUSH_FAILURES)[number];
+/** What a connection test to the Git destination found (ADR-210 stage 4 decision 42). Pinned to
+ *  `schemas.RemoteTestResult`. */
+export const REMOTE_TEST_RESULTS = [
+  'can_push',
+  'answered',
+  'auth_failed',
+  'no_write',
+  'not_found',
+  'unreachable',
+  'blocked',
+  'unexpected',
+] as const;
+export type RemoteTestResult = (typeof REMOTE_TEST_RESULTS)[number];
+
 /** The Git destination as an administrator sets it; never its token or private key. */
 export type RemoteView = components['schemas']['RemoteView'];
 /** How the last push to the Git destination went. */

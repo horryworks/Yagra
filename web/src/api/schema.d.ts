@@ -676,6 +676,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-backup-remote/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["test_remote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-backups": {
         parameters: {
             query?: never;
@@ -13409,6 +13425,16 @@ export interface components {
             /** @description The HTTPS user name (`x-token-auth` for a Bitbucket repository token). */
             username?: string | null;
         };
+        /**
+         * @description What a connection test found (decision 42). A test is a question to the destination, asked from
+         *     core: it changes nothing a push records.
+         * @enum {string}
+         */
+        RemoteTestResult: "can_push" | "answered" | "auth_failed" | "no_write" | "not_found" | "unreachable" | "blocked" | "unexpected";
+        /** @description What a connection test found. */
+        RemoteTestView: {
+            result: components["schemas"]["RemoteTestResult"];
+        };
         /** @description The destination, for the person who sets it. */
         RemoteView: {
             auth?: null | components["schemas"]["GitAuth"];
@@ -18178,6 +18204,62 @@ export interface operations {
             };
             /** @description No valid bearer token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    test_remote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What the destination answered: over HTTPS whether the stored token may push (`can_push`, `auth_failed`, `no_write`, `not_found`), over SSH whether the host answers (`answered`); `unreachable`, `blocked` (an address Yagra does not reach) or `unexpected` otherwise. Nothing a push records changes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteTestView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The caller lacks manage-system */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No destination is set (`no_config_backup_remote`) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

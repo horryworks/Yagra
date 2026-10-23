@@ -54,6 +54,7 @@ const overrides = (view: Schemas['RemoteView']) => ({
   ...BOOTSTRAP_OVERRIDES,
   '/api/v1/config-backup-remote': view as unknown as Json,
   '/api/v1/config-backup-remote/status': view.status as unknown as Json,
+  '/api/v1/config-backup-remote/test': { result: 'no_write' } as unknown as Json,
 });
 
 test.describe('no destination yet', () => {
@@ -93,6 +94,19 @@ test.describe('an SSH destination whose push was refused', () => {
     await expect(page.locator('.git-line.bad')).toContainText('the login was refused');
     await expect(page.locator('.copy-cmd-text')).toContainText('yagra-config-backup');
     await expect(page.locator('.git-facts')).toContainText('SHA256:+DiY3wvvV6');
+  });
+
+  test('Test connection asks once and says what the destination answered', async ({ page }) => {
+    await page.goto('/settings/integrations/git');
+    const asked = page.waitForRequest(
+      (r) =>
+        r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/config-backup-remote/test',
+    );
+    await page.getByRole('button', { name: 'Test connection' }).click();
+    await asked;
+    await expect(page.locator('.git-line[role="status"]')).toContainText(
+      'may not write to this repository',
+    );
   });
 
   test('the Config backups list says where the backups go', async ({ page }) => {
