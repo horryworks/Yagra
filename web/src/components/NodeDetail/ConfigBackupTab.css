@@ -112,3 +112,16 @@
   align-items: center;
   gap: 8px;
 }
+
+.cfgb-login {
+  font-weight: 500;
+}
+
+.cfgb-spacer {
+  flex: 1;
+}
+
+.cfgb-add-login {
+  align-self: flex-start;
+  color: var(--accent-color);
+}

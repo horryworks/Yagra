@@ -1475,6 +1475,18 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/nodes/:node_id/config-backup/cancel",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
+        "/api/v1/nodes/:node_id/config-backup/rescan",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/config-backups",
         GroupFiltered,

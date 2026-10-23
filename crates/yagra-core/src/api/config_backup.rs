@@ -68,6 +68,8 @@ use crate::oxidized::{
     get_version,
     get_diff,
     fetch_now,
+    cancel_fetch,
+    rescan_logins,
     list_config_backups,
     oxidized_source,
     oxidized_event
@@ -93,6 +95,14 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/nodes/:node_id/config-backup/fetch",
             post(fetch_now),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/config-backup/cancel",
+            post(cancel_fetch),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/config-backup/rescan",
+            post(rescan_logins),
         )
         .route("/api/v1/config-backups", get(list_config_backups))
         .route("/internal/oxidized/nodes", get(oxidized_source))
@@ -821,6 +831,79 @@ async fn fetch_now(
     }
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/nodes/{node_id}/config-backup/cancel", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 204, description = "The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as unreachable — not counted as a refused login, and the next login is not tried because of it"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
+        (status = 409, description = "No fetch is out for this node (`config_backup_not_pending`)", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn cancel_fetch(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    oxidized_of(&admin)?;
+    let repo = &admin.config_backup;
+    let pending = repo
+        .get_with_rotation(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?
+        .is_some_and(|(_, r)| rotation::in_flight(r.requested_at, Utc::now()));
+    if !pending {
+        return Err(ApiError::conflict(
+            "config_backup_not_pending",
+            "no fetch is out for this node",
+        ));
+    }
+    admin.config_relay.cancel(node_id);
+    repo.record_result(node_id, AttemptOutcome::Unreachable, None)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/nodes/{node_id}/config-backup/rescan", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 204, description = "The login that worked is forgotten and the node's logins are tried again from the top of its order, by the rotation and within the lockout limits; nothing is sent to the device by this call"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig or RevealCredentials, or the caller is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 404, description = "No such node the caller can see, or it has no config backup", body = super::error::ErrorBody),
+    ),
+)]
+async fn rescan_logins(
+    _perm: RequireManageConfig,
+    // It hands the node's logins out again, so it takes what switching the backup on takes.
+    _reveal: RequireRevealCredentials,
+    _visible: VisibleNode,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    refuse_scoped_login(&scope)?;
+    let found = admin
+        .config_backup
+        .forget_login(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "config_backup_not_found",
+            "this node has no config backup",
+        ))
+    }
+}
+
 /// One node in the fleet-wide list.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ConfigBackupRow {
@@ -1020,6 +1103,10 @@ async fn oxidized_event(
     };
     // A parked node's fetch reached no device and sent no login (stage 3 decision 26).
     if ev.ip.as_deref() == Some(oxidized::source::PARKED_IP) {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    // The fetch a person cancelled was recorded when they cancelled it (stage 5 decision 54).
+    if admin.config_relay.take_cancelled(node) {
         return Ok(StatusCode::NO_CONTENT);
     }
     let Some(mut outcome) = rotation::classify(&ev.event, ev.err_type.as_deref().unwrap_or(""))
@@ -1289,6 +1376,112 @@ mod tests {
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].outcome, AttemptOutcome::AuthFailed);
         assert_eq!(attempts[0].credential_id, Some(login));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// A fetch that is out can be cut, and is recorded as unreachable rather than as a refused
+    /// login; a node whose login works can be sent looking again (ADR-210 stage 5 decisions 54
+    /// and 55). Both writes accepted, and both refused where they must be.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_fetch_is_cancelled_and_a_working_login_is_searched_for_again(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{send, token};
+        let home = std::env::temp_dir().join(format!("yagra-ox-cancel-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("dir");
+        oxidized::config::ensure_token(&home).expect("token");
+        let st = crate::api::tests_support::live_state_with_oxidized(
+            pool.clone(),
+            Arc::new(OxidizedHandle {
+                settings: oxidized::Settings {
+                    url: "http://127.0.0.1:9".to_owned(),
+                    home: home.clone(),
+                },
+                client: Arc::new(OxidizedClient::new("http://127.0.0.1:9")),
+            }),
+        )
+        .await;
+        let admin = st.admin.clone().expect("live state");
+        let node = yagra_base::pgtest::node(&pool, "sw-11", 11, None).await;
+        let login = yagra_base::pgtest::credential(&pool, "ops", "cli_login").await;
+        let repo = yagra_base::config_backup::ConfigBackupRepo::new(pool.clone());
+        repo.put(
+            node,
+            &NodeConfigBackup {
+                enabled: true,
+                login_order: None,
+                input: BackupInput::Ssh,
+                model_override: Some("ios".to_owned()),
+                scan_mode: ScanMode::Normal,
+            },
+            true,
+        )
+        .await
+        .expect("put");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let cancel = format!("/api/v1/nodes/{node}/config-backup/cancel");
+        let rescan = format!("/api/v1/nodes/{node}/config-backup/rescan");
+
+        // Nothing is out yet.
+        let (status, body) = send(&st, "POST", &cancel, &operator, None).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "config_backup_not_pending");
+
+        repo.dispatch(
+            node,
+            login,
+            Utc::now(),
+            Utc::now() - rotation::REQUEST_TIMEOUT,
+        )
+        .await
+        .expect("dispatch");
+        let (status, _) = send(&st, "POST", &cancel, &viewer, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, body) = send(&st, "POST", &cancel, &operator, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let attempts = repo.attempts_of(node, 5).await.expect("attempts");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].outcome, AttemptOutcome::Unreachable);
+        let (_, rot) = repo
+            .get_with_rotation(node)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(
+            !rotation::in_flight(rot.requested_at, Utc::now()),
+            "no longer out"
+        );
+        // The cancelled fetch's own late report is not recorded a second time.
+        assert!(admin.config_relay.take_cancelled(node));
+
+        // A login that works is forgotten on request, and the rotation starts from the top.
+        sqlx::query("UPDATE node_config_backup SET credential_id = $2, login_confirmed = true WHERE node_id = $1")
+            .bind(node)
+            .bind(login)
+            .execute(&pool)
+            .await
+            .expect("confirm");
+        let (status, _) = send(&st, "POST", &rescan, &viewer, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, body) = send(&st, "POST", &rescan, &operator, None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let (_, rot) = repo
+            .get_with_rotation(node)
+            .await
+            .expect("read")
+            .expect("row");
+        assert!(!rot.login_confirmed);
+        assert_eq!(rot.credential_id, None);
+        let other = yagra_base::pgtest::node(&pool, "sw-12", 12, None).await;
+        let (status, _) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/nodes/{other}/config-backup/rescan"),
+            &operator,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
         std::fs::remove_dir_all(&home).ok();
     }
 

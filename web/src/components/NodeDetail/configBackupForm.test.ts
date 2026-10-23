@@ -8,6 +8,7 @@ import {
   isDirty,
   isQuietFetchRefusal,
   loginLabel,
+  orderShown,
   pickedLogins,
   previousOf,
   refreshMs,
@@ -192,5 +193,15 @@ describe('versions', () => {
     expect(previousOf(versions, 'a'.repeat(40))).toBeNull();
     expect(previousOf(versions, 'z')).toBeNull();
     expect(shortOid('abcdef0123456789')).toBe('abcdef01');
+  });
+});
+
+describe('the try order', () => {
+  it('is open while a login is looked for, and folded under the working one once found', () => {
+    const base = { login_confirmed: false, credential_id: null } as unknown as ConfigBackupView;
+    expect(orderShown(base, false)).toBe(true);
+    const found = { ...base, login_confirmed: true, credential_id: 'c1' } as ConfigBackupView;
+    expect(orderShown(found, false)).toBe(false);
+    expect(orderShown(found, true)).toBe(true);
   });
 });

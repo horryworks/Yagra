@@ -491,6 +491,21 @@ impl ConfigBackupRepo {
 
     /// Start a new pass through the candidates now: none counts as tried, and nothing is pending.
     /// What is remembered as working stays remembered.
+    /// Forget the login that works and start trying the node's logins from the top of its order
+    /// (ADR-210 stage 5 decision 55). Sends nothing to the device: the rotation tries again, within
+    /// the limits. `false` when the node has no configuration.
+    pub async fn forget_login(&self, node: Uuid) -> anyhow::Result<bool> {
+        let done = sqlx::query(
+            "UPDATE node_config_backup SET credential_id = NULL, login_confirmed = false, \
+               round_started_at = now(), requested_at = NULL, next_try_at = NULL, \
+               updated_at = now() WHERE node_id = $1",
+        )
+        .bind(node)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
     pub async fn restart_round(&self, node: Uuid) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE node_config_backup SET round_started_at = now(), requested_at = NULL, \

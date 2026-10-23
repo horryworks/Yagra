@@ -114,8 +114,12 @@ impl Routes for Coordinator {
 /// The relay's shared state.
 pub(crate) struct Relay {
     routes: Arc<dyn Routes>,
-    sessions: Mutex<HashMap<Uuid, mpsc::Sender<RelayFrame>>>,
+    /// Each session's channel, with the node it carries a login to.
+    sessions: Mutex<HashMap<Uuid, (Uuid, mpsc::Sender<RelayFrame>)>>,
     failures: Mutex<HashMap<Uuid, Instant>>,
+    /// Nodes whose fetch a person cancelled (decision 54): new sessions are refused and the fetch's
+    /// late report is not recorded, for [`FAILURE_MEMORY`].
+    cancelled: Mutex<HashMap<Uuid, Instant>>,
 }
 
 impl Relay {
@@ -124,6 +128,7 @@ impl Relay {
             routes,
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
+            cancelled: Mutex::new(HashMap::new()),
         })
     }
 
@@ -147,10 +152,37 @@ impl Relay {
             .is_some_and(|at| at.elapsed() < FAILURE_MEMORY)
     }
 
-    fn open_session(&self, id: Uuid) -> mpsc::Receiver<RelayFrame> {
+    /// Cut every session carrying a login to `node`, and refuse new ones for [`FAILURE_MEMORY`]
+    /// (decision 54). A session's channel is dropped, so its loop ends and tells the poller to close.
+    pub(crate) fn cancel(&self, node: Uuid) {
+        if let Ok(mut c) = self.cancelled.lock() {
+            c.insert(node, Instant::now());
+        }
+        if let Ok(mut s) = self.sessions.lock() {
+            s.retain(|_, (n, _)| *n != node);
+        }
+    }
+
+    fn is_cancelled(&self, node: Uuid) -> bool {
+        self.cancelled
+            .lock()
+            .is_ok_and(|c| c.get(&node).is_some_and(|at| at.elapsed() < FAILURE_MEMORY))
+    }
+
+    /// Whether `node`'s fetch was cancelled within [`FAILURE_MEMORY`], forgetting it as it answers:
+    /// the report of the fetch a person cancelled is not recorded, since the cancel already was.
+    pub(crate) fn take_cancelled(&self, node: Uuid) -> bool {
+        let Ok(mut c) = self.cancelled.lock() else {
+            return false;
+        };
+        c.remove(&node)
+            .is_some_and(|at| at.elapsed() < FAILURE_MEMORY)
+    }
+
+    fn open_session(&self, id: Uuid, node: Uuid) -> mpsc::Receiver<RelayFrame> {
         let (tx, rx) = mpsc::channel(SESSION_QUEUE);
         if let Ok(mut s) = self.sessions.lock() {
-            s.insert(id, tx);
+            s.insert(id, (node, tx));
         }
         rx
     }
@@ -168,7 +200,7 @@ impl Relay {
             return;
         };
         let id = frame.session;
-        let Some(tx) = s.get(&id) else {
+        let Some((_, tx)) = s.get(&id) else {
             return;
         };
         if tx.try_send(frame).is_err() {
@@ -195,6 +227,8 @@ enum Outcome {
     NoPoller,
     PollerTooOld,
     RelayRefused,
+    /// A person cancelled the node's fetch (decision 54).
+    Cancelled,
     /// The poller refused, did not answer, or could not reach the device.
     NotOpened,
     /// A limit, a lost frame, or the bus.
@@ -210,6 +244,7 @@ impl Outcome {
             Self::NoPoller => "no_poller",
             Self::PollerTooOld => "poller_too_old",
             Self::RelayRefused => "relay_refused",
+            Self::Cancelled => "cancelled",
             Self::NotOpened => "not_opened",
             Self::Cut => "cut",
             Self::Stranger => "stranger",
@@ -224,6 +259,7 @@ impl Outcome {
             Self::NoPoller
             | Self::PollerTooOld
             | Self::RelayRefused
+            | Self::Cancelled
             | Self::NotOpened
             | Self::Cut => true,
         }
@@ -404,6 +440,9 @@ async fn serve(
     ep: &Endpoint,
     device: u16,
 ) -> Outcome {
+    if relay.is_cancelled(ep.node) {
+        return Outcome::Cancelled;
+    }
     let poller = match relay.route(ep.node) {
         Route::Via(p) => p,
         Route::NoPoller => return Outcome::NoPoller,
@@ -411,7 +450,7 @@ async fn serve(
         Route::RelayRefused => return Outcome::RelayRefused,
     };
     let session = Uuid::new_v4();
-    let mut rx = relay.open_session(session);
+    let mut rx = relay.open_session(session, ep.node);
     let outcome = run_session(&poller, session, sock, ep, device, &mut rx, bus).await;
     relay.end_session(session);
     outcome
@@ -571,6 +610,7 @@ mod tests {
             Outcome::NoPoller,
             Outcome::PollerTooOld,
             Outcome::RelayRefused,
+            Outcome::Cancelled,
             Outcome::NotOpened,
             Outcome::Cut,
             Outcome::Stranger,
@@ -581,6 +621,29 @@ mod tests {
                 "{o:?}"
             );
         }
+    }
+
+    /// A cancel cuts the node's sessions, refuses new ones, and swallows the one late report.
+    #[test]
+    fn a_cancelled_fetch_is_cut_refused_and_reported_once() {
+        let relay = Relay::new(Arc::new(Fixed(Route::Via("p1".to_owned()))));
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut ra = relay.open_session(Uuid::from_u128(10), a);
+        let _rb = relay.open_session(Uuid::from_u128(11), b);
+        relay.cancel(a);
+        assert!(ra.try_recv().is_err());
+        assert!(matches!(
+            ra.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        assert_eq!(
+            relay.sessions.lock().expect("lock").len(),
+            1,
+            "b keeps its session"
+        );
+        assert!(relay.is_cancelled(a) && !relay.is_cancelled(b));
+        assert!(relay.take_cancelled(a));
+        assert!(!relay.take_cancelled(a), "one report only");
     }
 
     #[test]

@@ -50,6 +50,17 @@ const refused = {
   ],
 } satisfies Schemas['ConfigBackupView'];
 
+// A login that works, and then the same node with a fetch out (ADR-210 stage 5 decisions 54-55).
+const working = {
+  ...refused,
+  login_confirmed: true,
+  try_after: null,
+  attempts: [
+    { at: '2026-10-22T10:00:00Z', credential_id: LOGIN, outcome: 'success', new_version: true },
+  ],
+} satisfies Schemas['ConfigBackupView'];
+const fetching = { ...working, pending: true } satisfies Schemas['ConfigBackupView'];
+
 const credentials = (() => {
   const [first] = defaultBodyFor('/api/v1/credentials') as unknown as Schemas['CredentialSummary'][];
   return [
@@ -153,5 +164,45 @@ test.describe('a node whose login was refused', () => {
     const url = new URL((await diff).url());
     expect([url.searchParams.get('from'), url.searchParams.get('to')]).toEqual([OLD, NEW]);
     await expect(page.locator('.cfgb-line-removed')).toContainText('192.0.2.9');
+  });
+});
+
+test.describe('a node whose login works', () => {
+  test.use({ mockConfig: { overrides: overrides(working) } });
+
+  test('names the working login, folds the try order, and searches again on request', async ({
+    page,
+  }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const head = page.locator('.cfgb-logins-head').first();
+    await expect(head).toContainText('ymock-ops-login');
+    await expect(page.locator('.cred-picker')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Change the try order' }).click();
+    await expect(page.locator('.cred-picker')).toContainText('ymock-second-login');
+    await expect(page.getByRole('link', { name: 'Add a CLI login' })).toHaveAttribute(
+      'href',
+      '/nodes/credentials?tab=cli',
+    );
+
+    const rescan = page.waitForRequest(
+      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/rescan'),
+    );
+    await page.getByRole('button', { name: 'Search logins again' }).click();
+    await rescan;
+  });
+});
+
+test.describe('a node with a fetch out', () => {
+  test.use({ mockConfig: { overrides: overrides(fetching) } });
+
+  test('offers Cancel fetch instead of Fetch now, and cancelling posts it', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await expect(page.getByRole('button', { name: 'Fetch now' })).toHaveCount(0);
+    const cancel = page.waitForRequest(
+      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/cancel'),
+    );
+    await page.getByRole('button', { name: 'Cancel fetch' }).click();
+    await cancel;
   });
 });

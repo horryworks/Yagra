@@ -729,6 +729,10 @@ fn changes_monitoring_config(path: &str) -> bool {
         // rebuild reads; the configuration it fetches with is `PUT …/config-backup`, which is not
         // listed and does bump the signal. Same blind spot as the previews: ManageConfig.
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/fetch"))
+        // Cutting that fetch (ADR-210 stage 5 decision 54): it records an attempt and closes a relay
+        // connection, neither of which a rebuild reads. `…/rescan` forgets a login in the same
+        // table and is left dirty, as `PUT …/config-backup` is.
+        || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/cancel"))
         // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the

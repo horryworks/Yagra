@@ -1262,6 +1262,14 @@ export const api = {
   fetchConfigNow: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/fetch', { path: { node_id: id } }),
 
+  /** Cut the fetch that is out for a node; it is recorded as unreachable (ADR-210 stage 5). */
+  cancelConfigFetch: (id: string): Promise<void> =>
+    apiPost('/api/v1/nodes/{node_id}/config-backup/cancel', { path: { node_id: id } }),
+
+  /** Forget the login that works and try the node's logins again from the top of its order. */
+  rescanConfigLogins: (id: string): Promise<void> =>
+    apiPost('/api/v1/nodes/{node_id}/config-backup/rescan', { path: { node_id: id } }),
+
   /** Every node switched on for config backup that the caller can see (Nodes ▸ Config backups and
    *  the tree's marks). */
   listConfigBackups: (): Promise<ConfigBackupRow[]> => apiGet('/api/v1/config-backups'),

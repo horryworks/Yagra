@@ -1321,12 +1321,19 @@
       "save": "Could not save.",
       "fetch": "Could not ask for a fetch.",
       "text": "Could not read the version.",
-      "list": "Could not list config backups."
+      "list": "Could not list config backups.",
+      "cancel": "Could not cancel the fetch.",
+      "rescan": "Could not start the search again."
     },
     "switch": {
       "label": "Backup",
       "on": "On",
       "off": "Off"
-    }
+    },
+    "login": "Login",
+    "rescan": "Search logins again",
+    "changeOrder": "Change the try order",
+    "addLogin": "Add a CLI login",
+    "cancelFetch": "Cancel fetch"
   }
 }

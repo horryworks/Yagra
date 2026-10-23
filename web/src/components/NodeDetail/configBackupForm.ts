@@ -154,6 +154,13 @@ export function stateLine(view: ConfigBackupView): Line {
   return { key: 'config.state.waiting', tone: 'none' };
 }
 
+/** Whether the try order is drawn open: always while a login is still being looked for, and only
+ *  when the operator opens it once one works — the working login is then named on its own line
+ *  (ADR-210 stage 5 decision 55). */
+export function orderShown(view: ConfigBackupView, opened: boolean): boolean {
+  return !view.login_confirmed || !view.credential_id || opened;
+}
+
 /** How often the tab reads itself again: fast while a fetch is out, slowly while a login is still
  *  being looked for (the leader moves the rotation on every minute), not at all once settled. */
 export function refreshMs(view: ConfigBackupView | null): number | undefined {

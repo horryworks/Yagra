@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { api, ApiError, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import { useLoad } from '../../lib/useLoad';
@@ -45,6 +46,7 @@ import {
   isDirty,
   isQuietFetchRefusal,
   loginLabel,
+  orderShown,
   pickedLogins,
   previousOf,
   refreshMs,
@@ -94,6 +96,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
+  const [orderOpen, setOrderOpen] = useState(false);
 
   const candidates = view.data?.candidates;
   const loginText = useMemo(
@@ -139,6 +142,8 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
     act(() => api.putConfigBackup(node.id, bodyOf(form, view.data?.enabled ?? false)), t('config.err.save'));
   };
   const fetchNow = () => act(fetchQuietly, t('config.err.fetch'));
+  const cancelFetch = () => act(() => api.cancelConfigFetch(node.id), t('config.err.cancel'));
+  const rescan = () => act(() => api.rescanConfigLogins(node.id), t('config.err.rescan'));
 
   const attemptColumns = useMemo<Column<AttemptView>[]>(
     () => [
@@ -259,6 +264,13 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                 </>
               )}
             </p>
+            {canConfig && v.available && v.enabled && v.pending && (
+              <div className="cfgb-buttons">
+                <Button variant="outline" onClick={cancelFetch} disabled={busy}>
+                  {t('config.cancelFetch')}
+                </Button>
+              </div>
+            )}
             {canConfig && v.available && v.enabled && v.readiness === 'ready' && !v.pending && (
               <div className="cfgb-buttons">
                 <Button onClick={fetchNow} disabled={busy}>
@@ -333,20 +345,46 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
           </div>
           {canStart && canCreds && (
             <div className="cfgb-logins">
-              <div className="cfgb-logins-head">
-                <span className="modal-field-label">{t('config.logins')}</span>
-                {form.order !== null && (
-                  <Button variant="outline" onClick={() => setForm({ ...form, order: null })}>
-                    {t('config.defaultOrder')}
+              {v.login_confirmed && v.credential_id && (
+                <div className="cfgb-logins-head">
+                  <span className="modal-field-label">{t('config.login')}</span>
+                  <span className="cfgb-login">{loginText(v.credential_id)}</span>
+                  <span className="cfgb-spacer" />
+                  {v.enabled && (
+                    <Button variant="outline" onClick={rescan} disabled={busy}>
+                      {t('config.rescan')}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    aria-expanded={orderOpen}
+                    onClick={() => setOrderOpen(!orderOpen)}
+                  >
+                    {t('config.changeOrder')}
                   </Button>
-                )}
-              </div>
-              <CredentialPicker
-                options={logins}
-                selected={pickedLogins(form, v)}
-                onChange={(ids) => setForm({ ...form, order: ids })}
-                disabled={busy}
-              />
+                </div>
+              )}
+              {orderShown(v, orderOpen) && (
+                <>
+                  <div className="cfgb-logins-head">
+                    <span className="modal-field-label">{t('config.logins')}</span>
+                    {form.order !== null && (
+                      <Button variant="outline" onClick={() => setForm({ ...form, order: null })}>
+                        {t('config.defaultOrder')}
+                      </Button>
+                    )}
+                  </div>
+                  <CredentialPicker
+                    options={logins}
+                    selected={pickedLogins(form, v)}
+                    onChange={(ids) => setForm({ ...form, order: ids })}
+                    disabled={busy}
+                  />
+                  <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
+                    {t('config.addLogin')}
+                  </Link>
+                </>
+              )}
             </div>
           )}
           {canStart && v.enabled && (
