@@ -408,6 +408,8 @@ export const BACKUP_READINESS = [
   'no_credential',
   'unknown_input',
   'address_changed',
+  'no_poller',
+  'poller_too_old',
 ] as const;
 export type BackupReadiness = (typeof BACKUP_READINESS)[number];
 

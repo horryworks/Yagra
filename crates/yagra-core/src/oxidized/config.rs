@@ -42,7 +42,7 @@ const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 4;
+pub(crate) const CONFIG_REVISION: u32 = 5;
 
 const TOKEN_LEN: usize = 40;
 
@@ -169,6 +169,8 @@ source:
       password: password
     vars_map:
       enable: enable
+      ssh_port: ssh_port
+      telnet_port: telnet_port
 hooks:
   yagra:
     type: exec
@@ -260,7 +262,7 @@ mod tests {
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "26ed06794ceea2949a28495e7cf8ba0b1e7ab5f9c6f439818eca985f5f44a2ad",
+            "d37e8f08e18c9b5237c387ddcba539225253febe81476e3c3a618525a292a765",
         )];
         assert_eq!(
             pinned,

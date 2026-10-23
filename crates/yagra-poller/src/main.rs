@@ -48,6 +48,7 @@ mod module_source;
 mod neighbors;
 mod optical;
 mod pool;
+mod relay;
 mod routing;
 mod store_forward;
 mod support_logs;
@@ -306,6 +307,10 @@ async fn main() -> anyhow::Result<()> {
     // Support-log requests (ADR-045 Inc.4): core asks this poller for a window of its own
     // on-disk log so a support bundle can carry a remote site's evidence.
     support_logs::start(&bus, &identity.id, &working_set, &shutdown).await?;
+
+    // The config-backup relay (ADR-210 stage 5): core's oxidized logs in to this poller's devices
+    // through here.
+    relay::start(&bus, &identity.id, &working_set, &shutdown).await?;
 
     // Legacy / pool-scoped jobs: consume only this poller's pool (no more `yagra.jobs.*` wildcard)
     // so work stays local (ADR-009). Merge with the locally-scheduled jobs into one stream driving

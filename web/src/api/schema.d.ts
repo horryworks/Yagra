@@ -7095,6 +7095,8 @@ export interface components {
             node_id: string;
             /** @description A fetch is out and not yet answered. */
             pending: boolean;
+            /** @description Whether a poller can carry the node's login session (ADR-210 stage 5 decision 48). */
+            poller: components["schemas"]["PollerReach"];
             /**
              * Format: date-time
              * @description When the lockout limits next allow a try, as the leader last worked it out.
@@ -12324,6 +12326,11 @@ export interface components {
             /** @description Whether `nodes` is a capped page of `total`. */
             truncated: boolean;
         };
+        /**
+         * @description Whether a node's config-backup login has a poller to go through (ADR-210 stage 5).
+         * @enum {string}
+         */
+        PollerReach: "ready" | "no_poller" | "poller_too_old";
         /** @description What a new site needs, beyond its own name. */
         PollerTokenRequest: {
             /**
@@ -13064,7 +13071,7 @@ export interface components {
          * @description Whether a node is fetched, and if not, the one thing to fix.
          * @enum {string}
          */
-        Readiness: "ready" | "off" | "no_model" | "no_credential" | "unknown_input" | "address_changed";
+        Readiness: "ready" | "off" | "no_model" | "no_credential" | "unknown_input" | "address_changed" | "no_poller" | "poller_too_old";
         /** @description What an apply did. The four counts add up to the number of distinct nodes named. */
         ReclassifyApplied: {
             /** @description Nodes moved to the profile the rules choose. */
@@ -14268,6 +14275,17 @@ export interface components {
             /** @description The node id: oxidized's name for it, and the file it is stored under. */
             name: string;
             password: string;
+            /**
+             * Format: int32
+             * @description The relay port oxidized logs in over SSH on, at [`relay::RELAY_HOST`] (stage 5 decision 43).
+             *     Absent for a parked node.
+             */
+            ssh_port?: number | null;
+            /**
+             * Format: int32
+             * @description The relay port for telnet: the one after [`Self::ssh_port`].
+             */
+            telnet_port?: number | null;
             username: string;
         };
         /**

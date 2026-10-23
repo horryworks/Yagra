@@ -818,7 +818,13 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let oxidized_client = oxidized_settings
         .as_ref()
         .map(|s| Arc::new(oxidized::client::OxidizedClient::new(&s.url)));
+    // The poller a node's login goes through comes from the coordinator (ADR-210 stage 5).
+    let config_relay = oxidized::relay::Relay::new(coordinator.clone());
     let leader_tasks = LeaderTasks {
+        config_relay: config_relay.clone(),
+        oxidized_host: oxidized_settings
+            .as_ref()
+            .and_then(|s| oxidized::relay::host_of(&s.url)),
         config_backup: config_backup.clone(),
         oxidized: oxidized_client.clone(),
         llm: llm_repo.clone(),
@@ -900,6 +906,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                 Arc::new(api::config_backup::OxidizedHandle { settings, client })
             }),
         config_remote: Arc::new(yagra_base::config_remote::RemoteRepo::new(repo.pool())),
+        config_relay,
         repo: repo.clone(),
         creds,
         users,
@@ -1196,6 +1203,9 @@ struct LeaderTasks {
     config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
     /// The bundled oxidized; `None` when this deployment has none, and the loop does not start.
     oxidized: Option<Arc<oxidized::client::OxidizedClient>>,
+    /// The config-backup relay (ADR-210 stage 5), and the host oxidized's connections come from.
+    config_relay: Arc<oxidized::relay::Relay>,
+    oxidized_host: Option<String>,
     forward_handle: passive::forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<passive::forward::ForwardRunner>,
@@ -1273,10 +1283,37 @@ impl LeaderTasks {
                     client,
                     self.config_backup.clone(),
                     self.creds.clone(),
+                    self.config_relay.clone(),
                 ),
             );
+            self.spawn_config_relay().await?;
         }
         self.reconcile_orphaned_jobs().await;
+        Ok(())
+    }
+
+    /// The config-backup relay (ADR-210 stage 5): the listeners oxidized logs in through, and the
+    /// pollers' replies. Leader-only because the coordinator that names each node's poller is.
+    async fn spawn_config_relay(&self) -> anyhow::Result<()> {
+        let Some(host) = self.oxidized_host.clone() else {
+            tracing::warn!("config relay: the oxidized URL names no host; no relay started");
+            return Ok(());
+        };
+        let replies = Box::pin(self.bus.subscribe_relay_to_core().await?);
+        spawn_cancellable(
+            &self.shutdown,
+            oxidized::relay::run_reply_loop(self.config_relay.clone(), replies),
+        );
+        let relay_bus: Arc<dyn yagra_bus::RelayBus> = self.bus.clone();
+        spawn_cancellable(
+            &self.shutdown,
+            oxidized::relay::run_listeners(
+                self.config_relay.clone(),
+                self.config_backup.clone(),
+                relay_bus,
+                host,
+            ),
+        );
         Ok(())
     }
 

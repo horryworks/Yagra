@@ -188,9 +188,13 @@ async fn run_heartbeat_loop<B>(
                 yagra_bus::CAP_MERAKI_SWITCH_PORTS.to_owned(),
                 // …and the wireless tier (ADR-168), withheld from a pool for the same reason.
                 yagra_bus::CAP_MERAKI_WIRELESS.to_owned(),
+                // This build carries the config-backup relay (ADR-210 stage 5). Unconditional, like
+                // the subscription. Core fetches no configuration from a node whose poller does not
+                // claim it, and says so on the node rather than counting a failed login.
+                yagra_bus::CAP_CONFIG_RELAY.to_owned(),
             ]
             .into_iter()
-            // Unlike the nine above, these two are conditional and come from the same read: the
+            // Unlike the ten above, these two are conditional and come from the same read: the
             // site updater beside this poller is alive (`self-upgrade`), and it has vouched for
             // itself (`site-prepared`, ADR-051 Inc.7). Claiming the first unconditionally would
             // make core send commands into sites that cannot act on them and report every such

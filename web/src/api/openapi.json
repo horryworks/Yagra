@@ -29625,7 +29625,8 @@
         "required": [
           "node_id",
           "login_confirmed",
-          "pending"
+          "pending",
+          "poller"
         ],
         "properties": {
           "credential_id": {
@@ -29665,6 +29666,10 @@
           "pending": {
             "type": "boolean",
             "description": "A fetch is out and not yet answered."
+          },
+          "poller": {
+            "$ref": "#/components/schemas/PollerReach",
+            "description": "Whether a poller can carry the node's login session (ADR-210 stage 5 decision 48)."
           },
           "try_after": {
             "type": [
@@ -40449,6 +40454,15 @@
           }
         }
       },
+      "PollerReach": {
+        "type": "string",
+        "description": "Whether a node's config-backup login has a poller to go through (ADR-210 stage 5).",
+        "enum": [
+          "ready",
+          "no_poller",
+          "poller_too_old"
+        ]
+      },
       "PollerTokenRequest": {
         "type": "object",
         "description": "What a new site needs, beyond its own name.",
@@ -41916,7 +41930,9 @@
           "no_model",
           "no_credential",
           "unknown_input",
-          "address_changed"
+          "address_changed",
+          "no_poller",
+          "poller_too_old"
         ]
       },
       "ReclassifyApplied": {
@@ -44623,6 +44639,24 @@
           },
           "password": {
             "type": "string"
+          },
+          "ssh_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The relay port oxidized logs in over SSH on, at [`relay::RELAY_HOST`] (stage 5 decision 43).\nAbsent for a parked node.",
+            "minimum": 0
+          },
+          "telnet_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The relay port for telnet: the one after [`Self::ssh_port`].",
+            "minimum": 0
           },
           "username": {
             "type": "string"

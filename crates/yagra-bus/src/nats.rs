@@ -10,11 +10,11 @@
 //! pool subject and pollers consume them with a **queue group** so each job is delivered
 //! to exactly one poller (load-balanced), while results fan in on a single subject.
 
-use crate::bus::{Bus, BusError, DiscoveryBus, LogBus, PeerBus, SyncBus, UpgradeBus};
+use crate::bus::{Bus, BusError, DiscoveryBus, LogBus, PeerBus, RelayBus, SyncBus, UpgradeBus};
 use crate::messages::{
     AuthRevoke, DiscoveryCancel, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg,
     PollJob, PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram,
-    SyncMsg, SyncRequest,
+    RelayFrame, SyncMsg, SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -503,6 +503,41 @@ impl NatsBus {
         ))
     }
 
+    /// Subscribe to this poller's config-backup relay frames — poller side (ADR-210 stage 5). A
+    /// build that does not call this is never asked to open a session.
+    pub async fn subscribe_relay_to_poller(
+        &self,
+        poller_id: &str,
+    ) -> Result<impl Stream<Item = RelayFrame>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::relay_for(poller_id))
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe relay frames: {e}")))?;
+        Ok(decoded::<RelayFrame>(
+            Arc::clone(&self.bytes),
+            sub,
+            "RelayFrame",
+        ))
+    }
+
+    /// Subscribe to relay frames from every poller — core side. The consumer routes by session,
+    /// so a frame for a session that has ended is dropped.
+    pub async fn subscribe_relay_to_core(
+        &self,
+    ) -> Result<impl Stream<Item = RelayFrame>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::relay_reply())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe relay replies: {e}")))?;
+        Ok(decoded::<RelayFrame>(
+            Arc::clone(&self.bytes),
+            sub,
+            "RelayFrame",
+        ))
+    }
+
     /// Subscribe (in a queue group) to discovery jobs — poller side. Malformed messages skipped.
     pub async fn subscribe_discovery_jobs(
         &self,
@@ -791,6 +826,24 @@ impl LogBus for NatsBus {
 
     async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError> {
         self.publish_json(subjects::poller_log_reply(), &msg, "poller log chunk", None)
+            .await
+    }
+}
+
+#[async_trait]
+impl RelayBus for NatsBus {
+    async fn publish_relay_to_poller(&self, frame: RelayFrame) -> Result<(), BusError> {
+        self.publish_json(
+            subjects::relay_for(&frame.poller_id),
+            &frame,
+            "relay frame",
+            Some(("to", &frame.poller_id)),
+        )
+        .await
+    }
+
+    async fn publish_relay_to_core(&self, frame: RelayFrame) -> Result<(), BusError> {
+        self.publish_json(subjects::relay_reply(), &frame, "relay reply", None)
             .await
     }
 }

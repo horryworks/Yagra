@@ -68,6 +68,7 @@
 //! that difference is preserved for the life of the spec.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use uuid::Uuid;
@@ -712,6 +713,16 @@ impl WorkingSet {
         out.dedup();
         out
     }
+
+    /// Whether `node` is assigned to this poller at `target` — the one question a config-backup
+    /// relay asks before it connects anywhere (ADR-210 stage 5 decision 46). An address core names
+    /// for a node this poller does not poll, or a different address for one it does, is refused.
+    #[must_use]
+    pub fn polls_at(&self, node: NodeId, target: IpAddr) -> bool {
+        self.nodes
+            .get(&node)
+            .is_some_and(|specs| specs.iter().any(|s| s.spec.target == target))
+    }
 }
 
 /// Pair a node's new spec list against what it already had, donating each surviving spec's previous
@@ -900,6 +911,32 @@ mod tests {
     /// A jitter source that ignores the bound and returns a fixed offset (deterministic tests).
     fn fixed(offset_ms: u32) -> impl FnMut(u32) -> u32 {
         move |_bound| offset_ms
+    }
+
+    /// A relay connects only to a node this poller polls, at the address it polls it at (ADR-210
+    /// stage 5 decision 46).
+    #[test]
+    fn a_relay_target_must_be_a_node_polled_here_at_that_address() {
+        let mut ws = WorkingSet::new();
+        let mut rng = fixed(0);
+        ws.apply(
+            snapshot(
+                Uuid::from_u128(1),
+                1,
+                0,
+                1,
+                vec![NodeJobs {
+                    node_id: node(1),
+                    specs: vec![icmp_spec(node(1), 30)],
+                }],
+            ),
+            Instant::now(),
+            &mut rng,
+        );
+        let at = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+        assert!(ws.polls_at(node(1), at));
+        assert!(!ws.polls_at(node(1), IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2))));
+        assert!(!ws.polls_at(node(2), at));
     }
 
     #[test]

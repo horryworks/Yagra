@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { ConfigBackupRow } from '../types/api';
-import { markOf, marksOf } from './configBackupMarks';
+import { markOf, marksOf, stateKeyOf } from './configBackupMarks';
 
 const row = (over: Partial<ConfigBackupRow>): ConfigBackupRow => ({
   node_id: 'n1',
@@ -11,12 +11,24 @@ const row = (over: Partial<ConfigBackupRow>): ConfigBackupRow => ({
   try_after: null,
   last: null,
   last_success_at: null,
+  poller: 'ready',
   ...over,
 });
 
 const at = '2026-10-22T10:00:00Z';
 
 describe('config backup marks', () => {
+  it('a node no poller can carry needs attention and says why, whatever else is true', () => {
+    const fine = {
+      login_confirmed: true,
+      last: { at: '2026-10-22T10:00:00Z', credential_id: 'c1', outcome: 'success' as const, new_version: false },
+    };
+    expect(markOf(row({ ...fine, poller: 'no_poller' }))).toBe('trouble');
+    expect(stateKeyOf(row({ ...fine, poller: 'no_poller' }))).toBe('config.readiness.no_poller');
+    expect(stateKeyOf(row({ pending: true, poller: 'poller_too_old' }))).toBe('config.readiness.poller_too_old');
+    expect(stateKeyOf(row(fine))).toBe('config.list.mark.ok');
+  });
+
   it('a node that is fetched with a working login is ok', () => {
     expect(
       markOf(

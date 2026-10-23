@@ -9,7 +9,7 @@
 use crate::messages::{
     AuthRevoke, DiscoveryCancel, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg,
     PollJob, PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram,
-    SyncMsg, SyncRequest,
+    RelayFrame, SyncMsg, SyncRequest,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -131,6 +131,21 @@ pub trait LogBus: Send + Sync {
     async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError>;
 }
 
+/// The config-backup relay (ADR-210 stage 5): core carries a device login session to the poller
+/// assigned to the device.
+///
+/// Its own seam, for the reason [`LogBus`] is one: it crosses a *reach* boundary — a frame on it
+/// makes a site open a connection to one of its devices — and nothing that merely distributes
+/// polling work should hold a handle that can ask for that. Both directions on one trait, so the
+/// in-memory bus can drive a whole session in a unit test.
+#[async_trait]
+pub trait RelayBus: Send + Sync {
+    /// Send a frame towards the poller it names — core side.
+    async fn publish_relay_to_poller(&self, frame: RelayFrame) -> Result<(), BusError>;
+    /// Send a frame back to core — poller side.
+    async fn publish_relay_to_core(&self, frame: RelayFrame) -> Result<(), BusError>;
+}
+
 /// The discovery-sweep side of the bus (Phase C).
 ///
 /// A third seam rather than more methods on [`Bus`] because the two ends are different code:
@@ -226,6 +241,10 @@ pub struct InMemoryBus {
     // the reply is a single fan-in subject, so it needs none.
     poller_log_requests: broadcast::Sender<(String, PollerLogRequest)>,
     poller_log_chunks: broadcast::Sender<PollerLogChunk>,
+    // Config-backup relay frames (ADR-210 stage 5): towards a poller with its routing key, and the
+    // single fan-in back.
+    relay_to_poller: broadcast::Sender<(String, RelayFrame)>,
+    relay_to_core: broadcast::Sender<RelayFrame>,
 }
 
 impl InMemoryBus {
@@ -250,6 +269,8 @@ impl InMemoryBus {
         let (poller_upgrades, _) = broadcast::channel(capacity);
         let (poller_log_requests, _) = broadcast::channel(capacity);
         let (poller_log_chunks, _) = broadcast::channel(capacity);
+        let (relay_to_poller, _) = broadcast::channel(capacity);
+        let (relay_to_core, _) = broadcast::channel(capacity);
         Self {
             jobs,
             results,
@@ -269,6 +290,8 @@ impl InMemoryBus {
             poller_upgrades,
             poller_log_requests,
             poller_log_chunks,
+            relay_to_poller,
+            relay_to_core,
         }
     }
 
@@ -397,6 +420,19 @@ impl InMemoryBus {
     pub fn subscribe_poller_log_chunks(&self) -> broadcast::Receiver<PollerLogChunk> {
         self.poller_log_chunks.subscribe()
     }
+
+    /// Subscribe to relay frames, with the poller id they are addressed to — poller side (ADR-210
+    /// stage 5). The caller keeps only its own.
+    #[must_use]
+    pub fn subscribe_relay_to_poller(&self) -> broadcast::Receiver<(String, RelayFrame)> {
+        self.relay_to_poller.subscribe()
+    }
+
+    /// Subscribe to relay frames from every poller — core side.
+    #[must_use]
+    pub fn subscribe_relay_to_core(&self) -> broadcast::Receiver<RelayFrame> {
+        self.relay_to_core.subscribe()
+    }
 }
 
 impl Default for InMemoryBus {
@@ -519,6 +555,19 @@ impl LogBus for InMemoryBus {
 
     async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError> {
         let _ = self.poller_log_chunks.send(msg);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RelayBus for InMemoryBus {
+    async fn publish_relay_to_poller(&self, frame: RelayFrame) -> Result<(), BusError> {
+        let _ = self.relay_to_poller.send((frame.poller_id.clone(), frame));
+        Ok(())
+    }
+
+    async fn publish_relay_to_core(&self, frame: RelayFrame) -> Result<(), BusError> {
+        let _ = self.relay_to_core.send(frame);
         Ok(())
     }
 }

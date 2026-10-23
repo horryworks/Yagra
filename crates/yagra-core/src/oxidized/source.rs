@@ -8,9 +8,12 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use std::collections::HashMap;
 use uuid::Uuid;
 use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup};
 use yagra_base::secrets::{CliLoginSecret, CredentialStore, KIND_CLI_LOGIN};
+
+use super::relay::{self, Route};
 
 /// Whether a node is fetched, and if not, the one thing to fix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
@@ -29,6 +32,10 @@ pub(crate) enum Readiness {
     /// The node's address changed since the configuration was saved, so its login is withheld
     /// until someone allowed to choose a login saves it again.
     AddressChanged,
+    /// No live poller polls the node, so there is nothing to log in through (stage 5 decision 48).
+    NoPoller,
+    /// The poller that polls the node predates the config-backup relay.
+    PollerTooOld,
 }
 
 /// The model a node is fetched with: the person's pick, else its profile's row.
@@ -42,14 +49,15 @@ pub(crate) fn model_of(model_override: Option<&str>, profile_name: Option<&str>)
     }
 }
 
-/// Whether `cfg` is fetched, given the node's profile and whether it has any CLI login to try
-/// (`rotation::candidates`).
+/// Whether `cfg` is fetched, given the node's profile, whether it has any CLI login to try
+/// (`rotation::candidates`), and the poller its login session would go through (stage 5).
 #[must_use]
 pub(crate) fn readiness(
     cfg: Option<&NodeConfigBackup>,
     profile_name: Option<&str>,
     has_candidates: bool,
     address_changed: bool,
+    route: &Route,
 ) -> Readiness {
     let Some(cfg) = cfg.filter(|c| c.enabled) else {
         return Readiness::Off;
@@ -63,10 +71,13 @@ pub(crate) fn readiness(
     if model_of(cfg.model_override.as_deref(), profile_name).is_none() {
         return Readiness::NoModel;
     }
-    if has_candidates {
-        Readiness::Ready
-    } else {
-        Readiness::NoCredential
+    if !has_candidates {
+        return Readiness::NoCredential;
+    }
+    match route {
+        Route::Via(_) => Readiness::Ready,
+        Route::NoPoller => Readiness::NoPoller,
+        Route::PollerTooOld => Readiness::PollerTooOld,
     }
 }
 
@@ -84,6 +95,13 @@ pub(crate) struct SourceNode {
     pub password: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable: Option<String>,
+    /// The relay port oxidized logs in over SSH on, at [`relay::RELAY_HOST`] (stage 5 decision 43).
+    /// Absent for a parked node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
+    /// The relay port for telnet: the one after [`Self::ssh_port`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub telnet_port: Option<u16>,
 }
 
 /// The address a parked node is handed to oxidized with: its own loopback, where nothing listens,
@@ -106,6 +124,8 @@ fn parked(name: String, model: String, input: &'static str) -> SourceNode {
         username: PARKED_LOGIN.to_owned(),
         password: PARKED_LOGIN.to_owned(),
         enable: None,
+        ssh_port: None,
+        telnet_port: None,
     }
 }
 
@@ -121,14 +141,18 @@ pub(crate) fn hands_login(t: &BackupTarget, now: DateTime<Utc>) -> bool {
 
 /// Every configured node with a model and a connection, as oxidized's source.
 ///
-/// A node whose login may be handed over ([`hands_login`]) gets it and its address. Every other
-/// one is [`parked`]: in the list, so its versions stay readable while it looks for a login, and
-/// unable to reach the device. A login that fails to open, or is no longer a CLI login, parks the
-/// node too, logged by id, never by content.
+/// A node whose login may be handed over ([`hands_login`]), that a poller can carry it through
+/// and that has a relay port gets the login and its relay: [`relay::RELAY_HOST`] and the two
+/// ports (stage 5 decision 43). oxidized never sees a device's own address. Every other one is
+/// [`parked`]: in the list, so its versions stay readable while it looks for a login, and unable to
+/// reach the device. A login that fails to open, or is no longer a CLI login, parks the node too,
+/// logged by id, never by content.
 pub(crate) async fn source_nodes(
     targets: Vec<BackupTarget>,
     creds: &CredentialStore,
     now: DateTime<Utc>,
+    ports: &HashMap<Uuid, u16>,
+    route: &(dyn Fn(Uuid) -> Route + Sync),
 ) -> Vec<SourceNode> {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
@@ -142,7 +166,15 @@ pub(crate) async fn source_nodes(
             continue;
         };
         let name = t.node_id.to_string();
-        let login = match t.rotation.credential_id.filter(|_| hands_login(&t, now)) {
+        let port = ports
+            .get(&t.node_id)
+            .copied()
+            .filter(|_| matches!(route(t.node_id), Route::Via(_)));
+        let login = match t
+            .rotation
+            .credential_id
+            .filter(|_| port.is_some() && hands_login(&t, now))
+        {
             Some(cred) => match creds.open(cred).await {
                 Ok(Some((kind, secret))) if kind == KIND_CLI_LOGIN => {
                     let parsed = CliLoginSecret::parse(&secret).ok();
@@ -159,18 +191,20 @@ pub(crate) async fn source_nodes(
             },
             None => None,
         };
-        out.push(match login {
-            Some(login) => SourceNode {
+        out.push(match (login, port) {
+            (Some(login), Some(port)) => SourceNode {
                 name,
-                ip: t.address.to_string(),
+                ip: relay::RELAY_HOST.to_owned(),
                 model,
                 input,
                 group: super::GROUP,
                 username: login.username,
                 password: login.password,
                 enable: login.enable,
+                ssh_port: Some(port),
+                telnet_port: Some(port + 1),
             },
-            None => parked(name, model, input),
+            _ => parked(name, model, input),
         });
     }
     out
@@ -198,6 +232,8 @@ pub(crate) fn placeholder() -> SourceNode {
         username: "none".to_owned(),
         password: "none".to_owned(),
         enable: None,
+        ssh_port: None,
+        telnet_port: None,
     }
 }
 
@@ -220,7 +256,11 @@ mod tests {
         profile: Option<&str>,
         has_candidates: bool,
     ) -> Readiness {
-        readiness(cfg, profile, has_candidates, false)
+        readiness(cfg, profile, has_candidates, false, &via())
+    }
+
+    fn via() -> Route {
+        Route::Via("p1".to_owned())
     }
 
     fn cfg(enabled: bool, input: BackupInput, model: Option<&str>) -> NodeConfigBackup {
@@ -264,12 +304,34 @@ mod tests {
     fn a_moved_node_has_its_login_withheld() {
         let on = cfg(true, BackupInput::Ssh, Some("ios"));
         assert_eq!(
-            readiness(Some(&on), None, true, true),
+            readiness(Some(&on), None, true, true, &via()),
             Readiness::AddressChanged
         );
         // Switched off, it is simply off.
         let off = cfg(false, BackupInput::Ssh, Some("ios"));
-        assert_eq!(readiness(Some(&off), None, true, true), Readiness::Off);
+        assert_eq!(
+            readiness(Some(&off), None, true, true, &via()),
+            Readiness::Off
+        );
+    }
+
+    /// A node is fetched only through a poller that polls it and carries the relay (stage 5
+    /// decision 48), and a missing login is still the first thing to fix.
+    #[test]
+    fn a_node_with_no_poller_to_go_through_says_so() {
+        let on = cfg(true, BackupInput::Ssh, Some("ios"));
+        assert_eq!(
+            readiness(Some(&on), None, true, false, &Route::NoPoller),
+            Readiness::NoPoller
+        );
+        assert_eq!(
+            readiness(Some(&on), None, true, false, &Route::PollerTooOld),
+            Readiness::PollerTooOld
+        );
+        assert_eq!(
+            readiness(Some(&on), None, false, false, &Route::NoPoller),
+            Readiness::NoCredential
+        );
     }
 
     fn target(confirmed: bool, requested: Option<DateTime<Utc>>, moved: bool) -> BackupTarget {

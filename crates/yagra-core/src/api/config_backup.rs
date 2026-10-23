@@ -180,6 +180,7 @@ async fn readiness_of(
         profile.as_deref(),
         has,
         moved,
+        &admin.config_relay.route(node),
     ))
 }
 
@@ -315,7 +316,7 @@ async fn get_config_backup(
     let now = Utc::now();
     let pending = rotation::in_flight(rot.requested_at, now);
     let step = if readiness == Readiness::Ready && !pending {
-        rotation::step_of(repo, &admin.creds, node_id, now)
+        rotation::step_of(repo, &admin.creds, &admin.config_relay, node_id, now)
             .await
             .map_err(|e| read_failed(&e))?
     } else {
@@ -760,7 +761,7 @@ async fn fetch_now(
             "this node is not switched on for config backup, or has nothing to fetch with",
         )
     };
-    let mut step = rotation::step_of(repo, &admin.creds, node_id, now)
+    let mut step = rotation::step_of(repo, &admin.creds, &admin.config_relay, node_id, now)
         .await
         .map_err(|e| read_failed(&e))?
         .ok_or_else(not_ready)?;
@@ -769,7 +770,7 @@ async fn fetch_now(
         repo.restart_round(node_id)
             .await
             .map_err(|e| read_failed(&e))?;
-        step = rotation::step_of(repo, &admin.creds, node_id, now)
+        step = rotation::step_of(repo, &admin.creds, &admin.config_relay, node_id, now)
             .await
             .map_err(|e| read_failed(&e))?
             .ok_or_else(not_ready)?;
@@ -835,6 +836,30 @@ pub(crate) struct ConfigBackupRow {
     last: Option<AttemptView>,
     /// When a fetch last succeeded.
     last_success_at: Option<DateTime<Utc>>,
+    /// Whether a poller can carry the node's login session (ADR-210 stage 5 decision 48).
+    poller: PollerReach,
+}
+
+/// Whether a node's config-backup login has a poller to go through (ADR-210 stage 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PollerReach {
+    /// A live poller polls it and carries the relay.
+    Ready,
+    /// No live poller polls it.
+    NoPoller,
+    /// The poller that polls it predates the relay.
+    PollerTooOld,
+}
+
+impl From<&oxidized::relay::Route> for PollerReach {
+    fn from(r: &oxidized::relay::Route) -> Self {
+        match r {
+            oxidized::relay::Route::Via(_) => Self::Ready,
+            oxidized::relay::Route::NoPoller => Self::NoPoller,
+            oxidized::relay::Route::PollerTooOld => Self::PollerTooOld,
+        }
+    }
 }
 
 /// Every node switched on that the caller can see. Shared by REST and MCP.
@@ -858,6 +883,7 @@ pub(crate) async fn config_backup_rows(
             try_after: r.rotation.next_try_at.filter(|t| *t > now),
             last: r.last.map(AttemptView::from),
             last_success_at: r.last_success_at,
+            poller: PollerReach::from(&admin.config_relay.route(r.node_id)),
         })
         .collect())
 }
@@ -924,7 +950,22 @@ async fn oxidized_source(
     if let Err(e) = admin.config_backup.remember_names().await {
         tracing::warn!(error = %e, "config backup: node names could not be remembered");
     }
-    let mut nodes = oxidized::source::source_nodes(targets, &admin.creds, Utc::now()).await;
+    // Every node with a configuration gets its relay port here, so the ports oxidized is handed
+    // and the ones core listens on come from one table (stage 5 decision 44).
+    let ids: Vec<Uuid> = targets.iter().map(|t| t.node_id).collect();
+    let ports = admin.config_backup.relay_ports(&ids).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "config backup relay ports",
+            "failed to read config backup",
+        )
+    })?;
+    let relay = admin.config_relay.clone();
+    let mut nodes =
+        oxidized::source::source_nodes(targets, &admin.creds, Utc::now(), &ports, &|node| {
+            relay.route(node)
+        })
+        .await;
     if nodes.is_empty() {
         // oxidized will not start on an empty list (`source::placeholder`).
         nodes.push(oxidized::source::placeholder());
@@ -973,9 +1014,16 @@ async fn oxidized_event(
     if ev.ip.as_deref() == Some(oxidized::source::PARKED_IP) {
         return Ok(StatusCode::NO_CONTENT);
     }
-    let Some(outcome) = rotation::classify(&ev.event, ev.err_type.as_deref().unwrap_or("")) else {
+    let Some(mut outcome) = rotation::classify(&ev.event, ev.err_type.as_deref().unwrap_or(""))
+    else {
         return Ok(StatusCode::NO_CONTENT);
     };
+    // A fetch the relay could not carry reached no device, whatever oxidized made of the closed
+    // connection: counting it as a refused login would move on to the next one (stage 5 decision
+    // 47).
+    if outcome != AttemptOutcome::Success && admin.config_relay.take_recent_failure(node) {
+        outcome = AttemptOutcome::Unreachable;
+    }
     // The newest version tells a new one from an unchanged one. Best effort: without it the success
     // is recorded and the screen says only that it succeeded.
     let oid = if outcome == AttemptOutcome::Success {
@@ -1233,6 +1281,113 @@ mod tests {
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].outcome, AttemptOutcome::AuthFailed);
         assert_eq!(attempts[0].credential_id, Some(login));
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// A node handed a login is handed core's relay instead of its own address, and a fetch the
+    /// relay could not carry is recorded as unreachable rather than as a refused login (ADR-210
+    /// stage 5 decisions 43 and 47).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_handed_node_goes_through_the_relay_and_its_failure_is_not_a_refused_login(
+        pool: sqlx::PgPool,
+    ) {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        let home = std::env::temp_dir().join(format!("yagra-ox-relay-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("dir");
+        let token = oxidized::config::ensure_token(&home).expect("token");
+        let st = crate::api::tests_support::live_state_with_oxidized(
+            pool.clone(),
+            Arc::new(OxidizedHandle {
+                settings: oxidized::Settings {
+                    url: "http://127.0.0.1:9".to_owned(),
+                    home: home.clone(),
+                },
+                client: Arc::new(OxidizedClient::new("http://127.0.0.1:9")),
+            }),
+        )
+        .await;
+        let admin = st.admin.clone().expect("live state");
+        let node = yagra_base::pgtest::node(&pool, "sw-10", 10, None).await;
+        let login = admin
+            .creds
+            .create("ops", "cli_login", br#"{"username":"ops","password":"pw"}"#)
+            .await
+            .expect("login");
+        let repo = yagra_base::config_backup::ConfigBackupRepo::new(pool.clone());
+        repo.put(
+            node,
+            &NodeConfigBackup {
+                enabled: true,
+                login_order: None,
+                input: BackupInput::SshThenTelnet,
+                model_override: Some("ios".to_owned()),
+                scan_mode: ScanMode::Normal,
+            },
+            true,
+        )
+        .await
+        .expect("put");
+        repo.dispatch(
+            node,
+            login,
+            Utc::now(),
+            Utc::now() - rotation::REQUEST_TIMEOUT,
+        )
+        .await
+        .expect("dispatch");
+
+        let router = crate::api::router(st.clone());
+        let res = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/internal/oxidized/nodes")
+                    .header(oxidized::config::TOKEN_HEADER, &token)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("send");
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let list: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        let entry = list
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|n| n["name"] == node.to_string())
+            .expect("the node is listed");
+        assert_eq!(entry["ip"], oxidized::relay::RELAY_HOST);
+        assert_eq!(entry["username"], "ops");
+        let ssh = entry["ssh_port"].as_u64().expect("an SSH relay port");
+        assert_eq!(entry["telnet_port"].as_u64(), Some(ssh + 1));
+        assert_eq!(ssh % 2, 0);
+        // oxidized never learns the device's own address (the fixture's `10.0.0.10`).
+        assert!(!body.windows(b"10.0.0.10".len()).any(|w| w == b"10.0.0.10"));
+
+        admin.config_relay.record_failure(node);
+        let res = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/internal/oxidized/events")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header(oxidized::config::TOKEN_HEADER, &token)
+                    .body(Body::from(format!(
+                        "event=node_fail&node={node}&group=yagra&ip=core&err_type=Net%3A%3ASSH%3A%3ADisconnect"
+                    )))
+                    .expect("request"),
+            )
+            .await
+            .expect("send");
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        let attempts = repo.attempts_of(node, 5).await.expect("attempts");
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].outcome, AttemptOutcome::Unreachable);
         std::fs::remove_dir_all(&home).ok();
     }
 }

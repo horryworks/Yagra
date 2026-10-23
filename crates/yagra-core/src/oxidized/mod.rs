@@ -13,6 +13,9 @@
 //! - [`rotation`] tries each node's CLI logins in turn and remembers the one that works, within
 //!   the lockout limits (stage 3): the pure choice, and the leader loop that acts on it.
 //!
+//! - [`relay`] carries oxidized's login sessions to the poller assigned to each device (stage 5):
+//!   oxidized connects to core, never to a device.
+//!
 //! - [`push`] is the leader loop that opens and closes the alert saying config backups are not
 //!   reaching their Git destination (stage 4). The pushes are the push script's, inside oxidized.
 //!
@@ -22,6 +25,7 @@
 pub(crate) mod client;
 pub(crate) mod config;
 pub(crate) mod push;
+pub(crate) mod relay;
 pub(crate) mod rotation;
 pub(crate) mod source;
 pub(crate) mod status;

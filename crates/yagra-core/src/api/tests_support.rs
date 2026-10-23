@@ -280,6 +280,15 @@ pub(crate) async fn live_state_with_default_route(
     live_state_with(pool, None, None, None, kinds, None).await
 }
 
+/// The relay route a live test state answers for every node: through one poller that carries it.
+pub(crate) struct EveryNodeHasAPoller;
+
+impl crate::oxidized::relay::Routes for EveryNodeHasAPoller {
+    fn route(&self, _node: uuid::Uuid) -> crate::oxidized::relay::Route {
+        crate::oxidized::relay::Route::Via("poller-1".to_owned())
+    }
+}
+
 /// [`live_state`], with a bundled oxidized the test describes (ADR-210 stage 3).
 ///
 /// Its own entry point so the source token's directory is the test's own: production reads it
@@ -417,6 +426,9 @@ async fn live_state_with(
         // 503 otherwise.
         oxidized,
         config_remote: Arc::new(yagra_base::config_remote::RemoteRepo::new(pool.clone())),
+        // Every node goes through one poller: what a deployment whose pollers all carry the
+        // relay answers (ADR-210 stage 5). The coordinator below has no live poller at all.
+        config_relay: crate::oxidized::relay::Relay::new(Arc::new(EveryNodeHasAPoller)),
         repo: repo.clone(),
         creds: creds.clone(),
         users: Arc::new(yagra_auth::auth::UserStore::new(pool.clone())),

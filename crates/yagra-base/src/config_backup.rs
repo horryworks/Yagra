@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Config backup (ADR-210 stages 2 and 3): which nodes the bundled oxidized fetches, which login
 //! each is handed, and every login attempt. Three tables: `node_config_backup`,
-//! `config_backup_status` (migration 0152) and `config_backup_attempts` (migration 0153).
+//! `config_backup_status` (migration 0152) and `config_backup_attempts` (migration 0153), plus the
+//! names configurations are filed under (0156) and each node's relay port (0157, stage 5).
 //!
 //! The fetching itself is oxidized's. This store answers what Yagra owns: what a person configured
 //! (a node, the order of CLI logins to try, SSH or telnet, a model override), which login is being
@@ -11,6 +12,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use uuid::Uuid;
 
@@ -192,6 +194,14 @@ pub struct BackupOverview {
 
 /// How long attempts are kept.
 pub const ATTEMPT_RETENTION_DAYS: i32 = 30;
+
+/// The first SSH relay port (migration 0157). Ports are even, each followed by its telnet relay.
+pub const RELAY_PORT_FIRST: u16 = 20000;
+/// The last SSH relay port; its telnet relay is the one after it.
+pub const RELAY_PORT_LAST: u16 = 59998;
+/// How many ports are drawn for one node before giving up: every draw that lands on a port another
+/// node holds costs one, so this is only reached when the range is nearly full.
+const RELAY_PORT_DRAWS: usize = 64;
 
 const ROTATION_COLUMNS: &str = "b.credential_id, b.login_confirmed, b.round_started_at, \
                                 b.requested_at, b.next_try_at, b.last_version_oid";
@@ -698,6 +708,63 @@ impl ConfigBackupRepo {
             .collect()
     }
 
+    /// The SSH relay port of each of `nodes`, assigning one to a node that has none yet (ADR-210
+    /// stage 5 decision 44). The telnet relay is the port after it. A node that no longer exists is
+    /// left out of the answer. A port stays with its node for as long as the node exists, so a node
+    /// list oxidized still holds can never point one device's login at another device.
+    pub async fn relay_ports(&self, nodes: &[Uuid]) -> anyhow::Result<HashMap<Uuid, u16>> {
+        let mut ports = self.read_relay_ports(nodes).await?;
+        for node in nodes {
+            if ports.contains_key(node) {
+                continue;
+            }
+            // The sequence cycles, so a draw can land on a port another node still holds; the
+            // unique constraint refuses it and the next draw is taken.
+            for _ in 0..RELAY_PORT_DRAWS {
+                let done = sqlx::query(
+                    "INSERT INTO config_backup_relay_ports (node_id, port) \
+                     SELECT id, $2 + 2 * nextval('config_backup_relay_port_seq')::int \
+                     FROM nodes WHERE id = $1 ON CONFLICT DO NOTHING",
+                )
+                .bind(node)
+                .bind(i32::from(RELAY_PORT_FIRST))
+                .execute(&self.pool)
+                .await?;
+                if done.rows_affected() > 0 {
+                    break;
+                }
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM config_backup_relay_ports WHERE node_id = $1) \
+                     OR NOT EXISTS (SELECT 1 FROM nodes WHERE id = $1)",
+                )
+                .bind(node)
+                .fetch_one(&self.pool)
+                .await?;
+                if exists {
+                    break;
+                }
+            }
+        }
+        ports.extend(self.read_relay_ports(nodes).await?);
+        Ok(ports)
+    }
+
+    async fn read_relay_ports(&self, nodes: &[Uuid]) -> anyhow::Result<HashMap<Uuid, u16>> {
+        let rows: Vec<(Uuid, i32)> = sqlx::query_as(
+            "SELECT node_id, port FROM config_backup_relay_ports WHERE node_id = ANY($1)",
+        )
+        .bind(nodes)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|(node, port)| {
+                u16::try_from(port)
+                    .map(|p| (node, p))
+                    .map_err(|_| anyhow::anyhow!("relay port {port} out of range"))
+            })
+            .collect()
+    }
+
     /// Delete attempts older than [`ATTEMPT_RETENTION_DAYS`].
     pub async fn prune_attempts(&self) -> anyhow::Result<u64> {
         let done = sqlx::query(
@@ -816,6 +883,38 @@ mod tests {
         assert!(!gone.registered);
         // The last name it was remembered under, not the one it had for a moment after.
         assert_eq!(gone.name, "sw-01");
+    }
+
+    /// A node keeps its relay port, two nodes never share one, and a deleted node's port is not
+    /// the next one handed out (ADR-210 stage 5 decision 44).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_relay_port_stays_with_its_node_and_is_not_handed_straight_on(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let a = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let b = crate::pgtest::node(&pool, "sw-02", 2, None).await;
+        let missing = Uuid::from_u128(42);
+        let first = repo.relay_ports(&[a, b, missing]).await.expect("ports");
+        assert_eq!(first.len(), 2, "a node that does not exist gets no port");
+        assert_ne!(first[&a], first[&b]);
+        for port in first.values() {
+            assert!((RELAY_PORT_FIRST..=RELAY_PORT_LAST).contains(port));
+            assert_eq!(port % 2, 0, "the telnet relay is the odd port after it");
+        }
+        let again = repo.relay_ports(&[b, a]).await.expect("ports");
+        assert_eq!(again, first, "asking again changes nothing");
+
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(a)
+            .execute(&pool)
+            .await
+            .expect("delete");
+        let c = crate::pgtest::node(&pool, "sw-03", 3, None).await;
+        let after = repo.relay_ports(&[c]).await.expect("ports");
+        assert_ne!(
+            after[&c], first[&a],
+            "a freed port waits for the whole range to come round"
+        );
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

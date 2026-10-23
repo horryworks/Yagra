@@ -21,7 +21,7 @@ import { useLoad } from '../lib/useLoad';
 import { LoadGate } from '../components/ui/LoadGate';
 import { nodeHref } from '../lib/entityHref';
 import { isCliCredentialKind } from '../lib/credentialKinds';
-import { markOf } from '../lib/configBackupMarks';
+import { markOf, stateKeyOf } from '../lib/configBackupMarks';
 import { attemptLine, loginLabel } from '../components/NodeDetail/configBackupForm';
 import { GIT_REMOTE_PATH, pushLine } from './integrations/gitRemote';
 import { formatTimestamp } from '../lib/format';
@@ -70,7 +70,7 @@ export function ConfigBackupsPage() {
         width: '150px',
         render: (r) => {
           const mark = markOf(r);
-          return <span className={`cfgbl-mark cfgbl-mark-${mark}`}>{t(`config.list.mark.${mark}`)}</span>;
+          return <span className={`cfgbl-mark cfgbl-mark-${mark}`}>{t(stateKeyOf(r))}</span>;
         },
       },
       {

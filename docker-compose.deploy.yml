@@ -441,7 +441,9 @@ services:
 
   # ── oxidized — device configuration backup (ADR-210 stage 2) ──
   # The upstream image, pinned. It logs in to the devices Yagra hands it (SSH or telnet), runs the
-  # model's commands and keeps every version in Git on `oxdata`. Its REST API has NO authentication,
+  # model's commands and keeps every version in Git on `oxdata`. It never dials a device itself:
+  # every login goes to core's relay ports on this network, and core carries it over the bus to the
+  # poller assigned to the device (ADR-210 stage 5). Its REST API has NO authentication,
   # so no port is published: core reaches it across this network and nothing else can.
   # Its node list comes from core (`/internal/oxidized/nodes`, behind the source token), so it starts
   # after core is healthy; it restarts until core answers.
@@ -460,13 +462,14 @@ services:
       # and an upgrade that keeps this image would leave it running the old one; a new value here
       # is what makes compose recreate it. Moves with `oxidized::config::CONFIG_REVISION`, and a
       # test fails until both do (ADR-210 stage 3).
-      YAGRA_OXIDIZED_CONFIG_REVISION: "4"
+      YAGRA_OXIDIZED_CONFIG_REVISION: "5"
     volumes:
       - oxconf:/var/lib/yagra/oxidized:ro
       - oxdata:/home/oxidized/.config/oxidized
     # Its own network, shared with core alone. On the default network the poller could reach it,
     # and a URL monitor pointed at http://oxidized:8888 would read device configurations and
-    # enable passwords back through a check result. Not `internal`: oxidized must reach devices.
+    # enable passwords back through a check result. Not `internal`: the push script sends the
+    # configurations to an outside Git (ADR-210 stage 4).
     networks:
       - oxidized
     restart: unless-stopped

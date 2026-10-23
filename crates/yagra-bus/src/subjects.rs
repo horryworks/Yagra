@@ -188,6 +188,26 @@ pub fn poller_log_reply() -> String {
     format!("{ROOT}.poller.logreply")
 }
 
+/// Subject core publishes one poller's config-backup relay frames on, e.g.
+/// `yagra.poller.relay.edge-1` (ADR-210 stage 5 decision 45).
+///
+/// Its own token, for the reason [`poller_logs_for`] has one: a poller build without the relay
+/// never subscribes, so a frame reaches nobody and core's connect deadline ends the session.
+/// Subscribe is scoped to the poller's own id in both allow-lists - a wildcard would let one site
+/// open sessions meant for another site's devices.
+#[must_use]
+pub fn relay_for(poller: &str) -> String {
+    format!("{ROOT}.poller.relay.{}", sanitize_token(poller))
+}
+
+/// Subject pollers publish relay frames back on, consumed by core (ADR-210 stage 5). One shared
+/// subject; core routes by session. Deliberately not under `yagra.poller.relay.`, so a poller's
+/// publish grant cannot reach another poller's request subject.
+#[must_use]
+pub fn relay_reply() -> String {
+    format!("{ROOT}.poller.relayreply")
+}
+
 /// Subject core publishes pool-scoped discovery jobs on (the discovery analogue of
 /// [`jobs_for_pool`]), e.g. `yagra.discovery.jobs.tokyo`. Pollers in the pool queue-subscribe.
 #[must_use]
@@ -349,6 +369,16 @@ mod tests {
     /// The request must be per-poller so no site can be handed another site's request, and the reply
     /// must sit **outside** the request family so a poller's publish grant on it cannot be widened
     /// into one that lets it ask.
+    /// The relay family is addressed to one poller, and its reply sits outside it (ADR-210 stage
+    /// 5), for the support-log family's reason below.
+    #[test]
+    fn the_relay_family_is_addressed_and_the_reply_sits_outside_it() {
+        assert_eq!(relay_for("edge-1"), "yagra.poller.relay.edge-1");
+        assert_eq!(relay_for("a.b"), "yagra.poller.relay.a-b");
+        assert_eq!(relay_reply(), "yagra.poller.relayreply");
+        assert!(!relay_reply().starts_with("yagra.poller.relay."));
+    }
+
     #[test]
     fn the_support_log_family_is_addressed_and_the_reply_sits_outside_it() {
         assert_eq!(poller_logs_for("edge-1"), "yagra.poller.logs.edge-1");

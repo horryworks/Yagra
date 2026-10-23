@@ -160,6 +160,9 @@ pub struct AdminState {
     pub oxidized: Option<Arc<config_backup::OxidizedHandle>>,
     /// Where config backups are pushed (ADR-210 stage 4).
     pub config_remote: Arc<yagra_base::config_remote::RemoteRepo>,
+    /// The poller each node's config-backup login goes through, and which relays failed (ADR-210
+    /// stage 5). Read on every core; the relay itself runs on the leader.
+    pub config_relay: Arc<crate::oxidized::relay::Relay>,
     pub repo: Arc<NodeRepo>,
     pub creds: Arc<CredentialStore>,
     pub users: Arc<UserStore>,

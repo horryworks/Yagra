@@ -88,6 +88,9 @@ pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
             // the request family `yagra.poller.logs.{id}` is subscribe-side below and must never
             // appear here, or a compromised site could ask another site for its log body.
             subjects::poller_log_reply(),
+            // Config-backup relay frames back to core (ADR-210 stage 5). The reply subject only:
+            // publish on `yagra.poller.relay.{id}` would let one site open sessions through another.
+            subjects::relay_reply(),
         ],
         // core → this poller. The working-set (`assign.{id}`) and pool jobs — which carry the
         // continuous monitoring credentials — are scoped to this poller / its pool only, so a
@@ -126,6 +129,10 @@ pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
             // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
             subjects::discovery_cancel(),
             subjects::discovery_cancel_for_pool(&scope.pool),
+            // Its own config-backup relay frames, and only its own (ADR-210 stage 5): a wildcard
+            // would let one site receive the login sessions meant for another site's devices.
+            // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
+            subjects::relay_for(&scope.id),
             "_INBOX.>".to_owned(),
         ],
     }

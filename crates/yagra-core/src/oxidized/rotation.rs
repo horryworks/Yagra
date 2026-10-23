@@ -40,6 +40,7 @@ use yagra_base::config_backup::{Attempt, AttemptOutcome, ConfigBackupRepo, Rotat
 use yagra_base::secrets::{CredentialStore, KIND_CLI_LOGIN};
 
 use super::client::OxidizedClient;
+use super::relay::Relay;
 use super::source::{readiness, Readiness};
 
 /// The window the fleet-wide limit on one login counts over, in every mode.
@@ -334,6 +335,7 @@ pub(crate) fn in_flight(requested_at: Option<DateTime<Utc>>, now: DateTime<Utc>)
 pub(crate) async fn step_of(
     repo: &ConfigBackupRepo,
     creds: &CredentialStore,
+    relay: &Relay,
     node: Uuid,
     now: DateTime<Utc>,
 ) -> anyhow::Result<Option<Step>> {
@@ -344,7 +346,14 @@ pub(crate) async fn step_of(
     let cands = candidates(cfg.login_order.as_deref(), &logins);
     let profile = repo.profile_name(node).await?;
     let moved = repo.address_changed(node).await?;
-    if readiness(Some(&cfg), profile.as_deref(), !cands.is_empty(), moved) != Readiness::Ready {
+    if readiness(
+        Some(&cfg),
+        profile.as_deref(),
+        !cands.is_empty(),
+        moved,
+        &relay.route(node),
+    ) != Readiness::Ready
+    {
         return Ok(None);
     }
     let node_attempts = repo.attempts_of(node, ATTEMPTS_PER_NODE).await?;
@@ -403,7 +412,12 @@ const ATTEMPTS_PER_NODE: i64 = 300;
 
 /// One tick of the leader loop: count outstanding fetches nobody answered, then start the next
 /// login of every node whose turn it is.
-async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &CredentialStore) {
+async fn tick(
+    client: &OxidizedClient,
+    repo: &ConfigBackupRepo,
+    creds: &CredentialStore,
+    relay: &Relay,
+) {
     let now = Utc::now();
     let (targets, logins, mut fleet) =
         match tokio::try_join!(repo.targets(), cli_logins(creds), fleet_recent(repo, now)) {
@@ -446,6 +460,7 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, creds: &Credenti
             t.profile_name.as_deref(),
             !cands.is_empty(),
             t.address_changed,
+            &relay.route(t.node_id),
         ) != Readiness::Ready
         {
             continue;
@@ -553,13 +568,14 @@ pub(crate) async fn run_rotation_loop(
     client: Arc<OxidizedClient>,
     repo: Arc<ConfigBackupRepo>,
     creds: Arc<CredentialStore>,
+    relay: Arc<Relay>,
 ) {
     let mut every = tokio::time::interval(TICK);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ticks = 0u32;
     loop {
         every.tick().await;
-        tick(&client, &repo, &creds).await;
+        tick(&client, &repo, &creds, &relay).await;
         ticks = ticks.wrapping_add(1);
         if ticks.is_multiple_of(PRUNE_EVERY) {
             if let Err(e) = repo.prune_attempts().await {

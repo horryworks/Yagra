@@ -1256,7 +1256,9 @@
       "no_model": "No model for this device's profile. Pick one.",
       "no_credential": "No CLI login to try.",
       "unknown_input": "The stored connection is unknown to this version. Pick one and save.",
-      "address_changed": "The address changed since this was saved. Save again to resume."
+      "address_changed": "The address changed since this was saved. Save again to resume.",
+      "no_poller": "No poller polls this device.",
+      "poller_too_old": "Its poller is too old for config backup. Upgrade it."
     },
     "logins": "Logins, in the order tried",
     "defaultOrder": "Use the default order",

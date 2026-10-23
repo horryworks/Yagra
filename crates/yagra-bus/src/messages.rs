@@ -155,6 +155,15 @@ pub const SITE_PREPARED_FIELD: &str = "prepared";
 /// between "this site sent nothing" and "there was nothing to send".
 pub const CAP_LOG_SHIP: &str = "log-ship";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it carries a config-backup
+/// relay (ADR-210 stage 5 decision 45): it answers a [`RelayFrame`] that opens a session by
+/// connecting to the device and passing its bytes both ways.
+///
+/// Core asks only a poller that claims it. Every device's configuration is fetched through the
+/// poller assigned to it, so a node whose poller predates this is not fetched at all, and the
+/// screen says why rather than counting the silence as a failed login.
+pub const CAP_CONFIG_RELAY: &str = "config-relay";
+
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it honours a
 /// [`DiscoveryCancel`] (ADR-068 Increment 2).
 ///
@@ -1237,6 +1246,87 @@ impl PollerLogChunk {
     /// Decode [`Self::bytes`] back to the slice the poller read. `None` when the field is not valid
     /// base64 — a corrupt chunk drops that slice rather than taking down the collector, the same
     /// reaction [`EventMsg::raw_bytes`] has.
+    #[must_use]
+    pub fn slice(&self) -> Option<Vec<u8>> {
+        if self.bytes.is_empty() {
+            return Some(Vec::new());
+        }
+        data_encoding::BASE64.decode(self.bytes.as_bytes()).ok()
+    }
+}
+
+/// Where a config-backup relay session connects (ADR-210 stage 5 decision 46). Carried only by the
+/// frame that opens a session.
+///
+/// The poller does not take this on trust: it connects only when `node_id` is in its own working
+/// set at exactly `target`, and only to [`RELAY_PORTS`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayTarget {
+    pub node_id: NodeId,
+    pub target: IpAddr,
+    pub port: u16,
+}
+
+/// The device ports a relay session may connect to: SSH and telnet.
+pub const RELAY_PORTS: [u16; 2] = [22, 23];
+
+/// The most raw bytes one [`RelayFrame`] carries. Base64 makes it a third larger, which stays far
+/// below the bus's 1 MiB payload limit.
+pub const RELAY_CHUNK_BYTES: usize = 48 * 1024;
+
+/// How long a relay waits for the device to accept the connection (ADR-210 stage 5 decision 49).
+/// Core waits a little longer for the poller's answer, so a refusal arrives before core gives up.
+pub const RELAY_CONNECT_SECS: u64 = 10;
+/// A relay session in which nothing moves for this long is ended by either side.
+pub const RELAY_IDLE_SECS: u64 = 120;
+/// No relay session lasts longer than this, whatever moves.
+pub const RELAY_MAX_SECS: u64 = 600;
+/// No relay session carries more than this many bytes, in both directions together.
+pub const RELAY_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// One step of a config-backup relay session (ADR-210 stage 5 decision 45): the bundled oxidized
+/// connects to core, and core carries the byte stream to the poller assigned to the device, which
+/// connects to it. The same shape travels both ways, told apart by its subject:
+/// [`crate::subjects::relay_for`] towards one poller, [`crate::subjects::relay_reply`] back.
+///
+/// A flat struct with optional parts rather than an enum, like [`PollerLogChunk`], so a field added
+/// later is ignored by an older reader instead of failing the decode.
+///
+/// - Core's first frame carries [`Self::open`]. The poller answers with its frame 0: empty when it
+///   connected, [`Self::refused`] and [`Self::close`] when it did not.
+/// - Each side numbers its own frames from 0 and carries bytes in [`Self::bytes`]. A frame that
+///   arrives out of order ends the session: a lost slice breaks an SSH session anyway, and of a
+///   telnet one would store a wrong configuration.
+/// - Either side ends it with [`Self::close`].
+///
+/// ⚠️ The bytes are a device login session: a telnet one carries the password in the clear (an
+/// SSH one is encrypted end to end between oxidized and the device). Neither side ever logs them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayFrame {
+    /// Sanitized id of the poller this session runs through. Redundant with the subject on
+    /// purpose, as [`PollerLogRequest::poller_id`] is.
+    pub poller_id: String,
+    /// One session per connection oxidized makes.
+    pub session: Uuid,
+    /// Position among this side's frames of the session, from 0.
+    pub seq: u64,
+    /// Set on core's first frame only.
+    #[serde(default)]
+    pub open: Option<RelayTarget>,
+    /// A slice of the stream, base64-encoded ([`encode_raw`]). Empty on a frame that carries none.
+    #[serde(default)]
+    pub bytes: String,
+    /// The sender is done; the receiver closes its side.
+    #[serde(default)]
+    pub close: bool,
+    /// Why the poller did not connect, or why it ended the session early. Names the rule, never a
+    /// value from the stream.
+    #[serde(default)]
+    pub refused: Option<String>,
+}
+
+impl RelayFrame {
+    /// Decode [`Self::bytes`]. `None` when the field is not valid base64, which ends the session.
     #[must_use]
     pub fn slice(&self) -> Option<Vec<u8>> {
         if self.bytes.is_empty() {
@@ -3174,6 +3264,44 @@ impl RawFlowDatagram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_relay_frame_round_trips_and_tolerates_missing_and_unknown_fields() {
+        let open = RelayFrame {
+            poller_id: "edge-1".into(),
+            session: Uuid::from_u128(7),
+            seq: 0,
+            open: Some(RelayTarget {
+                node_id: NodeId(Uuid::from_u128(9)),
+                target: "192.0.2.10".parse().expect("ip"),
+                port: 22,
+            }),
+            bytes: encode_raw(b"SSH-2.0-x"),
+            close: false,
+            refused: None,
+        };
+        let json = serde_json::to_string(&open).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<RelayFrame>(&json).expect("decode"),
+            open
+        );
+        assert_eq!(open.slice().as_deref(), Some(&b"SSH-2.0-x"[..]));
+
+        // An older or newer writer: only the required fields, plus one nobody knows.
+        let bare: RelayFrame = serde_json::from_str(
+            r#"{"poller_id":"edge-1","session":"00000000-0000-0000-0000-000000000007","seq":3,"window":9}"#,
+        )
+        .expect("decode");
+        assert_eq!(bare.open, None);
+        assert!(!bare.close);
+        assert_eq!(bare.slice(), Some(Vec::new()));
+        let bad = RelayFrame {
+            bytes: "!!".into(),
+            ..bare
+        };
+        assert_eq!(bad.slice(), None);
+        const { assert!(RELAY_CHUNK_BYTES * 4 / 3 + 1024 < 1024 * 1024) };
+    }
 
     /// ADR-143 Inc.2: what core keeps from a result's row names. The accepting cases come first — a
     /// clean name passes untouched and a dirty one is cleaned rather than dropped — because a rule
