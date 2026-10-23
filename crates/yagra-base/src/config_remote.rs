@@ -282,14 +282,11 @@ pub fn export_paths(entries: &[NameEntry]) -> Vec<(Uuid, String)> {
         } else {
             format!("{stem}.txt")
         };
-        let mut candidates = vec![folder(first), folder(format!("{stem}__{id}.txt"))];
-        candidates.extend(
-            (1..)
-                .take(entries.len() + 1)
-                .map(|n| folder(format!("{id}-{n}.txt"))),
-        );
-        let path = candidates
-            .into_iter()
+        // Built one at a time, as far as the first free one: almost always the first.
+        let path = std::iter::once(first)
+            .chain(std::iter::once_with(|| format!("{stem}__{id}.txt")))
+            .chain((1..=entries.len() + 1).map(|n| format!("{id}-{n}.txt")))
+            .map(&folder)
             .find(|p| !taken.contains(&p.to_lowercase()))
             .unwrap_or_else(|| folder(format!("{id}.txt")));
         taken.insert(path.to_lowercase());

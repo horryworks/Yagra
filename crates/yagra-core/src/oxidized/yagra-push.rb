@@ -74,10 +74,12 @@ def export_tree(head, files)
     next unless dir == GROUP && id.match?(NODE_ID)
 
     target = files[id] || "deleted/#{id}.txt"
-    # Core never hands two ids one file; if it ever did, fail rather than drop one device's file.
-    raise "two configurations map to #{target}" if seen[target.downcase]
+    # Core never hands two ids one file, case-folded as well; if it ever did, fail rather than drop
+    # one device's file. Compared exactly here: Ruby's case folding is not Rust's, and a check that
+    # folded differently could stop every push over a name core had already told apart.
+    raise "two configurations map to #{target}" if seen[target]
 
-    seen[target.downcase] = true
+    seen[target] = true
     folder, name = target.include?('/') ? target.split('/', 2) : [nil, target]
     line = "#{mode} blob #{sha}\t#{name}"
     folder == 'deleted' ? deleted << line : root << line
