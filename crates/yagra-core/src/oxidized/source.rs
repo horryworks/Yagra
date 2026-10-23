@@ -141,9 +141,15 @@ pub(crate) fn hands_login(t: &BackupTarget, now: DateTime<Utc>) -> bool {
 
 /// Every configured node with a model and a connection, as oxidized's source.
 ///
-/// A node whose login may be handed over ([`hands_login`]), that a poller can carry it through
-/// and that has a relay port gets the login and its relay: [`relay::RELAY_HOST`] and the two
-/// ports (stage 5 decision 43). oxidized never sees a device's own address. Every other one is
+/// A node whose login may be handed over ([`hands_login`]) and that has a relay port gets the
+/// login and its relay: [`relay::RELAY_HOST`] and the two ports (stage 5 decision 43). oxidized
+/// never sees a device's own address.
+///
+/// ⚠️ Whether a poller can carry the session is deliberately **not** asked here. oxidized keeps
+/// the list it read until it is told to read it again, and a list read the moment core started —
+/// before any poller's first heartbeat — parked every node for as long as that list lived
+/// (measured on a lab deployment, 2026-10-23). The relay asks when oxidized connects, and a session
+/// it cannot carry is a fetch recorded as unreachable, never a refused login. Every other one is
 /// [`parked`]: in the list, so its versions stay readable while it looks for a login, and unable to
 /// reach the device. A login that fails to open, or is no longer a CLI login, parks the node too,
 /// logged by id, never by content.
@@ -152,7 +158,6 @@ pub(crate) async fn source_nodes(
     creds: &CredentialStore,
     now: DateTime<Utc>,
     ports: &HashMap<Uuid, u16>,
-    route: &(dyn Fn(Uuid) -> Route + Sync),
 ) -> Vec<SourceNode> {
     let mut out = Vec::with_capacity(targets.len());
     for t in targets {
@@ -166,10 +171,7 @@ pub(crate) async fn source_nodes(
             continue;
         };
         let name = t.node_id.to_string();
-        let port = ports
-            .get(&t.node_id)
-            .copied()
-            .filter(|_| matches!(route(t.node_id), Route::Via(_)));
+        let port = ports.get(&t.node_id).copied();
         let login = match t
             .rotation
             .credential_id

@@ -960,12 +960,7 @@ async fn oxidized_source(
             "failed to read config backup",
         )
     })?;
-    let relay = admin.config_relay.clone();
-    let mut nodes =
-        oxidized::source::source_nodes(targets, &admin.creds, Utc::now(), &ports, &|node| {
-            relay.route(node)
-        })
-        .await;
+    let mut nodes = oxidized::source::source_nodes(targets, &admin.creds, Utc::now(), &ports).await;
     if nodes.is_empty() {
         // oxidized will not start on an empty list (`source::placeholder`).
         nodes.push(oxidized::source::placeholder());
