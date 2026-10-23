@@ -1,5 +1,9 @@
 {
   "loading": "読み込み中…",
+  "chunkError": {
+    "text": "この画面を読み込めませんでした。",
+    "reload": "ページを再読み込み"
+  },
   "noRows": "データがありません。",
   "confirmDelete": {
     "typeToConfirm": "確認のため <b>{{phrase}}</b> と入力してください"

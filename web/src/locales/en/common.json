@@ -1,5 +1,9 @@
 {
   "loading": "Loading…",
+  "chunkError": {
+    "text": "This screen could not be loaded.",
+    "reload": "Reload page"
+  },
   "noRows": "No rows.",
   "confirmDelete": {
     "typeToConfirm": "Type <b>{{phrase}}</b> to confirm"

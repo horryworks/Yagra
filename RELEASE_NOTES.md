@@ -34,6 +34,10 @@
 
 - **A device monitored by ping alone no longer shows an Uptime row.** Uptime is read over SNMP, so on a device with no SNMP credential the row could only ever show a dash, and the page asked for it every time it opened (a 404 in the browser console). The row and its request now appear only on a device with SNMP configured.
 
+### Bug Fixes
+
+- **A screen that cannot be loaded no longer blanks the whole WebUI.** The Topology, Troubleshoot, Settings and Events sections and Credentials are loaded on first use. When that load failed — most often in a browser still on the page from before an upgrade, asking for a file the new version no longer has — the whole page went blank, menus included. It now says "This screen could not be loaded." with a Reload page button, and the menus stay.
+
 ## v0.3.57 — The node tree stays where you left it, and a breadcrumb folder is shown in it
 
 ### Improvements

@@ -16,10 +16,11 @@
 // leaving a group and coming back is synchronous too.
 
 import { lazy, Suspense, useEffect } from 'react';
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AppShell } from './components/shell/AppShell';
 import { MovedTo } from './components/shell/MovedTo';
+import { ChunkErrorBoundary } from './components/shell/ChunkErrorBoundary';
 import { LoginPage } from './pages/LoginPage';
 import { usePrefsDialogStore } from './store';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
@@ -78,13 +79,19 @@ function OpenPreferences() {
 
 /** Layout route for the lazy groups: holds the one Suspense boundary, inside the AppShell so the
  *  top bar and sidebar stay put while a group's chunk arrives. The fallback is the app's existing
- *  loading treatment (the same markup `App.tsx` shows while the client config resolves). */
+ *  loading treatment (the same markup `App.tsx` shows while the client config resolves).
+ *
+ *  `ChunkErrorBoundary` is the other half (ADR-212): a chunk that cannot be fetched — the browser
+ *  still on the page from before an upgrade — shows a reload button instead of blanking the app. */
 function LazyGroup() {
   const { t } = useTranslation();
+  const { pathname } = useLocation();
   return (
-    <Suspense fallback={<div className="app-loading muted">{t('loading')}</div>}>
-      <Outlet />
-    </Suspense>
+    <ChunkErrorBoundary resetKey={pathname}>
+      <Suspense fallback={<div className="app-loading muted">{t('loading')}</div>}>
+        <Outlet />
+      </Suspense>
+    </ChunkErrorBoundary>
   );
 }
 
