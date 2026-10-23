@@ -82,71 +82,83 @@ impl Modify for SecurityAddon {
 )]
 struct Root;
 
+/// Every domain's slice of the document, named for the file it comes from.
+///
+/// One list, so [`document`] and the test that no two slices name a schema differently read the
+/// same set.
+fn fragments() -> Vec<(&'static str, utoipa::openapi::OpenApi)> {
+    vec![
+        ("openapi", Doc::openapi()),
+        ("nodes", super::nodes::Doc::openapi()),
+        ("duplicates", super::duplicates::Doc::openapi()),
+        ("subnet_overlaps", super::subnet_overlaps::Doc::openapi()),
+        ("prefix_gaps", super::prefix_gaps::Doc::openapi()),
+        ("pools", super::pools::Doc::openapi()),
+        ("checks", super::checks::Doc::openapi()),
+        ("metrics", super::metrics::Doc::openapi()),
+        ("thresholds", super::thresholds::Doc::openapi()),
+        ("flow", super::flow::Doc::openapi()),
+        ("users", super::users::Doc::openapi()),
+        ("alerts", super::alerts::Doc::openapi()),
+        ("topology", super::topology::Doc::openapi()),
+        ("fleet", super::fleet::Doc::openapi()),
+        ("analysis", super::analysis::Doc::openapi()),
+        ("maintenance", super::maintenance::Doc::openapi()),
+        ("eventlog", super::eventlog::Doc::openapi()),
+        ("audit", super::audit::Doc::openapi()),
+        ("dashboard", super::dashboard::Doc::openapi()),
+        ("public_dashboard", super::public_dashboard::Doc::openapi()),
+        ("preferences", super::preferences::Doc::openapi()),
+        ("changes", super::changes::Doc::openapi()),
+        ("pins", super::pins::Doc::openapi()),
+        ("mib", super::mib::Doc::openapi()),
+        ("api_tokens", super::api_tokens::Doc::openapi()),
+        ("session", super::session::Doc::openapi()),
+        ("ldap", super::ldap::Doc::openapi()),
+        ("webtls", super::webtls::Doc::openapi()),
+        ("bus", super::bus::Doc::openapi()),
+        ("upgrade", super::upgrade::Doc::openapi()),
+        ("relocation", super::relocation::Doc::openapi()),
+        ("oidc", super::oidc::Doc::openapi()),
+        ("system", super::system::Doc::openapi()),
+        ("support", super::support::Doc::openapi()),
+        ("collection", super::collection::Doc::openapi()),
+        ("classification", super::classification::Doc::openapi()),
+        ("reclassify", super::reclassify::Doc::openapi()),
+        ("rediscover", super::rediscover::Doc::openapi()),
+        ("config_backup", super::config_backup::Doc::openapi()),
+        ("config_remote", super::config_remote::Doc::openapi()),
+        ("discovery", super::discovery::Doc::openapi()),
+        ("notifications", super::notifications::Doc::openapi()),
+        ("rca", super::rca::Doc::openapi()),
+        ("forwarding", super::forwarding::Doc::openapi()),
+        ("groups", super::groups::Doc::openapi()),
+        ("profiles", super::profiles::Doc::openapi()),
+        ("credentials", super::credentials::Doc::openapi()),
+        ("pollers", super::pollers::Doc::openapi()),
+        ("health", super::health::Doc::openapi()),
+        ("reports", super::reports::Doc::openapi()),
+        ("neighbors", super::neighbors::Doc::openapi()),
+        ("retention", super::retention::Doc::openapi()),
+        ("config_bundle", super::config_bundle::Doc::openapi()),
+        ("meraki", super::meraki::Doc::openapi()),
+        ("netbox", super::netbox::Doc::openapi()),
+        ("events", super::events::Doc::openapi()),
+        ("wireless", super::wireless::Doc::openapi()),
+    ]
+}
+
 /// The assembled OpenAPI document for `/api/v1`.
 ///
 /// Merged in the same order as [`super::router`], so reading the two side by side stays possible.
+///
+/// ⚠️ A merge keys schemas by their short name and keeps one: two different types both called
+/// `TestResult` leave the document describing only one of them, silently (ADR-210 stage 4).
+/// `no_two_domains_give_one_schema_name_two_shapes` is what fails for that.
 #[must_use]
 pub fn document() -> utoipa::openapi::OpenApi {
     let mut doc = Root::openapi();
-    for fragment in [
-        Doc::openapi(),
-        super::nodes::Doc::openapi(),
-        super::duplicates::Doc::openapi(),
-        super::subnet_overlaps::Doc::openapi(),
-        super::prefix_gaps::Doc::openapi(),
-        super::pools::Doc::openapi(),
-        super::checks::Doc::openapi(),
-        super::metrics::Doc::openapi(),
-        super::thresholds::Doc::openapi(),
-        super::flow::Doc::openapi(),
-        super::users::Doc::openapi(),
-        super::alerts::Doc::openapi(),
-        super::topology::Doc::openapi(),
-        super::fleet::Doc::openapi(),
-        super::analysis::Doc::openapi(),
-        super::maintenance::Doc::openapi(),
-        super::eventlog::Doc::openapi(),
-        super::audit::Doc::openapi(),
-        super::dashboard::Doc::openapi(),
-        super::public_dashboard::Doc::openapi(),
-        super::preferences::Doc::openapi(),
-        super::changes::Doc::openapi(),
-        super::pins::Doc::openapi(),
-        super::mib::Doc::openapi(),
-        super::api_tokens::Doc::openapi(),
-        super::session::Doc::openapi(),
-        super::ldap::Doc::openapi(),
-        super::webtls::Doc::openapi(),
-        super::bus::Doc::openapi(),
-        super::upgrade::Doc::openapi(),
-        super::relocation::Doc::openapi(),
-        super::oidc::Doc::openapi(),
-        super::system::Doc::openapi(),
-        super::support::Doc::openapi(),
-        super::collection::Doc::openapi(),
-        super::classification::Doc::openapi(),
-        super::reclassify::Doc::openapi(),
-        super::rediscover::Doc::openapi(),
-        super::config_backup::Doc::openapi(),
-        super::config_remote::Doc::openapi(),
-        super::discovery::Doc::openapi(),
-        super::notifications::Doc::openapi(),
-        super::rca::Doc::openapi(),
-        super::forwarding::Doc::openapi(),
-        super::groups::Doc::openapi(),
-        super::profiles::Doc::openapi(),
-        super::credentials::Doc::openapi(),
-        super::pollers::Doc::openapi(),
-        super::health::Doc::openapi(),
-        super::reports::Doc::openapi(),
-        super::neighbors::Doc::openapi(),
-        super::retention::Doc::openapi(),
-        super::config_bundle::Doc::openapi(),
-        super::meraki::Doc::openapi(),
-        super::netbox::Doc::openapi(),
-        super::events::Doc::openapi(),
-        super::wireless::Doc::openapi(),
-    ] {
+    for (_, fragment) in fragments() {
         doc.merge(fragment);
     }
     doc
@@ -206,6 +218,48 @@ mod tests {
     /// mechanism exists to remove, just moved one file along.
     ///
     /// Set `UPDATE_OPENAPI=1` to rewrite the file instead of failing.
+    /// Two domains may share a type, but never a schema name for two different shapes: the merge
+    /// keeps one of them without a word, so the generated TypeScript describes the wrong type for
+    /// every screen reading the other (found when a config-backup `TestResult` replaced the
+    /// forwarding one, ADR-210 stage 4).
+    #[test]
+    fn no_two_domains_give_one_schema_name_two_shapes() {
+        let mut seen: std::collections::BTreeMap<String, (&'static str, serde_json::Value)> =
+            std::collections::BTreeMap::new();
+        let mut clashes = Vec::new();
+        let mut inspected = 0usize;
+        let mut slices = vec![("root", Root::openapi())];
+        slices.extend(fragments());
+        for (domain, fragment) in slices {
+            let Some(components) = fragment.components else {
+                continue;
+            };
+            for (name, schema) in components.schemas {
+                inspected += 1;
+                let shape = serde_json::to_value(&schema).expect("a schema serializes");
+                match seen.get(&name) {
+                    Some((first, earlier)) if *earlier != shape => {
+                        clashes.push(format!("{name}: {first} and {domain}"));
+                    }
+                    Some(_) => {}
+                    None => {
+                        seen.insert(name, (domain, shape));
+                    }
+                }
+            }
+        }
+        // A floor on what was looked at, so a change that stopped finding the slices' schemas
+        // cannot pass over nothing.
+        assert!(
+            inspected > 300,
+            "only {inspected} schemas inspected - the fragments are no longer read"
+        );
+        assert!(
+            clashes.is_empty(),
+            "two different types share an OpenAPI schema name; rename one: {clashes:?}"
+        );
+    }
+
     #[test]
     fn the_committed_document_is_current() {
         let path =
