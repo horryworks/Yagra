@@ -260,24 +260,41 @@ pub fn export_paths(entries: &[NameEntry]) -> Vec<(Uuid, String)> {
             .entry((*registered, stem.to_lowercase()))
             .or_default() += 1;
     }
-    let mut out: Vec<(Uuid, String)> = stems
-        .into_iter()
-        .map(|(id, registered, stem)| {
-            let clash = counts[&(registered, stem.to_lowercase())] > 1;
-            let file = if clash {
-                format!("{stem}__{}.txt", &id.simple().to_string()[..8])
-            } else {
-                format!("{stem}.txt")
-            };
-            let path = if registered {
+    let mut stems = stems;
+    stems.sort_by_key(|(id, _, _)| *id);
+    // The suffix can itself collide — a node may be *named* `sw__aaaaaaaa` — so every path is
+    // checked against the ones already given out, case-folded, and a taken one falls back to the
+    // whole id, then to a counter. Two ids never share a file.
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<(Uuid, String)> = Vec::with_capacity(stems.len());
+    for (id, registered, stem) in stems {
+        let clash = counts[&(registered, stem.to_lowercase())] > 1;
+        let short = &id.simple().to_string()[..8];
+        let folder = |file: String| {
+            if registered {
                 file
             } else {
                 format!("{DELETED_DIR}/{file}")
-            };
-            (id, path)
-        })
-        .collect();
-    out.sort_by_key(|(id, _)| *id);
+            }
+        };
+        let first = if clash {
+            format!("{stem}__{short}.txt")
+        } else {
+            format!("{stem}.txt")
+        };
+        let mut candidates = vec![folder(first), folder(format!("{stem}__{id}.txt"))];
+        candidates.extend(
+            (1..)
+                .take(entries.len() + 1)
+                .map(|n| folder(format!("{id}-{n}.txt"))),
+        );
+        let path = candidates
+            .into_iter()
+            .find(|p| !taken.contains(&p.to_lowercase()))
+            .unwrap_or_else(|| folder(format!("{id}.txt")));
+        taken.insert(path.to_lowercase());
+        out.push((id, path));
+    }
     out
 }
 
@@ -784,6 +801,29 @@ mod tests {
                 "deleted/sw-01.txt"
             ]
         );
+        // A node named like another's suffixed file does not take it, whatever the case.
+        let squatter = Uuid::parse_str("dddddddd-0000-4000-8000-000000000004").unwrap();
+        let paths = export_paths(&[
+            NameEntry {
+                node_id: a,
+                name: "sw".to_owned(),
+                registered: true,
+            },
+            NameEntry {
+                node_id: b,
+                name: "sw".to_owned(),
+                registered: true,
+            },
+            NameEntry {
+                node_id: squatter,
+                name: "SW__AAAAAAAA".to_owned(),
+                registered: true,
+            },
+        ]);
+        let lower: std::collections::HashSet<String> =
+            paths.iter().map(|(_, p)| p.to_lowercase()).collect();
+        assert_eq!(lower.len(), 3, "{paths:?}");
+        assert_eq!(paths[2].1, format!("SW__AAAAAAAA__{squatter}.txt"));
         let long = export_paths(&[entry(9, &"x".repeat(300), true)]);
         assert_eq!(long[0].1.len(), FILE_STEM_MAX + 4);
     }

@@ -74,9 +74,10 @@ def export_tree(head, files)
     next unless dir == GROUP && id.match?(NODE_ID)
 
     target = files[id] || "deleted/#{id}.txt"
-    next if seen[target]
+    # Core never hands two ids one file; if it ever did, fail rather than drop one device's file.
+    raise "two configurations map to #{target}" if seen[target.downcase]
 
-    seen[target] = true
+    seen[target.downcase] = true
     folder, name = target.include?('/') ? target.split('/', 2) : [nil, target]
     line = "#{mode} blob #{sha}\t#{name}"
     folder == 'deleted' ? deleted << line : root << line
