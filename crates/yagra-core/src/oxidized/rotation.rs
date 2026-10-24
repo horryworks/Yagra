@@ -252,6 +252,14 @@ pub(crate) fn next_step(
         .filter(|a| round.is_none_or(|r| a.at >= r))
         .collect();
     if let Some(last) = in_round.first() {
+        // A person cancelled the last fetch (stage 5 decision 56): the same login again, after the
+        // interval a silent device gets, so a cancel is not undone a minute later by the rotation.
+        // It is no evidence about the device, so it neither counts towards giving up nor moves on.
+        if last.outcome == AttemptOutcome::Cancelled {
+            if let Some(c) = last.credential_id.filter(|c| candidates.contains(c)) {
+                return decide(c, Some(last.at + limits.unreachable_retry));
+            }
+        }
         if last.outcome == AttemptOutcome::Unreachable {
             // The oldest of the run of "did not answer" this pass ends with.
             let since = in_round
@@ -752,6 +760,29 @@ mod tests {
     fn a_device_that_did_not_answer_is_not_counted_and_keeps_its_login() {
         let cands = [A, B];
         let start = t0();
+        // A cancelled fetch waits like a silent one, with the same login, and is no step towards
+        // giving up (stage 5 decision 56).
+        let cancelled = vec![attempt(NODE, A, AttemptOutcome::Cancelled, start)];
+        let rot = Rotation {
+            credential_id: Some(A),
+            ..Default::default()
+        };
+        let lim = limits_of(ScanMode::Normal);
+        assert_eq!(
+            next_step(
+                &[A, B],
+                &rot,
+                &cancelled,
+                &[],
+                &lim,
+                &HashMap::new(),
+                start + minutes(1)
+            ),
+            Step::Wait {
+                credential: A,
+                until: start + lim.unreachable_retry
+            }
+        );
         let silent = vec![attempt(NODE, A, AttemptOutcome::Unreachable, start)];
         let rot = fresh(start);
         assert_eq!(

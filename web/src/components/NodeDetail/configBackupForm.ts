@@ -124,7 +124,8 @@ export function attemptLine(a: AttemptView): Line {
   return {
     key: `config.outcome.${a.outcome}`,
     login: a.credential_id,
-    tone: a.outcome === 'unreachable' ? 'none' : 'bad',
+    // Neither a silent device nor a cancelled fetch says anything is wrong with the login.
+    tone: a.outcome === 'unreachable' || a.outcome === 'cancelled' ? 'none' : 'bad',
   };
 }
 

@@ -15,6 +15,8 @@ export function markOf(row: ConfigBackupRow): BackupMark {
   if (row.poller !== 'ready') return 'trouble';
   if (row.pending) return 'busy';
   if (!row.last) return 'busy';
+  // A cancelled fetch is a person's choice, not trouble: the node stands where it stood before.
+  if (row.last.outcome === 'cancelled') return row.login_confirmed ? 'ok' : 'busy';
   if (row.login_confirmed && row.last.outcome === 'success') return 'ok';
   return 'trouble';
 }

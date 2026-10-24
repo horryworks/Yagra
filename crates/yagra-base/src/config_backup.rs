@@ -88,6 +88,9 @@ pub enum AttemptOutcome {
     Other,
     /// Yagra asked for a fetch and never heard how it ended.
     Lost,
+    /// A person cancelled the fetch while it was out (ADR-210 stage 5 decision 56). Says nothing
+    /// about the login or the device.
+    Cancelled,
     /// A token a newer core wrote.
     Unknown,
 }
@@ -98,6 +101,7 @@ crate::token_enum!(AttemptOutcome, Unknown, "config_backup_attempts.outcome", [
     Unreachable => "unreachable",
     Other => "other",
     Lost => "lost",
+    Cancelled => "cancelled",
     Unknown => "unknown",
 ]);
 
@@ -110,7 +114,7 @@ impl AttemptOutcome {
     pub const fn is_login_failure(self) -> bool {
         match self {
             Self::AuthFailed | Self::Other | Self::Lost | Self::Unknown => true,
-            Self::Success | Self::Unreachable => false,
+            Self::Success | Self::Unreachable | Self::Cancelled => false,
         }
     }
 }
@@ -827,7 +831,11 @@ mod tests {
             .collect();
         assert_eq!(
             not_failures,
-            [&AttemptOutcome::Success, &AttemptOutcome::Unreachable]
+            [
+                &AttemptOutcome::Success,
+                &AttemptOutcome::Unreachable,
+                &AttemptOutcome::Cancelled
+            ]
         );
     }
 

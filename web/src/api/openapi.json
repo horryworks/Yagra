@@ -13323,7 +13323,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as unreachable — not counted as a refused login, and the next login is not tried because of it"
+            "description": "The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer, and the same login is tried again after the interval a silent device gets"
           },
           "401": {
             "description": "No valid bearer token",
@@ -27948,6 +27948,7 @@
           "unreachable",
           "other",
           "lost",
+          "cancelled",
           "unknown"
         ]
       },

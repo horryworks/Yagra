@@ -428,6 +428,7 @@ export const ATTEMPT_OUTCOMES = [
   'unreachable',
   'other',
   'lost',
+  'cancelled',
   'unknown',
 ] as const;
 export type AttemptOutcome = (typeof ATTEMPT_OUTCOMES)[number];

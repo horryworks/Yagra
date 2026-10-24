@@ -1281,7 +1281,8 @@
       "unreachable": "Device did not answer",
       "other": "{{login}} failed",
       "lost": "The fetch did not report back",
-      "unknown": "{{login}} failed"
+      "unknown": "{{login}} failed",
+      "cancelled": "Fetch cancelled"
     },
     "attempts": {
       "cols": {

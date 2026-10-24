@@ -41,6 +41,12 @@ describe('config backup marks', () => {
     ).toBe('ok');
   });
 
+  it('a cancelled fetch is not trouble', () => {
+    const cancelled = { at, credential_id: 'c1', outcome: 'cancelled' as const, new_version: null };
+    expect(markOf(row({ login_confirmed: true, last: cancelled }))).toBe('ok');
+    expect(markOf(row({ last: cancelled }))).toBe('busy');
+  });
+
   it('a fetch that is out, or a node not tried yet, is in progress', () => {
     expect(markOf(row({ pending: true }))).toBe('busy');
     expect(markOf(row({}))).toBe('busy');

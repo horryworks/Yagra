@@ -835,7 +835,7 @@ async fn fetch_now(
     post, path = "/api/v1/nodes/{node_id}/config-backup/cancel", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     responses(
-        (status = 204, description = "The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as unreachable — not counted as a refused login, and the next login is not tried because of it"),
+        (status = 204, description = "The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer, and the same login is tried again after the interval a silent device gets"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
@@ -863,7 +863,7 @@ async fn cancel_fetch(
         ));
     }
     admin.config_relay.cancel(node_id);
-    repo.record_result(node_id, AttemptOutcome::Unreachable, None)
+    repo.record_result(node_id, AttemptOutcome::Cancelled, None)
         .await
         .map_err(|e| read_failed(&e))?;
     Ok(StatusCode::NO_CONTENT)
@@ -1441,7 +1441,7 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
         let attempts = repo.attempts_of(node, 5).await.expect("attempts");
         assert_eq!(attempts.len(), 1);
-        assert_eq!(attempts[0].outcome, AttemptOutcome::Unreachable);
+        assert_eq!(attempts[0].outcome, AttemptOutcome::Cancelled);
         let (_, rot) = repo
             .get_with_rotation(node)
             .await

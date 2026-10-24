@@ -6205,7 +6205,7 @@ export interface components {
          * @description How one login attempt ended.
          * @enum {string}
          */
-        AttemptOutcome: "success" | "auth_failed" | "unreachable" | "other" | "lost" | "unknown";
+        AttemptOutcome: "success" | "auth_failed" | "unreachable" | "other" | "lost" | "cancelled" | "unknown";
         /** @description One login attempt. */
         AttemptView: {
             /** Format: date-time */
@@ -26301,7 +26301,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as unreachable — not counted as a refused login, and the next login is not tried because of it */
+            /** @description The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer, and the same login is tried again after the interval a silent device gets */
             204: {
                 headers: {
                     [name: string]: unknown;

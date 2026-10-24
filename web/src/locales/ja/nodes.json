@@ -1271,7 +1271,8 @@
       "unreachable": "機器が応答しません",
       "other": "{{login}} で失敗しました",
       "lost": "取得の結果が返ってきませんでした",
-      "unknown": "{{login}} で失敗しました"
+      "unknown": "{{login}} で失敗しました",
+      "cancelled": "取得をやめました"
     },
     "attempts": {
       "cols": {
