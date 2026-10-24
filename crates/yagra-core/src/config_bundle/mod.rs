@@ -16,8 +16,10 @@
 //! A passphrase-resealing mode is a plausible future feature; adding the *variant* now, unused,
 //! would create an enum arm waiting to be filled in by someone who has not read ADR-018. The rule
 //! is that no code path in this repository turns a sealed secret back into transportable plaintext
-//! — the one exception, ADR-210's reveal, shows one secret to one signed-in person on screen and
-//! writes an audit row, which is not a file that travels — and an unused variant is how that rule
+//! — the exceptions are ADR-210's: the reveal shows one secret to one signed-in person on screen
+//! and writes an audit row, and the two `/internal/oxidized/*` readers hand the bundled oxidized,
+//! on the same box, only what one fetch or one push uses; none is a file that travels — and an
+//! unused variant is how that rule
 //! gets relaxed by accident. The bundle therefore carries
 //! **only ids** of credentials, and the importer keeps a reference only when the target already has
 //! that exact id — otherwise it drops it and says so.

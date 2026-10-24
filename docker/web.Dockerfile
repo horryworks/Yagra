@@ -107,8 +107,14 @@ COPY --from=bundle /app/dist /usr/share/nginx/html
 #
 # What covers the config instead: the entrypoint runs `nginx -t` before every reload, and the deploy
 # smoke test fails if the container does not come up.
+#
+# 🚨 Brotli first (CVE-2026-111497, a heap overflow in its decoder): the base image ships
+# `brotli-libs` 1.2.0, which freetype and libcurl link. Named with its fixed version so the build
+# fails rather than quietly keeping the old one. Alpine built it on 2026-10-22, past the two days
+# ADR-211 decision 5 gives a security fix. Drop the line once the base image carries it.
 USER root
-RUN install -d -o 101 -g 0 -m 0755 /etc/nginx/certs \
+RUN apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' \
+ && install -d -o 101 -g 0 -m 0755 /etc/nginx/certs \
  && printf 'listen 8080;\n' > /etc/nginx/yagra-listen.conf \
  && chown 101:0 /etc/nginx/yagra-listen.conf \
  && chmod 0664 /etc/nginx/yagra-listen.conf

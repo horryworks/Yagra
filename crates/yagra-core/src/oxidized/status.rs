@@ -2,11 +2,13 @@
 //! The leader loop between Yagra and the bundled oxidized (ADR-210 stage 2 decision 12).
 //!
 //! Every tick it asks oxidized to read the node list again — oxidized reads its source only at
-//! start and on `/reload`, so an address, a login or a new node reaches it no later than one tick —
-//! and copies what oxidized last reported for each node into `config_backup_status`.
+//! start and on `/reload` — unless a fetch is out, when the reload waits for up to two ticks
+//! ([`MAX_SKIPPED_RELOADS`], and `rotation`'s module doc for why it waits at all). So an address, a
+//! login or a new node reaches oxidized within three ticks. It also copies what oxidized last
+//! reported for each node into `config_backup_status`.
 //!
-//! Leader-only because two cores would write the same rows and send oxidized two reloads; both are
-//! harmless, but there is no reason to have them. An oxidized that does not answer leaves the last
+//! Leader-only because two cores would write the same rows and each send oxidized a reload — and a
+//! reload while a fetch is out can start that fetch a second time. An oxidized that does not answer leaves the last
 //! recorded status in place: a screen then shows the last known result with its time, never a
 //! fresh "failed" invented from silence.
 

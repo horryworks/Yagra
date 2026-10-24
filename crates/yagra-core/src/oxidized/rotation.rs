@@ -18,17 +18,21 @@
 //! skipped: skipping it would spend another failure at the same device on a login that is further
 //! down the list.
 //!
-//! Only Yagra starts a login with a candidate nobody has confirmed: such a node is in oxidized's
-//! node list only while a fetch Yagra asked for is outstanding (`source::source_nodes`), so
-//! oxidized's own daily schedule cannot spend an attempt the limits did not allow.
+//! Only Yagra starts a login with a candidate nobody has confirmed: such a node carries its login
+//! in oxidized's node list only while a fetch Yagra asked for is outstanding, and is parked the
+//! rest of the time (`source::source_nodes`), so oxidized's own daily schedule cannot spend an
+//! attempt the limits did not allow.
 //!
 //! 🚨 **oxidized's node list is never re-read while a fetch is out** ([`may_reload`]). oxidized
 //! 0.37 rebuilds every node object on a reload and does not carry the running mark across
 //! (`Nodes#update_nodes` copies `last` and `stats` only), and `/node/next` has already set `last` to
 //! nothing — so a node being fetched reads as never fetched and a second job starts with whatever
 //! login the list now holds. Measured on a lab deployment: one fetch-now, two logins, and the
-//! second one's result recorded against the wrong login. So every reload goes through
-//! [`may_reload`], and this loop starts its batch only when nothing is out.
+//! second one's result recorded against the wrong login. So a reload asks [`may_reload`] first,
+//! and this loop starts its batch only when nothing is out. ⚠️ One reload does not wait: the
+//! status loop reloads anyway after two skipped ticks (`status::MAX_SKIPPED_RELOADS`), so that a
+//! node switched off or a login taken away still reaches oxidized while fetches keep coming. A
+//! fetch out at that moment may run a second time — the price of that guarantee, taken knowingly.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -447,7 +451,8 @@ async fn tick(
                 return;
             }
         };
-    // A batch starts only when the last one has answered (`may_reload`). Lost fetches are still
+    // A batch starts only when the last one has answered (the rule `may_reload` states, read here
+    // off the targets already in hand). Lost fetches are still
     // counted below, and they are what frees a batch whose answer never came.
     let busy = targets
         .iter()

@@ -113,8 +113,10 @@ pub const PUSH_PATTERNS: &[(PushFailure, &str)] = &[
     (PushFailure::Unreachable, "timed out"),
 ];
 
-/// The failure git's `output` describes, by [`PUSH_PATTERNS`]. What the push script does with the
-/// same table, in Rust so it can be tested.
+/// The failure git's `output` describes, by [`PUSH_PATTERNS`]: the table the push script searches,
+/// first hit wins, modelled here so its order can be tested. Nothing in production calls it. The
+/// script adds one rule this does not: a push its `timeout` killed (exit 124) with no pattern in the
+/// output is `unreachable`, not `other`.
 #[must_use]
 pub fn classify_push_output(output: &str) -> PushFailure {
     let lower = output.to_lowercase();

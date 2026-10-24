@@ -22,6 +22,14 @@ ignore = [
     # entry. Re-evaluate if `rsa` ships a fix, if openidconnect drops it, or if any private-key
     # operation is ever routed through `rsa`.
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0387 — timing variability in `crypto-bigint` operations meant to be
+    # constant-time. Fixed only in 0.7.6 (2026-10-23); the 0.5 line we have gets no fix. Pulled only
+    # by `openidconnect` 4 → `p256`/`p384` → `elliptic-curve` 0.13 (checked with `cargo tree -i`),
+    # for ES256/ES384 ID-token verification, which handles the IdP's public key and a public
+    # signature — no secret integer passes through it, so a timing leak reveals nothing.
+    # Re-evaluate when `openidconnect` moves to `elliptic-curve` 0.14, or if anything starts signing
+    # or deriving a key through these crates.
+    "RUSTSEC-2026-0387",
 ]
 
 [licenses]

@@ -686,7 +686,7 @@ pub(crate) struct PushJob {
     params(PushQuery),
     responses(
         (status = 200, description = "Push this head: the destination with its token or private key in plaintext. For the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`", body = PushJob),
-        (status = 204, description = "Nothing to push: no destination, the head is already there, or a recent push failed"),
+        (status = 204, description = "Nothing to push: no destination, the head is already there, a recent push failed, the destination was set up by a newer core in a way this one does not know, or its credential cannot be opened"),
         (status = 400, description = "Not a version id (`invalid_oid`)", body = super::error::ErrorBody),
         (status = 401, description = "No token, or the wrong one (`oxidized_token`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),

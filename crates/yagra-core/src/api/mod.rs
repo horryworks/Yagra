@@ -778,6 +778,9 @@ fn changes_monitoring_config(path: &str) -> bool {
         || path == "/api/v1/event-rules/test"
         || path == "/api/v1/llm/test"
         || path == "/api/v1/settings/ldap/test"
+        // ADR-210 stage 4: asks the Git destination whether it would take a push, from core.
+        // It needs ManageSystem, so the read-shape check cannot see it either.
+        || path == "/api/v1/config-backup-remote/test"
         || path == "/api/v1/meraki/orgs/discover"
         // "Sync now" (ADR-164 decision 32) writes one column, `full_sync_requested_at`, which none of the
         // rebuilds reads; the read it asks for runs in the leader's sync loop, and whatever that
@@ -1940,6 +1943,11 @@ mod tests {
         assert!(changes_monitoring_config(
             "/api/v1/nodes/00000000-0000-4000-8000-000000000001/config-backup"
         ));
+        // ADR-210 stage 4: testing the Git destination writes nothing; saving it stays dirty.
+        assert!(!changes_monitoring_config(
+            "/api/v1/config-backup-remote/test"
+        ));
+        assert!(changes_monitoring_config("/api/v1/config-backup-remote"));
         // ADR-210: reading a secret back writes nothing.
         assert!(
             !changes_monitoring_config(

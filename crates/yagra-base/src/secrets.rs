@@ -286,8 +286,30 @@ impl CliLoginSecret {
 /// oxidized for one push.
 pub const KIND_GIT_REMOTE: &str = "git_remote";
 
+/// Whether `kind` is a credential this deployment knows is not SNMP: a device login, an HTTP login
+/// or token, an integration key. The SNMP readers (`scheduler::dispatch::resolve_snmp_auth`, the
+/// discovery sweep) read any other non-v3 secret as a v2c community and send it in the clear in
+/// every GET, so each of these is refused there by name. A kind nobody knows is left as it was.
+#[must_use]
+pub fn is_never_snmp(kind: &str) -> bool {
+    [
+        KIND_CLI_LOGIN,
+        KIND_GIT_REMOTE,
+        KIND_MERAKI_API,
+        KIND_NETBOX_TOKEN,
+        KIND_HTTP_AUTH,
+        KIND_API_TOKEN,
+    ]
+    .contains(&kind)
+}
+
 /// The sealed JSON shape of a `git_remote` credential: an HTTPS token with the user name it is
 /// presented as, or the private half of an SSH key Yagra generated (OpenSSH PEM form).
+///
+/// No `#[serde(other)]` variant, deliberately: one document holds one secret, so a variant a newer
+/// core wrote fails only that secret's [`GitRemoteSecret::parse`]. An older core then answers the
+/// push script "nothing to push" and logs it — pushes pause until it is upgraded, and nothing is
+/// lost, since every version stays in oxidized's own repository.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "auth", rename_all = "snake_case")]
 pub enum GitRemoteSecret {
@@ -608,9 +630,12 @@ impl CredentialStore {
     }
 
     /// Decrypt a credential's secret in memory along with its `kind`, so the caller can
-    /// pick the protocol path (v2c community vs v3 USM doc). Exposed via the API at exactly one
-    /// door: `POST /api/v1/credentials/{id}/reveal` (ADR-210), which answers a signed-in person
-    /// holding `RevealCredentials`, device kinds only, and is audited on every call.
+    /// pick the protocol path (v2c community vs v3 USM doc). Three HTTP readers hand a plaintext
+    /// out, each listed in `.claude/rules/security.md` with its guards (ADR-210): `POST
+    /// /api/v1/credentials/{id}/reveal` for a signed-in person holding `RevealCredentials`, device
+    /// kinds only and audited on every call; and, for the bundled oxidized alone behind its source
+    /// token, `GET /internal/oxidized/nodes` (the CLI logins) and `GET /internal/oxidized/push`
+    /// (the Git destination's key). A fourth needs its own ADR.
     pub async fn open(&self, id: Uuid) -> anyhow::Result<Option<(String, Vec<u8>)>> {
         let row = sqlx::query(
             "SELECT kind, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce \
@@ -763,6 +788,23 @@ pub async fn count_sealed(pool: &PgPool, kek: Kek) -> anyhow::Result<SealedRepor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every non-SNMP kind is refused by the SNMP readers; the two SNMP kinds are not.
+    #[test]
+    fn no_non_snmp_kind_is_read_as_a_community() {
+        for kind in [
+            KIND_CLI_LOGIN,
+            KIND_GIT_REMOTE,
+            KIND_MERAKI_API,
+            KIND_NETBOX_TOKEN,
+            KIND_HTTP_AUTH,
+            KIND_API_TOKEN,
+        ] {
+            assert!(is_never_snmp(kind), "{kind}");
+        }
+        assert!(!is_never_snmp(KIND_SNMP_V3));
+        assert!(!is_never_snmp("snmp_v2c"));
+    }
     use yagra_secrets::KeyProvider;
 
     /// The regression this whole change exists for: a KEK file that is *configured* but cannot be

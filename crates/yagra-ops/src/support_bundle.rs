@@ -476,10 +476,10 @@ fn standing_omissions() -> Vec<Omission> {
     vec![
         Omission::new(
             "Monitoring credentials, the KEK, and the session signing key",
-            "ADR-018: a sealed secret never leaves as a file. The one way to read one back is the \
-             audited on-screen reveal (ADR-210), and a debugging artefact is not the place to add a \
-             second. Credential *health* — whether stored secrets still decrypt — is carried \
-             instead, in health/credentials.json.",
+            "ADR-018: a sealed secret never leaves as a file. A person reads one back only through \
+             the audited on-screen reveal (ADR-210), and a debugging artefact is not the place to \
+             add another way. Credential *health* — whether stored secrets still decrypt — is \
+             carried instead, in health/credentials.json.",
         ),
         Omission::new(
             "Metric samples, passive-event message bodies, and flow records",

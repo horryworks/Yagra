@@ -195,6 +195,12 @@ RUN apt-get update \
          && apt-get install -y --no-install-recommends /tmp/wkhtmltox.deb \
          || echo "WARN: wkhtmltopdf install skipped — report PDF export will return 503 at runtime" ) \
     && rm -f /tmp/wkhtmltox.deb \
+    # 🚨 CVE-2026-111497 (a heap overflow in Brotli's decoder): freetype pulls `libbrotli1`, and
+    # bookworm's own build is affected. When it is here it must be the security fix, or the build
+    # fails rather than shipping the old one. Debian built it on 2026-10-23, a day short of the two
+    # days ADR-211 decision 5 gives a security fix: taken anyway, by the user's decision (2026-10-24).
+    && v="$(dpkg-query -W -f='${Version}' libbrotli1 2>/dev/null || true)" \
+    && { [ -z "$v" ] || dpkg --compare-versions "$v" ge 1.0.9-2+deb12u1; } \
     && apt-get purge -y wget \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

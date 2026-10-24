@@ -107,7 +107,8 @@ crate::token_enum!(AttemptOutcome, Unknown, "config_backup_attempts.outcome", [
 
 impl AttemptOutcome {
     /// Whether the attempt may have been a refused login: it counts against the limits, and the
-    /// next login is tried. Everything but a success and a device that did not answer — an outcome
+    /// next login is tried. Everything but a success, a device that did not answer and a fetch a
+    /// person cancelled — an outcome
     /// that cannot be told apart from a refused login is counted as one, because the limits exist
     /// to stop short of a lockout.
     #[must_use]
@@ -538,7 +539,7 @@ impl ConfigBackupRepo {
     /// A success remembers the login as working and, when `oid` is given, records it as the newest
     /// version — `new_version` says whether it differed from the last one seen. A refused login
     /// forgets a working one and starts a new pass from this failure, so the next candidate is
-    /// tried rather than the same one again. Returns the attempt as recorded, or `None` when the
+    /// tried rather than the same one again; a lost fetch does not. Returns the attempt as recorded, or `None` when the
     /// node has no configuration.
     pub async fn record_result(
         &self,
@@ -596,7 +597,10 @@ impl ConfigBackupRepo {
             .bind(oid)
             .execute(&mut *tx)
             .await?;
-        } else if outcome.is_login_failure() && confirmed {
+        } else if outcome.is_login_failure() && outcome != AttemptOutcome::Lost && confirmed {
+            // A working login is forgotten only when the device answered and refused it (ADR-210
+            // decision 20). A fetch nobody heard back from — a restart, a failover, a hook that
+            // could not post — still counts against the limits, but says nothing about the login.
             sqlx::query(
                 "UPDATE node_config_backup SET login_confirmed = false, round_started_at = $2, \
                    requested_at = NULL WHERE node_id = $1",
@@ -1084,6 +1088,46 @@ mod tests {
             .expect("row");
         assert!(!rot.login_confirmed);
         assert_eq!(rot.last_version_oid.as_deref(), Some("aaa"));
+    }
+
+    /// A working login whose fetch was never heard back from is still the node's login: the lost
+    /// fetch counts against the limits, and only a refusal forgets it (ADR-210 decision 20).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_lost_fetch_does_not_forget_a_working_login(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "sw-05", 5, None).await;
+        let login = crate::pgtest::credential(&pool, "ops", "cli_login").await;
+        assert!(repo
+            .put(node, &on(BackupInput::Ssh, Some("ios")), true)
+            .await
+            .expect("put"));
+        let cutoff = || Utc::now() - chrono::TimeDelta::minutes(10);
+        assert!(repo
+            .dispatch(node, login, Utc::now(), cutoff())
+            .await
+            .expect("dispatch"));
+        repo.record_result(node, AttemptOutcome::Success, Some("aaa"))
+            .await
+            .expect("record");
+        assert!(repo
+            .dispatch(node, login, Utc::now(), cutoff())
+            .await
+            .expect("dispatch"));
+        let lost = repo
+            .record_result(node, AttemptOutcome::Lost, None)
+            .await
+            .expect("record")
+            .expect("configured");
+        assert_eq!(lost.credential_id, Some(login));
+        assert!(lost.outcome.is_login_failure(), "it counts");
+        let (_, rot) = repo
+            .get_with_rotation(node)
+            .await
+            .expect("get")
+            .expect("row");
+        assert!(rot.login_confirmed, "nobody refused it");
+        assert_eq!(rot.requested_at, None);
     }
 
     /// A second dispatch while one is out changes nothing, and the one out counts as an attempt

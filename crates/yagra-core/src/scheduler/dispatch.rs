@@ -518,11 +518,11 @@ async fn resolve_snmp_auth(
                             tracing::warn!(node = %node.id, %reason, "invalid snmp_v3 credential");
                         }
                     }
-                } else if kind == secrets::KIND_CLI_LOGIN {
-                    // A device login bound as the SNMP credential (ADR-210): reading it as a
-                    // community would send the password in cleartext in every GET. Fall back to
-                    // the env community as for a missing credential.
-                    tracing::warn!(node = %node.id, "a CLI login is bound as the SNMP credential");
+                } else if secrets::is_never_snmp(&kind) {
+                    // A device login, an HTTP secret or an integration key bound as the SNMP
+                    // credential (ADR-210): reading it as a community would send it in cleartext
+                    // in every GET. Fall back to the env community as for a missing credential.
+                    tracing::warn!(node = %node.id, %kind, "a non-SNMP credential is bound as the SNMP credential");
                 } else if let Ok(community) = String::from_utf8(bytes) {
                     return Some(SnmpAuth::V2c(community));
                 }
@@ -1026,6 +1026,22 @@ mod tests {
             Some(SnmpAuth::V2c(c)) => assert_eq!(c, "public"),
             other => panic!("expected the env community, got {}", other.is_some()),
         }
+    }
+
+    /// The config-backup Git destination's token is never read as a community either: it would go
+    /// out in every GET to whatever address the node carries.
+    #[tokio::test]
+    async fn a_git_destination_key_is_never_sent_as_a_community() {
+        let cred = Uuid::from_u128(0x617);
+        let mut n = node("git-bound");
+        n.credential = Some(CredentialId::from(cred));
+        let key = br#"{"auth":"https_token","username":"ops","token":"t0ken"}"#;
+        let h = Harness::builder()
+            .creds(FakeCreds::new().with(cred, secrets::KIND_GIT_REMOTE, key))
+            .build();
+        assert!(resolve_snmp_auth(h.creds.as_ref(), &n, None)
+            .await
+            .is_none());
     }
     /// 🚨 **Current behaviour, recorded rather than endorsed** (ADR-111 decision 6): a bound `snmp_v3`
     /// credential that does not parse falls through to the environment's **v2c** community, so a

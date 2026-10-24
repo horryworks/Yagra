@@ -244,9 +244,20 @@ async fn carry(
                     reply(bus, cut("the session carried too much")).await;
                     return Outcome::Cut;
                 }
-                if !bytes.is_empty() && write.write_all(&bytes).await.is_err() {
-                    reply(bus, closing(poller_id, session, sent, None)).await;
-                    return Outcome::Closed;
+                if !bytes.is_empty() {
+                    // Bounded by the same limits as the wait: a device that stops reading would
+                    // otherwise hold this arm, and the idle and length limits with it, for ever.
+                    match tokio::time::timeout_at(wake, write.write_all(&bytes)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => {
+                            reply(bus, closing(poller_id, session, sent, None)).await;
+                            return Outcome::Closed;
+                        }
+                        Err(_) => {
+                            reply(bus, cut("nothing moved for too long")).await;
+                            return Outcome::Cut;
+                        }
+                    }
                 }
                 if f.close {
                     let _ = write.shutdown().await;
@@ -291,8 +302,9 @@ async fn carry(
     }
 }
 
-/// Subscribe to this poller's relay frames and start the loop. Unconditional, like the claim of
-/// [`yagra_bus::CAP_CONFIG_RELAY`] in the heartbeat.
+/// Subscribe to this poller's relay frames and start the loop. Unconditional: whether the broker
+/// lets the subscription through is what the heartbeat's claim reports
+/// ([`yagra_bus::CAP_CONFIG_RELAY`] or its `-refused` twin).
 pub(crate) async fn start(
     bus: &Arc<NatsBus>,
     poller_id: &str,

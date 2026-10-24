@@ -26301,7 +26301,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The fetch that was out is cut: its relay connection is closed, a new one is refused for five minutes, and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer, and the same login is tried again after the interval a silent device gets */
+            /** @description The fetch that was out is cut: its relay connection is closed, a new one is refused until that fetch has reported (five minutes at most), and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer. A node still looking for a login tries the same one again after the interval a silent device gets; a node whose login works is fetched again on oxidized's own daily schedule */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -26540,7 +26540,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig or RevealCredentials, or the caller is restricted to folders (`scope_unsupported`) */
+            /** @description Role lacks ManageConfig or RevealCredentials, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -37114,7 +37114,7 @@ export interface operations {
                     "application/json": components["schemas"]["PushJob"];
                 };
             };
-            /** @description Nothing to push: no destination, the head is already there, or a recent push failed */
+            /** @description Nothing to push: no destination, the head is already there, a recent push failed, the destination was set up by a newer core in a way this one does not know, or its credential cannot be opened */
             204: {
                 headers: {
                     [name: string]: unknown;

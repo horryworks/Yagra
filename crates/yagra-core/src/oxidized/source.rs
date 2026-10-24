@@ -2,9 +2,10 @@
 //! What each configured node is handed to oxidized as, and why a node is not handed over
 //! (ADR-210 stage 2 decisions 12-14, stage 3 decision 22).
 //!
-//! The judgement is [`readiness`], which is pure: the screen asks it to say why a node is not
-//! fetched, and the source asks it to decide what to send. The two cannot disagree because they
-//! are the same function.
+//! Two judgements, both pure. [`readiness`] says why a node is not fetched — the screen and the
+//! rotation ask it. [`hands_login`] says whether a node's login may be handed over now — the source
+//! asks it. The source deliberately does not ask `readiness` about the poller a session would go
+//! through: see [`source_nodes`] for the start-up race that cost.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -165,6 +166,9 @@ pub(crate) async fn source_nodes(
     relay_ip: Option<std::net::IpAddr>,
 ) -> Vec<SourceNode> {
     let mut out = Vec::with_capacity(targets.len());
+    // A fleet shares a handful of logins: each is opened once per read, not once per node. The
+    // plaintext lives only as long as this call, as it did when each node opened its own.
+    let mut opened: HashMap<Uuid, Option<CliLoginSecret>> = HashMap::new();
     for t in targets {
         let (Some(model), Some(input)) = (
             model_of(
@@ -185,20 +189,26 @@ pub(crate) async fn source_nodes(
             .credential_id
             .filter(|_| port.is_some() && hands_login(&t, now))
         {
-            Some(cred) => match creds.open(cred).await {
-                Ok(Some((kind, secret))) if kind == KIND_CLI_LOGIN => {
-                    let parsed = CliLoginSecret::parse(&secret).ok();
-                    if parsed.is_none() {
-                        tracing::warn!(node = %t.node_id, "config backup: the CLI login does not parse");
-                    }
-                    parsed
+            Some(cred) => {
+                if let std::collections::hash_map::Entry::Vacant(e) = opened.entry(cred) {
+                    let login = match creds.open(cred).await {
+                        Ok(Some((kind, secret))) if kind == KIND_CLI_LOGIN => {
+                            let parsed = CliLoginSecret::parse(&secret).ok();
+                            if parsed.is_none() {
+                                tracing::warn!(node = %t.node_id, "config backup: the CLI login does not parse");
+                            }
+                            parsed
+                        }
+                        Ok(_) => None,
+                        Err(e) => {
+                            tracing::warn!(node = %t.node_id, error = %e, "config backup: credential decrypt failed");
+                            None
+                        }
+                    };
+                    e.insert(login);
                 }
-                Ok(_) => None,
-                Err(e) => {
-                    tracing::warn!(node = %t.node_id, error = %e, "config backup: credential decrypt failed");
-                    None
-                }
-            },
+                opened.get(&cred).cloned().flatten()
+            }
             None => None,
         };
         out.push(match (login, port, relay_ip) {

@@ -34,6 +34,7 @@ use yagra_base::config_backup::ConfigBackupRepo;
 use yagra_bus::{
     encode_raw, RelayBus, RelayFrame, RelayTarget, CAP_CONFIG_RELAY, CAP_CONFIG_RELAY_REFUSED,
     RELAY_CHUNK_BYTES, RELAY_CONNECT_SECS, RELAY_IDLE_SECS, RELAY_MAX_BYTES, RELAY_MAX_SECS,
+    RELAY_PORTS,
 };
 use yagra_common::NodeId;
 
@@ -62,9 +63,9 @@ pub(crate) async fn relay_address(oxidized_host: &str) -> Option<IpAddr> {
 }
 
 /// The device ports, in the order of a node's two relay ports: SSH on the even one, telnet on the
-/// one after it.
-const DEVICE_SSH: u16 = 22;
-const DEVICE_TELNET: u16 = 23;
+/// one after it. Taken from the list the poller checks an open against, so the two cannot drift.
+const DEVICE_SSH: u16 = RELAY_PORTS[0];
+const DEVICE_TELNET: u16 = RELAY_PORTS[1];
 
 /// How long a relay failure turns the next failed fetch of that node into "unreachable"
 /// (decision 47). Longer than one fetch takes, shorter than the gap to the next one.
@@ -571,9 +572,20 @@ async fn carry(
                     let _ = bus.publish_relay_to_poller(close(sent)).await;
                     return Outcome::Cut;
                 }
-                if !bytes.is_empty() && write.write_all(&bytes).await.is_err() {
-                    let _ = bus.publish_relay_to_poller(close(sent)).await;
-                    return Outcome::Closed;
+                if !bytes.is_empty() {
+                    // Bounded by the same limits as the wait: a peer that stops reading would
+                    // otherwise hold this arm, and the idle and length limits with it, for ever.
+                    match tokio::time::timeout_at(wake, write.write_all(&bytes)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => {
+                            let _ = bus.publish_relay_to_poller(close(sent)).await;
+                            return Outcome::Closed;
+                        }
+                        Err(_) => {
+                            let _ = bus.publish_relay_to_poller(close(sent)).await;
+                            return Outcome::Cut;
+                        }
+                    }
                 }
                 if f.close {
                     let _ = write.shutdown().await;

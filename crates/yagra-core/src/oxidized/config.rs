@@ -249,6 +249,16 @@ mod tests {
         // The token goes through the environment, never git's arguments.
         assert!(PUSH_SCRIPT.contains("GIT_CONFIG_VALUE_0"));
         assert!(PUSH_SCRIPT.contains(&format!("'{TOKEN_HEADER}'")));
+        // 🚨 The script reads the repository the configuration names and keeps only the files under
+        // the folder Yagra's nodes are filed in. Either one out of step makes every push an empty
+        // tree, which deletes every device's file at the destination.
+        assert!(PUSH_SCRIPT.contains(&format!("GROUP = '{}'", super::super::GROUP)));
+        let repo = render("T", "S", "E", "P")
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("repo: "))
+            .expect("the configuration names a repository")
+            .to_owned();
+        assert!(PUSH_SCRIPT.contains(&format!("REPO = '{repo}'")));
     }
 
     /// The rendered text is pinned by its digest, and the digest by [`CONFIG_REVISION`] and the

@@ -4,10 +4,12 @@
 //! `ManageCredentials`, its own permission rather than `ManageConfig`: these are what the whole
 //! fleet is polled with, so holding them is a strictly larger power than editing what gets polled.
 //!
-//! **The secret leaves this process in the clear through one door only**: `POST
+//! **The secret leaves this module in the clear through one door only**: `POST
 //! /credentials/{id}/reveal` (ADR-210), which takes its own permission (`RevealCredentials`), is
 //! refused to API tokens and to folder-scoped callers, is a POST so `audit_mw` records every call,
-//! and answers only the kinds a person signs in to a device with. Everywhere else the secret is
+//! and answers only the kinds a person signs in to a device with. (The program's other two doors
+//! are for the bundled oxidized alone — `api/config_backup.rs` and `api/config_remote.rs`; the list
+//! of all three is `.claude/rules/security.md`.) Everywhere else the secret is
 //! write-only: sealed with envelope encryption before it reaches the database (ADR-018), the
 //! listing carries metadata only, and nothing here logs or echoes a secret — including the
 //! validation errors, which name a static reason and never any field content (security.md).
