@@ -457,6 +457,8 @@ export RUST_LOG=info
 | `YAGRA_REDIS_URL` | 未設定 ⇒ 無効 | ポーラ死活/割当ミラー用の Redis URL（best-effort） |
 | `YAGRA_LOGS_URL` | 未設定 ⇒ イベントは PostgreSQL のみ | VictoriaLogs ベース URL — オプトインのパッシブイベントログストア |
 | `YAGRA_CLICKHOUSE_URL` | 未設定 ⇒ フローストア無効 | ClickHouse HTTP URL — オプトインのトラフィックフローストア（未設定だとフロー API は 503 を返す） |
+| `YAGRA_OXIDIZED_URL` | 未設定 ⇒ config のバックアップは無効 | 同梱の oxidized の REST API。`docker-compose.deploy.yml` は `http://oxidized:8888` を入れる。`.env` で空にすると config のバックアップが止まり、oxidized が要る操作に core は 503 を返す。`YAGRA_OXIDIZED_HOME` も要る |
+| `YAGRA_OXIDIZED_HOME` | 未設定 ⇒ config のバックアップは無効 | oxidized の設定と source のトークンを置くディレクトリ（`oxconf`。core には読み取り専用でマウント）。compose は `/var/lib/yagra/oxidized` を入れる |
 | `YAGRA_PG_MAX_CONNECTIONS` | `20` | PostgreSQL 接続プールの上限（HA のリーダーはこれに加えて advisory lock 用の +1 接続を保持） |
 | `YAGRA_VM_WRITERS` | コア数（最大 4） | VictoriaMetrics へメトリクスを書くタスクの本数。ノード id でシャードするので 1 系列の順序は保たれる。キューと spill の上限は本数で割られる（増えない）。`1` で従来の 1 本構成に戻る |
 | `YAGRA_RESULT_QUEUE_CAP` | `16384` | VictoriaMetrics が遅くなっている間、メトリクス層が抱えられるポール結果の件数。系列数が多いと VictoriaMetrics は周期的に失速し、この上限を超えたぶんは捨てられる（メトリクスは best-effort 層なので設計どおりだが、グラフの穴にはなる）。**変える前にこのデプロイの `yagra_vm_backlog_needed_high_water` を読むこと** —— 上限が無ければキューがどこまで伸びたかを表す値なので、そのままこの設定を決める数字になる。24 ポートで 1 件約 21 KB なのでメモリは線形に増える。`YAGRA_VM_WRITERS` の本数で割られる。131072 を超える値は丸められる（ログに出る） |
@@ -652,6 +654,7 @@ Yagra はバックアップ製品を作りません。PostgreSQL・VictoriaMetri
 |---|---|---|
 | **1 — 失ってはいけない** | **KEK**（`kekdata` / `YAGRA_KEK_FILE`）、PostgreSQL（`pgdata`）、VictoriaMetrics（`vmdata`） | **はい** |
 | 2 — TTL 付き・喪失許容 | VictoriaLogs（`vldata`、30 日）、ClickHouse フローストア（`chdata`、30 日） | いいえ — 自身の期限で消え、保全必須の状態を持たない |
+| 2 — まだ運ばない | oxidized の Git リポジトリ（`oxdata`）。全機器の config の、保存した版すべて | ⚠️ `scripts/yagra-backup.sh` も移設もまだ運ばない。ボリュームを自分で写すか、Git の送り先（Settings ▸ Integrations ▸ Git）を箱の外の写しにする |
 | 3 — 再構築可能 | Redis | いいえ — PostgreSQL が持つ状態のミラー |
 
 **PostgreSQL のダンプは設定の一部ではなく全体です**: ノード・フォルダ・プロファイル・閾値・分類ルール・

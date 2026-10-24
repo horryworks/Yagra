@@ -464,6 +464,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_REDIS_URL` | unset ⇒ disabled | Redis URL for poller liveness/assignment mirror (best-effort) |
 | `YAGRA_LOGS_URL` | unset ⇒ events stay in PostgreSQL | VictoriaLogs base URL — opt-in passive-event log store |
 | `YAGRA_CLICKHOUSE_URL` | unset ⇒ flow store off | ClickHouse HTTP URL — opt-in traffic-flow store (without it the flow API returns 503) |
+| `YAGRA_OXIDIZED_URL` | unset ⇒ config backup off | The bundled oxidized's REST API. `docker-compose.deploy.yml` sets `http://oxidized:8888`; set it empty in `.env` to turn config backup off, and core then answers 503 for what needs oxidized. Needs `YAGRA_OXIDIZED_HOME` as well |
+| `YAGRA_OXIDIZED_HOME` | unset ⇒ config backup off | The directory oxidized's configuration and its source token are written to (`oxconf`, mounted read-only into core). The composition sets `/var/lib/yagra/oxidized` |
 | `YAGRA_PG_MAX_CONNECTIONS` | `20` | PostgreSQL connection-pool ceiling (the HA leader holds +1 advisory-lock connection on top) |
 | `YAGRA_VM_WRITERS` | one per core, max 4 | How many tasks write metrics to VictoriaMetrics. Samples are sharded by node, so a series stays in order; the tier queue and spill bounds are divided among them, not repeated. Set `1` for the old single-writer behaviour |
 | `YAGRA_RESULT_QUEUE_CAP` | `16384` | How many poll results the metrics tier may hold while VictoriaMetrics is slow. A large series count makes VictoriaMetrics stall periodically, and everything past this cap is dropped — by design (metrics are the best-effort tier) but still a gap in the graphs. **Read `yagra_vm_backlog_needed_high_water` on this deployment before changing it**: it is how deep an unbounded queue would have gone, so it is the figure that sizes this. At 24 ports a queued result is ~21 KB, so the memory cost is linear. Divided among `YAGRA_VM_WRITERS`; clamped (and logged) above 131072 |
@@ -661,6 +663,7 @@ keys, the accounts and the history in one step (ADR-121).
 |---|---|---|
 | **1 — must not lose** | **KEK** (`kekdata` / `YAGRA_KEK_FILE`), PostgreSQL (`pgdata`), VictoriaMetrics (`vmdata`) | **Yes** |
 | 2 — loss-tolerant, TTL'd | VictoriaLogs (`vldata`, 30 days), ClickHouse flow store (`chdata`, 30 days) | No — both expire on their own schedule and hold no must-preserve state |
+| 2 — not carried yet | oxidized's Git repository (`oxdata`): every stored version of every device's configuration | ⚠️ Neither `scripts/yagra-backup.sh` nor relocation carries it yet. Copy the volume yourself, or keep a Git destination (Settings ▸ Integrations ▸ Git) as the copy that leaves the box |
 | 3 — rebuildable | Redis | No — it mirrors state PostgreSQL already owns |
 
 **The PostgreSQL dump is the whole configuration**, not just part of it: nodes, folders, profiles,
