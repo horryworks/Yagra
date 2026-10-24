@@ -1,0 +1,46 @@
+# Weekly supply-chain audit of the dependencies as committed (ADR-211, decision 5).
+#
+# `/verify` audits the tree before a release, but a new advisory against a dependency we already
+# ship does not wait for a release: until this workflow, nothing looked between releases, so one
+# published on a Tuesday was found at the next `/verify` at best. Running on a schedule against
+# unchanged lockfiles is the point — a red run here means "something we already ship is now known
+# to be vulnerable", and decides which path the fix takes (wait 7/14 days, or go in at once because
+# it reaches Yagra). A failed scheduled run is emailed to the maintainer by GitHub.
+#
+# It audits only: nothing is built, nothing is published, no secret is read, and `npm ci` runs with
+# `--ignore-scripts` because no package needs to execute for an audit. Third-party actions are
+# pinned by commit SHA, not by tag, since a moved tag would run new code here with no diff to read.
+name: security-audit
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@8a45e1c7c9a95dfae3276e89a553705e40ae45a2 # v2.0.20
+        with:
+          command: check advisories bans sources licenses
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          # Audit the lockfile, never a restored cache.
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=moderate
+      - run: npm audit signatures
