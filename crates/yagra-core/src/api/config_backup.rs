@@ -1115,8 +1115,10 @@ async fn oxidized_event(
     };
     // A fetch the relay could not carry reached no device, whatever oxidized made of the closed
     // connection: counting it as a refused login would move on to the next one (stage 5 decision
-    // 47).
-    if outcome != AttemptOutcome::Success && admin.config_relay.take_recent_failure(node) {
+    // 47). Taken on every report, a success included, so a failure this fetch left behind cannot
+    // turn the next fetch's refused login into "did not answer".
+    let relay_failed = admin.config_relay.take_recent_failure(node);
+    if outcome != AttemptOutcome::Success && relay_failed {
         outcome = AttemptOutcome::Unreachable;
     }
     // The newest version tells a new one from an unchanged one. Best effort: without it the success

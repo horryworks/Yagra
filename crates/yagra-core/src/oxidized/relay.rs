@@ -111,11 +111,19 @@ impl Routes for Coordinator {
     }
 }
 
+/// One session in flight.
+struct Session {
+    node: Uuid,
+    poller: String,
+    tx: mpsc::Sender<RelayFrame>,
+}
+
 /// The relay's shared state.
 pub(crate) struct Relay {
     routes: Arc<dyn Routes>,
-    /// Each session's channel, with the node it carries a login to.
-    sessions: Mutex<HashMap<Uuid, (Uuid, mpsc::Sender<RelayFrame>)>>,
+    /// Each session's channel, with the node it carries a login to and the poller it was opened
+    /// with — every poller may publish on the reply subject, so a frame is taken only from that one.
+    sessions: Mutex<HashMap<Uuid, Session>>,
     failures: Mutex<HashMap<Uuid, Instant>>,
     /// Nodes whose fetch a person cancelled (decision 54): new sessions are refused and the fetch's
     /// late report is not recorded, for [`FAILURE_MEMORY`].
@@ -142,6 +150,16 @@ impl Relay {
         }
     }
 
+    /// A session reached `node`'s device, so whatever this fetch reports next is the device's
+    /// answer. An earlier failed connection of the same fetch — the SSH relay of an `ssh, telnet`
+    /// node with no SSH — must not turn a refused telnet login into "did not answer", which the
+    /// lockout limits do not count.
+    fn clear_failure(&self, node: Uuid) {
+        if let Ok(mut f) = self.failures.lock() {
+            f.remove(&node);
+        }
+    }
+
     /// Whether `node`'s relay failed within [`FAILURE_MEMORY`], forgetting it as it answers: a
     /// failure explains one failed fetch, not every later one.
     pub(crate) fn take_recent_failure(&self, node: Uuid) -> bool {
@@ -159,7 +177,7 @@ impl Relay {
             c.insert(node, Instant::now());
         }
         if let Ok(mut s) = self.sessions.lock() {
-            s.retain(|_, (n, _)| *n != node);
+            s.retain(|_, session| session.node != node);
         }
     }
 
@@ -179,10 +197,17 @@ impl Relay {
             .is_some_and(|at| at.elapsed() < FAILURE_MEMORY)
     }
 
-    fn open_session(&self, id: Uuid, node: Uuid) -> mpsc::Receiver<RelayFrame> {
+    fn open_session(&self, id: Uuid, node: Uuid, poller: &str) -> mpsc::Receiver<RelayFrame> {
         let (tx, rx) = mpsc::channel(SESSION_QUEUE);
         if let Ok(mut s) = self.sessions.lock() {
-            s.insert(id, (node, tx));
+            s.insert(
+                id,
+                Session {
+                    node,
+                    poller: poller.to_owned(),
+                    tx,
+                },
+            );
         }
         rx
     }
@@ -193,17 +218,18 @@ impl Relay {
         }
     }
 
-    /// Hand a poller's frame to its session. A frame for a session that has ended is dropped, and a
-    /// session that cannot keep up is ended (its receiver then sees the channel close).
+    /// Hand a poller's frame to its session. A frame for a session that has ended, or from a poller
+    /// the session was not opened with, is dropped, and a session that cannot keep up is ended (its
+    /// receiver then sees the channel close).
     fn deliver(&self, frame: RelayFrame) {
         let Ok(mut s) = self.sessions.lock() else {
             return;
         };
         let id = frame.session;
-        let Some((_, tx)) = s.get(&id) else {
+        let Some(session) = s.get(&id).filter(|s| s.poller == frame.poller_id) else {
             return;
         };
-        if tx.try_send(frame).is_err() {
+        if session.tx.try_send(frame).is_err() {
             s.remove(&id);
         }
     }
@@ -321,6 +347,14 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_owned())
 }
 
+/// Whether a pair of listeners is kept as it is this tick: it still serves the endpoint wanted on
+/// its port, and neither of them has stopped. A listener stops only when its port could not be
+/// opened — the one it replaced may not have let go of it yet — and is opened again on the next
+/// tick, rather than leaving the node with no relay until core restarts.
+fn still_listening(wanted: Option<&Endpoint>, serving: &Endpoint, stopped: bool) -> bool {
+    wanted == Some(serving) && !stopped
+}
+
 /// Keep one pair of listeners per node that may be fetched, until cancelled.
 pub(crate) async fn run_listeners(
     relay: Arc<Relay>,
@@ -343,7 +377,11 @@ pub(crate) async fn run_listeners(
             }
         };
         open.retain(|port, (ep, tasks)| {
-            let keep = want.get(port) == Some(ep);
+            let keep = still_listening(
+                want.get(port),
+                ep,
+                tasks.iter().any(JoinHandle::is_finished),
+            );
             if !keep {
                 for t in tasks.iter() {
                     t.abort();
@@ -450,21 +488,27 @@ async fn serve(
         Route::RelayRefused => return Outcome::RelayRefused,
     };
     let session = Uuid::new_v4();
-    let mut rx = relay.open_session(session, ep.node);
-    let outcome = run_session(&poller, session, sock, ep, device, &mut rx, bus).await;
+    let mut rx = relay.open_session(session, ep.node, &poller);
+    let outcome = if open_with_poller(&poller, session, ep, device, &mut rx, bus).await {
+        // The device took the connection: what this fetch reports next is its answer.
+        relay.clear_failure(ep.node);
+        carry(&poller, session, sock, &mut rx, bus).await
+    } else {
+        Outcome::NotOpened
+    };
     relay.end_session(session);
     outcome
 }
 
-async fn run_session(
+/// Ask the poller to connect to the device, and wait for its answer. `true` when it connected.
+async fn open_with_poller(
     poller: &str,
     session: Uuid,
-    sock: TcpStream,
     ep: &Endpoint,
     device: u16,
     rx: &mut mpsc::Receiver<RelayFrame>,
     bus: &Arc<dyn RelayBus>,
-) -> Outcome {
+) -> bool {
     let open = RelayFrame {
         open: Some(RelayTarget {
             node_id: NodeId::from(ep.node),
@@ -474,15 +518,14 @@ async fn run_session(
         ..frame(poller, session, 0)
     };
     if bus.publish_relay_to_poller(open).await.is_err() {
-        return Outcome::NotOpened;
+        return false;
     }
     // The poller waits RELAY_CONNECT_SECS for the device; a little more here, so its refusal
     // arrives before this side gives up.
-    match timeout(Duration::from_secs(RELAY_CONNECT_SECS + 5), rx.recv()).await {
-        Ok(Some(f)) if f.seq == 0 && !f.close => {}
-        _ => return Outcome::NotOpened,
-    }
-    carry(poller, session, sock, rx, bus).await
+    matches!(
+        timeout(Duration::from_secs(RELAY_CONNECT_SECS + 5), rx.recv()).await,
+        Ok(Some(f)) if f.seq == 0 && !f.close
+    )
 }
 
 async fn carry(
@@ -628,8 +671,8 @@ mod tests {
     fn a_cancelled_fetch_is_cut_refused_and_reported_once() {
         let relay = Relay::new(Arc::new(Fixed(Route::Via("p1".to_owned()))));
         let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
-        let mut ra = relay.open_session(Uuid::from_u128(10), a);
-        let _rb = relay.open_session(Uuid::from_u128(11), b);
+        let mut ra = relay.open_session(Uuid::from_u128(10), a, "p1");
+        let _rb = relay.open_session(Uuid::from_u128(11), b, "p1");
         relay.cancel(a);
         assert!(ra.try_recv().is_err());
         assert!(matches!(
@@ -644,6 +687,39 @@ mod tests {
         assert!(relay.is_cancelled(a) && !relay.is_cancelled(b));
         assert!(relay.take_cancelled(a));
         assert!(!relay.take_cancelled(a), "one report only");
+    }
+
+    /// A listener that could not open its port is opened again on the next tick.
+    #[test]
+    fn a_stopped_listener_is_replaced() {
+        let ep = Endpoint {
+            node: Uuid::from_u128(1),
+            address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+        };
+        let moved = Endpoint {
+            address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)),
+            ..ep.clone()
+        };
+        assert!(still_listening(Some(&ep), &ep, false));
+        assert!(!still_listening(Some(&ep), &ep, true), "its bind failed");
+        assert!(!still_listening(Some(&moved), &ep, false));
+        assert!(!still_listening(None, &ep, false));
+    }
+
+    /// A frame is taken only from the poller its session was opened with: every poller may publish
+    /// on the reply subject.
+    #[test]
+    fn a_frame_from_another_poller_is_dropped() {
+        let relay = Relay::new(Arc::new(Fixed(Route::Via("p1".to_owned()))));
+        let id = Uuid::from_u128(10);
+        let mut rx = relay.open_session(id, Uuid::from_u128(1), "p1");
+        relay.deliver(frame("p2", id, 0));
+        assert!(rx.try_recv().is_err(), "another site's frame");
+        relay.deliver(frame("p1", id, 0));
+        assert_eq!(
+            rx.try_recv().expect("its own poller's frame").poller_id,
+            "p1"
+        );
     }
 
     #[test]
@@ -718,9 +794,15 @@ mod tests {
             address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
         };
         let relay_bus: Arc<dyn RelayBus> = bus.clone();
+        // The SSH relay of this fetch failed a moment ago; this connection reaches the device.
+        relay.record_failure(ep.node);
         let outcome = serve(&relay, &relay_bus, sock, &ep, DEVICE_SSH).await;
         assert_eq!(outcome, Outcome::Closed);
         assert_eq!(client.await.expect("client"), b"SHOW RUN");
+        assert!(
+            !relay.take_recent_failure(ep.node),
+            "a session that reached the device: the fetch's answer is the device's"
+        );
     }
 
     /// With no poller to go through, nothing is published and the fetch is the relay's failure.

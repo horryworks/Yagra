@@ -332,6 +332,18 @@ pub(crate) async fn cli_logins(creds: &CredentialStore) -> anyhow::Result<Vec<Uu
         .collect())
 }
 
+/// Whether a node has a login that works and is still one of its candidates, so oxidized's own
+/// schedule fetches it and the rotation leaves it alone. A working login that was deleted, re-sealed
+/// as another kind or taken out of the node's order is not: the node is parked without it, and the
+/// rotation moves on to the next candidate.
+#[must_use]
+pub(crate) fn settled(rotation: &Rotation, candidates: &[Uuid]) -> bool {
+    rotation.login_confirmed
+        && rotation
+            .credential_id
+            .is_some_and(|c| candidates.contains(&c))
+}
+
 /// Whether a fetch Yagra asked for at `requested_at` is still outstanding.
 #[must_use]
 pub(crate) fn in_flight(requested_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
@@ -458,11 +470,11 @@ async fn tick(
         } else if in_flight(t.rotation.requested_at, now) {
             continue;
         }
+        let cands = candidates(t.config.login_order.as_deref(), &logins);
         // A working login is fetched on oxidized's own schedule.
-        if busy || (t.rotation.login_confirmed && t.rotation.requested_at.is_none()) {
+        if busy || (settled(&t.rotation, &cands) && t.rotation.requested_at.is_none()) {
             continue;
         }
-        let cands = candidates(t.config.login_order.as_deref(), &logins);
         if readiness(
             Some(&t.config),
             t.profile_name.as_deref(),
@@ -485,7 +497,7 @@ async fn tick(
             Ok(Some((_, r))) => r,
             _ => continue,
         };
-        if rotation.login_confirmed {
+        if settled(&rotation, &cands) {
             continue;
         }
         let step = next_step(
@@ -975,6 +987,34 @@ mod tests {
             Some(AttemptOutcome::Other)
         );
         assert_eq!(classify("post_store", ""), None);
+    }
+
+    /// A working login that was deleted (its id cleared) or is no longer a candidate does not keep
+    /// the node out of the rotation, and the rotation then tries the next candidate.
+    #[test]
+    fn a_working_login_that_is_gone_does_not_settle_the_node() {
+        let worked = Rotation {
+            credential_id: Some(A),
+            login_confirmed: true,
+            round_started_at: Some(t0()),
+            ..Rotation::default()
+        };
+        assert!(settled(&worked, &[A, B]));
+        assert!(
+            !settled(&worked, &[B]),
+            "taken out of the order or re-sealed"
+        );
+        let deleted = Rotation {
+            credential_id: None,
+            ..worked.clone()
+        };
+        assert!(
+            !settled(&deleted, &[A, B]),
+            "deleted: the column is cleared"
+        );
+        assert!(!settled(&Rotation::default(), &[A]));
+        assert_eq!(step(&[B], &worked, &[], &[], t0()), Step::Fetch(B));
+        assert_eq!(step(&[A, B], &deleted, &[], &[], t0()), Step::Fetch(A));
     }
 
     #[test]
