@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.59 — A device switched on for config backup no longer fails its first fetch
+
 ### Bug Fixes
 
 - **A device switched on for config backup no longer fails its first fetch.** Switching the backup on, or pressing Fetch now soon after, used to end in "Device did not answer" for up to 30 seconds: oxidized fetched the device at once, before core had opened the device's relay port. Core now opens the port before it hands oxidized the device. A fetch in the first seconds after core restarts failed the same way, because core did not yet know which poller polls the device; it now waits up to 20 seconds for the poller to be known.
