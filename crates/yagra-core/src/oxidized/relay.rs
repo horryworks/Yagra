@@ -575,7 +575,13 @@ async fn serve(
     if relay.is_cancelled(ep.node) {
         return Outcome::Cancelled;
     }
-    let poller = match route_when_known(relay, ep.node).await {
+    let route = route_when_known(relay, ep.node).await;
+    // A cancel that arrived while the connection waited for a poller is still a cancel, not a
+    // node with no poller.
+    if relay.is_cancelled(ep.node) {
+        return Outcome::Cancelled;
+    }
+    let poller = match route {
         Route::Via(p) => p,
         Route::NoPoller => return Outcome::NoPoller,
         Route::PollerTooOld => return Outcome::PollerTooOld,
@@ -944,6 +950,36 @@ mod tests {
         assert_eq!(outcome, Outcome::NoPoller);
         assert!(outcome.is_relay_failure());
         assert!(inbox.try_recv().is_err(), "nothing was sent to any poller");
+    }
+
+    /// A fetch cancelled while its connection waits for a poller ends as cancelled, not as a node
+    /// with no poller.
+    #[tokio::test]
+    async fn a_cancel_while_waiting_for_a_poller_is_a_cancel() {
+        let bus = Arc::new(InMemoryBus::new(64));
+        let relay =
+            Relay::waiting_for_routes(Arc::new(Fixed(Route::NoPoller)), Duration::from_secs(5));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let _client = tokio::spawn(async move { TcpStream::connect(addr).await });
+        let (sock, _) = listener.accept().await.expect("accept");
+        let ep = Endpoint {
+            node: Uuid::from_u128(1),
+            address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+        };
+        let canceller = relay.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            canceller.cancel(Uuid::from_u128(1));
+        });
+        let relay_bus: Arc<dyn RelayBus> = bus.clone();
+        let outcome = timeout(
+            Duration::from_secs(3),
+            serve(&relay, &relay_bus, sock, &ep, DEVICE_SSH),
+        )
+        .await
+        .expect("the wait ends at the cancel");
+        assert_eq!(outcome, Outcome::Cancelled);
     }
 
     /// No poller at first, one a moment later: what every node reads right after core starts.
