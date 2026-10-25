@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! SNMP v2c GET + GETBULK table walk over a pure-Rust client (`csnmp`) — ADR-021 PoC.
+//! SNMP v2c GET + GETBULK table walk. The exchange itself is `snmp_v2c.rs` (ADR-213 decision 4;
+//! it was the `csnmp` crate, whose rules for a reply it keeps).
 //!
 //! This validates the pure-Rust path before any net-snmp FFI fallback. v3 (auth/priv)
 //! is still pending. Values are returned **raw** (counters included) — rates are derived
@@ -10,6 +11,7 @@
 //! base GET on an empty column — run against a scripted agent in the tests below; the three
 //! multi-column loops around it still need a device and are covered only by reading their source.
 
+use crate::snmp_v2c::{BindingValue, ObjectIdentifier, ObjectValue, Snmp2cClient, SnmpClientError};
 use crate::walk_budget::{
     conclude, is_silence, not_asked, note_retry, note_truncation, ColumnEnd, ColumnOutcome,
     ColumnReport, ColumnStop, RetryAllowance, TableWalk, Truncation, WalkBudget, WalkLimits,
@@ -19,35 +21,34 @@ use crate::{
     SnmpInstanceRow, SnmpSample, SnmpTableSample, SnmpTableString, SnmpValue, TransportError,
 };
 use async_trait::async_trait;
-use csnmp::message::BindingValue;
-use csnmp::{ObjectIdentifier, ObjectValue, Snmp2cClient, SnmpClientError};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 /// Did the agent say **anything**, or nothing at all?
 ///
 /// 🚨 **The whole of [`WalkBudget`]'s consecutive-failure rule depends on this distinction**, and
-/// getting it backwards would truncate healthy devices. Most `csnmp` errors mean bytes came back and
+/// getting it backwards would truncate healthy devices. Most client errors mean bytes came back and
 /// we did not like them — the commonest by far being `FailedBinding { NoSuchObject }`, which is how
-/// a scalar GET reports *"I do not implement that OID"*. That is an answer. Only the five variants
-/// below mean the conversation did not happen.
+/// a scalar GET reports *"I do not implement that OID"*. That is an answer. Only the four variants
+/// listed first below mean the conversation did not happen.
 ///
 /// ⚠️ A column walk reaches "unimplemented" without coming here: [`BulkPager::get_base`] turns
 /// `noSuchObject` / `noSuchInstance` on the column base into [`BaseAnswer::NoSuch`], the way
 /// `csnmp::walk_bulk` swallowed it. What does arrive here from a column walk is a page or a base
 /// GET that errored, and the answer decides whether [`RetryAllowance`] may send it again.
 fn outcome_of(err: &SnmpClientError) -> ColumnOutcome {
+    // Exhaustive since the client is ours (ADR-213 decision 4): a new variant has to be placed.
     match err {
         SnmpClientError::TimedOut
-        | SnmpClientError::Sending { .. }
-        | SnmpClientError::Receiving { .. }
-        | SnmpClientError::CreatingSocket { .. }
-        | SnmpClientError::Connecting { .. } => ColumnOutcome::Failed,
-        // A wildcard on purpose, and it falls the safe way: this is a foreign enum, so a variant
-        // added upstream lands here and is read as "the agent answered" — which never truncates a
-        // walk. Enumerating the other nine would turn an upstream release into a build failure and
-        // buy nothing, because the interesting split is exactly the five above.
-        _ => ColumnOutcome::Answered,
+        | SnmpClientError::Socket(_)
+        | SnmpClientError::Sending(_)
+        | SnmpClientError::Receiving(_) => ColumnOutcome::Failed,
+        SnmpClientError::Encoding
+        | SnmpClientError::Decoding
+        | SnmpClientError::NotAResponse
+        | SnmpClientError::ErrorStatus(_)
+        | SnmpClientError::FailedBinding { .. }
+        | SnmpClientError::UnexpectedBindings => ColumnOutcome::Answered,
     }
 }
 
@@ -81,7 +82,7 @@ pub async fn snmp_get_v2c(
                 continue;
             }
         };
-        match client.get(oid).await {
+        match client.get(&oid).await {
             Ok(value) => {
                 if let Some(v) = numeric(&value) {
                     samples.push(SnmpSample {
@@ -210,7 +211,7 @@ where
         };
         let column = Column {
             base_str,
-            base,
+            base: base.clone(),
             row_budget: usize::MAX,
             empty: EmptyColumn::AskBase,
         };
@@ -277,7 +278,7 @@ pub async fn snmp_walk_instances_v2c(
         }
         let column = Column {
             base_str,
-            base,
+            base: base.clone(),
             row_budget: max_rows - rows.len(),
             // This walker never asked the base: an adjacency column's base carries no instance, so
             // there is nothing a GET could add to it.
@@ -287,7 +288,7 @@ pub async fn snmp_walk_instances_v2c(
             let Some(tail) = oid.relative_to(&base) else {
                 return;
             };
-            let instance = tail.as_slice().to_vec();
+            let instance = tail.to_vec();
             if instance.is_empty() {
                 return; // the column base itself: no instance
             }
@@ -339,7 +340,7 @@ pub(crate) enum BaseAnswer {
 ///
 /// A seam and nothing more: [`Snmp2cClient`] is the only production implementation, and the tests
 /// drive [`walk_column_v2c`] through a scripted one. Before it existed the paging was either inside
-/// `csnmp::walk_bulk` or inside a function that opened a UDP socket, and neither could be run
+/// the old client's `walk_bulk` or inside a function that opened a UDP socket, and neither could be run
 /// without a device — so the rule "a column that fails keeps its rows" could not have been tested.
 #[async_trait]
 pub(crate) trait BulkPager: Sync {
@@ -352,8 +353,8 @@ pub(crate) trait BulkPager: Sync {
 #[async_trait]
 impl BulkPager for Snmp2cClient {
     async fn bulk(&self, cursor: ObjectIdentifier) -> Result<Page, SnmpClientError> {
-        let result = self.get_bulk(&[cursor], 0, WALK_MAX_REPETITIONS).await?;
-        // `GetBulkResult::values` is a `BTreeMap`, so it already arrives in OID order — which is
+        let result = self.get_bulk(&cursor, WALK_MAX_REPETITIONS).await?;
+        // `BulkResult::values` is a `BTreeMap`, so it already arrives in OID order — which is
         // what "leading entries" in `page_slice` means.
         Ok(Page {
             entries: result.values.into_iter().collect(),
@@ -362,18 +363,14 @@ impl BulkPager for Snmp2cClient {
     }
 
     async fn get_base(&self, base: ObjectIdentifier) -> Result<BaseAnswer, SnmpClientError> {
-        match self.get(base).await {
+        match self.get(&base).await {
             Ok(_) => Ok(BaseAnswer::Value),
             // Exactly the two `csnmp::walk_bulk` swallowed on an empty column. Anything else is an
             // error, and `outcome_of` decides whether it was an answer.
-            Err(SnmpClientError::FailedBinding { binding })
-                if matches!(
-                    binding.value,
-                    BindingValue::NoSuchObject | BindingValue::NoSuchInstance
-                ) =>
-            {
-                Ok(BaseAnswer::NoSuch)
-            }
+            Err(SnmpClientError::FailedBinding {
+                value: BindingValue::NoSuchObject | BindingValue::NoSuchInstance,
+                ..
+            }) => Ok(BaseAnswer::NoSuch),
             Err(e) => Err(e),
         }
     }
@@ -430,8 +427,8 @@ async fn walk_column_v2c<P: BulkPager>(
     mut keep: impl FnMut(&ObjectIdentifier, &ObjectValue) + Send,
 ) -> ColumnStop {
     const MAX_REQUESTS: usize = V2C_MAX_REQUESTS_PER_COLUMN;
-    let base = column.base;
-    let mut cursor = base;
+    let base = &column.base;
+    let mut cursor = base.clone();
     let mut taken = 0usize;
     let mut retried = 0u32;
     let mut requests = 0usize;
@@ -447,13 +444,13 @@ async fn walk_column_v2c<P: BulkPager>(
                 "snmp column walk cut at the walk's deadline"
             );
             let resume_after = cursor
-                .relative_to(&base)
-                .map(|tail| tail.as_slice().to_vec())
+                .relative_to(base)
+                .map(<[u32]>::to_vec)
                 .unwrap_or_default();
             return ColumnStop::Cut(resume_after);
         }
         requests += 1;
-        let page = match pager.bulk(cursor).await {
+        let page = match pager.bulk(cursor.clone()).await {
             Ok(page) => {
                 retries.heard();
                 if retried > 0 {
@@ -483,7 +480,7 @@ async fn walk_column_v2c<P: BulkPager>(
                 return ColumnStop::Ended(outcome);
             }
         };
-        let (take, next) = page_slice(&base, &page.entries, column.row_budget - taken);
+        let (take, next) = page_slice(base, &page.entries, column.row_budget - taken);
         for (oid, value) in page.entries.iter().take(take) {
             keep(oid, value);
         }
@@ -502,7 +499,7 @@ async fn walk_column_v2c<P: BulkPager>(
     // walkers that used it keep doing so: a device is then asked exactly what it was asked before.
     let mut retried = 0u32;
     loop {
-        match pager.get_base(base).await {
+        match pager.get_base(base.clone()).await {
             Ok(_) => {
                 retries.heard();
                 if retried > 0 {
@@ -561,7 +558,7 @@ fn page_slice(
     if take == budget {
         return (take, None);
     }
-    (take, page.last().map(|(oid, _)| *oid))
+    (take, page.last().map(|(oid, _)| oid.clone()))
 }
 
 /// Map an SNMP value onto [`SnmpValue`] without coercing.
@@ -571,7 +568,7 @@ fn page_slice(
 /// here rather than a row that quietly disappears from an operator's neighbour table.
 pub(crate) fn raw_value(value: &ObjectValue) -> SnmpValue {
     match value {
-        ObjectValue::Integer(i) => SnmpValue::Int(i64::from(*i)),
+        ObjectValue::Integer(i) => SnmpValue::Int(*i),
         ObjectValue::Counter32(c) | ObjectValue::Unsigned32(c) | ObjectValue::TimeTicks(c) => {
             SnmpValue::Int(i64::from(*c))
         }
@@ -591,7 +588,7 @@ async fn connect(
     timeout: Duration,
 ) -> Result<Snmp2cClient, TransportError> {
     let addr = SocketAddr::new(target, SNMP_PORT);
-    Snmp2cClient::new(addr, community.as_bytes().to_vec(), None, Some(timeout))
+    Snmp2cClient::new(addr, community.as_bytes().to_vec(), timeout)
         .await
         .map_err(|e| TransportError::Io(format!("snmp connect {addr}: {e}")))
 }
@@ -601,7 +598,7 @@ async fn connect(
 /// identically. Returns `None` when the OID isn't under `base`, or is `base` itself (no instance).
 fn ifindex_of(oid: &ObjectIdentifier, base: &ObjectIdentifier) -> Option<u32> {
     let tail = oid.relative_to(base)?;
-    crate::ifindex_from_tail(tail.as_slice())
+    crate::ifindex_from_tail(tail)
 }
 
 /// Map an SNMP string-ish value to a Rust `String`: `OCTET STRING` (lossy UTF-8) or
@@ -615,7 +612,7 @@ fn string_value(value: &ObjectValue) -> Option<String> {
     }
 }
 
-/// Parse a dotted OID string into a `csnmp` [`ObjectIdentifier`].
+/// Parse a dotted OID string into an [`ObjectIdentifier`].
 fn parse_oid(s: &str) -> Option<ObjectIdentifier> {
     let parts: Vec<u32> = s
         .split('.')
@@ -801,10 +798,8 @@ mod tests {
 
     fn error_pdu(at: ObjectIdentifier) -> SnmpClientError {
         SnmpClientError::FailedBinding {
-            binding: csnmp::message::VariableBinding {
-                name: at,
-                value: BindingValue::Unspecified,
-            },
+            oid: at,
+            value: BindingValue::Unspecified,
         }
     }
 

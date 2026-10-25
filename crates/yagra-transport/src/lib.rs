@@ -7,9 +7,9 @@
 //! and utilization are **not** computed here — pollers store raw counters and rates are
 //! derived at query/eval time (ADR-012), so this layer is stateless per device.
 //!
-//! Phase 1 covers ICMP; SNMP/HTTP land behind the same trait. The real ICMP transport
-//! (raw sockets via `surge-ping`, needs `CAP_NET_RAW`) is a later drop-in; [`FakeTransport`]
-//! lets the poller and the walking skeleton be exercised without privileges or a device.
+//! [`LiveTransport`] is the production implementation (ICMP over an ICMP socket, which needs
+//! `CAP_NET_RAW` or ping-socket permission); [`FakeTransport`] lets the poller and the walking
+//! skeleton be exercised without privileges or a device.
 
 use async_trait::async_trait;
 use std::net::IpAddr;
@@ -29,9 +29,10 @@ mod meraki_neighbors;
 #[cfg(test)]
 mod module_source;
 mod snmp;
+mod snmp_v2c;
 mod snmp_v3;
 mod walk_budget;
-pub use icmp::SurgePingTransport;
+pub use icmp::LiveTransport;
 pub use meraki::{
     fetch_device_neighbors, fetch_ha_roles, fetch_inventory, fetch_network_lans,
     list_organizations, MerakiAvailability, MerakiDeviceInfo, MerakiDeviceNeighbors,
@@ -1466,7 +1467,7 @@ mod tests {
     /// assertion that can catch a one-sided change.
     #[test]
     fn both_snmp_mappers_agree_on_every_value_type_they_share() {
-        use csnmp::ObjectValue;
+        use crate::snmp_v2c::{ObjectIdentifier, ObjectValue};
         use snmp2::Value;
 
         let v2c = |v: &ObjectValue| Some(crate::snmp::raw_value(v));
@@ -1505,7 +1506,10 @@ mod tests {
         );
         // OBJECT IDENTIFIER — dotted decimal on both. This is what carries `ipAddressPrefix`.
         let dotted = "1.3.6.1.2.1.4.32.1.5.8.1.4.192.168.1.0.24";
-        let v2c_oid: csnmp::ObjectIdentifier = dotted.parse().unwrap();
+        let v2c_oid = {
+            let arcs: Vec<u32> = dotted.split('.').map(|p| p.parse().unwrap()).collect();
+            ObjectIdentifier::try_from(arcs.as_slice()).unwrap()
+        };
         let v3_oid = {
             let parts: Vec<u64> = dotted.split('.').map(|p| p.parse().unwrap()).collect();
             snmp2::Oid::from(parts.as_slice()).unwrap()

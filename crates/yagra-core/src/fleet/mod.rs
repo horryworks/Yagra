@@ -10,5 +10,7 @@ pub(crate) mod pollers;
 pub(crate) mod pool_coverage;
 /// Effective poll-pool resolution (node > ancestor folder > default).
 pub(crate) mod poolres;
+/// The Redis protocol, as far as `volatile` needs it (ADR-213 decision 3).
+pub(crate) mod resp;
 pub(crate) mod ring;
 pub(crate) mod volatile;

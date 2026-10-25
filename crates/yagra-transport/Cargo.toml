@@ -25,8 +25,7 @@ thiserror = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-surge-ping = { workspace = true }
-csnmp = { workspace = true }
+socket2 = { workspace = true }
 snmp2 = { workspace = true }
 rand = { workspace = true }
 # URL/HTTP(S) monitoring transport.

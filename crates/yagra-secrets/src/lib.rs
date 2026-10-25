@@ -9,16 +9,55 @@
 
 pub mod password;
 
-use aes_gcm::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
-    Aes256Gcm, Key, Nonce,
-};
+use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
+use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
 /// The AES-GCM nonce length every seal writes, and the only length [`EnvelopeCipher::open`] accepts.
-const GCM_NONCE_BYTES: usize = 12;
+const GCM_NONCE_BYTES: usize = NONCE_LEN;
+
+/// A DEK or KEK: AES-256, so 32 bytes.
+const KEY_BYTES: usize = 32;
+
+// The AEAD is `ring`'s AES-256-GCM since ADR-213 decision 2 (it was the `aes-gcm` crate). The stored
+// shape did not change: a 12-byte nonce, and the ciphertext with its 16-byte tag appended - which is
+// what both libraries produce, and what `opens_a_secret_sealed_before_adr_213` holds them to.
+
+fn aead_key(bytes: &[u8]) -> Result<LessSafeKey, SecretError> {
+    UnboundKey::new(&AES_256_GCM, bytes)
+        .map(LessSafeKey::new)
+        .map_err(|_| SecretError::Crypto)
+}
+
+fn random_bytes<const N: usize>() -> Result<[u8; N], SecretError> {
+    let mut out = [0u8; N];
+    SystemRandom::new()
+        .fill(&mut out)
+        .map_err(|_| SecretError::Crypto)?;
+    Ok(out)
+}
+
+/// Encrypt under a fresh random nonce; returns `(nonce, ciphertext || tag)`.
+fn encrypt(key: &LessSafeKey, plaintext: &[u8]) -> Result<([u8; NONCE_LEN], Vec<u8>), SecretError> {
+    let nonce = random_bytes::<NONCE_LEN>()?;
+    let mut buf = plaintext.to_vec();
+    key.seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::empty(), &mut buf)
+        .map_err(|_| SecretError::Crypto)?;
+    Ok((nonce, buf))
+}
+
+fn decrypt(key: &LessSafeKey, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, SecretError> {
+    let nonce = Nonce::try_assume_unique_for_key(nonce).map_err(|_| SecretError::Crypto)?;
+    let mut buf = ciphertext.to_vec();
+    let plain_len = key
+        .open_in_place(nonce, Aad::empty(), &mut buf)
+        .map_err(|_| SecretError::Crypto)?
+        .len();
+    buf.truncate(plain_len);
+    Ok(buf)
+}
 
 /// Errors from secret sealing/opening.
 #[derive(Debug, Error)]
@@ -151,19 +190,11 @@ impl<K: KeyProvider> EnvelopeCipher<K> {
             .ok_or(SecretError::KeyNotFound(key_id))?;
 
         // Fresh per-secret DEK.
-        let dek = Aes256Gcm::generate_key(&mut OsRng);
-        let dek_cipher = Aes256Gcm::new(&dek);
-        let ct_nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let ciphertext = dek_cipher
-            .encrypt(&ct_nonce, plaintext)
-            .map_err(|_| SecretError::Crypto)?;
+        let dek = random_bytes::<KEY_BYTES>()?;
+        let (ct_nonce, ciphertext) = encrypt(&aead_key(&dek)?, plaintext)?;
 
         // Wrap the DEK under the KEK.
-        let kek_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&kek));
-        let dek_nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let wrapped_dek = kek_cipher
-            .encrypt(&dek_nonce, dek.as_slice())
-            .map_err(|_| SecretError::Crypto)?;
+        let (dek_nonce, wrapped_dek) = encrypt(&aead_key(&kek)?, &dek)?;
 
         Ok(SealedSecret {
             key_id,
@@ -176,10 +207,10 @@ impl<K: KeyProvider> EnvelopeCipher<K> {
 
     /// Decrypt a [`SealedSecret`] back to plaintext.
     pub fn open(&self, sealed: &SealedSecret) -> Result<Vec<u8>, SecretError> {
-        // `Nonce::from_slice` asserts its length, so a stored row whose nonce is not 12 bytes would
-        // panic below instead of failing. That row is corrupt, and a corrupt row is exactly what
+        // A stored row whose nonce is not 12 bytes is corrupt, and a corrupt row is exactly what
         // `decrypt_report` exists to name and what the scheduler steps over with a warning — both
-        // need an `Err` to do it (ADR-158 C8).
+        // need an `Err` to do it, never a panic (ADR-158 C8). `decrypt` would refuse it too; the
+        // explicit check keeps the rule readable here rather than resting on a library's choice.
         if sealed.dek_nonce.len() != GCM_NONCE_BYTES || sealed.ct_nonce.len() != GCM_NONCE_BYTES {
             return Err(SecretError::Crypto);
         }
@@ -188,23 +219,11 @@ impl<K: KeyProvider> EnvelopeCipher<K> {
             .kek(sealed.key_id)
             .ok_or(SecretError::KeyNotFound(sealed.key_id))?;
 
-        // Unwrap the DEK.
-        let kek_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&kek));
-        let dek_bytes = kek_cipher
-            .decrypt(
-                Nonce::from_slice(&sealed.dek_nonce),
-                sealed.wrapped_dek.as_slice(),
-            )
-            .map_err(|_| SecretError::Crypto)?;
+        // Unwrap the DEK. A DEK that is not 32 bytes is refused by `aead_key`.
+        let dek = decrypt(&aead_key(&kek)?, &sealed.dek_nonce, &sealed.wrapped_dek)?;
 
         // Decrypt the secret.
-        let dek_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&dek_bytes));
-        dek_cipher
-            .decrypt(
-                Nonce::from_slice(&sealed.ct_nonce),
-                sealed.ciphertext.as_slice(),
-            )
-            .map_err(|_| SecretError::Crypto)
+        decrypt(&aead_key(&dek)?, &sealed.ct_nonce, &sealed.ciphertext)
     }
 }
 
@@ -280,7 +299,46 @@ mod tests {
         assert_eq!(cipher.open(&sealed).unwrap(), b"community");
         // And the length it accepts is the one the cipher writes, not a number typed beside it.
         assert_eq!(sealed.dek_nonce.len(), GCM_NONCE_BYTES);
-        assert_eq!(Aes256Gcm::generate_nonce(&mut OsRng).len(), GCM_NONCE_BYTES);
+        assert_eq!(sealed.ct_nonce.len(), GCM_NONCE_BYTES);
+    }
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// 🚨 **Every credential already stored was sealed by the `aes-gcm` crate** (ADR-213 decision 2
+    /// moved the AEAD to `ring`). This row was produced by that implementation, under the KEK
+    /// `[0x5a; 32]`, immediately before the switch. If it stops opening, every deployment that
+    /// upgrades loses every SNMP community, v3 key and API token it holds.
+    #[test]
+    fn opens_a_secret_sealed_before_adr_213() {
+        let sealed = SealedSecret {
+            key_id: 1,
+            dek_nonce: unhex("d6423ae33e5afdad1951d799"),
+            wrapped_dek: unhex(concat!(
+                "db061fa07768217bc33e476ae9ecceaa4351945107004f5ba58125ae840d886c",
+                "479b0b6a9133edee05eba4d7a60cdfe0",
+            )),
+            ct_nonce: unhex("851d8cc95a23fe39b45a598b"),
+            ciphertext: unhex(concat!(
+                "c08f87947a1a3db0d268202a418c21823769ec1402180c163dfdfe638143cb84",
+                "a8ec506e2e",
+            )),
+        };
+        let cipher = EnvelopeCipher::new(StaticKeyProvider::single(kek(0x5a)));
+        assert_eq!(cipher.open(&sealed).unwrap(), b"sealed-before-ADR-213");
+
+        // The stored shape is unchanged: a seal made now has the same lengths for the same input.
+        let now = cipher.seal(b"sealed-before-ADR-213").unwrap();
+        assert_eq!(now.wrapped_dek.len(), sealed.wrapped_dek.len());
+        assert_eq!(now.ciphertext.len(), sealed.ciphertext.len());
+
+        // And the fixture is not opening by accident: the wrong KEK refuses it.
+        let wrong = EnvelopeCipher::new(StaticKeyProvider::single(kek(0x5b)));
+        assert!(matches!(wrong.open(&sealed), Err(SecretError::Crypto)));
     }
 
     #[test]

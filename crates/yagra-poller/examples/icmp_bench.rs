@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! ICMP transport bench — the ADR-109 bisection harness.
 //!
-//! Drives `SurgePingTransport` and **nothing else**: no bus, no core, no working set, no local
+//! Drives `LiveTransport` and **nothing else**: no bus, no core, no working set, no local
 //! scheduler, no `PollLimiter`. One question, and it takes one run to answer:
 //!
 //! > A poller with 64 concurrent-poll permits served 390 polls/s and one with 512 served 643, at
@@ -25,7 +25,7 @@
 //! not the limit" is a claim about a machine, not about the code. Sweep `BENCH_CONCURRENCY`:
 //!
 //! - It flattens well below `concurrency ÷ latency` ⇒ **the ceiling is the transport.** The prime
-//!   suspect is that `SurgePingTransport` holds ONE `surge_ping::Client` per address family, so a
+//!   suspect was that the transport holds ONE ICMP socket per address family (it still does), so a
 //!   single socket and a single receive task demultiplex every reply this process will ever get.
 //! - It tracks `concurrency ÷ latency` ⇒ the transport has room, and a deployment that is slower
 //!   than that is short of permits or short of jobs. A running poller's `yagra_poll_inflight` tells
@@ -68,7 +68,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use yagra_transport::{SurgePingTransport, Transport};
+use yagra_transport::{LiveTransport, Transport};
 
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
@@ -102,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(Ipv4Addr::new(10, 0, 0, 1));
 
-    let transport: Arc<dyn Transport> = Arc::new(SurgePingTransport::new()?);
+    let transport: Arc<dyn Transport> = Arc::new(LiveTransport::new()?);
     let cursor = Arc::new(AtomicUsize::new(0));
     let latencies: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
     let deadline = Instant::now() + Duration::from_secs(seconds as u64);

@@ -1,6 +1,6 @@
 [package]
 name = "yagra-secrets"
-description = "Envelope encryption (AES-256-GCM) for monitoring credentials at rest (ADR-018)."
+description = "Envelope encryption (AES-256-GCM via ring) for monitoring credentials at rest (ADR-018)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,5 +11,5 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 thiserror = { workspace = true }
-aes-gcm = { workspace = true }
+ring = { workspace = true }
 argon2 = { workspace = true }

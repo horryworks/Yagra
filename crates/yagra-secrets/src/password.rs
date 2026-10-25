@@ -7,13 +7,18 @@
 
 use crate::SecretError;
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 
+/// Salt length in bytes: what `SaltString::generate` drew, kept when the random source moved to
+/// `ring` (ADR-213 decision 2 removed the crate that had switched `rand_core`'s `OsRng` on).
+const SALT_BYTES: usize = 16;
+
 /// Hash a password into a PHC string (includes algorithm, salt, and parameters).
 pub fn hash_password(password: &str) -> Result<String, SecretError> {
-    let salt = SaltString::generate(&mut OsRng);
+    let salt = SaltString::encode_b64(&crate::random_bytes::<SALT_BYTES>()?)
+        .map_err(|_| SecretError::Crypto)?;
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())

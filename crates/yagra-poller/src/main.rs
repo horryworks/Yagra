@@ -194,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
     let meraki_wire = None;
     // Raw-socket ICMP transport — needs CAP_NET_RAW (granted to this container only).
     let transport: Arc<dyn yagra_transport::Transport> =
-        Arc::new(yagra_transport::SurgePingTransport::new()?.with_meraki_wire_origin(meraki_wire));
+        Arc::new(yagra_transport::LiveTransport::new()?.with_meraki_wire_origin(meraki_wire));
     tracing::info!("ICMP transport ready (raw sockets)");
 
     // Remote pollers pin the server cert with a CA file (TLS mandatory across trust boundaries,

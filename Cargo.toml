@@ -71,7 +71,6 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 # DB / storage
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "chrono", "uuid", "json", "migrate"] }
-redis = { version = "0.27", features = ["tokio-comp"] }
 # HTTP client. VictoriaMetrics import/query is in-cluster plaintext; URL monitoring
 # (yagra-transport) needs TLS, so rustls is enabled (no native-tls/NASM). `tls_info` exposes
 # the peer certificate so the URL probe can read the cert's notAfter for expiry.
@@ -80,10 +79,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 x509-parser = "0.16"
 # Message bus (core⇄poller over NATS, ADR-007)
 async-nats = "0.49"
-# Raw-socket ICMP for the poller (needs CAP_NET_RAW at runtime, ADR build-prereqs)
-surge-ping = "0.8"
-# SNMP v2c (pure-Rust async; ADR-021 PoC — validate before any net-snmp FFI fallback)
-csnmp = "0.5"
 # SNMP v3 / USM (pure-Rust crypto + tokio async; resolves the ADR-021 v3 question)
 snmp2 = { version = "0.5", default-features = false, features = ["v3", "crypto-rust", "tokio"] }
 # DNS stub resolver for DNS name-resolution monitoring (ADR-033). Pure Rust, tokio-native, no
@@ -218,8 +213,6 @@ metrics = "0.24"
 # default set also enables `push-gateway`, which nothing here uses and which was the one path that
 # brought `aws-lc-sys` (a C crypto library) into the build via `hyper-rustls` (ADR-213 decision 1).
 metrics-exporter-prometheus = { version = "0.16", default-features = false, features = ["http-listener"] }
-# Crypto (envelope encryption of monitoring credentials — pure Rust, no NASM)
-aes-gcm = "0.10"
 # Webhook ingest-token hashing (already in the tree via the crypto stack)
 sha2 = "0.10"
 # HMAC-SHA256 for stateless signed session tokens (Core HA active/active, ADR-016 Increment 2a).

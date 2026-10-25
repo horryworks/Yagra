@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The Redis mirror gives up instead of waiting.** Connecting to Redis now times out after 5 seconds and each write after 10; after a failure, core waits 5 seconds before it tries again. Before, a Redis that accepted no connections could hold each poller heartbeat until the operating system gave up. Redis remains optional and its loss is still harmless.
+
+### Security
+
+- **Five third-party dependencies are gone, and 26 crates leave the build with them.** The SNMP v2c client, the ICMP pinger and the Redis client are now Yagra's own code; credentials are sealed with the `ring` library Yagra already used, in exactly the format they were stored in (existing credentials open unchanged); and the Prometheus endpoint no longer builds the unused feature that brought in the C library `aws-lc-sys`. This removes the unmaintained `derivative` crate from the build. Polling behaves as before, with one difference: on a raw ICMP socket, an ICMP error sent by the target itself no longer counts as a reply (the default ping socket never delivered those).
+
 ## v0.3.59 — A device switched on for config backup no longer fails its first fetch
 
 ### Bug Fixes

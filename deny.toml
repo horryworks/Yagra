@@ -6,7 +6,8 @@
 version = 2
 yanked = "warn"
 # Only flag unmaintained crates we depend on directly (we can act on those);
-# transitive ones (e.g. csnmp -> derivative, RUSTSEC-2024-0388) are upstream's call.
+# transitive ones are upstream's call. (csnmp -> derivative, RUSTSEC-2024-0388, was the example until
+# ADR-213 decision 4 removed csnmp.)
 unmaintained = "workspace"
 ignore = [
     # RUSTSEC-2023-0071 — "Marvin Attack": a timing side-channel in the `rsa` crate. No fixed
