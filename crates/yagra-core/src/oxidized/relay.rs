@@ -78,6 +78,16 @@ const RECONCILE: Duration = Duration::from_secs(30);
 /// How long the node list waits for the listeners to be matched before it answers anyway.
 const LISTENING_WAIT: Duration = Duration::from_secs(5);
 
+/// How long a connection waits for its node to have a poller before it is closed as "no poller".
+/// Right after core starts, no node has one until the pollers' first heartbeat and the next sweep
+/// hand them their working sets; a fetch arriving then was cut at once and recorded as "did not
+/// answer" (measured on a lab deployment, 2026-10-25). Below oxidized's own 30-second timeout, so
+/// the fetch is carried rather than timed out by oxidized while it waits.
+const ROUTE_WAIT: Duration = Duration::from_secs(20);
+
+/// How often a waiting connection asks again.
+const ROUTE_POLL: Duration = Duration::from_millis(500);
+
 /// Frames from the poller queued for one session before it is ended as too slow.
 const SESSION_QUEUE: usize = 256;
 
@@ -126,6 +136,8 @@ struct Session {
 /// The relay's shared state.
 pub(crate) struct Relay {
     routes: Arc<dyn Routes>,
+    /// [`ROUTE_WAIT`], shorter in tests.
+    route_wait: Duration,
     /// Each session's channel, with the node it carries a login to and the poller it was opened
     /// with — every poller may publish on the reply subject, so a frame is taken only from that one.
     sessions: Mutex<HashMap<Uuid, Session>>,
@@ -143,9 +155,14 @@ pub(crate) struct Relay {
 
 impl Relay {
     pub(crate) fn new(routes: Arc<dyn Routes>) -> Arc<Self> {
+        Self::waiting_for_routes(routes, ROUTE_WAIT)
+    }
+
+    fn waiting_for_routes(routes: Arc<dyn Routes>, route_wait: Duration) -> Arc<Self> {
         let (asks, asked) = mpsc::unbounded_channel();
         Arc::new(Self {
             routes,
+            route_wait,
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
             cancelled: Mutex::new(HashMap::new()),
@@ -558,7 +575,7 @@ async fn serve(
     if relay.is_cancelled(ep.node) {
         return Outcome::Cancelled;
     }
-    let poller = match relay.route(ep.node) {
+    let poller = match route_when_known(relay, ep.node).await {
         Route::Via(p) => p,
         Route::NoPoller => return Outcome::NoPoller,
         Route::PollerTooOld => return Outcome::PollerTooOld,
@@ -575,6 +592,20 @@ async fn serve(
     };
     relay.end_session(session);
     outcome
+}
+
+/// The node's route, waiting up to the relay's `route_wait` while it has no poller: that is what
+/// every node reads in the first seconds after core starts. The other answers do not change by
+/// waiting and are returned at once, as is a node whose fetch was cancelled meanwhile.
+async fn route_when_known(relay: &Relay, node: Uuid) -> Route {
+    let deadline = Instant::now() + relay.route_wait;
+    loop {
+        let route = relay.route(node);
+        if route != Route::NoPoller || Instant::now() >= deadline || relay.is_cancelled(node) {
+            return route;
+        }
+        tokio::time::sleep(ROUTE_POLL.min(relay.route_wait)).await;
+    }
 }
 
 /// Ask the poller to connect to the device, and wait for its answer. `true` when it connected.
@@ -898,7 +929,8 @@ mod tests {
     async fn a_node_with_no_poller_is_not_opened() {
         let bus = Arc::new(InMemoryBus::new(64));
         let mut inbox = bus.subscribe_relay_to_poller();
-        let relay = Relay::new(Arc::new(Fixed(Route::NoPoller)));
+        let relay =
+            Relay::waiting_for_routes(Arc::new(Fixed(Route::NoPoller)), Duration::from_millis(50));
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let _client = tokio::spawn(async move { TcpStream::connect(addr).await });
@@ -912,6 +944,58 @@ mod tests {
         assert_eq!(outcome, Outcome::NoPoller);
         assert!(outcome.is_relay_failure());
         assert!(inbox.try_recv().is_err(), "nothing was sent to any poller");
+    }
+
+    /// No poller at first, one a moment later: what every node reads right after core starts.
+    struct Arrives(std::sync::atomic::AtomicBool);
+    impl Routes for Arrives {
+        fn route(&self, _node: Uuid) -> Route {
+            if self.0.load(Ordering::Acquire) {
+                Route::Via("p1".to_owned())
+            } else {
+                Route::NoPoller
+            }
+        }
+    }
+
+    /// A connection that arrives before its node has a poller waits for one, rather than being cut
+    /// and recorded as a device that did not answer.
+    #[tokio::test]
+    async fn a_connection_waits_for_its_node_to_have_a_poller() {
+        let bus = Arc::new(InMemoryBus::new(64));
+        let routes = Arc::new(Arrives(std::sync::atomic::AtomicBool::new(false)));
+        let relay = Relay::waiting_for_routes(routes.clone(), Duration::from_secs(5));
+        let replies = BroadcastStream::new(bus.subscribe_relay_to_core())
+            .filter_map(|r| async move { r.ok() });
+        tokio::spawn(run_reply_loop(relay.clone(), Box::pin(replies)));
+        tokio::spawn(fake_poller(bus.clone()));
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            routes.0.store(true, Ordering::Release);
+        });
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let client = tokio::spawn(async move {
+            let mut c = TcpStream::connect(addr).await.expect("connect");
+            c.write_all(b"show run").await.expect("write");
+            let mut got = Vec::new();
+            c.read_to_end(&mut got).await.expect("read");
+            got
+        });
+        let (sock, _) = listener.accept().await.expect("accept");
+        let ep = Endpoint {
+            node: Uuid::from_u128(1),
+            address: IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)),
+        };
+        let relay_bus: Arc<dyn RelayBus> = bus.clone();
+        let outcome = serve(&relay, &relay_bus, sock, &ep, DEVICE_SSH).await;
+        assert_eq!(
+            outcome,
+            Outcome::Closed,
+            "carried once the poller was known"
+        );
+        assert_eq!(client.await.expect("client"), b"SHOW RUN");
     }
 
     /// With no listener loop on this core there is nothing to wait for, and nothing is waited for.
