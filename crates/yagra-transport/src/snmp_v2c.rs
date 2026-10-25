@@ -201,7 +201,11 @@ impl Snmp2cClient {
             socket,
             community,
             timeout,
-            next_request_id: AtomicI32::new(1),
+            // Random, so an off-path sender that forges the agent's address must also guess it, not
+            // only our port. csnmp started at 0; nothing reads the value but the match below.
+            next_request_id: AtomicI32::new(
+                i32::from_ne_bytes(rand::random::<[u8; 4]>()) & 0x3fff_ffff,
+            ),
         })
     }
 
@@ -269,6 +273,9 @@ impl Snmp2cClient {
                 Ok(Err(e)) => return Err(SnmpClientError::Receiving(e)),
                 Ok(Ok(len)) => len,
             };
+            // A datagram that does not decode ends the exchange as an answer rather than being read
+            // past: that is csnmp's judgement, and the walk budget's silence rule rests on it — a
+            // device sending malformed replies is there, and must not be scored as one that is not.
             match decode_reply(&buf[..len], request_id)? {
                 Some(bindings) => return Ok(bindings),
                 // A reply to an earlier request — read past it, as csnmp did.
