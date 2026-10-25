@@ -127,8 +127,10 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # Syslog over TLS for forwarding (RFC 5425, ADR-034 Increment 2). rustls is already in the tree via
 # reqwest/sqlx/lettre; these entries name it directly so the forwarder can build its own ClientConfig
 # (per-destination trust anchors). `ring` is pinned as the crypto provider **explicitly at the call
-# site**: both `ring` and `aws_lc_rs` end up enabled through the dependency graph, and with both on
-# rustls refuses to pick a process default — `ClientConfig::builder()` would panic at runtime.
+# site**: when both `ring` and `aws_lc_rs` are enabled anywhere in the dependency graph, rustls refuses
+# to pick a process default and `ClientConfig::builder()` panics at runtime. Since ADR-213 decision 1
+# nothing enables `aws_lc_rs`; the explicit pins stay so a dependency that brings it back cannot
+# turn into that panic.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 # System trust anchors for TLS destinations (the container's CA bundle).
@@ -212,7 +214,10 @@ opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
 tracing-opentelemetry = "0.28"
 metrics = "0.24"
-metrics-exporter-prometheus = "0.16"
+# Only `http-listener` (the poller's :9100 endpoint; core renders `/metrics` through axum). The
+# default set also enables `push-gateway`, which nothing here uses and which was the one path that
+# brought `aws-lc-sys` (a C crypto library) into the build via `hyper-rustls` (ADR-213 decision 1).
+metrics-exporter-prometheus = { version = "0.16", default-features = false, features = ["http-listener"] }
 # Crypto (envelope encryption of monitoring credentials — pure Rust, no NASM)
 aes-gcm = "0.10"
 # Webhook ingest-token hashing (already in the tree via the crypto stack)
