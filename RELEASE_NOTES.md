@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A device switched on for config backup no longer fails its first fetch.** Switching the backup on, or pressing Fetch now soon after, used to end in "Device did not answer" for up to 30 seconds: oxidized fetched the device at once, before core had opened the device's relay port. Core now opens the port before it hands oxidized the device.
+
 ## v0.3.58 — Device configurations are backed up through each device's own poller, and pushed to Git
 
 ### New Features

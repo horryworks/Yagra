@@ -1055,6 +1055,9 @@ async fn oxidized_source(
             "config backup: core's own address beside oxidized is unknown; every node is parked"
         );
     }
+    // oxidized fetches a node it is newly handed at once, so the node's relay port must already
+    // accept when this list reaches it.
+    admin.config_relay.listening_now().await;
     let mut nodes =
         oxidized::source::source_nodes(targets, &admin.creds, Utc::now(), &ports, relay_ip).await;
     if nodes.is_empty() {

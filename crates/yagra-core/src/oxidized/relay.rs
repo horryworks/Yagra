@@ -21,12 +21,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Instant};
 use uuid::Uuid;
@@ -71,8 +72,11 @@ const DEVICE_TELNET: u16 = RELAY_PORTS[1];
 /// (decision 47). Longer than one fetch takes, shorter than the gap to the next one.
 const FAILURE_MEMORY: Duration = Duration::from_secs(5 * 60);
 
-/// How often the listeners are matched against the configured nodes.
+/// How often the listeners are matched against the configured nodes when nothing asks sooner.
 const RECONCILE: Duration = Duration::from_secs(30);
+
+/// How long the node list waits for the listeners to be matched before it answers anyway.
+const LISTENING_WAIT: Duration = Duration::from_secs(5);
 
 /// Frames from the poller queued for one session before it is ended as too slow.
 const SESSION_QUEUE: usize = 256;
@@ -129,16 +133,46 @@ pub(crate) struct Relay {
     /// Nodes whose fetch a person cancelled (decision 54): new sessions are refused and the fetch's
     /// late report is not recorded, for [`FAILURE_MEMORY`].
     cancelled: Mutex<HashMap<Uuid, Instant>>,
+    /// Requests to match the listeners now, each answered once a pass that began after it is done
+    /// ([`Relay::listening_now`]). The receiver is taken by [`run_listeners`].
+    asks: mpsc::UnboundedSender<oneshot::Sender<()>>,
+    asked: Mutex<Option<mpsc::UnboundedReceiver<oneshot::Sender<()>>>>,
+    /// Whether [`run_listeners`] is running here, so a core without it does not wait for nothing.
+    listening: AtomicBool,
 }
 
 impl Relay {
     pub(crate) fn new(routes: Arc<dyn Routes>) -> Arc<Self> {
+        let (asks, asked) = mpsc::unbounded_channel();
         Arc::new(Self {
             routes,
             sessions: Mutex::new(HashMap::new()),
             failures: Mutex::new(HashMap::new()),
             cancelled: Mutex::new(HashMap::new()),
+            asks,
+            asked: Mutex::new(Some(asked)),
+            listening: AtomicBool::new(false),
         })
+    }
+
+    /// Wait until the listeners match the configured nodes as they are now, for at most
+    /// [`LISTENING_WAIT`]. Called before oxidized is handed its node list: oxidized fetches a node
+    /// it has just been handed at once, and a port still closed fails that fetch as "did not
+    /// answer". Every node switched on failed its first fetch that way until the next 30-second
+    /// pass (measured on a PoC deployment, 2026-10-24).
+    pub(crate) async fn listening_now(&self) {
+        if !self.listening.load(Ordering::Acquire) {
+            return;
+        }
+        let (done, wait) = oneshot::channel();
+        if self.asks.send(done).is_err() {
+            return;
+        }
+        if timeout(LISTENING_WAIT, wait).await.is_err() {
+            tracing::warn!(
+                "config relay: the listeners were not matched in time; answering anyway"
+            );
+        }
     }
 
     pub(crate) fn route(&self, node: Uuid) -> Route {
@@ -349,87 +383,129 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
 }
 
 /// Whether a pair of listeners is kept as it is this tick: it still serves the endpoint wanted on
-/// its port, and neither of them has stopped. A listener stops only when its port could not be
-/// opened — the one it replaced may not have let go of it yet — and is opened again on the next
-/// tick, rather than leaving the node with no relay until core restarts.
+/// its port, and neither of them has stopped. A listener's task ends only if it panicked; the pair
+/// is then opened again on the next pass, rather than leaving the node with no relay until core
+/// restarts. A port that could not be bound is never entered, so it too is tried again.
 fn still_listening(wanted: Option<&Endpoint>, serving: &Endpoint, stopped: bool) -> bool {
     wanted == Some(serving) && !stopped
 }
 
-/// Keep one pair of listeners per node that may be fetched, until cancelled.
+/// Keep one pair of listeners per node that may be fetched, until cancelled: every
+/// [`RECONCILE`], and at once whenever [`Relay::listening_now`] asks. The ports are opened on
+/// `listen_on`: every address in production, since oxidized reaches core on its own network.
 pub(crate) async fn run_listeners(
     relay: Arc<Relay>,
     repo: Arc<ConfigBackupRepo>,
     bus: Arc<dyn RelayBus>,
     oxidized_host: String,
+    listen_on: IpAddr,
 ) {
+    let Some(mut asked) = relay.asked.lock().ok().and_then(|mut a| a.take()) else {
+        tracing::warn!("config relay: the listeners are already running");
+        return;
+    };
+    relay.listening.store(true, Ordering::Release);
     let mut open: HashMap<u16, (Endpoint, [JoinHandle<()>; 2])> = HashMap::new();
     let mut every = tokio::time::interval(RECONCILE);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        every.tick().await;
-        let want = match desired(&repo).await {
-            Ok(w) => w,
-            Err(e) => {
-                // A failed read changes nothing: closing every relay on a database hiccup would
-                // turn one slow query into a round of failed fetches.
-                tracing::warn!(error = %e, "config relay: the configured nodes could not be read");
-                continue;
-            }
-        };
-        open.retain(|port, (ep, tasks)| {
-            let keep = still_listening(
-                want.get(port),
-                ep,
-                tasks.iter().any(JoinHandle::is_finished),
-            );
-            if !keep {
-                for t in tasks.iter() {
-                    t.abort();
-                }
-            }
-            keep
-        });
-        for (port, ep) in want {
-            if open.contains_key(&port) {
-                continue;
-            }
-            let pair = [(port, DEVICE_SSH), (port + 1, DEVICE_TELNET)].map(|(local, device)| {
-                tokio::spawn(listen(
-                    relay.clone(),
-                    bus.clone(),
-                    oxidized_host.clone(),
-                    local,
-                    ep.clone(),
-                    device,
-                ))
-            });
-            open.insert(port, (ep, pair));
+        let mut waiting = Vec::new();
+        tokio::select! {
+            _ = every.tick() => {}
+            ask = asked.recv() => match ask {
+                Some(done) => waiting.push(done),
+                None => return,
+            },
         }
-        metrics::gauge!("yagra_config_relay_listeners").set(open.len() as f64 * 2.0);
+        // Every request queued before this pass begins is answered by it: the pass reads the
+        // configured nodes after the request was made.
+        while let Ok(done) = asked.try_recv() {
+            waiting.push(done);
+        }
+        reconcile(&relay, &repo, &bus, &oxidized_host, listen_on, &mut open).await;
+        for done in waiting {
+            let _ = done.send(());
+        }
     }
 }
 
+/// Match the open listeners against the configured nodes once. A port is bound before this
+/// returns, so a node list answered after it names only ports that accept.
+async fn reconcile(
+    relay: &Arc<Relay>,
+    repo: &ConfigBackupRepo,
+    bus: &Arc<dyn RelayBus>,
+    oxidized_host: &str,
+    listen_on: IpAddr,
+    open: &mut HashMap<u16, (Endpoint, [JoinHandle<()>; 2])>,
+) {
+    let want = match desired(repo).await {
+        Ok(w) => w,
+        Err(e) => {
+            // A failed read changes nothing: closing every relay on a database hiccup would
+            // turn one slow query into a round of failed fetches.
+            tracing::warn!(error = %e, "config relay: the configured nodes could not be read");
+            return;
+        }
+    };
+    open.retain(|port, (ep, tasks)| {
+        let keep = still_listening(
+            want.get(port),
+            ep,
+            tasks.iter().any(JoinHandle::is_finished),
+        );
+        if !keep {
+            for t in tasks.iter() {
+                t.abort();
+            }
+        }
+        keep
+    });
+    for (port, ep) in want {
+        if open.contains_key(&port) {
+            continue;
+        }
+        // Both ports or neither: a pair left half open is tried again on the next pass.
+        let (Some(ssh), Some(telnet)) =
+            (bind(listen_on, port).await, bind(listen_on, port + 1).await)
+        else {
+            continue;
+        };
+        let pair = [(ssh, DEVICE_SSH), (telnet, DEVICE_TELNET)].map(|(listener, device)| {
+            tokio::spawn(listen(
+                relay.clone(),
+                bus.clone(),
+                oxidized_host.to_owned(),
+                listener,
+                ep.clone(),
+                device,
+            ))
+        });
+        open.insert(port, (ep, pair));
+    }
+    metrics::gauge!("yagra_config_relay_listeners").set(open.len() as f64 * 2.0);
+}
+
+/// Open one relay port. It may fail while the listener it replaces has not let go of it yet.
+async fn bind(listen_on: IpAddr, local: u16) -> Option<TcpListener> {
+    match TcpListener::bind(SocketAddr::new(listen_on, local)).await {
+        Ok(l) => Some(l),
+        Err(e) => {
+            tracing::warn!(port = local, error = %e, "config relay: a port could not be opened");
+            None
+        }
+    }
+}
+
+/// Carry each of oxidized's connections on one bound relay port, until aborted.
 async fn listen(
     relay: Arc<Relay>,
     bus: Arc<dyn RelayBus>,
     oxidized_host: String,
-    local: u16,
+    listener: TcpListener,
     ep: Endpoint,
     device: u16,
 ) {
-    let listener = match TcpListener::bind(SocketAddr::new(
-        IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-        local,
-    ))
-    .await
-    {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::warn!(port = local, error = %e, "config relay: a port could not be opened");
-            return;
-        }
-    };
     loop {
         let Ok((sock, peer)) = listener.accept().await else {
             // Out of file descriptors, most likely: wait rather than spin.
@@ -836,5 +912,62 @@ mod tests {
         assert_eq!(outcome, Outcome::NoPoller);
         assert!(outcome.is_relay_failure());
         assert!(inbox.try_recv().is_err(), "nothing was sent to any poller");
+    }
+
+    /// With no listener loop on this core there is nothing to wait for, and nothing is waited for.
+    #[tokio::test]
+    async fn the_node_list_does_not_wait_for_listeners_that_are_not_running() {
+        let relay = Relay::new(Arc::new(Fixed(Route::NoPoller)));
+        timeout(Duration::from_millis(200), relay.listening_now())
+            .await
+            .expect("answered at once");
+    }
+
+    /// A node switched on between two passes has its ports open once `listening_now` returns,
+    /// which is what lets oxidized's first fetch of it reach the relay rather than a closed port.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_node_switched_on_is_listened_for_before_the_list_is_answered(pool: sqlx::PgPool) {
+        use yagra_base::config_backup::{BackupInput, NodeConfigBackup, ScanMode};
+        let repo = Arc::new(ConfigBackupRepo::new(pool.clone()));
+        let relay = Relay::new(Arc::new(Fixed(Route::NoPoller)));
+        let bus: Arc<dyn RelayBus> = Arc::new(InMemoryBus::new(8));
+        let loop_task = tokio::spawn(run_listeners(
+            relay.clone(),
+            repo.clone(),
+            bus,
+            "localhost".to_owned(),
+            // Loopback, so the test opens no port to the network (and asks no firewall).
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+        ));
+        // The loop's first pass, with nothing configured yet.
+        relay.listening_now().await;
+
+        let node = yagra_base::pgtest::node(&pool, "sw-21", 21, None).await;
+        repo.put(
+            node,
+            &NodeConfigBackup {
+                enabled: true,
+                login_order: None,
+                input: BackupInput::Ssh,
+                model_override: None,
+                scan_mode: ScanMode::Normal,
+            },
+            true,
+        )
+        .await
+        .expect("put");
+        let port = repo.relay_ports(&[node]).await.expect("ports")[&node];
+        relay.listening_now().await;
+        for p in [port, port + 1] {
+            timeout(
+                Duration::from_secs(2),
+                TcpStream::connect((Ipv4Addr::LOCALHOST, p)),
+            )
+            .await
+            .expect("in time")
+            .expect("the relay port accepts");
+        }
+        loop_task.abort();
     }
 }

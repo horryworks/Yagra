@@ -1312,6 +1312,7 @@ impl LeaderTasks {
                 self.config_backup.clone(),
                 relay_bus,
                 host,
+                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
             ),
         );
         Ok(())
