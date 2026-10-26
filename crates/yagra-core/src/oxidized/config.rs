@@ -237,6 +237,20 @@ mod tests {
         ));
     }
 
+    /// The push never speaks HTTP/2 (ADR-215 increment 2, decision 4): the libcurl in the pinned
+    /// oxidized image has a use-after-free on an HTTP/2 upload that the server resets, and that is
+    /// the one finding in the image Yagra can reach. Remove with the image that fixes it.
+    #[test]
+    fn the_push_is_pinned_to_http_1_1() {
+        let push = PUSH_SCRIPT
+            .lines()
+            .skip_while(|l| !l.contains("Open3.capture2e(env, 'timeout'"))
+            .take(3)
+            .collect::<String>();
+        assert!(push.contains("'-c', 'http.version=HTTP/1.1'"), "{push}");
+        assert!(push.contains("'push'"), "{push}");
+    }
+
     /// The script carries no rule of its own: it reports only what core's patterns name, never
     /// git's output, and it never forces a push.
     #[test]

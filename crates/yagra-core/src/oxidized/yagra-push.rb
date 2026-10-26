@@ -172,8 +172,13 @@ Dir.mktmpdir('yagra-push') do |dir|
     env['GIT_CONFIG_KEY_0'] = 'http.extraHeader'
     env['GIT_CONFIG_VALUE_0'] = "Authorization: Basic #{basic}"
   end
-  output, status = Open3.capture2e(env, 'timeout', PUSH_SECONDS, 'git', '--git-dir', REPO, 'push',
-                                   '--porcelain', job['url'], "#{commit}:refs/heads/#{job['branch']}")
+  # HTTP/1.1, never HTTP/2: the bundled image's libcurl-gnutls frees the transfer when an HTTP/2
+  # server answers an upload with RST_STREAM (CVE-2026-92392), which a busy Git host sends with no
+  # attacker involved. Upstream has no fixed image yet (ADR-215 increment 2, decision 4). Harmless
+  # over SSH, which never reads it.
+  output, status = Open3.capture2e(env, 'timeout', PUSH_SECONDS, 'git', '-c', 'http.version=HTTP/1.1',
+                                   '--git-dir', REPO, 'push', '--porcelain', job['url'],
+                                   "#{commit}:refs/heads/#{job['branch']}")
   failure = nil
   unless status.success?
     lower = output.downcase

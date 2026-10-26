@@ -109,11 +109,18 @@ COPY --from=bundle /app/dist /usr/share/nginx/html
 # smoke test fails if the container does not come up.
 #
 # 🚨 Brotli first (CVE-2026-111497, a heap overflow in its decoder): the base image ships
-# `brotli-libs` 1.2.0, which freetype and libcurl link. Named with its fixed version so the build
-# fails rather than quietly keeping the old one. Alpine built it on 2026-10-22, past the two days
-# ADR-211 decision 5 gives a security fix. Drop the line once the base image carries it.
+# `brotli-libs` 1.2.0, which freetype links. Named with its fixed version so the build fails rather
+# than quietly keeping the old one. Alpine built it on 2026-10-22, past the two days ADR-211
+# decision 5 gives a security fix. Drop the line once the base image carries it.
+#
+# zlib likewise (CVE-2026-85091, in gzwrite — nginx links zlib but never calls it; 1.3.2-r1 was built
+# 2026-10-06). And curl is removed rather than upgraded: the base image carries it, nothing here runs
+# it (no healthcheck, no entrypoint script), and nothing else requires it, so `apk del` takes libcurl
+# and its six dependencies with it — a package that is not there has no advisories (ADR-215
+# increment 2, decision 6).
 USER root
-RUN apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' \
+RUN apk del --no-cache curl \
+ && apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' 'zlib>=1.3.2-r1' \
  && install -d -o 101 -g 0 -m 0755 /etc/nginx/certs \
  && printf 'listen 8080;\n' > /etc/nginx/yagra-listen.conf \
  && chown 101:0 /etc/nginx/yagra-listen.conf \

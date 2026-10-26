@@ -12,3 +12,1101 @@ ignore:
     package:
       name: libbrotli1
       version: 1.1.0-2+b7
+
+  # ── oxidized/oxidized:0.37.0, everything Yagra cannot reach (ADR-215 increment 2, decision 5) ──
+  # Generated 2026-10-27 from the first weekly scan, one rule per (vulnerability, package, version),
+  # each package with why it is out of reach — checked against OSV's text and against what the
+  # running container loads. Upstream has no newer image (0.37.0, 2026-05-20). Remove this whole
+  # block when the pinned oxidized image moves: the versions stop matching on their own, and any
+  # finding they no longer cover turns the scan red again, which is the point.
+  # NOT here on purpose: libtasn1-6 (CVE-2025-13151). GnuTLS parses the Git host's certificate with
+  # it, and whether a TLS handshake reaches asn1_expand_octet_string could not be settled, so it
+  # stays red until the image moves.
+  # bsdutils 1:2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: bsdutils
+      version: 1:2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: bsdutils
+      version: 1:2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: bsdutils
+      version: 1:2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: bsdutils
+      version: 1:2.41-5
+  # curl 8.14.1-2+deb13u3: the event hook's curl, whose only peer is core over plain HTTP/1.1; the findings are the HTTP/2 upload, SMB, cookie, proxy-auth and STARTTLS reuse paths
+  - vulnerability: CVE-2026-3805
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-5773
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-6276
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8286
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8924
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8927
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-92392
+    package:
+      name: curl
+      version: 8.14.1-2+deb13u3
+  # gzip 1.13-1: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-41992
+    package:
+      name: gzip
+      version: 1.13-1
+  # jq 1.7.1-6+deb13u2: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2024-53427
+    package:
+      name: jq
+      version: 1.7.1-6+deb13u2
+  - vulnerability: CVE-2026-32316
+    package:
+      name: jq
+      version: 1.7.1-6+deb13u2
+  - vulnerability: CVE-2026-49839
+    package:
+      name: jq
+      version: 1.7.1-6+deb13u2
+  # libblkid1 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: libblkid1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: libblkid1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: libblkid1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: libblkid1
+      version: 2.41-5
+  # libc-bin 2.41-12+deb13u3: scanf's %mc and ungetwc() on an overlapping charset; neither is called on device or Git-host data
+  - vulnerability: CVE-2026-5450
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u3
+  - vulnerability: CVE-2026-5928
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u3
+  # libc6 2.41-12+deb13u3: scanf's %mc and ungetwc() on an overlapping charset; neither is called on device or Git-host data
+  - vulnerability: CVE-2026-5450
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+  - vulnerability: CVE-2026-5928
+    package:
+      name: libc6
+      version: 2.41-12+deb13u3
+  # libcurl3t64-gnutls 8.14.1-2+deb13u3: git-remote-https's libcurl; the push is pinned to HTTP/1.1 (decision 4), which removes CVE-2026-92392's HTTP/2 upload path, and a single-URL push with no cookie file, proxy or SMB takes none of the others
+  - vulnerability: CVE-2026-3805
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-5773
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-6276
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8286
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8924
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8927
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-92392
+    package:
+      name: libcurl3t64-gnutls
+      version: 8.14.1-2+deb13u3
+  # libcurl4t64 8.14.1-2+deb13u3: the event hook's curl, whose only peer is core over plain HTTP/1.1; the findings are the HTTP/2 upload, SMB, cookie, proxy-auth and STARTTLS reuse paths
+  - vulnerability: CVE-2026-3805
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-5773
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-6276
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8286
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8924
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-8927
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  - vulnerability: CVE-2026-92392
+    package:
+      name: libcurl4t64
+      version: 8.14.1-2+deb13u3
+  # libexpat1 2.7.1-2: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2025-59375
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-25210
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-41080
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-45186
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-66046
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-76956
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-76957
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-77214
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  - vulnerability: CVE-2026-93990
+    package:
+      name: libexpat1
+      version: 2.7.1-2
+  # libgit2-1.9 1.9.0+ds-2: loaded by rugged, which oxidized uses only on its local configs.git: the hooks are `exec`, never `githubrepo`, so libgit2 opens no network transport and its SSH and TLS code (libssh2, mbed TLS) never runs
+  - vulnerability: CVE-2026-53587
+    package:
+      name: libgit2-1.9
+      version: 1.9.0+ds-2
+  - vulnerability: CVE-2026-5917
+    package:
+      name: libgit2-1.9
+      version: 1.9.0+ds-2
+  # libglib2.0-0t64 2.84.4-3~deb13u3: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-16118
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58010
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58011
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58012
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58013
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58014
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58015
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  - vulnerability: CVE-2026-58016
+    package:
+      name: libglib2.0-0t64
+      version: 2.84.4-3~deb13u3
+  # libgssapi-krb5-2 1.21.3-5: both findings are in gss_accept_sec_context() with NegoEx, the acceptor side; curl only ever initiates
+  - vulnerability: CVE-2026-40355
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5
+  - vulnerability: CVE-2026-40356
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5
+  # libjq1 1.7.1-6+deb13u2: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2024-53427
+    package:
+      name: libjq1
+      version: 1.7.1-6+deb13u2
+  - vulnerability: CVE-2026-32316
+    package:
+      name: libjq1
+      version: 1.7.1-6+deb13u2
+  - vulnerability: CVE-2026-49839
+    package:
+      name: libjq1
+      version: 1.7.1-6+deb13u2
+  # libk5crypto3 1.21.3-5: both findings are in gss_accept_sec_context() with NegoEx, the acceptor side; curl only ever initiates
+  - vulnerability: CVE-2026-40355
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5
+  - vulnerability: CVE-2026-40356
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5
+  # libkrb5-3 1.21.3-5: both findings are in gss_accept_sec_context() with NegoEx, the acceptor side; curl only ever initiates
+  - vulnerability: CVE-2026-40355
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5
+  - vulnerability: CVE-2026-40356
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5
+  # libkrb5support0 1.21.3-5: both findings are in gss_accept_sec_context() with NegoEx, the acceptor side; curl only ever initiates
+  - vulnerability: CVE-2026-40355
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5
+  - vulnerability: CVE-2026-40356
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5
+  # liblastlog2-2 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: liblastlog2-2
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: liblastlog2-2
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: liblastlog2-2
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: liblastlog2-2
+      version: 2.41-5
+  # libmbedcrypto16 3.6.5-0.1~deb13u1: loaded by rugged, which oxidized uses only on its local configs.git: the hooks are `exec`, never `githubrepo`, so libgit2 opens no network transport and its SSH and TLS code (libssh2, mbed TLS) never runs
+  - vulnerability: CVE-2026-25835
+    package:
+      name: libmbedcrypto16
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34872
+    package:
+      name: libmbedcrypto16
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34873
+    package:
+      name: libmbedcrypto16
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34874
+    package:
+      name: libmbedcrypto16
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34875
+    package:
+      name: libmbedcrypto16
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34876
+    package:
+      name: libmbedcrypto16
+      version: 3.6.5-0.1~deb13u1
+  # libmbedtls21 3.6.5-0.1~deb13u1: loaded by rugged, which oxidized uses only on its local configs.git: the hooks are `exec`, never `githubrepo`, so libgit2 opens no network transport and its SSH and TLS code (libssh2, mbed TLS) never runs
+  - vulnerability: CVE-2026-25835
+    package:
+      name: libmbedtls21
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34872
+    package:
+      name: libmbedtls21
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34873
+    package:
+      name: libmbedtls21
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34874
+    package:
+      name: libmbedtls21
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34875
+    package:
+      name: libmbedtls21
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34876
+    package:
+      name: libmbedtls21
+      version: 3.6.5-0.1~deb13u1
+  # libmbedx509-7 3.6.5-0.1~deb13u1: loaded by rugged, which oxidized uses only on its local configs.git: the hooks are `exec`, never `githubrepo`, so libgit2 opens no network transport and its SSH and TLS code (libssh2, mbed TLS) never runs
+  - vulnerability: CVE-2026-25835
+    package:
+      name: libmbedx509-7
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34872
+    package:
+      name: libmbedx509-7
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34873
+    package:
+      name: libmbedx509-7
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34874
+    package:
+      name: libmbedx509-7
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34875
+    package:
+      name: libmbedx509-7
+      version: 3.6.5-0.1~deb13u1
+  - vulnerability: CVE-2026-34876
+    package:
+      name: libmbedx509-7
+      version: 3.6.5-0.1~deb13u1
+  # libmount1 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: libmount1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: libmount1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: libmount1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: libmount1
+      version: 2.41-5
+  # libpcre2-8-0 10.46-1~deb13u1: attacker-supplied patterns, pcre2_dfa_match, JIT context reuse or 32-bit builds; no pattern from a device or a Git host reaches PCRE2
+  - vulnerability: CVE-2026-103111
+    package:
+      name: libpcre2-8-0
+      version: 10.46-1~deb13u1
+  - vulnerability: CVE-2026-86145
+    package:
+      name: libpcre2-8-0
+      version: 10.46-1~deb13u1
+  - vulnerability: CVE-2026-89157
+    package:
+      name: libpcre2-8-0
+      version: 10.46-1~deb13u1
+  - vulnerability: CVE-2026-89161
+    package:
+      name: libpcre2-8-0
+      version: 10.46-1~deb13u1
+  # libperl5.40 5.40.1-6: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-12087
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-13221
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42496
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42497
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48959
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48961
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48962
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57432
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57433
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-7017
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-8376
+    package:
+      name: libperl5.40
+      version: 5.40.1-6
+  # libpq5 17.10-0+deb13u1: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-14662
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14664
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14668
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14669
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14670
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14671
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14677
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14679
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-14680
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-15741
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-15742
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-16239
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-18408
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-19385
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-6464
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-6471
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  - vulnerability: CVE-2026-6473
+    package:
+      name: libpq5
+      version: 17.10-0+deb13u1
+  # libsmartcols1 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: libsmartcols1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: libsmartcols1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: libsmartcols1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: libsmartcols1
+      version: 2.41-5
+  # libsqlite3-0 3.46.1-7+deb13u1: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-11822
+    package:
+      name: libsqlite3-0
+      version: 3.46.1-7+deb13u1
+  - vulnerability: CVE-2026-11824
+    package:
+      name: libsqlite3-0
+      version: 3.46.1-7+deb13u1
+  # libssh2-1t64 1.11.1-1: loaded by rugged, which oxidized uses only on its local configs.git: the hooks are `exec`, never `githubrepo`, so libgit2 opens no network transport and its SSH and TLS code (libssh2, mbed TLS) never runs
+  - vulnerability: CVE-2026-55199
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-55200
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-58050
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-58051
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-66032
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-66033
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-66034
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-66035
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  - vulnerability: CVE-2026-7598
+    package:
+      name: libssh2-1t64
+      version: 1.11.1-1
+  # libssl3t64 3.5.6-1~deb13u1: Ruby's OpenSSL binding runs net-ssh's ciphers and key exchange; every finding is in QUIC, DTLS, CMS, PKCS#7, PKCS#12, CMP, RPK or SSL_set_SSL_CTX (none of which SSH uses), in the EVP_Cipher() one-shot call (Ruby's Cipher uses EVP_CipherUpdate), or needs an ASN.1 element over 2 GB (an SSH packet is at most 256 KB)
+  - vulnerability: CVE-2026-14456
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-14457
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-18798
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34180
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34181
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34182
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34183
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-42764
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-45445
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-45447
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-54873
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-54874
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63072
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63073
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63075
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63076
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-72897
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-7383
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-75803
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-84782
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-84784
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-9076
+    package:
+      name: libssl3t64
+      version: 3.5.6-1~deb13u1
+  # libuuid1 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: libuuid1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: libuuid1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: libuuid1
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: libuuid1
+      version: 2.41-5
+  # login 1:4.16.0-2+really2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: login
+      version: 1:4.16.0-2+really2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: login
+      version: 1:4.16.0-2+really2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: login
+      version: 1:4.16.0-2+really2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: login
+      version: 1:4.16.0-2+really2.41-5
+  # mount 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: mount
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: mount
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: mount
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: mount
+      version: 2.41-5
+  # openssl 3.5.6-1~deb13u1: Ruby's OpenSSL binding runs net-ssh's ciphers and key exchange; every finding is in QUIC, DTLS, CMS, PKCS#7, PKCS#12, CMP, RPK or SSL_set_SSL_CTX (none of which SSH uses), in the EVP_Cipher() one-shot call (Ruby's Cipher uses EVP_CipherUpdate), or needs an ASN.1 element over 2 GB (an SSH packet is at most 256 KB)
+  - vulnerability: CVE-2026-14456
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-14457
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-18798
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34180
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34181
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34182
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34183
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-42764
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-45445
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-45447
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-54873
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-54874
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63072
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63073
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63075
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63076
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-72897
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-7383
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-75803
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-84782
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-84784
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-9076
+    package:
+      name: openssl
+      version: 3.5.6-1~deb13u1
+  # openssl-provider-legacy 3.5.6-1~deb13u1: Ruby's OpenSSL binding runs net-ssh's ciphers and key exchange; every finding is in QUIC, DTLS, CMS, PKCS#7, PKCS#12, CMP, RPK or SSL_set_SSL_CTX (none of which SSH uses), in the EVP_Cipher() one-shot call (Ruby's Cipher uses EVP_CipherUpdate), or needs an ASN.1 element over 2 GB (an SSH packet is at most 256 KB)
+  - vulnerability: CVE-2026-14456
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-14457
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-18798
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34180
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34181
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34182
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-34183
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-42764
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-45445
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-45447
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-54873
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-54874
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63072
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63073
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63075
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-63076
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-72897
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-7383
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-75803
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-84782
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-84784
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  - vulnerability: CVE-2026-9076
+    package:
+      name: openssl-provider-legacy
+      version: 3.5.6-1~deb13u1
+  # perl 5.40.1-6: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-12087
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-13221
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42496
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42497
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48959
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48961
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48962
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57432
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57433
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-7017
+    package:
+      name: perl
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-8376
+    package:
+      name: perl
+      version: 5.40.1-6
+  # perl-base 5.40.1-6: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-12087
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-13221
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42496
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42497
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48959
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48961
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48962
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57432
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57433
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-7017
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-8376
+    package:
+      name: perl-base
+      version: 5.40.1-6
+  # perl-modules-5.40 5.40.1-6: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-12087
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-13221
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42496
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-42497
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48959
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48961
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-48962
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57432
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-57433
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-7017
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  - vulnerability: CVE-2026-8376
+    package:
+      name: perl-modules-5.40
+      version: 5.40.1-6
+  # ruby-rack 3.1.20-0+deb13u1: oxidized's REST API; reachable only by core on the `oxidized` network, no published port
+  - vulnerability: CVE-2026-34230
+    package:
+      name: ruby-rack
+      version: 3.1.20-0+deb13u1
+  - vulnerability: CVE-2026-34785
+    package:
+      name: ruby-rack
+      version: 3.1.20-0+deb13u1
+  - vulnerability: CVE-2026-34826
+    package:
+      name: ruby-rack
+      version: 3.1.20-0+deb13u1
+  - vulnerability: CVE-2026-34827
+    package:
+      name: ruby-rack
+      version: 3.1.20-0+deb13u1
+  - vulnerability: CVE-2026-34829
+    package:
+      name: ruby-rack
+      version: 3.1.20-0+deb13u1
+  - vulnerability: CVE-2026-34830
+    package:
+      name: ruby-rack
+      version: 3.1.20-0+deb13u1
+  # ruby-rack-session 2.1.1-0.1: oxidized's REST API session store; same as ruby-rack
+  - vulnerability: CVE-2026-39324
+    package:
+      name: ruby-rack-session
+      version: 2.1.1-0.1
+  # util-linux 2.41-5: not loaded by the running oxidized process nor linked by git-remote-https (/proc/<pid>/maps and ldd, 2026-10-27)
+  - vulnerability: CVE-2026-53612
+    package:
+      name: util-linux
+      version: 2.41-5
+  - vulnerability: CVE-2026-53613
+    package:
+      name: util-linux
+      version: 2.41-5
+  - vulnerability: CVE-2026-53614
+    package:
+      name: util-linux
+      version: 2.41-5
+  - vulnerability: CVE-2026-53615
+    package:
+      name: util-linux
+      version: 2.41-5
