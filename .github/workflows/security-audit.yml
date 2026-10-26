@@ -44,3 +44,62 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm audit --audit-level=moderate
       - run: npm audit signatures
+
+  # The container images a deployment runs (ADR-215 decision 2). The two jobs above read Yagra's
+  # lockfiles and nothing else, so the bundled third-party images — oxidized's Ruby gems, nats-server,
+  # nginx, PostgreSQL, wkhtmltopdf inside core — had no one looking at them between releases.
+  #
+  # The list is read out of docker-compose.deploy.yml, the composition a deployment actually runs,
+  # so there is no second list to fall behind it; Yagra's own three are scanned at `:latest`, the
+  # newest published release.
+  #
+  # Grype, not Trivy: trivy-action's tags were rewritten to a secret-stealing build on 2026-03-19
+  # (CVE-2026-33634). And no action at all — a pinned release binary, checked against the sha256
+  # written here, so neither a moved tag nor a replaced asset can change what runs. v0.120.1 was
+  # 20 days old when pinned; security tooling waits 14 days like the crypto crates (ADR-211).
+  #
+  # Red means "a High or Critical with a fixed version exists in an image we ship". Findings with no
+  # fix yet do not fail the run, or it would be red every week and stop being read. A known one
+  # we have decided to wait on is written, with its reason, in .grype.yaml.
+  image-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GRYPE_VERSION: 0.120.1
+      GRYPE_SHA256: 0a9ee97ef5ae2ee953b0a80098105052e846cdbe319a57d808b519c33cd1343d
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install grype (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL -o "/tmp/$tarball" \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/$tarball"
+          echo "${GRYPE_SHA256}  /tmp/$tarball" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin"
+          tar -xzf "/tmp/$tarball" -C "$HOME/.local/bin" grype
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Scan every image the deployment runs
+        run: |
+          set -uo pipefail
+          images=$(grep -E '^\s+image:' docker-compose.deploy.yml \
+            | sed -E 's/^\s+image:\s*//; s/\$\{YAGRA_IMAGE_REPO:-([^}]*)\}/\1/; s/\$\{YAGRA_IMAGE_TAG:-([^}]*)\}/\1/' \
+            | sort -u)
+          # A floor, so a composition that stopped matching cannot pass by scanning nothing.
+          count=$(echo "$images" | grep -c .)
+          if [ "$count" -lt 10 ]; then
+            echo "::error::only $count images found in docker-compose.deploy.yml"; exit 1
+          fi
+          failed=()
+          for image in $images; do
+            echo "::group::$image"
+            if ! grype "registry:$image" --config .grype.yaml --only-fixed --fail-on high -o table; then
+              failed+=("$image")
+            fi
+            echo "::endgroup::"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then
+            printf '::error::High/Critical with a fix available in: %s\n' "${failed[*]}"
+            exit 1
+          fi
+          echo "scanned $count images; none has a fixable High or Critical"

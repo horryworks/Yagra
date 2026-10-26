@@ -257,6 +257,12 @@ fn decode_i64(i: &[u8]) -> Result<i64> {
     if i.len() > mem::size_of::<i64>() {
         return Err(Error::AsnIntOverflow);
     }
+    // Yagra patch (ADR-215): X.690 8.3.1 gives an INTEGER at least one content octet. Upstream
+    // shifted by 64 bits on an empty one — a panic where overflow checks are on, and a silent 0
+    // where they are off.
+    if i.is_empty() {
+        return Err(Error::AsnInvalidLen);
+    }
     let mut bytes = [0u8; 8];
     bytes[(mem::size_of::<i64>() - i.len())..].copy_from_slice(i);
 

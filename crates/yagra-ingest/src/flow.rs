@@ -2846,4 +2846,65 @@ mod tests {
             let _ = parse_sflow(&c);
         }
     }
+
+    /// Broken copies of NetFlow v5, v9 (template and data), IPFIX and sFlow datagrams through every
+    /// flow entry point (ADR-215 decision 3) — UDP 2055 and 6343, no authentication.
+    ///
+    /// The template cache is kept across inputs on purpose: a poisoned template from one datagram
+    /// meeting the data of the next is exactly the shape a hostile exporter would send.
+    #[test]
+    fn mutated_flow_exports_never_panic_or_stall() {
+        let recs = [(
+            Ipv4Addr::new(10, 0, 0, 5),
+            Ipv4Addr::new(8, 8, 8, 8),
+            40000u16,
+            443u16,
+            6u8,
+            5000u64,
+            10u64,
+        )];
+        let v5_rec: Nf5Rec = (
+            Ipv4Addr::new(10, 0, 0, 5),
+            Ipv4Addr::new(8, 8, 8, 8),
+            40000,
+            443,
+            6,
+            0,
+            3,
+            10,
+            5000,
+            65001,
+            65002,
+        );
+        let header = eth(
+            0x0800,
+            &ipv4_tcp(
+                Ipv4Addr::new(10, 0, 0, 5),
+                Ipv4Addr::new(8, 8, 8, 8),
+                12345,
+                443,
+            ),
+            0,
+        );
+        let seeds = vec![
+            nf5_packet(&[v5_rec, v5_rec], 0x4064),
+            nf9_packet(260, &recs),
+            nf9_template_only(261),
+            nf9_orphan_data(262),
+            ipfix_with_sets(&[
+                flow_set(2, &template_record(400, &[(IE_SRC_PORT, 2), (82, 0xFFFF)])),
+                flow_set(400, &[0, 80, 3, b'a', b'b', b'c']),
+            ]),
+            sflow_datagram(SFLOW_FLOW_SAMPLE, false, 1000, 7, 1, &header, 1500),
+            sflow_datagram(SFLOW_FLOW_SAMPLE, true, 512, 9, 1, &header, 64),
+        ];
+        let mut templates = FlowTemplates::new();
+        let exporter = v4(192, 168, 1, 1);
+        let run = crate::fuzzkit::hammer("flow", &seeds, 15_000, 0xf10, |b| {
+            let _ = parse_flow_export(&mut templates, exporter, b);
+            let _ = carries_template_set(b);
+            let _ = parse_sflow(b);
+        });
+        assert!(run > 105_000, "only {run} inputs were run");
+    }
 }

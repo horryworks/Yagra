@@ -20,6 +20,8 @@
 
 ### Security
 
+- **Report PDFs are rendered with JavaScript switched off.** The renderer, `wkhtmltopdf`, is no longer maintained upstream; reports never contained script, and now one missed escape in a device-supplied string cannot run any in it either.
+- **An SNMP trap carrying an empty INTEGER is refused instead of being read as 0.** A broken-input test run against the trap decoder found it; a test build panicked on the same datagram. Anyone who can send UDP to a poller could send one.
 - **Five third-party dependencies are gone, and 26 crates leave the build with them.** The SNMP v2c client, the ICMP pinger and the Redis client are now Yagra's own code; credentials are sealed with the `ring` library Yagra already used, in exactly the format they were stored in (existing credentials open unchanged); and the Prometheus endpoint no longer builds the unused feature that brought in the C library `aws-lc-sys`. This removes the unmaintained `derivative` crate from the build. Three more followed: the support and site bundles write their tar archives themselves, the WebUI loads its Japanese text without `i18next-resources-to-backend`, and `/metrics` is rendered by Yagra's own code; another 13 crates leave the build, among them `rustix` and `raw-cpuid`. Polling behaves as before, with one difference: on a raw ICMP socket, an ICMP error sent by the target itself no longer counts as a reply (the default ping socket never delivered those).
 
 ## v0.3.59 — A device switched on for config backup no longer fails its first fetch

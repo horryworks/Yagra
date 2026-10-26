@@ -402,6 +402,26 @@ table.rs-table td{padding:6px 8px;border-bottom:1px solid #eef1f6}\
 
 #[cfg(test)]
 mod tests {
+    /// The document a report is wrapped in carries no script, and device-supplied text in its
+    /// header cannot add one (ADR-215 decision 1 relies on this: the PDF renderer runs with
+    /// JavaScript off because nothing here needs it).
+    #[test]
+    fn the_report_document_carries_no_script() {
+        let html = super::render_document(
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
+            "javascript:alert(1)",
+            "",
+        );
+        let lower = html.to_ascii_lowercase();
+        assert!(!lower.contains("<script"), "{html}");
+        assert!(!lower.contains("<img"), "{html}");
+        assert!(!super::REPORT_CSS.to_ascii_lowercase().contains("url("));
+        assert!(!super::REPORT_CSS
+            .to_ascii_lowercase()
+            .contains("expression("));
+    }
+
     use super::*;
 
     #[test]

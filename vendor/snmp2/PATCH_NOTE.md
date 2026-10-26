@@ -1,7 +1,7 @@
 # Vendored snmp2 0.5.0 (patched)
 
 Vendored from crates.io `snmp2 = 0.5.0` (MIT OR Apache-2.0, upstream
-https://github.com/roboplc/snmp2) with **four local patches**:
+https://github.com/roboplc/snmp2) with **five local patches**:
 
 - `src/v3.rs`: the six `mac.update(data)` calls in `calculate_hmac` are
   disambiguated to `hmac::Mac::update(&mut mac, data)`. Upstream code is
@@ -28,6 +28,14 @@ https://github.com/roboplc/snmp2) with **four local patches**:
   encodings across every sign and length boundary are pinned by
   `yagra-ingest`'s `integers_encode_minimally_across_every_sign_boundary`
   (this vendored crate is outside the workspace, so its own tests never run).
+- `src/asn1.rs` (ADR-215): **an INTEGER with no content octets is an
+  error, not a shift by 64 bits.** `decode_i64` sign-extended with
+  `(ret << 64) >> 64` for an empty value, which panics where overflow checks are
+  on and silently decodes as 0 where they are off (Yagra's release and ci-fast
+  builds). X.690 8.3.1 requires at least one octet, so it now returns
+  `Error::AsnInvalidLen`. Found by `yagra-ingest`'s
+  `mutated_traps_and_informs_never_panic_or_stall` on a trap whose `error-index`
+  was cut to zero length — reachable by anyone who can send UDP to a poller.
 
 Wired in via `[patch.crates-io]` in the workspace `Cargo.toml`. Drop this
 vendor copy (and the patch entry) once upstream ships a fix.

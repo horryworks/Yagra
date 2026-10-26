@@ -733,4 +733,49 @@ mod tests {
             ));
         }
     }
+
+    /// Broken copies of v1, v2c and inform datagrams through both trap entry points (ADR-215
+    /// decision 3). This is the decoder anyone on the LAN can reach on UDP 162, and it is the
+    /// vendored `snmp2`, whose upstream advisories may not reach us.
+    #[test]
+    fn mutated_traps_and_informs_never_panic_or_stall() {
+        let extra = Oid::from(&[1, 3, 6, 1, 2, 1, 2, 2, 1, 1, 3]).unwrap();
+        let name = Oid::from(&[1, 3, 6, 1, 2, 1, 1, 5, 0]).unwrap();
+        let seeds = vec![
+            v2c_trap_bytes(
+                &[1, 3, 6, 1, 6, 3, 1, 1, 5, 3],
+                vec![
+                    (&extra, Value::Integer(3)),
+                    (&name, Value::OctetString(b"sw-01")),
+                ],
+            ),
+            v2c_trap_bytes(&[1, 3, 6, 1, 4, 1, 9, 9, 41, 2, 0, 1], vec![]),
+            v1_trap_bytes(&[1, 3, 6, 1, 4, 1, 9]),
+            hand_built_inform(0, 0, &[]),
+        ];
+        let run = crate::fuzzkit::hammer("trap", &seeds, 20_000, 0x7a9, |b| {
+            let _ = parse_trap(b);
+            let _ = build_inform_response(b);
+        });
+        assert!(run > 80_000, "only {run} inputs were run");
+    }
+
+    /// The defect the mutation run found first (ADR-215): an INTEGER with no content octets. The
+    /// vendored `snmp2` shifted by 64 bits on it — a panic in a test build, a silent 0 in a release
+    /// one. A v2c trap whose error-index is `02 00` must now be refused, not read.
+    #[test]
+    fn a_zero_length_integer_is_refused_not_read_as_zero() {
+        let mut pdu = Vec::new();
+        pdu.extend(tlv(0x02, &[0x2a])); // request-id 42
+        pdu.extend(tlv(0x02, &[0x00])); // error-status
+        pdu.extend(tlv(0x02, &[])); // error-index with no content octets
+        pdu.extend(tlv(0x30, &[]));
+        let mut message = Vec::new();
+        message.extend(tlv(0x02, &[0x01])); // v2c
+        message.extend(tlv(0x04, b"public"));
+        message.extend(tlv(snmp::MSG_TRAP, &pdu));
+        let datagram = tlv(0x30, &message);
+        assert!(parse_trap(&datagram).is_err());
+        assert!(build_inform_response(&datagram).is_none());
+    }
 }

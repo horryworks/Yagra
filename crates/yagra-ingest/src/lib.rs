@@ -20,6 +20,10 @@ pub mod signature;
 pub mod syslog;
 pub mod trap;
 
+/// Test-only: broken copies of valid datagrams, run through every parser (ADR-215 decision 3).
+#[cfg(test)]
+mod fuzzkit;
+
 pub use flow::{
     carries_template_set, parse_flow_export, parse_sflow, AggregatedFlow, ExporterBatch,
     ExporterBuckets, FlowAggregator, FlowError, FlowTemplates, RawFlow, TemplateStats,

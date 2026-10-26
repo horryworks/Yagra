@@ -394,4 +394,21 @@ mod tests {
         let e = parse_syslog(b"<34>1 2026-07-06T22:14:15Z host app - - [x@1 k=\"v\" msg");
         assert_eq!(e.format, SyslogFormat::Raw);
     }
+
+    /// Broken copies of RFC 5424 and RFC 3164 messages (ADR-215 decision 3) — UDP 514, no
+    /// authentication. The parser is total (it returns an event for any bytes), so what is checked
+    /// is that it neither panics nor stalls, including on invalid UTF-8 cut mid-character.
+    #[test]
+    fn mutated_syslog_never_panics_or_stalls() {
+        let seeds: Vec<Vec<u8>> = vec![
+            b"<165>1 2026-07-06T22:14:15.003Z edge-sw1 chassisd 1234 ID47 [exampleSDID@32473 iut=\"3\" eventSource=\"App\"][b@1 x=\"]\\\"\"] link down on ge-0/0/1".to_vec(),
+            b"<34>1 2026-07-06T22:14:15Z - - - - - disk full".to_vec(),
+            b"<13>Oct 26 01:02:03 sw-01 %LINK-3-UPDOWN: Interface Gi0/1, changed state to down".to_vec(),
+            "<190>2026-10-26 01:02:03 ap-01 日本語のメッセージ".as_bytes().to_vec(),
+        ];
+        let run = crate::fuzzkit::hammer("syslog", &seeds, 20_000, 0x5150, |b| {
+            let _ = parse_syslog(b);
+        });
+        assert!(run > 80_000, "only {run} inputs were run");
+    }
 }

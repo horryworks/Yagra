@@ -690,6 +690,17 @@ async fn export_report_run(
     })
 }
 
+/// The renderer's arguments: what it may do, stated rather than defaulted.
+const WKHTMLTOPDF_ARGS: [&str; 7] = [
+    "--quiet",
+    "--disable-local-file-access",
+    "--disable-javascript",
+    "--encoding",
+    "utf-8",
+    "-", // read HTML from stdin
+    "-", // write PDF to stdout
+];
+
 /// Render HTML to PDF by piping it through `wkhtmltopdf`.
 ///
 /// **The HTML goes in on stdin and the arguments are fixed**, so there is no command injection —
@@ -702,18 +713,15 @@ async fn export_report_run(
 /// used to pass `--enable-local-file-access` for no reason, which is the flag that turns an escape
 /// bug in the (device-supplied) text of a report into a local-file read. Stated rather than left to
 /// the default so it stays off if a future renderer version flips that default back.
+///
+/// **JavaScript is switched off too** (ADR-215 decision 1). A report has no `<script>`, so this
+/// costs nothing; what it buys is that one missed escape in device-supplied text cannot run code in
+/// a 2020 WebKit that will never be patched again — the engine behind CVE-2022-35583's SSRF.
 async fn html_to_pdf(html: &str) -> anyhow::Result<Vec<u8>> {
     use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
     let mut child = Command::new("wkhtmltopdf")
-        .args([
-            "--quiet",
-            "--disable-local-file-access",
-            "--encoding",
-            "utf-8",
-            "-", // read HTML from stdin
-            "-", // write PDF to stdout
-        ])
+        .args(WKHTMLTOPDF_ARGS)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -948,6 +956,22 @@ async fn stream_report_runs(_guard: RequireView, Scoped(scope): Scoped, admin: A
 
 #[cfg(test)]
 mod tests {
+    /// The two things the PDF renderer is never allowed to do, held where a flag change would have
+    /// to delete them (ADR-215 decision 1). `wkhtmltopdf` is abandoned upstream, so its defaults
+    /// are not something to rely on — and an `--enable-*` added later would silently undo either.
+    #[test]
+    fn the_pdf_renderer_reads_no_local_file_and_runs_no_script() {
+        assert!(super::WKHTMLTOPDF_ARGS.contains(&"--disable-local-file-access"));
+        assert!(super::WKHTMLTOPDF_ARGS.contains(&"--disable-javascript"));
+        assert!(
+            !super::WKHTMLTOPDF_ARGS
+                .iter()
+                .any(|a| a.starts_with("--enable")),
+            "{:?}",
+            super::WKHTMLTOPDF_ARGS
+        );
+    }
+
     use super::*;
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};

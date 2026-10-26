@@ -1,0 +1,14 @@
+# Grype configuration for the weekly image scan (.github/workflows/security-audit.yml, ADR-215).
+#
+# Every ignore names the package AND its version, so the same CVE turning up anywhere else — or in
+# a later version of the same image — still fails the run. Each carries why it is waited on and
+# when it can go, the rule deny.toml follows.
+ignore:
+  # CVE-2026-111497 (Brotli decompression heap overflow) in the bundled oxidized/oxidized:0.37.0.
+  # Upstream has published no image with the fixed libbrotli1; the only thing inside that decodes
+  # Brotli is the hook's curl, and its one peer is core. Decided 2026-10-24/25 (ADR-211 decision 5,
+  # exception 1): wait for an upstream release. Remove when the pinned oxidized image moves past it.
+  - vulnerability: CVE-2026-111497
+    package:
+      name: libbrotli1
+      version: 1.1.0-2+b7
