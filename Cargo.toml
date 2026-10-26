@@ -209,10 +209,8 @@ opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", default-features = false, features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
 tracing-opentelemetry = "0.28"
 metrics = "0.24"
-# Only `http-listener` (the poller's :9100 endpoint; core renders `/metrics` through axum). The
-# default set also enables `push-gateway`, which nothing here uses and which was the one path that
-# brought `aws-lc-sys` (a C crypto library) into the build via `hyper-rustls` (ADR-213 decision 1).
-metrics-exporter-prometheus = { version = "0.16", default-features = false, features = ["http-listener"] }
+# The recorder and the Prometheus text are `yagra-telemetry/src/prometheus.rs` (ADR-214 decision 3;
+# `metrics-exporter-prometheus` until then).
 # Webhook ingest-token hashing (already in the tree via the crypto stack)
 sha2 = "0.10"
 # HMAC-SHA256 for stateless signed session tokens (Core HA active/active, ADR-016 Increment 2a).

@@ -41,6 +41,14 @@ use crate::runtime::ratelimit::{charge_window, env_cap};
 use yagra_auth::audit::AuditRepo;
 use yagra_base::repo::NodeRepo;
 
+/// How long one LLM call took, in milliseconds.
+pub(crate) const LLM_LATENCY_METRIC: &str = "yagra_llm_latency_ms";
+/// Its buckets: milliseconds, from a quick local model to a minute-long remote one. The recorder's
+/// defaults are seconds and would put every call in `+Inf` (ADR-214 decision 3).
+pub(crate) const LLM_LATENCY_BUCKETS_MS: &[f64] = &[
+    50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 30_000.0, 60_000.0,
+];
+
 /// Default simultaneous generations (`YAGRA_RCA_MAX_CONCURRENT`). Two, not four: unlike an analysis
 /// this call is billed and leaves the building.
 const DEFAULT_MAX_CONCURRENT: usize = 2;
@@ -543,7 +551,7 @@ impl RcaOrchestrator {
         let result = provider.complete(request).await;
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         let name = provider.name();
-        metrics::histogram!("yagra_llm_latency_ms", "provider" => name).record(elapsed_ms);
+        metrics::histogram!(LLM_LATENCY_METRIC, "provider" => name).record(elapsed_ms);
 
         match result {
             Ok(r) => {

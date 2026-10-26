@@ -66,7 +66,6 @@ rand = { workspace = true }
 similar = { workspace = true }
 async-trait = { workspace = true }
 metrics = { workspace = true }
-metrics-exporter-prometheus = { workspace = true }
 tokio-stream = { workspace = true }
 # Direct NATS client for the Auth Callout responder (`$SYS.REQ.USER.AUTH` request-reply, ADR-030).
 # Already in the tree via yagra-bus's `nats` feature; named directly here for the client handle.

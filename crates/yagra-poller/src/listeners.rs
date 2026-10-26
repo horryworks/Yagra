@@ -768,7 +768,7 @@ mod tests {
     /// A panic inside one datagram's parsing is a counted drop, not a dead reader.
     #[test]
     fn a_panic_inside_one_datagram_is_a_counted_drop() {
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         let (survived, dropped) = metrics::with_local_recorder(&recorder, || {
             register_datagram_panics_at_zero("syslog");

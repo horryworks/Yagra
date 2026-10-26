@@ -26,5 +26,3 @@ tokio-util = { workspace = true }
 metrics = { workspace = true }
 
 [dev-dependencies]
-# Renders the counters a test registered, to check they exist at zero.
-metrics-exporter-prometheus = { workspace = true }

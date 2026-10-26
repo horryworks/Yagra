@@ -407,7 +407,7 @@ pub struct ApiState {
     /// Held here rather than fetched over HTTP by the bundle: core asking itself for its own
     /// `/metrics` would need a URL, a client and a working listener — three things that are broken
     /// exactly when a bundle is being taken.
-    pub metrics: Option<metrics_exporter_prometheus::PrometheusHandle>,
+    pub metrics: Option<yagra_telemetry::prometheus::Handle>,
     /// When this process started. The bundle reports uptime from it, which is how "did core restart
     /// while nobody was looking?" is answered from a bundle taken afterwards.
     pub started: std::time::SystemTime,

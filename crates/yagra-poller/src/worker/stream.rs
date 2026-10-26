@@ -349,20 +349,16 @@ mod tests {
 
     /// The phase histogram reaches the exporter under the name and buckets it was configured with.
     ///
-    /// 🚨 A metric registered under one name and given buckets under another does not fail: this
-    /// exporter silently falls back to a rolling summary, whose quantiles cannot be added up across
-    /// a pool — so the fleet-level question would get a per-poller answer that looks fine. Nothing
-    /// else in the build compares the two spellings, and they sit in different modules because the
-    /// exporter is installed at startup and the metric is recorded in the poll loop.
+    /// 🚨 A metric registered under one name and given buckets under another does not fail: the
+    /// recorder silently falls back to its default buckets, which stop at 300 s with no 30 s edge —
+    /// so the single-flight ceiling this histogram exists to show would vanish into a wide bucket.
+    /// Nothing else in the build compares the two spellings, and they sit in different modules
+    /// because the recorder is installed at startup and the metric is recorded in the poll loop.
+    /// (Before ADR-214 the fallback was a rolling summary, whose quantiles cannot be added up.)
     #[test]
     fn the_phase_histogram_reaches_the_exporter_under_its_own_name_and_buckets() {
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
-            .set_buckets_for_metric(
-                metrics_exporter_prometheus::Matcher::Full(POLL_PHASE_METRIC.to_owned()),
-                POLL_PHASE_BUCKETS,
-            )
-            .expect("the shipped buckets are a valid bucket list")
-            .build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new()
+            .with_buckets(POLL_PHASE_METRIC, POLL_PHASE_BUCKETS);
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || {
             record_phase("snmp_table", "execute", Instant::now());
@@ -371,9 +367,7 @@ mod tests {
 
         assert!(
             rendered.contains("yagra_poll_phase_seconds_bucket"),
-            "no histogram buckets rendered — the name the exporter was configured with and the \
-             name `record_phase` writes to have diverged, and this metric is now a summary:\n\
-             {rendered}"
+            "no histogram buckets rendered for the phase metric:\n{rendered}"
         );
         assert!(
             rendered.contains("phase=\"execute\""),

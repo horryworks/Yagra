@@ -42,6 +42,7 @@
 //! this process can see in its own environment. That catches a credential arriving through a path
 //! nobody anticipated, which is the failure a pattern list cannot describe in advance.
 
+use crate::tar_writer::TarWriter;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
@@ -647,7 +648,7 @@ impl BundleBuilder {
         let manifest_json = serde_json::to_vec_pretty(&manifest)?;
 
         let mtime = u64::try_from(now.timestamp()).unwrap_or(0);
-        let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+        let mut tar = TarWriter::new(flate2::write::GzEncoder::new(
             Vec::new(),
             flate2::Compression::default(),
         ));
@@ -656,7 +657,7 @@ impl BundleBuilder {
         for f in &self.files {
             append(&mut tar, &f.path, &f.bytes, mtime)?;
         }
-        let gz = tar.into_inner()?;
+        let gz = tar.finish()?;
         Ok(gz.finish()?)
     }
 }
@@ -664,16 +665,12 @@ impl BundleBuilder {
 /// Append one entry with an explicit header, so mode and mtime are stated rather than inherited
 /// from a filesystem this data never touched.
 fn append<W: Write>(
-    tar: &mut tar::Builder<W>,
+    tar: &mut TarWriter<W>,
     path: &str,
     bytes: &[u8],
     mtime: u64,
 ) -> std::io::Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_mtime(mtime);
-    tar.append_data(&mut header, path, bytes)
+    tar.append(path, bytes, 0o644, mtime)
 }
 
 /// The human-facing index, written for whoever has to approve the archive leaving the site.

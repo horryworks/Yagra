@@ -835,7 +835,7 @@ mod tests {
     /// after (ADR-158).
     #[test]
     fn template_drops_are_published_by_reason_including_zero() {
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || {
             publish_template_stats(TemplateStats::default());

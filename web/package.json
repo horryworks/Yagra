@@ -24,7 +24,6 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@tanstack/react-virtual": "^3.10.0",
     "i18next": "^26.3.4",
-    "i18next-resources-to-backend": "^1.2.1",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "react-i18next": "^17.0.8",

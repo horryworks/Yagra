@@ -10,13 +10,17 @@
 
 ## Unreleased
 
+### 破壊的変更
+
+- **`/metrics` のヒストグラムが、全部 Prometheus のヒストグラムになった。** core の `/metrics` と poller のポート 9100 は、バケツを指定していないヒストグラムを、時間の窓で回る要約（`{quantile="0.5"}` など）として出していました。今は全部を `_bucket`・`_sum`・`_count` で出します。こちらはポーラーをまたいで足し合わせられます。`yagra_vm_import_seconds`・`yagra_vm_read_seconds`・`yagra_notification_delivery_seconds`・`yagra_topology_derive_seconds`・`yagra_endpoint_sweep_seconds`・`yagra_ldap_bind_duration_seconds`・`yagra_llm_latency_ms` の `quantile` の系列でグラフやアラートを作っている場合は、`histogram_quantile()` に置き換えてください。Yagra 自身は要約を読んでいませんでした。
+
 ### 改善
 
 - **Redis への書き込みは、待ち続けずにあきらめるようになった。** Redis への接続は 5 秒、1 回の書き込みは 10 秒で打ち切ります。失敗したあとは、5 秒たってから次を試します。これまでは、接続を受け付けない Redis に当たると、ポーラーの死活の報告のたびに、OS があきらめるまで待っていました。Redis は今も任意で、無くなっても害はありません。
 
 ### セキュリティ
 
-- **外部の依存を 5 つ外し、組み上がる物から crate が 26 個減った。** SNMP v2c の取得・ICMP の ping・Redis のクライアントは Yagra 自身のコードになりました。資格情報の暗号化は、すでに使っていた `ring` に乗り換えました。保存の形は同じなので、保存済みの資格情報はそのまま開けます。Prometheus の出力部品は、使っていない機能を切りました。その機能が C のライブラリ `aws-lc-sys` を連れてきていました。保守の終わった `derivative` も組み上がる物から消えました。監視の振る舞いは前と同じです。1 つだけ違います: raw の ICMP ソケットでは、監視先の機器自身が返した ICMP エラーを、応答として数えなくなりました（既定の ping ソケットには、もともとエラーは届きません）。
+- **外部の依存を 5 つ外し、組み上がる物から crate が 26 個減った。** SNMP v2c の取得・ICMP の ping・Redis のクライアントは Yagra 自身のコードになりました。資格情報の暗号化は、すでに使っていた `ring` に乗り換えました。保存の形は同じなので、保存済みの資格情報はそのまま開けます。Prometheus の出力部品は、使っていない機能を切りました。その機能が C のライブラリ `aws-lc-sys` を連れてきていました。保守の終わった `derivative` も組み上がる物から消えました。続けて 3 つ外しました。サポートと拠点のバンドルは tar を自分で書き、WebUI は `i18next-resources-to-backend` を使わずに日本語の文言を読み込み、`/metrics` は Yagra 自身のコードが作ります。これでさらに 13 個の crate が消え、その中には `rustix` と `raw-cpuid` があります。監視の振る舞いは前と同じです。1 つだけ違います: raw の ICMP ソケットでは、監視先の機器自身が返した ICMP エラーを、応答として数えなくなりました（既定の ping ソケットには、もともとエラーは届きません）。
 
 ## v0.3.59 — config のバックアップをオンにした直後の取得が、失敗しなくなった
 

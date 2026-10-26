@@ -9,7 +9,7 @@
 
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
-import resourcesToBackend from 'i18next-resources-to-backend';
+import { lazyBackend } from './i18nBackend';
 import { usePrefsStore } from './prefs';
 
 // English namespaces are imported eagerly so they ship in the main chunk (zero extra fetch on the
@@ -87,7 +87,7 @@ void i18n
   // files that `resources` imports eagerly, so Vite keeps English in the main chunk (zero extra
   // fetch on the default path) while still splitting the other languages out. Don't "fix" it by
   // dropping the eager English imports — that would make the default path wait on a fetch.
-  .use(resourcesToBackend((lng: string, ns: string) => import(`./locales/${lng}/${ns}.json`)))
+  .use(lazyBackend((lng, ns) => import(`./locales/${lng}/${ns}.json`)))
   .use(initReactI18next)
   .init({
     lng: usePrefsStore.getState().language, // initial language from the persisted pref

@@ -32,13 +32,15 @@ futures = { workspace = true }
 async-trait = { workspace = true }
 # Compatibility-window arithmetic for the upgrade planner (ADR-050 decision 7).
 semver = { workspace = true }
-# The support bundle and the remote-site bundle are gzipped tar archives.
-tar = { workspace = true }
+# The support bundle and the remote-site bundle are gzipped tar archives. The tar half is written
+# in `tar_writer.rs` (ADR-214 decision 1); `tar` itself is a dev-dependency below.
 flate2 = { workspace = true }
 # The upgrade and relocation views are API responses, so they carry their own JSON Schema.
 utoipa = { workspace = true }
 
 [dev-dependencies]
+# Reads the bundles back in tests, and is what `tar_writer.rs` is compared with byte for byte.
+tar = { workspace = true }
 # `srcread` and the real-PostgreSQL fixtures. Dev-dependencies only, so a release build carries
 # neither.
 yagra-common = { path = "../yagra-common", features = ["test-util"] }

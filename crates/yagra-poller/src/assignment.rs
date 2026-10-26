@@ -177,7 +177,7 @@ async fn run_sync_loop<B, S>(
 /// intervals asked for.
 ///
 /// 🚨 **The call this replaced was wrapped in `if missed > 0`, and that made the series absent
-/// rather than zero.** `metrics-exporter-prometheus` renders only the keys it has been handed at
+/// rather than zero.** The Prometheus recorder renders only the keys it has been handed at
 /// least once, so on a healthy deployment `/metrics` carried no `yagra_poll_cycles_missed_total`
 /// line at all — not even a `# TYPE`. Read on the live poller 2026-09-01, beside
 /// `yagra_poll_deferred_specs 0`, which is a gauge and is therefore set every round. **Absent and
@@ -323,7 +323,7 @@ mod tests {
         );
         assert_eq!(applied, ApplyOutcome::Applied, "the fixture must land");
 
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || publish_working_set_gauges(&ws));
         let rendered = handle.render();
@@ -348,7 +348,7 @@ mod tests {
     ///
     /// 🚨 **This is a regression test for a line that was invisible on the deployment, not for a
     /// wrong number.** The emission used to be wrapped in `if missed > 0`, and
-    /// `metrics-exporter-prometheus` renders only keys it has been handed — so a healthy
+    /// The Prometheus recorder renders only keys it has been handed — so a healthy
     /// poller's `/metrics` had no `yagra_poll_cycles_missed_total` line at all. An operator
     /// reading it saw the same thing they would see if the counter were wired to a branch that
     /// never runs. The assertion is on the **rendered text**, for the same reason the demand
@@ -356,7 +356,7 @@ mod tests {
     /// proves nothing.
     #[test]
     fn a_poller_that_missed_nothing_still_publishes_the_counter() {
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || record_cycles_missed(0));
 
@@ -375,7 +375,7 @@ mod tests {
     /// quiet case.
     #[test]
     fn the_counter_carries_the_number_of_missed_cycles() {
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || {
             record_cycles_missed(0);

@@ -315,7 +315,7 @@ impl ShardBacklog {
 /// Hand every counter this module publishes **only when something goes wrong** to the recorder
 /// once, at zero.
 ///
-/// 🚨 `metrics-exporter-prometheus` renders only the keys it has been handed at least once, so a
+/// 🚨 The Prometheus recorder renders only the keys it has been handed at least once, so a
 /// counter that is first touched by a failure publishes **no line at all** while nothing is
 /// failing — not even a `# TYPE`. Measured on a healthy deployment before this existed: all five
 /// of the counters below were absent, which are precisely the five an operator would alert on.
@@ -449,7 +449,7 @@ pub(crate) fn start_vm_writers(
     for shard in 0..shards {
         let (tx, rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(channel_cap);
         txs.push(tx);
-        // Hand every backlog key to the recorder once, at zero. `metrics-exporter-prometheus`
+        // Hand every backlog key to the recorder once, at zero. The Prometheus recorder
         // renders only keys it has been handed at least once, so a series that first appears when
         // something goes wrong is **absent** on a healthy deployment — the same text as "wired to a
         // branch that never runs". ADR-108 Increment 3 shipped exactly that bug for a whole year.
@@ -1697,7 +1697,7 @@ mod tests {
         let mut result = (*sample_result()).clone();
         result.serial_number = Some("FCW1929B68S".into()); // something for the metadata tier too
 
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || {
             for _ in 0..2 {
@@ -2844,7 +2844,7 @@ mod tests {
     /// **A healthy deployment must publish all four backlog keys, at zero.**
     ///
     /// 🚨 This is the bug ADR-108 Increment 3 shipped for a year, in a different file:
-    /// `metrics-exporter-prometheus` renders only the keys it has been handed at least once, so a
+    /// The Prometheus recorder renders only the keys it has been handed at least once, so a
     /// series that first appears when something goes wrong is **absent** while nothing is wrong —
     /// and "absent" is the same text as "wired to a branch that never runs". An operator cannot
     /// tell those apart, and neither can an alert.
@@ -2853,7 +2853,7 @@ mod tests {
         let fake = Arc::new(FakeStore::new(false));
         let store: Arc<dyn MetricStore> = fake.clone();
         let shutdown = CancellationToken::new();
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = yagra_telemetry::prometheus::Recorder::new();
         let handle = recorder.handle();
         // Registration happens synchronously inside `start_vm_writers`, so the local recorder sees
         // it; anything the spawned writers publish later would not, and this test asserts nothing

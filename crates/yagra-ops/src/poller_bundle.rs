@@ -28,6 +28,7 @@
 //! the way `docker-compose.poller.yml` documents — putting a gigabyte in a browser download to save
 //! one command would make this unusable at the size it is most needed.
 
+use crate::tar_writer::TarWriter;
 use std::io::Write;
 
 /// Everything the archive is built from. Assembled by the API handler; kept as a struct so this
@@ -77,7 +78,7 @@ pub fn build(input: &SiteBundleInput<'_>) -> std::io::Result<Vec<u8>> {
     let env = render_env(input);
     let readme = render_readme(input);
 
-    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+    let mut tar = TarWriter::new(flate2::write::GzEncoder::new(
         Vec::new(),
         flate2::Compression::default(),
     ));
@@ -105,7 +106,7 @@ pub fn build(input: &SiteBundleInput<'_>) -> std::io::Result<Vec<u8>> {
         input.mtime,
         0o644,
     )?;
-    tar.into_inner()?.finish()
+    tar.finish()?.finish()
 }
 
 /// The `.env` that sits beside `docker-compose.poller.yml`.
@@ -256,17 +257,13 @@ fn readme_self_upgrade(on: bool) -> String {
 }
 
 fn append<W: Write>(
-    tar: &mut tar::Builder<W>,
+    tar: &mut TarWriter<W>,
     path: &str,
     bytes: &[u8],
     mtime: u64,
     mode: u32,
 ) -> std::io::Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(mode);
-    header.set_mtime(mtime);
-    tar.append_data(&mut header, path, bytes)
+    tar.append(path, bytes, mode, mtime)
 }
 
 /// A filename for the download. Kept beside the builder so the two agree on the extension.

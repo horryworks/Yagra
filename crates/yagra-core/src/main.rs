@@ -77,7 +77,6 @@ use discover::mib::MibRepo;
 use fleet::coordinator::Coordinator;
 use fleet::pollers::PollerRepo;
 use fleet::volatile::VolatileStore;
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use passive::flowstore::{ChStore, FlowRow, FlowStore};
 use passive::logstore::{LogStore, VlStore};
 use tsdb::sink::InMemorySink;
@@ -91,6 +90,7 @@ use yagra_base::secrets::CredentialStore;
 use yagra_base::{config_gen, groups, neighbors, repo, secrets};
 use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
 use yagra_ops::{poller_logs, relocation, support_bundle, upgrade};
+use yagra_telemetry::prometheus::{Handle as PrometheusHandle, Recorder as PrometheusRecorder};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -158,8 +158,12 @@ async fn main() -> anyhow::Result<()> {
 
     // Self-observability (ADR / monitoring-conventions): install the Prometheus recorder
     // up front so `metrics::counter!` calls anywhere are captured; `/metrics` renders it.
-    let metrics = PrometheusBuilder::new()
-        .install_recorder()
+    let metrics = PrometheusRecorder::new()
+        .with_buckets(
+            rca::orchestrator::LLM_LATENCY_METRIC,
+            rca::orchestrator::LLM_LATENCY_BUCKETS_MS,
+        )
+        .install()
         .map_err(|e| anyhow::anyhow!("install Prometheus recorder: {e}"))?;
     // After the recorder, or the zero goes nowhere (ADR-158).
     yagra_telemetry::register_panic_counter_at_zero();

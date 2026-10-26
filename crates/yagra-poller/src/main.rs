@@ -60,7 +60,6 @@ mod worker;
 mod working_set;
 
 use limiter::PollLimiter;
-use metrics_exporter_prometheus::PrometheusBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -150,25 +149,21 @@ async fn main() -> anyhow::Result<()> {
 
     // Self-observability: expose Prometheus metrics on :9100/metrics (monitoring-conventions).
     //
-    // `yagra_poll_phase_seconds` gets explicit buckets so it renders as a real histogram rather
-    // than this exporter's default rolling summary: quantiles computed per poller cannot be added
-    // up across a pool, and "how is the fleet's polling doing" is a question about the pool. The
-    // range spans one network round trip (5 ms) to the single-flight ceiling (30 s+), because the
-    // distribution this exists to show is bimodal — a probe that answers, and a probe that waits
-    // out a 1 s timeout (ADR-109).
-    let exporter = || PrometheusBuilder::new().with_http_listener(([0, 0, 0, 0], 9100));
-    let builder = match exporter().set_buckets_for_metric(
-        metrics_exporter_prometheus::Matcher::Full(worker::POLL_PHASE_METRIC.to_owned()),
-        worker::POLL_PHASE_BUCKETS,
-    ) {
-        Ok(with_buckets) => with_buckets,
-        Err(e) => {
-            tracing::warn!(error = %e, "poll-phase buckets rejected; exporting a summary instead");
-            exporter()
+    // `yagra_poll_phase_seconds` gets its own buckets, spanning one network round trip (5 ms) to
+    // the single-flight ceiling (30 s+), because the distribution this exists to show is bimodal —
+    // a probe that answers, and a probe that waits out a 1 s timeout (ADR-109). Every histogram is
+    // a real histogram (ADR-214 decision 3), so a pool's polling can be added up across pollers.
+    let recorder = yagra_telemetry::prometheus::Recorder::new()
+        .with_buckets(worker::POLL_PHASE_METRIC, worker::POLL_PHASE_BUCKETS);
+    match recorder.install() {
+        Ok(handle) => {
+            if let Err(e) =
+                yagra_telemetry::prometheus::serve(([0, 0, 0, 0], 9100).into(), handle).await
+            {
+                tracing::warn!(error = %e, "failed to start the metrics listener on :9100");
+            }
         }
-    };
-    if let Err(e) = builder.install() {
-        tracing::warn!(error = %e, "failed to start metrics exporter");
+        Err(e) => tracing::warn!(error = %e, "failed to install the metrics recorder"),
     }
     // After the recorder, or the zero goes nowhere (ADR-158).
     yagra_telemetry::register_panic_counter_at_zero();

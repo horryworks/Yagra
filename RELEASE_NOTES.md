@@ -10,13 +10,17 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **Every histogram on `/metrics` is now a Prometheus histogram.** Core's `/metrics` and the poller's port 9100 used to render a histogram without configured buckets as a summary (`{quantile="0.5"}` and so on, over a rolling window). They now render `_bucket`, `_sum` and `_count` for all of them, which can be added up across pollers. A dashboard or alert built on the `quantile` series of `yagra_vm_import_seconds`, `yagra_vm_read_seconds`, `yagra_notification_delivery_seconds`, `yagra_topology_derive_seconds`, `yagra_endpoint_sweep_seconds`, `yagra_ldap_bind_duration_seconds` or `yagra_llm_latency_ms` should use `histogram_quantile()` instead. Nothing in Yagra itself read the summaries.
+
 ### Improvements
 
 - **The Redis mirror gives up instead of waiting.** Connecting to Redis now times out after 5 seconds and each write after 10; after a failure, core waits 5 seconds before it tries again. Before, a Redis that accepted no connections could hold each poller heartbeat until the operating system gave up. Redis remains optional and its loss is still harmless.
 
 ### Security
 
-- **Five third-party dependencies are gone, and 26 crates leave the build with them.** The SNMP v2c client, the ICMP pinger and the Redis client are now Yagra's own code; credentials are sealed with the `ring` library Yagra already used, in exactly the format they were stored in (existing credentials open unchanged); and the Prometheus endpoint no longer builds the unused feature that brought in the C library `aws-lc-sys`. This removes the unmaintained `derivative` crate from the build. Polling behaves as before, with one difference: on a raw ICMP socket, an ICMP error sent by the target itself no longer counts as a reply (the default ping socket never delivered those).
+- **Five third-party dependencies are gone, and 26 crates leave the build with them.** The SNMP v2c client, the ICMP pinger and the Redis client are now Yagra's own code; credentials are sealed with the `ring` library Yagra already used, in exactly the format they were stored in (existing credentials open unchanged); and the Prometheus endpoint no longer builds the unused feature that brought in the C library `aws-lc-sys`. This removes the unmaintained `derivative` crate from the build. Three more followed: the support and site bundles write their tar archives themselves, the WebUI loads its Japanese text without `i18next-resources-to-backend`, and `/metrics` is rendered by Yagra's own code; another 13 crates leave the build, among them `rustix` and `raw-cpuid`. Polling behaves as before, with one difference: on a raw ICMP socket, an ICMP error sent by the target itself no longer counts as a reply (the default ping socket never delivered those).
 
 ## v0.3.59 — A device switched on for config backup no longer fails its first fetch
 

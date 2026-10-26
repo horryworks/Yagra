@@ -26,6 +26,8 @@ pub mod poller_logs;
 pub mod poller_upgrade;
 pub mod relocation;
 pub mod support_bundle;
+/// Writing a tar archive, the half the bundles need (ADR-214 decision 1).
+mod tar_writer;
 pub mod upgrade;
 
 /// One poller as the live registry last heard it — the part of core's `PollerView` an upgrade

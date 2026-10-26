@@ -35,6 +35,9 @@
 //! * **Disk use is bounded** by [`LOG_RETAIN_ENV`] hours of hourly files, so an unattended
 //!   deployment cannot fill its volume with its own logs.
 
+/// The `metrics` recorder and its Prometheus text (ADR-214 decision 3).
+pub mod prometheus;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -873,7 +876,7 @@ mod tests {
     /// Both panic counters exist at zero before anything has panicked (ADR-108 Increment 3).
     #[tokio::test]
     async fn the_panic_counters_are_published_at_zero() {
-        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let recorder = crate::prometheus::Recorder::new();
         let handle = recorder.handle();
         let token = CancellationToken::new();
         metrics::with_local_recorder(&recorder, || {
