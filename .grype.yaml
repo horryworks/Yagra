@@ -1110,3 +1110,15 @@ ignore:
     package:
       name: util-linux
       version: 2.41-5
+  # Two gem findings that appeared in the second scan (2026-10-27), also out of reach:
+  # erb 4.0.3: the guard bypass needs an ERB object rebuilt by Marshal.load from attacker data;
+  # oxidized unmarshals nothing from outside (the rack session cookie is reachable only by core).
+  - vulnerability: GHSA-q339-8rmv-2mhv
+    package:
+      name: erb
+      version: 4.0.3
+  # net-imap 0.4.19: STARTTLS stripping in Net::IMAP; nothing in the oxidized image speaks IMAP.
+  - vulnerability: GHSA-vcgp-9326-pqcp
+    package:
+      name: net-imap
+      version: 0.4.19
