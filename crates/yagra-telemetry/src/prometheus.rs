@@ -69,12 +69,21 @@ impl GaugeCell {
     fn get(&self) -> f64 {
         f64::from_bits(self.0.load(Ordering::Relaxed))
     }
+    /// A compare-exchange loop rather than `fetch_update`: current stable deprecates that name in
+    /// favour of `try_update`, which the Rust 1.90 the images build with does not have yet, and CI
+    /// lints with `-D warnings` on current stable.
     fn update(&self, f: impl Fn(f64) -> f64) {
-        let _ = self
-            .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
-                Some(f(f64::from_bits(bits)).to_bits())
-            });
+        let mut current = self.0.load(Ordering::Relaxed);
+        loop {
+            let next = f(f64::from_bits(current)).to_bits();
+            match self
+                .0
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 
