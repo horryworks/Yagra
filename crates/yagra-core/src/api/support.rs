@@ -698,6 +698,17 @@ fn add_remote_poller_logs(
             continue;
         }
         said_something = true;
+        // The name came over the bus from another host. The archive writer refuses one that could
+        // leave the extraction directory, and that refusal fails the whole bundle — so a name that
+        // is not one plain file name is left out and said, rather than costing every other file.
+        if !is_plain_file_name(&f.name) {
+            b.omit(
+                format!("logs/remote/ ({})", f.poller_id),
+                "the poller sent a log file whose name is not a plain file name, so it was left out"
+                    .to_owned(),
+            );
+            continue;
+        }
         b.add_bytes(
             &format!("logs/remote/{}", f.name),
             "One rotated hour of a remote-site poller's structured log (JSON lines), sent over the \
@@ -743,6 +754,11 @@ fn add_remote_poller_logs(
             ),
         },
     );
+}
+
+/// One file name and nothing more: no separator of either kind, no NUL, not `.` or `..`.
+fn is_plain_file_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
 }
 
 /// Map assembly failures onto the API envelope.
@@ -1009,6 +1025,43 @@ mod tests {
                 .any(|(what, _)| *what == "logs/remote/"),
             "the section carries files, so it does not need a line saying why it is empty"
         );
+    }
+
+    /// A remote poller's file name is another host's data. One the archive writer would refuse used
+    /// to fail the whole bundle; now that file is left out and named, and the rest still ships.
+    #[test]
+    fn a_remote_log_with_an_unsafe_name_is_left_out_not_fatal() {
+        use yagra_ops::poller_logs::{RemoteLogFile, RemoteLogs};
+
+        let file = |poller: &str, name: &str| RemoteLogFile {
+            poller_id: poller.to_owned(),
+            name: name.to_owned(),
+            bytes: b"{}\n".to_vec(),
+        };
+        let mut b = BundleBuilder::new(6);
+        add_remote_poller_logs(
+            &mut b,
+            RemoteLogs {
+                files: vec![
+                    file("edge-1", "..\\..\\escape.log"),
+                    file("edge-2", "../escape.log"),
+                    file("edge-3", "yagra-poller-edge-3.2026-08-16-10.log"),
+                ],
+                gaps: Vec::new(),
+                asked: 3,
+                answered: 3,
+            },
+            &std::collections::BTreeSet::new(),
+        );
+        assert_eq!(
+            b.paths(),
+            vec!["logs/remote/yagra-poller-edge-3.2026-08-16-10.log"]
+        );
+        let omitted: Vec<&str> = b.omissions().iter().map(|(what, _)| *what).collect();
+        assert!(omitted.contains(&"logs/remote/ (edge-1)"), "{omitted:?}");
+        assert!(omitted.contains(&"logs/remote/ (edge-2)"), "{omitted:?}");
+        b.finish(&SecretScan::patterns_only(), chrono::Utc::now())
+            .expect("the bundle still builds");
     }
 
     async fn send(st: ApiState, token: Option<&str>) -> Response {

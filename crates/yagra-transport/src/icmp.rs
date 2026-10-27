@@ -149,11 +149,13 @@ impl EchoSocket {
             key,
         };
         let packet = echo_request(self.family, ident, seq, payload);
+        // Before the send, not after it: the waiter is already registered, so the receiver can
+        // stamp a fast reply before `send_to` returns, and a later start would read it as 0 ms.
+        let sent = Instant::now();
         self.socket
             .send_to(&packet, SocketAddr::new(target, 0))
             .await
             .map_err(EchoError::Send)?;
-        let sent = Instant::now();
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(arrived)) => Ok(arrived.saturating_duration_since(sent)),
             Ok(Err(_)) => Err(EchoError::Closed),

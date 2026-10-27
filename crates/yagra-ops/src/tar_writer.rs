@@ -13,8 +13,10 @@
 //!   (NUL-terminated), and the real header carries its first 100 bytes;
 //! - data padded to 512-byte blocks, and two zero blocks to end the archive.
 //!
-//! A name that is empty, absolute or contains `..` is refused rather than written: every name here
-//! is chosen by Yagra, so one of those is a defect, and an archive is the wrong place to find out.
+//! A name that is empty, absolute, contains `..`, a backslash or a NUL is refused rather than
+//! written, so no extractor on any platform can be led outside its directory. Most names here are
+//! Yagra's own; the one that is not — a remote poller's log file name — is checked by its caller
+//! first (`api/support.rs`), because a refusal here fails the whole archive.
 
 use std::io::{self, Write};
 

@@ -196,21 +196,27 @@ impl VolatileStore {
     ) -> Option<Vec<crate::fleet::resp::Reply>> {
         let target = self.target.as_ref()?;
         let mut state = self.conn.lock().await;
-        if state.conn.is_none() {
-            if state.retry_at.is_some_and(|at| Instant::now() < at) {
-                return None;
-            }
-            match Connection::open(target, CONNECT_TIMEOUT).await {
-                Ok(c) => state.conn = Some(c),
-                Err(e) => {
-                    self.note_outage(&mut state, &e);
+        // Taken out for the exchange and put back only when it completes: a caller dropped between
+        // the write and the last read would otherwise leave unread replies on the cached
+        // connection, and the next exchange would read them as its own.
+        let mut conn = match state.conn.take() {
+            Some(c) => c,
+            None => {
+                if state.retry_at.is_some_and(|at| Instant::now() < at) {
                     return None;
                 }
+                match Connection::open(target, CONNECT_TIMEOUT).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.note_outage(&mut state, &e);
+                        return None;
+                    }
+                }
             }
-        }
-        let conn = state.conn.as_mut()?;
+        };
         match conn.exchange(&commands, EXCHANGE_TIMEOUT).await {
             Ok(replies) => {
+                state.conn = Some(conn);
                 state.retry_at = None;
                 if self.outage_logged.swap(false, Ordering::Relaxed) {
                     tracing::info!("Redis recovered — poller state mirroring resumed");
@@ -368,6 +374,29 @@ mod tests {
         assert_eq!(block[2][1], b"yagra:assign:lab");
         assert_eq!(block[2][3], b"edge-1");
         assert_eq!(text(block), ["MULTI", "DEL", "HSET", "EXEC"]);
+    }
+
+    /// A caller dropped mid-exchange must not leave the connection cached with its replies unread —
+    /// the next exchange would read them as its own.
+    #[tokio::test]
+    async fn an_exchange_abandoned_mid_reply_does_not_keep_the_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accepts, reads the request, and never answers.
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 64];
+            let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await;
+            std::future::pending::<()>().await;
+        });
+        let store = VolatileStore::from_url(&format!("redis://127.0.0.1:{port}"));
+        let abandoned = tokio::time::timeout(Duration::from_millis(200), store.healthy()).await;
+        assert!(abandoned.is_err(), "the caller gave up before any reply");
+        assert!(
+            store.conn.lock().await.conn.is_none(),
+            "a connection with a reply still owed was put back"
+        );
+        server.abort();
     }
 
     /// A Redis that is down costs one connection attempt per backoff window, not one per call.

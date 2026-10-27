@@ -16,11 +16,11 @@
 //! A metric with no buckets of its own gets [`DEFAULT_BUCKETS`]; give it its own with
 //! [`Recorder::with_buckets`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use metrics::{
@@ -43,9 +43,9 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 struct Registry {
-    counters: Mutex<HashMap<Key, Arc<CounterCell>>>,
-    gauges: Mutex<HashMap<Key, Arc<GaugeCell>>>,
-    histograms: Mutex<HashMap<Key, Arc<HistogramCell>>>,
+    counters: Cells<CounterCell>,
+    gauges: Cells<GaugeCell>,
+    histograms: Cells<HistogramCell>,
     buckets: HashMap<String, Vec<f64>>,
 }
 
@@ -177,18 +177,15 @@ impl metrics::Recorder for Recorder {
     fn describe_histogram(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
 
     fn register_counter(&self, key: &Key, _: &Metadata<'_>) -> Counter {
-        let mut map = lock(&self.registry.counters);
-        Counter::from_arc(Arc::clone(map.entry(key.clone()).or_default()))
+        Counter::from_arc(self.registry.counters.get_or_insert(key, Arc::default))
     }
 
     fn register_gauge(&self, key: &Key, _: &Metadata<'_>) -> Gauge {
-        let mut map = lock(&self.registry.gauges);
-        Gauge::from_arc(Arc::clone(map.entry(key.clone()).or_default()))
+        Gauge::from_arc(self.registry.gauges.get_or_insert(key, Arc::default))
     }
 
     fn register_histogram(&self, key: &Key, _: &Metadata<'_>) -> Histogram {
-        let mut map = lock(&self.registry.histograms);
-        let cell = map.entry(key.clone()).or_insert_with(|| {
+        Histogram::from_arc(self.registry.histograms.get_or_insert(key, || {
             let bounds = self
                 .registry
                 .buckets
@@ -203,13 +200,46 @@ impl metrics::Recorder for Recorder {
                 }),
                 bounds,
             })
-        });
-        Histogram::from_arc(Arc::clone(cell))
+        }))
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
+/// One kind's series, keyed by name and labels.
+///
+/// ⚠️ **Every `counter!`/`gauge!`/`histogram!` call registers** — the `metrics` macros look the
+/// series up on each invocation, on the poll and ingest paths too — so the lookup takes a read lock
+/// and clones nothing; only a series seen for the first time takes the write lock and its key.
+struct Cells<T>(RwLock<HashMap<Key, Arc<T>>>);
+
+impl<T> Default for Cells<T> {
+    fn default() -> Self {
+        Self(RwLock::default())
+    }
+}
+
+impl<T> Cells<T> {
+    fn get_or_insert(&self, key: &Key, make: impl FnOnce() -> Arc<T>) -> Arc<T> {
+        if let Some(cell) = self
+            .0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)
+        {
+            return Arc::clone(cell);
+        }
+        let mut map = self.0.write().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(map.entry(key.clone()).or_insert_with(make))
+    }
+
+    /// Every series as it stands, so a render formats them without holding the lock.
+    fn snapshot(&self) -> Vec<(Key, Arc<T>)> {
+        self.0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(k, c)| (k.clone(), Arc::clone(c)))
+            .collect()
+    }
 }
 
 impl Handle {
@@ -218,16 +248,16 @@ impl Handle {
     pub fn render(&self) -> String {
         // name -> (type, lines). Sorted by name, then by the rendered label set, so the output is
         // stable from one scrape to the next.
-        let mut families: Vec<(String, &'static str, Vec<String>)> = Vec::new();
-        let mut push = |name: String, kind: &'static str, line: String| match families
-            .iter_mut()
-            .find(|(n, _, _)| *n == name)
-        {
-            Some((_, _, lines)) => lines.push(line),
-            None => families.push((name, kind, vec![line])),
+        let mut families: BTreeMap<String, (&'static str, Vec<String>)> = BTreeMap::new();
+        let mut push = |name: String, kind: &'static str, line: String| {
+            families
+                .entry(name)
+                .or_insert((kind, Vec::new()))
+                .1
+                .push(line);
         };
 
-        for (key, cell) in lock(&self.registry.counters).iter() {
+        for (key, cell) in &self.registry.counters.snapshot() {
             let name = metric_name(key.name());
             let line = format!(
                 "{name}{} {}",
@@ -236,12 +266,12 @@ impl Handle {
             );
             push(name, "counter", line);
         }
-        for (key, cell) in lock(&self.registry.gauges).iter() {
+        for (key, cell) in &self.registry.gauges.snapshot() {
             let name = metric_name(key.name());
             let line = format!("{name}{} {}", labels(key, None), number(cell.get()));
             push(name, "gauge", line);
         }
-        for (key, cell) in lock(&self.registry.histograms).iter() {
+        for (key, cell) in &self.registry.histograms.snapshot() {
             let name = metric_name(key.name());
             let s = cell
                 .state
@@ -269,9 +299,8 @@ impl Handle {
             push(name, "histogram", text);
         }
 
-        families.sort_by(|a, b| a.0.cmp(&b.0));
         let mut out = String::new();
-        for (name, kind, mut lines) in families {
+        for (name, (kind, mut lines)) in families {
             lines.sort();
             let _ = writeln!(out, "# TYPE {name} {kind}");
             for line in lines {
@@ -420,6 +449,34 @@ mod tests {
     fn rendered(recorder: &Recorder, f: impl FnOnce()) -> String {
         metrics::with_local_recorder(recorder, f);
         recorder.handle().render()
+    }
+
+    /// Every macro call registers again, so a second call must find the cell the first made — from
+    /// several threads at once, the shape the poll and ingest paths have.
+    #[test]
+    fn a_series_registered_again_and_concurrently_is_one_cell() {
+        let r = Arc::new(Recorder::new());
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let r = Arc::clone(&r);
+                std::thread::spawn(move || {
+                    metrics::with_local_recorder(&*r, || {
+                        for _ in 0..1_000 {
+                            metrics::counter!("yagra_results_total", "shard" => "0").increment(1);
+                        }
+                    });
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let text = r.handle().render();
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("yagra_results_total"))
+            .collect();
+        assert_eq!(lines, ["yagra_results_total{shard=\"0\"} 8000"], "{text}");
     }
 
     #[test]
