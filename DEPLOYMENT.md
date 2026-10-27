@@ -39,6 +39,7 @@ Yagra is two long-running binaries plus a static WebUI, backed by five stores pl
 | Port (container/bind) | Host default | Env | Purpose | Exposed? |
 |---|---|---|---|---|
 | `8080` | `8080` | `YAGRA_API_ADDR` (native) / `YAGRA_API_PORT` + `YAGRA_API_BIND` (compose) | core northbound API + `/metrics` — **plaintext** | yes |
+| `8090` | — | `YAGRA_INTERNAL_ADDR` | core's internal listener: `/internal/*` only, for the bundled oxidized | **never** |
 | `8080` (web nginx) | **`443`** | `YAGRA_WEB_PORT` | WebUI — **HTTPS** (`YAGRA_WEB_TLS`) | yes |
 | `1514/udp` | `514` | `YAGRA_SYSLOG_BIND` / `YAGRA_SYSLOG_PORT` | syslog intake (poller) | opt-in |
 | `1162/udp` | `162` | `YAGRA_TRAP_BIND` / `YAGRA_TRAP_PORT` | SNMP trap intake (poller) | opt-in |
@@ -472,6 +473,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | **API & security** | | |
 | `YAGRA_KEK_FILE` | unset ⇒ ephemeral dev key | Path to the mounted 32-byte key-encryption key |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` bind address |
+| `YAGRA_INTERNAL_ADDR` | `0.0.0.0:8090` | Internal listener for `/internal/*` (the bundled oxidized); empty ⇒ not opened. Never publish it |
 | `YAGRA_ADMIN_PASSWORD` | unset ⇒ one-time random (logged) | Bootstrap `admin` password, first boot only |
 | **Polling & notifications** | | |
 | `YAGRA_POLL_INTERVAL_SECS` | `300` (clamp 10–3600) | Initial default poll interval (seeded on first boot; DB-authoritative after) |

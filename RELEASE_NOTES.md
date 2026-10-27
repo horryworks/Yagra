@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.61 — The bundled oxidized's routes leave the LAN-facing port, lists keep their order after an edit, and the bundled stores move to newer versions
+
 ### Improvements
 
 - **The maker behind a MAC address knows the newest registrations.** The IEEE registry compiled into Yagra was refreshed (16 more assignments).

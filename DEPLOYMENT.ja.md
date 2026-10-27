@@ -39,6 +39,7 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 5 つのスト�
 | ポート（コンテナ/バインド） | ホスト既定 | 環境変数 | 用途 | 公開? |
 |---|---|---|---|---|
 | `8080` | `8080` | `YAGRA_API_ADDR`（ネイティブ）/ `YAGRA_API_PORT` + `YAGRA_API_BIND`（compose） | core 北向き API + `/metrics` — **平文** | する |
+| `8090` | — | `YAGRA_INTERNAL_ADDR` | core の内部の窓口: `/internal/*` だけ（同梱の oxidized 用） | **しない** |
 | `8080`（web nginx） | **`443`** | `YAGRA_WEB_PORT` | WebUI — **HTTPS**（`YAGRA_WEB_TLS`） | する |
 | `1514/udp` | `514` | `YAGRA_SYSLOG_BIND` / `YAGRA_SYSLOG_PORT` | syslog 受信（poller） | 任意 |
 | `1162/udp` | `162` | `YAGRA_TRAP_BIND` / `YAGRA_TRAP_PORT` | SNMP トラップ受信（poller） | 任意 |
@@ -465,6 +466,7 @@ export RUST_LOG=info
 | **API とセキュリティ** | | |
 | `YAGRA_KEK_FILE` | 未設定 ⇒ 一時 dev 鍵 | マウントした 32 バイト鍵ファイルへのパス |
 | `YAGRA_API_ADDR` | `0.0.0.0:8080` | API + `/metrics` のバインドアドレス |
+| `YAGRA_INTERNAL_ADDR` | `0.0.0.0:8090` | `/internal/*`（同梱の oxidized）の内部の窓口。空なら開かない。公開しないこと |
 | `YAGRA_ADMIN_PASSWORD` | 未設定 ⇒ 一度限りのランダム値（ログ出力） | ブートストラップ `admin` パスワード（初回起動のみ） |
 | **ポーリングと通知** | | |
 | `YAGRA_POLL_INTERVAL_SECS` | `300`（10–3600 にクランプ） | 初期の既定ポーリング間隔（初回起動でシード。以後は DB が権威） |
