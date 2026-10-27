@@ -341,7 +341,7 @@ services:
     # never lose or corrupt data" a top-tier policy. A floating tag lets an unrelated `docker
     # compose pull` swap the storage engine underneath it, which is the same class of trap as the
     # `rust:<x>-slim` GLIBC pin documented in CLAUDE.md. Bump this deliberately, with a backup.
-    image: victoriametrics/victoria-metrics:v1.148.0
+    image: victoriametrics/victoria-metrics:v1.154.0
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
@@ -355,7 +355,7 @@ services:
   # back from /flags but cannot set it (ADR-040). Internal only (port 9428, no host mapping).
   victorialogs:
     # Pinned for the same reason as victoriametrics above.
-    image: victoriametrics/victoria-logs:v1.52.0
+    image: victoriametrics/victoria-logs:v1.53.0
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
     volumes:
       - vldata:/victoria-logs-data
@@ -367,7 +367,7 @@ services:
   # (:8123). Internal only (no host mapping). ClickHouse is I/O + page-cache heavy — split it onto
   # a dedicated VM/node pool at scale (change YAGRA_CLICKHOUSE_URL only).
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:26.8
     environment:
       # Single-node MVP: the default user, no password, reachable from the internal network.
       CLICKHOUSE_SKIP_USER_SETUP: "1"
@@ -377,9 +377,12 @@ services:
       - chdata:/var/lib/clickhouse
     # Bound ClickHouse's OWN telemetry (ADR-031 Increment 4) — see docker-compose.deploy.yml for
     # the measured numbers and for why this is a `configs:` entry and not a volume over config.d.
+    # Keep the on-disk format 24.8 can open (ADR-211) — see docker-compose.deploy.yml.
     configs:
       - source: clickhouse-telemetry
         target: /etc/clickhouse-server/config.d/yagra-telemetry.xml
+      - source: clickhouse-downgradable
+        target: /etc/clickhouse-server/config.d/yagra-downgradable.xml
     restart: unless-stopped
 
   # ── IP→ASN dataset updater (ADR-031 Increment 3; optional, off by default) ──
@@ -465,6 +468,14 @@ configs:
           <part_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></part_log>
           <processors_profile_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></processors_profile_log>
           <error_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></error_log>
+      </clickhouse>
+  clickhouse-downgradable:
+    content: |
+      <clickhouse>
+          <merge_tree>
+              <write_marks_for_substreams_in_compact_parts>0</write_marks_for_substreams_in_compact_parts>
+              <serialization_info_version>basic</serialization_info_version>
+          </merge_tree>
       </clickhouse>
 
 volumes:

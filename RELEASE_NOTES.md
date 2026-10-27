@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The maker behind a MAC address knows the newest registrations.** The IEEE registry compiled into Yagra was refreshed (16 more assignments).
+
 ### Bug Fixes
 
 - **Acting on a row no longer moves it out of sight.** On Nodes ▸ Missing IP prefixes, marking a gap as intentional (or reopening one) re-read the list in the server's order — most open gaps first — so the site just worked on dropped down the table, often off screen, while it stayed expanded. Troubleshoot ▸ Scheduled and Reports ▸ Schedules did the same after a schedule was edited, because those lists are ordered by the next run and an edit moves it; on Reports the 30-second refresh also reshuffled the list after every run. A re-read now keeps the rows in the order on screen, with new rows at the end. The server's order comes back when the page is opened, when the view, tab, kind or search changes on Missing IP prefixes, and when the tab changes on Reports.
@@ -17,6 +21,7 @@
 ### Security
 
 - **The bundled oxidized's routes are no longer reachable from the LAN.** `/internal/oxidized/*` return device logins and the config-backup destination's token or private key to the bundled oxidized, and they were served on core's port 8080 — which is published on the LAN — guarded by the source token alone. They now answer only on a second, unpublished port (8090, `YAGRA_INTERNAL_ADDR`) that serves nothing else, and port 8080 answers 404 for them. The bundled oxidized is pointed at the new port by the upgrade itself and restarts once. `/api/v1`, `/mcp` and `/metrics` on port 8080 are unchanged.
+- **The bundled stores move to versions without the known vulnerabilities in their images:** VictoriaMetrics v1.148.0 → v1.154.0, VictoriaLogs v1.52.0 → v1.53.0, ClickHouse 24.8 → 26.8. None of the advisories reaches Yagra the way it uses these stores. All three were checked on a lab deployment's own data: the stored numbers read back the same after the upgrade, and the previous release still starts on the upgraded data. ClickHouse is told to keep writing the on-disk format 24.8 reads, without which a rollback would leave the flow store unable to start. Because the VictoriaMetrics image changes, this upgrade's backup includes a metrics snapshot, so it takes a few minutes longer than usual.
 
 ## v0.3.60 — Fewer third-party dependencies: SNMP, ICMP, Redis and /metrics are now Yagra's own code
 

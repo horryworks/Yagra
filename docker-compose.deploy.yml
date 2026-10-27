@@ -761,7 +761,7 @@ services:
     # deliberately, with a backup. Settings > Upgrade takes that backup by itself: a release whose
     # line here differs from the running image is the one upgrade that snapshots the metrics
     # (ADR-050 decision 22). Keep it a plain unquoted `image:` line — that is what it reads.
-    image: victoriametrics/victoria-metrics:v1.148.0
+    image: victoriametrics/victoria-metrics:v1.154.0
     # Retention (months). This flag is the ONLY way to change it: VictoriaMetrics has no runtime
     # retention API, so Yagra reports this value (read back from /flags) but cannot set it —
     # ADR-040. Edit here, then `up -d victoriametrics` to recreate just this container.
@@ -774,7 +774,7 @@ services:
   # 30-day retention. The 90-day must-preserve subset is the alert-linked rows in PostgreSQL.
   victorialogs:
     # Pinned for the same reason as victoriametrics above.
-    image: victoriametrics/victoria-logs:v1.52.0
+    image: victoriametrics/victoria-logs:v1.53.0
     # As with victoriametrics: this flag is the only way to change retention (no runtime API), so
     # Yagra reports it from /flags but cannot set it (ADR-040).
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
@@ -786,7 +786,7 @@ services:
   # 1-month TTL (loss-tolerant tier). core creates the schema on startup and writes over HTTP :8123.
   # Internal only. I/O + page-cache heavy — split onto a dedicated node at scale (URL change only).
   clickhouse:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:26.8
     environment:
       CLICKHOUSE_SKIP_USER_SETUP: "1"
     ulimits:
@@ -804,9 +804,18 @@ services:
     # `config.d/docker_related_config.xml` — which is what sets `listen_host`. Wiping that leaves
     # ClickHouse listening on loopback only, i.e. the flow store silently unreachable. A `configs:`
     # entry lands one file and leaves the directory alone. It also needs no checkout on the host.
+    #
+    # 🚨 `clickhouse-downgradable` keeps the on-disk format one the previous release's 24.8 can
+    # open (ADR-211). Left at their defaults, 26.8 writes `.mrk4` marks and a new
+    # `serialization.json` into every part it creates — its own system log tables included — and
+    # 24.8 then refuses to attach the flow tables at all: rolling back to v0.3.60 would leave the
+    # flow store in a restart loop. Measured on a lab deployment, 2026-10-27, both ways. Remove it
+    # only when no supported rollback target still runs 24.8.
     configs:
       - source: clickhouse-telemetry
         target: /etc/clickhouse-server/config.d/yagra-telemetry.xml
+      - source: clickhouse-downgradable
+        target: /etc/clickhouse-server/config.d/yagra-downgradable.xml
     restart: unless-stopped
 
   # IP→ASN dataset updater (ADR-031) — keeps the offline enrichment table fresh, entirely in Docker
@@ -1971,6 +1980,14 @@ configs:
           <part_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></part_log>
           <processors_profile_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></processors_profile_log>
           <error_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></error_log>
+      </clickhouse>
+  clickhouse-downgradable:
+    content: |
+      <clickhouse>
+          <merge_tree>
+              <write_marks_for_substreams_in_compact_parts>0</write_marks_for_substreams_in_compact_parts>
+              <serialization_info_version>basic</serialization_info_version>
+          </merge_tree>
       </clickhouse>
 
 networks:
