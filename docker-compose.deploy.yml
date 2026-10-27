@@ -594,7 +594,7 @@ services:
       # hour of a poller that has since died, which is the case no bus request can ever answer.
       - logdata:/var/log/yagra
     cap_add:
-      - NET_RAW        # required for raw-socket ICMP (surge-ping)
+      - NET_RAW        # required for raw-socket ICMP
     restart: unless-stopped
 
   # ── Yagra-web (web/) — WebUI, and the deployment's TLS edge ──

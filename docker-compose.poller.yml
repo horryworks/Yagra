@@ -62,7 +62,7 @@ services:
     # interfaces directly. Because of this, no `ports:` mapping is used or needed.
     network_mode: host
     cap_add:
-      - NET_RAW        # raw-socket ICMP (surge-ping) — granted to this poller only
+      - NET_RAW        # raw-socket ICMP — granted to this poller only
     environment:
       # ── Required ──────────────────────────────────────────────────────────────────
       # Central bus URL. A remote site crosses a trust boundary ⇒ TLS + auth mandatory.

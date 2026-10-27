@@ -248,7 +248,7 @@ services:
     # Event→node correlation keys on the source IP — if it's rewritten, run the poller
     # with `network_mode: host` instead of the port mappings above.
     cap_add:
-      - NET_RAW        # required for raw-socket ICMP (surge-ping)
+      - NET_RAW        # required for raw-socket ICMP
     volumes:
       # Store-and-forward spill (Phase 3) — persists the buffer across poller restarts.
       - pollerbuf:/var/lib/yagra/buffer

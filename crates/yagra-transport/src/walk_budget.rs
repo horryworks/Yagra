@@ -28,7 +28,8 @@
 //! ## 🚨 Why counting consecutive failures is safe
 //!
 //! It rests on a property of the client, and the whole design is wrong without it: **a column the
-//! device does not implement is not a failure.** `csnmp`'s `walk_bulk` walks out of the subtree,
+//! device does not implement is not a failure.** The v2c walker (`snmp.rs`, which keeps what `csnmp`'s
+//! `walk_bulk` did before ADR-213) walks out of the subtree,
 //! finds nothing, issues one `GET` on the column base, and **swallows `noSuchObject` /
 //! `noSuchInstance`, returning `Ok(empty)`**. The v3 walker reaches the same place through
 //! `EndOfMibView` / `NoSuchObject` varbind values, which end that column normally.

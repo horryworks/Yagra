@@ -9,10 +9,10 @@
 //!
 //! ## Three things about this file are load-bearing, not style
 //!
-//! 1. 🚨 **One socket per address, bound to that address. Never `0.0.0.0`.** `csnmp` does not
-//!    connect its socket — it compares the datagram's source against the target it asked and
-//!    **silently discards a mismatch**, then loops until the 2 s budget is gone
-//!    (`csnmp-0.5.0/src/client.rs:468`). A wildcard listener replies from whatever address routing
+//! 1. 🚨 **One socket per address, bound to that address. Never `0.0.0.0`.** The v2c client
+//!    connects its socket to the target (`yagra-transport/src/snmp_v2c.rs`), so the kernel
+//!    **silently discards a datagram from any other source**, and the client waits out its 2 s
+//!    budget. A wildcard listener replies from whatever address routing
 //!    picks, so every poll times out and the failure reads as "the poller is slow", not "the rig is
 //!    wrong". Same bind-per-source shape as `event_firehose.rs` / `trap_firehose.rs`, with a fixed
 //!    port instead of an ephemeral one.
@@ -830,7 +830,7 @@ mod tests {
     }
 
     /// A GETBULK for one column returns that column's rows in order, capped at max-repetitions —
-    /// the exact shape `csnmp::walk_bulk` sends for every table column.
+    /// the exact shape the v2c walker sends for every table column.
     #[test]
     fn getbulk_pages_a_column_the_way_the_walker_asks() {
         let mib = mib24();
