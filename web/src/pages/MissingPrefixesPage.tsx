@@ -23,6 +23,7 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { useLoad } from '../lib/useLoad';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useStableOrder } from '../lib/stableOrder';
 import { columnLabels } from '../lib/listToolbar';
 import { saveBlob } from '../lib/download';
 import { nodeHref, nodesPageHref } from '../lib/entityHref';
@@ -65,6 +66,7 @@ const GAP_COLS_ACT = `${GAP_COLS} 180px`;
 /** What the view not on screen is given — one identity, so its memos do not re-run. */
 const NO_SITES: SiteRow[] = [];
 const NO_SUBNETS: SubnetRow[] = [];
+const NO_SITE_ANSWERS: SitePrefixGaps[] = [];
 
 export function MissingPrefixesPage() {
   const { t } = useTranslation('monitoring');
@@ -89,12 +91,24 @@ export function MissingPrefixesPage() {
   const { data, loading, reload } = load;
 
   const filter = useMemo(() => ({ kind, q }), [kind, q]);
+  // The server puts the sites with the most open gaps first, and marking one lowers that count, so
+  // the re-read after a mark keeps the order on screen (ADR-216). It is taken afresh when the
+  // operator changes what the list shows.
+  const orderedSites = useStableOrder(
+    data?.sites ?? NO_SITE_ANSWERS,
+    siteKey,
+    `${view}|${tab}|${kind ?? ''}|${q}`,
+  );
+  const ordered = useMemo(
+    () => (data ? { ...data, sites: orderedSites } : null),
+    [data, orderedSites],
+  );
   // Only the view on screen builds and filters its rows; the subnet list is sorted once per
   // answer and filtered per keystroke (ADR-170 Inc.3). `gapRows` is still built in the site view
   // because Export CSV saves it from either view, and filtering it is linear.
   const siteRows = useMemo(
-    () => (view === 'site' ? sitesOn(data, tab, filter, nodeName) : NO_SITES),
-    [view, data, tab, filter, nodeName],
+    () => (view === 'site' ? sitesOn(ordered, tab, filter, nodeName) : NO_SITES),
+    [view, ordered, tab, filter, nodeName],
   );
   const allSubnets = useMemo(() => allSubnetRows(data), [data]);
   const gapRows = useMemo(

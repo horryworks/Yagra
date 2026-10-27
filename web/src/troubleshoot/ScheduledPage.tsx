@@ -26,6 +26,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
 import { useLoad } from '../lib/useLoad';
+import { useStableOrder } from '../lib/stableOrder';
 import { scheduleFilters } from './scheduleFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -143,7 +144,7 @@ export function ScheduledPage() {
   const canWrite = useCan('ack_alerts');
 
   const {
-    data: rows,
+    data: answer,
     block,
     error,
     loading,
@@ -153,6 +154,9 @@ export function ScheduledPage() {
     enabled: authed,
     errorFallback: t('schedule.err.load'),
   });
+  // The server lists the next run first, and saving a schedule moves its next run, so the re-read
+  // after a save keeps the order on screen (ADR-216). Opening the page orders it afresh.
+  const rows = useStableOrder(answer, (s) => s.id, '');
 
   useEffect(() => {
     if (!authed) return;

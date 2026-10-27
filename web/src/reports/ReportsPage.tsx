@@ -43,8 +43,10 @@ import { RUN_STATUS } from './runStatus';
 import { ReportBuilder } from './ReportBuilder';
 import { ReportViewer } from './ReportViewer';
 import { ScheduleModal } from './ScheduleModal';
+import { useStableOrder } from '../lib/stableOrder';
 import './reports.css';
 
+const NO_SCHEDULES: ReportSchedule[] = [];
 
 /** Status chip for a run (live progress while generating). Read from the registry rather than a
  *  switch, so a state added to the backend cannot fall through to "failed" — see `runStatus.ts`. */
@@ -117,7 +119,10 @@ export function ReportsPage() {
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
-  const schedules: ReportSchedule[] = scheds.data ?? [];
+  // The server lists the next run first, so a save — and every run, which the 30-second poll then
+  // reads — moves a schedule. The re-read keeps the order on screen; switching tabs takes it
+  // afresh (ADR-216).
+  const schedules: ReportSchedule[] = useStableOrder(scheds.data ?? NO_SCHEDULES, (s) => s.id, tab);
   // A first read that failed has no answer yet, and "none yet" is an answer. `usePolled` keeps
   // the last good data and asks again on its interval, so this only covers the gap before the
   // first success — which is exactly when these tabs told an operator to create what they had.

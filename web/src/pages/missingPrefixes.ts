@@ -96,7 +96,8 @@ function gapsOfTab(tab: SiteGapStatus): GapStatus | null {
 
 /** The sites on one tab. On the gaps and intentional tabs a site with nothing left after the
  *  filter drops out; the other tabs hold no gaps, so there the term matches the site's name and
- *  folders only, and a kind tile does not apply. The server already orders the sites. */
+ *  folders only, and a kind tile does not apply. The sites keep the order `view.sites` has — the
+ *  server's, or the one the screen kept across a re-read (ADR-216). */
 export function sitesOn(
   view: PrefixGapSitesView | null,
   tab: SiteGapStatus,
