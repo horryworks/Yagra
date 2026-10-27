@@ -23,6 +23,24 @@ pub(crate) fn api_addr_from_env() -> String {
     std::env::var("YAGRA_API_ADDR").unwrap_or_else(|_| DEFAULT_API_ADDR.to_owned())
 }
 
+/// Default address of the internal listener (ADR-217): `/internal/*` only, for the bundled oxidized.
+/// The composition never publishes it, which is what keeps those routes off the LAN.
+pub(crate) const DEFAULT_INTERNAL_ADDR: &str = "0.0.0.0:8090";
+
+/// `YAGRA_INTERNAL_ADDR`, or [`DEFAULT_INTERNAL_ADDR`] when unset. Set empty, the internal listener
+/// is not opened and nothing answers `/internal/*` at all.
+pub(crate) fn internal_addr_from_env() -> Option<String> {
+    parse_internal_addr(std::env::var("YAGRA_INTERNAL_ADDR").ok())
+}
+
+fn parse_internal_addr(raw: Option<String>) -> Option<String> {
+    match raw {
+        None => Some(DEFAULT_INTERNAL_ADDR.to_owned()),
+        Some(v) if v.trim().is_empty() => None,
+        Some(v) => Some(v.trim().to_owned()),
+    }
+}
+
 /// `YAGRA_BUS_URL` as this process was started with it. The one reader: [`Config::from_env`] requires
 /// it, and the bus settings card reads it again to report whether this core's own connection is
 /// encrypted — the running state, which is the point (ADR-202).
@@ -54,6 +72,8 @@ pub struct Config {
     pub poll_interval_secs: u32,
     /// API bind address.
     pub api_addr: String,
+    /// Internal listener's bind address (ADR-217), `None` when turned off.
+    pub internal_addr: Option<String>,
     // ⚠️ `public_dashboard` was here, read from `YAGRA_PUBLIC_DASHBOARD`, and it is **gone**
     // (ADR-123 decision 1, a breaking change recorded in the release notes). Anonymous viewing is now
     // a row in `app_settings` an admin toggles from Settings ▸ Sign-in methods, because the
@@ -165,6 +185,7 @@ impl Config {
             tsdb_url,
             poll_interval_secs: parse_interval(std::env::var("YAGRA_POLL_INTERVAL_SECS").ok()),
             api_addr: api_addr_from_env(),
+            internal_addr: internal_addr_from_env(),
             pat_oidc_idle_days: parse_idle_days(std::env::var("YAGRA_PAT_OIDC_IDLE_DAYS").ok()),
             // Read but *not* required: a missing/blank URL leaves Redis mirroring disabled without
             // affecting the live/skeleton gating above.
@@ -356,6 +377,19 @@ mod tests {
             DEFAULT_POLL_INTERVAL_SECS
         );
         assert_eq!(parse_interval(Some("0".into())), DEFAULT_POLL_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn the_internal_listener_is_on_unless_set_empty() {
+        assert_eq!(
+            parse_internal_addr(None).as_deref(),
+            Some(DEFAULT_INTERNAL_ADDR)
+        );
+        assert_eq!(parse_internal_addr(Some("  ".into())), None);
+        assert_eq!(
+            parse_internal_addr(Some(" 127.0.0.1:9000 ".into())).as_deref(),
+            Some("127.0.0.1:9000")
+        );
     }
 
     #[test]

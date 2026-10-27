@@ -14,6 +14,10 @@
 
 - **Acting on a row no longer moves it out of sight.** On Nodes ▸ Missing IP prefixes, marking a gap as intentional (or reopening one) re-read the list in the server's order — most open gaps first — so the site just worked on dropped down the table, often off screen, while it stayed expanded. Troubleshoot ▸ Scheduled and Reports ▸ Schedules did the same after a schedule was edited, because those lists are ordered by the next run and an edit moves it; on Reports the 30-second refresh also reshuffled the list after every run. A re-read now keeps the rows in the order on screen, with new rows at the end. The server's order comes back when the page is opened, when the view, tab, kind or search changes on Missing IP prefixes, and when the tab changes on Reports.
 
+### Security
+
+- **The bundled oxidized's routes are no longer reachable from the LAN.** `/internal/oxidized/*` return device logins and the config-backup destination's token or private key to the bundled oxidized, and they were served on core's port 8080 — which is published on the LAN — guarded by the source token alone. They now answer only on a second, unpublished port (8090, `YAGRA_INTERNAL_ADDR`) that serves nothing else, and port 8080 answers 404 for them. The bundled oxidized is pointed at the new port by the upgrade itself and restarts once. `/api/v1`, `/mcp` and `/metrics` on port 8080 are unchanged.
+
 ## v0.3.60 — Fewer third-party dependencies: SNMP, ICMP, Redis and /metrics are now Yagra's own code
 
 ### Breaking changes

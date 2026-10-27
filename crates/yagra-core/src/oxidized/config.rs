@@ -19,12 +19,13 @@ pub(crate) const CONFIG_FILE: &str = "config";
 /// The header oxidized presents the token in.
 pub(crate) const TOKEN_HEADER: &str = "x-yagra-oxidized-token";
 
-/// Where oxidized reads its node list, and where its hook reports how each fetch ended. Core's own
-/// port on the compose network.
-pub(crate) const SOURCE_URL: &str = "http://core:8080/internal/oxidized/nodes";
-pub(crate) const EVENTS_URL: &str = "http://core:8080/internal/oxidized/events";
+/// Where oxidized reads its node list, and where its hook reports how each fetch ended. Core's
+/// internal listener on the compose network, which the composition never publishes (ADR-217) —
+/// these routes return device logins and the Git credential, and the northbound port refuses them.
+pub(crate) const SOURCE_URL: &str = "http://core:8090/internal/oxidized/nodes";
+pub(crate) const EVENTS_URL: &str = "http://core:8090/internal/oxidized/events";
 /// Where the push script asks whether to push and reports how the push went (ADR-210 stage 4).
-pub(crate) const PUSH_URL: &str = "http://core:8080/internal/oxidized/push";
+pub(crate) const PUSH_URL: &str = "http://core:8090/internal/oxidized/push";
 
 /// The push script's file name in the shared directory, and the script itself (stage 4 decision 28).
 /// Written beside the configuration file, so the same one-shot owns both and an upgrade replaces
@@ -42,7 +43,7 @@ const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 5;
+pub(crate) const CONFIG_REVISION: u32 = 6;
 
 const TOKEN_LEN: usize = 40;
 
@@ -219,7 +220,7 @@ mod tests {
         let body = render("Abc123", SOURCE_URL, EVENTS_URL, PUSH_URL);
         assert!(body.contains("remove_secret: true"));
         assert!(body.contains("x-yagra-oxidized-token: \"Abc123\""));
-        assert!(body.contains("url: http://core:8080/internal/oxidized/nodes"));
+        assert!(body.contains("url: http://core:8090/internal/oxidized/nodes"));
         assert!(body.contains("pid: /home/oxidized/.config/oxidized/pid"));
         // The session log would hold the password a device was sent.
         assert!(body.contains("  debug: false"));
@@ -232,7 +233,7 @@ mod tests {
         assert!(body.contains(EVENTS_URL));
         // The push hook runs the script from the shared directory, with the token and core's URL.
         assert!(body.contains(
-            "cmd: 'YAGRA_TOKEN=\"Abc123\" YAGRA_PUSH_URL=\"http://core:8080/internal/oxidized/push\" \
+            "cmd: 'YAGRA_TOKEN=\"Abc123\" YAGRA_PUSH_URL=\"http://core:8090/internal/oxidized/push\" \
              /usr/bin/ruby /var/lib/yagra/oxidized/yagra-push.rb'"
         ));
     }
@@ -281,12 +282,15 @@ mod tests {
     fn the_revision_moves_with_the_configuration() {
         use sha2::Digest;
         // The push script is not in the digest: oxidized runs it afresh on every hook, so a changed
-        // script needs no restart, only the one-shot that rewrites it on every start.
-        let digest = sha2::Sha256::digest(render("T", "S", "E", "P").as_bytes());
+        // script needs no restart, only the one-shot that rewrites it on every start. The three URLs
+        // are: they are what oxidized dials, and moving them to the internal listener (ADR-217) was
+        // a change to the running configuration this digest could not see while it rendered
+        // placeholders in their place.
+        let digest = sha2::Sha256::digest(render("T", SOURCE_URL, EVENTS_URL, PUSH_URL).as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "d37e8f08e18c9b5237c387ddcba539225253febe81476e3c3a618525a292a765",
+            "5dbb67c880c7988cfe454c993ec3e6705d0e077901da5d7e8a874fd026258d63",
         )];
         assert_eq!(
             pinned,

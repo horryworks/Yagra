@@ -124,6 +124,7 @@ pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
     // Identity and topology of this process
     ("YAGRA_CORE_ID", EnvShape::Plain),
     ("YAGRA_API_ADDR", EnvShape::Plain),
+    ("YAGRA_INTERNAL_ADDR", EnvShape::Plain),
     ("YAGRA_ENABLE_HA", EnvShape::Plain),
     ("YAGRA_ENABLE_MCP", EnvShape::Plain),
     // ⚠️ `YAGRA_PUBLIC_DASHBOARD` was here and is gone (ADR-123): the public dashboard is a row

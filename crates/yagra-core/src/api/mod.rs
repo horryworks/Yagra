@@ -143,7 +143,7 @@ use axum::{
     extract::{DefaultBodyLimit, Request, State},
     http::StatusCode,
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
@@ -547,6 +547,45 @@ pub fn router(state: ApiState) -> Router {
             resolve_auth_mw,
         ))
         .with_state(state)
+}
+
+/// Which of core's two listeners a router is served on (ADR-217).
+///
+/// One router serves both, so the route ledger and the OpenAPI document stay one list; the edge
+/// decides which half each listener lets through. `/internal/*` hands the bundled oxidized device
+/// logins and the config-backup destination's credential in plaintext, so it is answered only on
+/// the internal listener, which the composition never publishes — and that listener answers
+/// nothing else, so it cannot become a second way into `/api/v1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listener {
+    /// The northbound port (8080): everything but `/internal/*`.
+    Public,
+    /// The unpublished port (8090): `/internal/*` alone.
+    Internal,
+}
+
+impl Listener {
+    fn admits(self, path: &str) -> bool {
+        let internal = path == "/internal" || path.starts_with("/internal/");
+        match self {
+            Listener::Public => !internal,
+            Listener::Internal => internal,
+        }
+    }
+
+    /// `app` with every path this listener does not serve answered 404 before any other layer —
+    /// before authentication, auditing or the handler — exactly as an unknown route is.
+    pub fn edge(self, app: Router) -> Router {
+        app.layer(middleware::from_fn(
+            move |req: Request, next: Next| async move {
+                if self.admits(req.uri().path()) {
+                    next.run(req).await
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            },
+        ))
+    }
 }
 
 /// Username recorded when a mutating request carries no valid session.
@@ -2319,5 +2358,67 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body_json(resp).await["rca_enabled"], false);
+    }
+
+    /// ADR-217: the routes that hand oxidized plaintext secrets are not on the northbound port, and
+    /// the internal port is not a second way into the API. "Not 404" is the assertion on the side
+    /// that serves a route, because what it answers (401, 503, 200) depends on the state, not on the
+    /// edge.
+    #[tokio::test]
+    async fn internal_routes_answer_on_the_internal_listener_alone() {
+        async fn status(listener: Listener, method: &str, path: &str) -> StatusCode {
+            let app = listener.edge(router(super::tests_support::public_state()));
+            app.oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        }
+        let internal = [
+            ("GET", "/internal/oxidized/nodes"),
+            ("POST", "/internal/oxidized/events"),
+            ("GET", "/internal/oxidized/push"),
+            ("POST", "/internal/oxidized/push"),
+        ];
+        for (method, path) in internal {
+            assert_eq!(
+                status(Listener::Public, method, path).await,
+                StatusCode::NOT_FOUND,
+                "{method} {path} on the northbound port"
+            );
+            assert_ne!(
+                status(Listener::Internal, method, path).await,
+                StatusCode::NOT_FOUND,
+                "{method} {path} on the internal port"
+            );
+        }
+        // Spellings that do not start with `/internal/` must not reach those handlers either.
+        for path in [
+            "//internal/oxidized/nodes",
+            "/api/../internal/oxidized/nodes",
+            "/%69nternal/oxidized/nodes",
+        ] {
+            assert_eq!(
+                status(Listener::Public, "GET", path).await,
+                StatusCode::NOT_FOUND,
+                "{path} on the northbound port"
+            );
+        }
+        assert_eq!(
+            status(Listener::Public, "GET", "/healthz").await,
+            StatusCode::OK
+        );
+        for path in ["/healthz", "/api/v1/nodes", "/internal/../api/v1/nodes"] {
+            assert_eq!(
+                status(Listener::Internal, "GET", path).await,
+                StatusCode::NOT_FOUND,
+                "{path} on the internal port"
+            );
+        }
     }
 }

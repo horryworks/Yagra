@@ -1101,7 +1101,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     )
     .await?;
 
-    serve(state, &cfg.api_addr, metrics, shutdown).await
+    serve(
+        state,
+        &cfg.api_addr,
+        cfg.internal_addr.as_deref(),
+        metrics,
+        shutdown,
+    )
+    .await
 }
 
 /// The sending half of the leader's one notification delivery queue
@@ -1846,9 +1853,11 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         started: std::time::SystemTime::now(),
         poller_logs: None,
     };
+    // No internal listener: skeleton mode has no database, so no oxidized to serve (ADR-217).
     serve(
         state,
         config::DEFAULT_API_ADDR,
+        None,
         metrics,
         CancellationToken::new(),
     )
@@ -2713,10 +2722,12 @@ async fn advance(
     }
 }
 
-/// Bind and serve the northbound API plus the Prometheus `/metrics` endpoint.
+/// Bind and serve the northbound API plus the Prometheus `/metrics` endpoint on `addr`, and
+/// `/internal/*` alone on `internal_addr` when there is one (ADR-217).
 async fn serve(
     state: ApiState,
     addr: &str,
+    internal_addr: Option<&str>,
     metrics: PrometheusHandle,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
@@ -2764,11 +2775,33 @@ async fn serve(
             shutdown.cancel();
         });
     }
+    // Both listeners serve the same router; the edge decides which half each one answers, so the
+    // route ledger stays one list (ADR-217).
+    use std::future::IntoFuture as _;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(%addr, "Yagra-core API listening on /api/v1 (+ /metrics)");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { shutdown.cancelled().await })
-        .await?;
+    let public = axum::serve(listener, api::Listener::Public.edge(app.clone()))
+        .with_graceful_shutdown({
+            let shutdown = shutdown.clone();
+            async move { shutdown.cancelled().await }
+        })
+        .into_future();
+    match internal_addr {
+        Some(internal_addr) => {
+            let listener = tokio::net::TcpListener::bind(internal_addr).await?;
+            tracing::info!(addr = %internal_addr, "Yagra-core internal listener on /internal (ADR-217)");
+            let internal = axum::serve(listener, api::Listener::Internal.edge(app))
+                .with_graceful_shutdown(async move { shutdown.cancelled().await })
+                .into_future();
+            tokio::try_join!(public, internal)?;
+        }
+        None => {
+            tracing::info!(
+                "internal listener off (YAGRA_INTERNAL_ADDR empty) — /internal is not served"
+            );
+            public.await?;
+        }
+    }
     Ok(())
 }
 
