@@ -24,8 +24,9 @@
 //!
 //! And two routes for oxidized itself, outside `/api/v1`, both behind the source token the
 //! one-shot `oxidized-config` wrote (compared in constant time). nginx forwards only `/api/` and
-//! `/mcp`, so the TLS edge never serves them; core's own port is on the LAN, so the token is what
-//! keeps a neighbour out.
+//! `/mcp`, so the TLS edge never serves them, and core's published port 8080 answers 404 for them:
+//! they are served only on the internal listener, which the composition never publishes (ADR-217).
+//! The token is what keeps out another container on the compose network.
 //!
 //! - `GET /internal/oxidized/nodes`, the HTTP source oxidized reads its node list from. **It returns
 //!   device logins in plaintext** — the second reader of plaintext after

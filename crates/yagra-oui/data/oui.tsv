@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-24
-# counts: MA-L=40286 MA-L-repeats-dropped=3 MA-M=6573 MA-S=7213 withheld=3
+# fetched: 2026-10-27
+# counts: MA-L=40296 MA-L-repeats-dropped=3 MA-M=6576 MA-S=7216 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -18607,6 +18607,7 @@
 28BC05	BLU Products Inc
 28BC18	SourcingOverseas Co. Ltd
 28BC56	EMAC, Inc.
+28BC82	AMiT Automation
 28BD89	Google, Inc.
 28BE03	TCT mobile ltd
 28BE43	vivo Mobile Communication Co., Ltd.
@@ -18812,6 +18813,7 @@
 2C0B97	Xiaomi Communications Co Ltd
 2C0BAB	HUAWEI TECHNOLOGIES CO.,LTD
 2C0BE9	Cisco Systems, Inc
+2C0C88	Silicon Laboratories
 2C0D27	Huawei Device Co., Ltd.
 2C0DA7	Intel Corporate
 2C0DCF	Xiaomi Communications Co Ltd
@@ -21662,6 +21664,7 @@
 4022D8	Espressif Inc.
 4022ED	Digital Projection Ltd
 402343	CHONGQING FUGUI ELECTRONICS CO.,LTD.
+402364	Serage
 4024B2	Sichuan AI-Link Technology Co., Ltd.
 4024D2	Huawei Device Co., Ltd.
 402508	Highway 9 Networks, Inc.
@@ -23278,6 +23281,7 @@
 4C5077	Huawei Device Co., Ltd.
 4C50DD	Hui Zhou Gaoshengda Technology Co.,LTD
 4C50F1	GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD
+4C5149	GSD VIET NAM TECHNOLOGY COMPANY LIMITED
 4C5262	Fujitsu Technology Solutions GmbH
 4C52EC	SOLARWATT GmbH
 4C5369	YanFeng Visteon(ChongQing) Automotive Electronic Co.,Ltd
@@ -25664,9 +25668,11 @@
 5CAAFD	Sonos, Inc.
 5CAB22	IEEE Registration Authority
 5CAB220	InfraShield Inc.
+5CAB221	MDA SatConn UK
 5CAB222	Santiam Labs
 5CAB223	Xiamen Joint Tech. CO.,Ltd.
 5CAB224	Comet Technologies Denmark A/S
+5CAB225	Cyngrox Private Limited
 5CAB226	Shanghai Jiweijiu Intelligent Technology Co., Ltd.
 5CAB227	Chubb France
 5CAB228	FEEL Group LLC
@@ -27008,6 +27014,7 @@
 685210	MCS Logic
 6852D6	UGame Technology Co.,Ltd
 68536C	SPnS Co.,Ltd
+685370	Chipsea Technologies (Shenzhen) Corp.
 685377	Bouffalo Lab (Nanjing) Co., Ltd.
 685388	P&S Technology
 68539D	EM Microelectronic
@@ -37460,6 +37467,7 @@
 8C1F6484C	AvMap srlu
 8C1F6484D	DAVE SRL
 8C1F6484E	West Pharmaceutical Services, Inc.
+8C1F6484F	Rouchon Industries Inc.
 8C1F64850	Tokyo Denki Gijutsu Kogyo
 8C1F64852	ABB
 8C1F64855	e.kundenservice Netz GmbH
@@ -37746,6 +37754,7 @@
 8C1F649E8	GHM Messtechnik GmbH
 8C1F649EA	MSolutions
 8C1F649EC	Specialized Communications Corp.
+8C1F649ED	Sotech Development Pvt. Ltd.
 8C1F649EE	Möbus Engineering GmbH
 8C1F649F0	ePlant, Inc.
 8C1F649F1	Skymira
@@ -37920,6 +37929,7 @@
 8C1F64ADA	Ability Intelligent Corp.
 8C1F64ADB	Hebei Weiji Electric Co.,Ltd
 8C1F64ADC	Motor Protection Electronics
+8C1F64ADD	Intermobility Co., Ltd.
 8C1F64AE0	ASTER PRO-AUDIO INC.
 8C1F64AE1	YUYAMA MFG Co.,Ltd
 8C1F64AE2	Jiangsu Yi Rong Mstar Technology Ltd.
@@ -40159,6 +40169,7 @@
 9482B2	GL Intelligence
 9483C4	GL Technologies (Hong Kong) Limited
 94857A	Evantage Industries Corp
+948580	Amazon Technologies Inc.
 9486CD	SEOUL ELECTRONICS&TELECOM
 9486D4	Surveillance Pro Corporation
 94877C	Commscope
@@ -45028,6 +45039,8 @@ B8F12A	Apple, Inc.
 B8F255	Universal Electronics, Inc.
 B8F317	iSun Smasher Communications Private Limited
 B8F44F	u-blox AG
+B8F453	IEEE Registration Authority
+B8F453A	Skeleton Technologies OÜ
 B8F4A4	Google, Inc.
 B8F4D0	Herrmann Ultraschalltechnik GmbH & Co. Kg
 B8F5E7	WayTools, LLC
@@ -45492,6 +45505,7 @@ BCD767	BAE Systems
 BCD7A5	Hewlett Packard Enterprise
 BCD7CE	China Mobile (Hangzhou) Information Technology Co., Ltd.
 BCD7D4	Roku, Inc
+BCD810	Amazon Technologies Inc.
 BCD849	TP-Link Systems Inc.
 BCD940	ASR Co,.Ltd.
 BCD9FB	China Mobile Group Device Co.,Ltd.
@@ -45796,6 +45810,7 @@ C07BBC	Cisco Systems, Inc
 C07C90	Shenzhen YOUHUA Technology Co., Ltd
 C07CD1	PEGATRON CORPORATION
 C07E40	SHENZHEN XDK COMMUNICATION EQUIPMENT CO.,LTD
+C08009	Vantiva USA LLC
 C08135	Ningbo Forfan technology Co., LTD
 C08170	Effigis GeoSolutions
 C0830A	2Wire Inc
@@ -51149,6 +51164,7 @@ E89A8F	Quanta Computer Inc.
 E89AFF	Fujian LANDI Commercial Equipment Co.,Ltd
 E89C25	ASUSTek COMPUTER INC.
 E89D87	Toshiba
+E89DEA	Silicon Laboratories
 E89E0C	MAX8USA DISTRIBUTORS INC.
 E89E13	CRESYN
 E89E49	Mellanox Technologies, Inc.

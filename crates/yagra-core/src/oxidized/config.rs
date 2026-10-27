@@ -6,8 +6,9 @@
 //! operator yet; what changes per deployment is the source token.
 //!
 //! The token is what `GET /internal/oxidized/nodes` demands. That route returns device logins in
-//! plaintext and is on core's own port, which is published on the LAN, so the header is the only
-//! thing between a neighbour on the network and every login Yagra holds for config backup.
+//! plaintext. It is served only on core's internal listener, which the composition never publishes
+//! (ADR-217), so the header is what stands between another container on the compose network and
+//! every login Yagra holds for config backup.
 
 use std::path::Path;
 
