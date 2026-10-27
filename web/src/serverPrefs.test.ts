@@ -42,6 +42,7 @@ import {
   setNodeTreePinnedOnly,
   setNodeTreeWithNodesOnly,
   setGeoMapDayNight,
+  setGeoMapPlace,
 } from './serverPrefs';
 import { MAX_STORED_COLLAPSED } from './lib/nodeTree';
 import { COLUMN_MAX_PX, MAX_STORED_COLUMNS, MAX_STORED_TABLES } from './lib/columnWidths';
@@ -62,6 +63,7 @@ beforeEach(() => {
   usePrefsStore.getState().setNodeTreePinnedOnly(null);
   usePrefsStore.getState().setNodeTreeWithNodesOnly(null);
   usePrefsStore.getState().setGeoMapDayNight(null);
+  usePrefsStore.getState().setGeoMapPlace(null);
   usePrefsStore.getState().setNodeTreeCollapsed({});
   usePrefsStore.getState().setTableColumnWidths({});
 });
@@ -470,5 +472,37 @@ describe('resetServerPrefs', () => {
     setInterfaceDockHeight(360);
     vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
     expect(putPreferences).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('where the Geo map is looking (ADR-218)', () => {
+  const tokyo = { lon: 139.69, lat: 35.68, zoom: 12 };
+
+  it('reads as unset until the operator moves the map', () => {
+    expect(usePrefsStore.getState().geoMapPlace).toBeNull();
+  });
+
+  it("adopts the account's place, and keeps this browser's over one that is not a place", async () => {
+    getPreferences.mockResolvedValue({ geoMapPlace: tokyo });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().geoMapPlace).toEqual(tokyo);
+    for (const value of [null, 'tokyo', { lon: 139.69, lat: 35.68 }, { lon: 999, lat: 0, zoom: 2 }]) {
+      getPreferences.mockResolvedValue({ geoMapPlace: value });
+      await loadServerPrefs();
+      expect(usePrefsStore.getState().geoMapPlace).toEqual(tokyo);
+    }
+  });
+
+  it('saves a place once it is set', () => {
+    setGeoMapPlace(tokyo);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ geoMapPlace: tokyo });
+  });
+
+  // ADR-218 decision 6: an account that never moved the map keeps opening on the pins.
+  it('sends nothing for a machine whose map was never moved', () => {
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
   });
 });

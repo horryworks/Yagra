@@ -261,10 +261,11 @@ export interface MapView {
   scale: number;
 }
 
-/** Which map a stored view belongs to. One memory per drawing: the full network map, the map in a
- *  folder's pane on the Nodes page (ADR-191 Inc.2), and the Geo map. The two network maps share a
- *  renderer but not a size, so a view restored from one would be wrong in the other. */
-export type MapViewKey = 'topo' | 'topoGroup' | 'geo';
+/** Which map a stored view belongs to. One memory per drawing: the full network map and the map in
+ *  a folder's pane on the Nodes page (ADR-191 Inc.2). The two share a renderer but not a size, so a
+ *  view restored from one would be wrong in the other. The Geo map is not here: it is remembered on
+ *  the account, in degrees rather than pixels (ADR-218, `prefs.ts::geoMapPlace`). */
+export type MapViewKey = 'topo' | 'topoGroup';
 
 // Where each map was panned and zoomed to (ADR-134). Both maps already work hard *not* to lose this
 // within one mount — the `view === null` guard is what stops their 15s refresh from stomping the
@@ -278,7 +279,6 @@ export type MapViewKey = 'topo' | 'topoGroup' | 'geo';
 interface MapViewStore {
   topo: MapView | null;
   topoGroup: MapView | null;
-  geo: MapView | null;
   /** Which level (folder id, `''` for the root) each stored view was fitted to. Persisted beside the
    *  view it describes: held in module memory instead, a reload forgot it and the first mount threw
    *  the restored view away as if it belonged to another level. */
@@ -299,7 +299,6 @@ export const useMapViewStore = create<MapViewStore>()(
     (set, get) => ({
       topo: null,
       topoGroup: null,
-      geo: null,
       fitted: {},
       setMapView: (key, next) =>
         set((s) => ({ [key]: typeof next === 'function' ? next(s[key]) : next }) as Partial<MapViewStore>),

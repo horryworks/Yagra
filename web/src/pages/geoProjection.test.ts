@@ -4,8 +4,10 @@ import {
   clampGeoScale,
   clampGeoView,
   fitPins,
+  adoptGeoPlace,
   fitWorld,
   geoBounds,
+  geoWraps,
   GEO_DETAIL_MIN_SCALE,
   GEO_TILE_UNITS,
   MAP_HEIGHT,
@@ -13,8 +15,12 @@ import {
   MAX_GEO_SCALE,
   minGeoScale,
   placedOnly,
+  placeFromView,
   project,
+  unproject,
+  viewFromPlace,
   visibleGeoTiles,
+  wrapPinX,
   zoomGeoView,
   type GeoView,
 } from './geoProjection';
@@ -158,6 +164,13 @@ function exposed(v: GeoView, vw: number, vh: number) {
   };
 }
 
+/** `exposed`, for a view that wraps: the page draws a second world one width to the right
+ *  (ADR-218), so the right edge is that copy's. */
+function exposedWrapped(v: GeoView, vw: number, vh: number) {
+  const e = exposed(v, vw, vh);
+  return { ...e, right: e.right - MAP_WIDTH * v.scale };
+}
+
 describe('clampGeoScale', () => {
   it('holds every gesture between the pane floor and the ceiling', () => {
     expect(clampGeoScale(0, 800, 400)).toBe(minGeoScale(800, 400));
@@ -218,7 +231,7 @@ describe('clampGeoView', () => {
       [1e6, -1e6],
       [-1e6, 1e6],
     ]) {
-      const e = exposed(clampGeoView({ tx, ty, scale: 20 }, vw, vh), vw, vh);
+      const e = exposedWrapped(clampGeoView({ tx, ty, scale: 20 }, vw, vh), vw, vh);
       expect(e.left).toBeLessThanOrEqual(1e-9);
       expect(e.top).toBeLessThanOrEqual(1e-9);
       expect(e.right).toBeLessThanOrEqual(1e-9);
@@ -250,7 +263,7 @@ describe('clampGeoView', () => {
       { latitude: -85, longitude: 179 },
       { latitude: 85, longitude: -179 },
     ]) {
-      const e = exposed(fitPins([pin], vw, vh), vw, vh);
+      const e = exposedWrapped(fitPins([pin], vw, vh), vw, vh);
       expect(e.left).toBeLessThanOrEqual(1e-9);
       expect(e.top).toBeLessThanOrEqual(1e-9);
       expect(e.right).toBeLessThanOrEqual(1e-9);
@@ -261,6 +274,167 @@ describe('clampGeoView', () => {
   it('passes an unmeasured pane through rather than producing NaN', () => {
     const v = { tx: 3, ty: 4, scale: 2 };
     expect(clampGeoView(v, 0, 0)).toEqual(v);
+  });
+
+  // ADR-218: east-west the world repeats, so a drag never stops and `tx` never grows.
+  it('folds a drag past either end of the world back into one width', () => {
+    const scale = 20;
+    const w = MAP_WIDTH * scale;
+    for (const tx of [1, w / 3, w, 5 * w + 7, -w, -w - 7, -40 * w + 3]) {
+      const c = clampGeoView({ tx, ty: -500, scale }, vw, vh);
+      expect(c.tx).toBeGreaterThan(-w);
+      expect(c.tx).toBeLessThanOrEqual(0);
+      // The same place on screen, one or more worlds over.
+      const turns = (tx - c.tx) / w;
+      expect(turns).toBeCloseTo(Math.round(turns), 9);
+    }
+  });
+
+  it('answers 0 rather than -0 for a view exactly one world over', () => {
+    expect(Object.is(clampGeoView({ tx: -MAP_WIDTH * 20, ty: -500, scale: 20 }, vw, vh).tx, 0)).toBe(
+      true,
+    );
+  });
+
+  it('still stops at the poles', () => {
+    const scale = 20;
+    expect(clampGeoView({ tx: 0, ty: 1e6, scale }, vw, vh).ty).toBe(0);
+    expect(clampGeoView({ tx: 0, ty: -1e6, scale }, vw, vh).ty).toBe(vh - MAP_HEIGHT * scale);
+  });
+
+  // The pane the page actually has: never wider than the world at its height (ADR-188 Inc.2), so
+  // at the floor one world exactly spans it and a drag at the floor turns the world.
+  it('wraps at the zoom floor of a pane no wider than the world', () => {
+    const w = 1620;
+    const h = 810;
+    const floor = fitWorld(w, h);
+    expect(geoWraps(floor.scale, w)).toBe(true);
+    const dragged = clampGeoView({ ...floor, tx: floor.tx + 300 }, w, h);
+    expect(dragged.tx).toBeCloseTo(300 - w, 9);
+    expect(dragged.scale).toBe(floor.scale);
+  });
+
+  // The browser rounds the pane's width and height separately; a world a pixel short of the pane
+  // must still wrap rather than be centred with a sliver either side.
+  it('wraps a world one pixel short of the pane', () => {
+    expect(geoWraps(minGeoScale(1621, 810), 1621)).toBe(true);
+    expect(geoWraps(minGeoScale(1700, 810), 1700)).toBe(false);
+  });
+});
+
+describe('wrapPinX', () => {
+  const scale = 4;
+  // The pane's left edge is at map x 600, near the date line on the east side.
+  const v = { tx: -600 * scale, ty: 0, scale };
+
+  it('moves a pin left of the pane into the second world', () => {
+    expect(wrapPinX(10, v)).toBe(10 + MAP_WIDTH);
+  });
+
+  it('leaves a pin already in view where it is', () => {
+    expect(wrapPinX(650, v)).toBe(650);
+    expect(wrapPinX(600, v)).toBe(600);
+  });
+
+  it('moves nothing in a view that does not wrap', () => {
+    const centred = clampGeoView({ tx: 0, ty: 0, scale: 0.01 }, 2000, 520);
+    expect(geoWraps(centred.scale, 2000)).toBe(false);
+    expect(wrapPinX(0, centred)).toBe(0);
+    expect(wrapPinX(MAP_WIDTH, centred)).toBe(MAP_WIDTH);
+  });
+});
+
+describe('unproject', () => {
+  it('is the inverse of project', () => {
+    for (const [lat, lon] of [
+      [35.68, 139.69],
+      [-33.87, 151.21],
+      [40.71, -74.01],
+      [0, 0],
+      [-89, -179],
+    ]) {
+      const back = unproject(project(lat, lon));
+      expect(back.lat).toBeCloseTo(lat, 9);
+      expect(back.lon).toBeCloseTo(lon, 9);
+    }
+  });
+
+  it('reads the second world as the same longitudes', () => {
+    const p = project(21.3, -157.86);
+    expect(unproject({ x: p.x + MAP_WIDTH, y: p.y }).lon).toBeCloseTo(-157.86, 9);
+  });
+});
+
+describe('placeFromView / viewFromPlace', () => {
+  // The point of storing degrees (ADR-218): a place saved on one pane shows the same place, at
+  // the same span of longitude, on another.
+  it('shows the same place on a pane of another size', () => {
+    const tokyo = project(35.68, 139.69);
+    const scale = 30;
+    const saved = placeFromView({ tx: 800 - tokyo.x * scale, ty: 400 - tokyo.y * scale, scale }, 1600, 800);
+    expect(saved).not.toBeNull();
+    expect(saved!.lat).toBeCloseTo(35.68, 9);
+    expect(saved!.lon).toBeCloseTo(139.69, 9);
+    for (const [w, h] of [
+      [1600, 800],
+      [390, 600],
+      [1100, 550],
+    ]) {
+      const v = viewFromPlace(saved!, w, h);
+      const shown = placeFromView(v, w, h)!;
+      expect(shown.lat).toBeCloseTo(35.68, 6);
+      expect(shown.lon).toBeCloseTo(139.69, 6);
+      // The same span of longitude across the pane.
+      expect((w / v.scale / MAP_WIDTH) * 360).toBeCloseTo((1600 / scale / MAP_WIDTH) * 360, 6);
+    }
+  });
+
+  it('survives a view one or more worlds over', () => {
+    const place = { lon: -170, lat: 10, zoom: 8 };
+    const v = viewFromPlace(place, 1600, 800);
+    const turned = { ...v, tx: v.tx - 3 * MAP_WIDTH * v.scale };
+    expect(placeFromView(turned, 1600, 800)!.lon).toBeCloseTo(-170, 6);
+  });
+
+  it('holds a restored view inside the pane, like every other view', () => {
+    const v = viewFromPlace({ lon: 0, lat: 89, zoom: 1e6 }, 1600, 800);
+    expect(v.scale).toBe(MAX_GEO_SCALE);
+    expect(v.ty).toBeLessThanOrEqual(0);
+  });
+
+  it('answers nothing for an unmeasured pane', () => {
+    expect(placeFromView({ tx: 0, ty: 0, scale: 1 }, 0, 0)).toBeNull();
+  });
+});
+
+describe('adoptGeoPlace', () => {
+  it('takes three finite numbers in range', () => {
+    expect(adoptGeoPlace({ lon: 139.7, lat: 35.7, zoom: 12 })).toEqual({
+      lon: 139.7,
+      lat: 35.7,
+      zoom: 12,
+    });
+  });
+
+  it('drops anything else', () => {
+    for (const raw of [
+      null,
+      undefined,
+      'tokyo',
+      [],
+      {},
+      { lon: 139.7, lat: 35.7 },
+      { lon: '139.7', lat: 35.7, zoom: 2 },
+      { lon: 181, lat: 0, zoom: 2 },
+      { lon: 0, lat: -91, zoom: 2 },
+      { lon: 0, lat: 0, zoom: 0 },
+      { lon: 0, lat: 0, zoom: -1 },
+      { lon: 0, lat: 0, zoom: Number.NaN },
+      { lon: Number.POSITIVE_INFINITY, lat: 0, zoom: 2 },
+      { lon: 0, lat: 0, zoom: 1e9 },
+    ]) {
+      expect(adoptGeoPlace(raw)).toBeNull();
+    }
   });
 });
 
@@ -303,15 +477,23 @@ describe('visibleGeoTiles', () => {
     expect(visibleGeoTiles(v, 1200, 600)).toEqual(['31_5', '32_5']);
   });
 
-  it('stays on the grid at the edges of the world', () => {
-    // A view whose maths reaches past the date line or a pole asks for the edge square, never
-    // for a column or row that does not exist.
+  it('stays on the grid at the poles', () => {
+    // A view whose maths reaches past a pole asks for the edge row, never for one that does not
+    // exist.
     const scale = GEO_DETAIL_MIN_SCALE;
-    const keys = visibleGeoTiles({ tx: 100, ty: 100, scale }, 400, 400);
-    expect(keys).toEqual(['0_0']);
-    const last = `${MAP_WIDTH / GEO_TILE_UNITS - 1}_${MAP_HEIGHT / GEO_TILE_UNITS - 1}`;
-    const far = { tx: -(MAP_WIDTH * scale) + 100, ty: -(MAP_HEIGHT * scale) + 100, scale };
-    expect(visibleGeoTiles(far, 400, 400)).toEqual([last]);
+    expect(visibleGeoTiles({ tx: -100, ty: 100, scale }, 400, 400)).toEqual(['0_0']);
+    const lastRow = MAP_HEIGHT / GEO_TILE_UNITS - 1;
+    const far = { tx: -100, ty: -(MAP_HEIGHT * scale) + 100, scale };
+    expect(visibleGeoTiles(far, 400, 400)).toEqual([`0_${lastRow}`]);
+  });
+
+  // ADR-218: a pane across the date line shows the east end of the world and the west end of the
+  // next one, so it wants the last column and the first.
+  it('asks for both ends of the world across the date line', () => {
+    const scale = GEO_DETAIL_MIN_SCALE;
+    const lastCol = MAP_WIDTH / GEO_TILE_UNITS - 1;
+    const v = { tx: -(MAP_WIDTH * scale) + 200, ty: -100 * scale, scale };
+    expect(visibleGeoTiles(v, 400, 400)).toEqual([`${lastCol}_5`, '0_5']);
   });
 
   it('answers nothing for an unmeasured pane', () => {

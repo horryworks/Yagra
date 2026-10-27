@@ -8,7 +8,7 @@ import {
   worstFirst,
   type PinPoint,
 } from './geoCluster';
-import { MAX_GEO_SCALE } from './geoProjection';
+import { MAP_WIDTH, MAX_GEO_SCALE } from './geoProjection';
 import { pinLook } from '../dashboard/widgets/util';
 import { emptyStateCounts } from '../lib/nodeState';
 import type { NodeState } from '../types/api';
@@ -74,6 +74,31 @@ describe('clusterPins', () => {
 
   it('answers a group per pin at a scale it cannot use', () => {
     expect(clusterPins([pin('a', 0, 0), pin('b', 0, 0)], 0)).toHaveLength(2);
+  });
+});
+
+describe('clusterPins across the date line (ADR-218)', () => {
+  // The map repeats east-west, so a site at 179.5°E and one at 179.5°W sit side by side on screen.
+  it('groups two sites either side of the date line', () => {
+    const out = clusterPins([pin('east', MAP_WIDTH - 1, 100), pin('west', 1, 100)], 1);
+    expect(out).toHaveLength(1);
+    expect(out[0].members.map((m) => m.id).sort()).toEqual(['east', 'west']);
+  });
+
+  it('places that group on the date line, not in the middle of the Atlantic', () => {
+    const [c] = clusterPins([pin('east', MAP_WIDTH - 1, 100), pin('west', 1, 100)], 1);
+    expect(Math.min(c.x, MAP_WIDTH - c.x)).toBeCloseTo(0, 9);
+  });
+
+  it('keeps the mean inside one world', () => {
+    const [c] = clusterPins([pin('west', 1, 100), pin('east', MAP_WIDTH - 2, 100)], 1);
+    expect(c.x).toBeGreaterThanOrEqual(0);
+    expect(c.x).toBeLessThan(MAP_WIDTH);
+    expect(c.x).toBeCloseTo(MAP_WIDTH - 0.5, 9);
+  });
+
+  it('still separates sites half a world apart', () => {
+    expect(clusterPins([pin('a', 0, 100), pin('b', MAP_WIDTH / 2, 100)], 1)).toHaveLength(2);
   });
 });
 

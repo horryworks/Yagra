@@ -129,12 +129,25 @@ export function visibleGeoTiles(v: GeoView, vw: number, vh: number): string[] {
   const rows = MAP_HEIGHT / GEO_TILE_UNITS;
   const toTile = (map: number, last: number) =>
     Math.max(0, Math.min(last, Math.floor(map / GEO_TILE_UNITS)));
-  const c0 = toTile(-v.tx / v.scale, cols - 1);
-  const c1 = toTile((vw - v.tx) / v.scale, cols - 1);
   const r0 = toTile(-v.ty / v.scale, rows - 1);
   const r1 = toTile((vh - v.ty) / v.scale, rows - 1);
+  // East-west the world repeats (ADR-218), so a pane across the date line wants the last columns
+  // and the first ones; north-south it ends, so a row past a pole is the edge row.
+  const cs: number[] = [];
+  if (geoWraps(v.scale, vw)) {
+    const c0 = Math.floor(-v.tx / v.scale / GEO_TILE_UNITS);
+    const c1 = Math.floor((vw - v.tx) / v.scale / GEO_TILE_UNITS);
+    for (let c = c0; c <= c1; c++) {
+      const col = ((c % cols) + cols) % cols;
+      if (!cs.includes(col)) cs.push(col);
+    }
+  } else {
+    const c0 = toTile(-v.tx / v.scale, cols - 1);
+    const c1 = toTile((vw - v.tx) / v.scale, cols - 1);
+    for (let c = c0; c <= c1; c++) cs.push(c);
+  }
   const keys: string[] = [];
-  for (let c = c0; c <= c1; c++) for (let r = r0; r <= r1; r++) keys.push(`${c}_${r}`);
+  for (const c of cs) for (let r = r0; r <= r1; r++) keys.push(`${c}_${r}`);
   return keys;
 }
 
@@ -165,21 +178,123 @@ function clampAxis(t: number, mapLen: number, paneLen: number): number {
   return Math.min(0, Math.max(paneLen - mapLen, t));
 }
 
+/** How far the world may fall short of the pane's width and still wrap. The pane is never wider
+ *  than the world at its height (ADR-188 Inc.2), so at the zoom floor the two are equal — but the
+ *  browser rounds the pane's width and height separately, and a world one pixel short of the pane
+ *  must not fall back to being centred with a sliver either side. The second copy covers it. */
+const WRAP_SLACK_PX = 1;
+
+/**
+ * Whether the world repeats east-west at this zoom (ADR-218): it does whenever one world is at
+ * least as wide as the pane, which is every zoom on a pane no wider than the world. Narrower than
+ * that, the world is centred as before — a pane that shows two worlds side by side is the one look
+ * the user ruled out.
+ */
+export function geoWraps(scale: number, vw: number): boolean {
+  return vw > 0 && MAP_WIDTH * scale >= vw - WRAP_SLACK_PX;
+}
+
+/** `t` folded into `(-mapLen, 0]`, so a drag in either direction never runs out of world and the
+ *  number never grows. `-0` is answered as `0`, which is what a test comparing views expects. */
+function wrapAxis(t: number, mapLen: number): number {
+  const r = t % mapLen;
+  if (r === 0) return 0;
+  return r > 0 ? r - mapLen : r;
+}
+
 /**
  * Hold a view inside what this pane can show without showing anything outside the world.
  *
  * Every write to the view goes through here — wheel, pinch, drag, the buttons, Fit, and a view
- * restored from the session (ADR-134), which may have been saved on a pane of another size.
+ * restored from the account (ADR-218), which may have been saved on a pane of another size.
  * Keeping the rule in one function is what stops one of those paths from letting the map escape.
+ *
+ * North-south the map stops at the poles. East-west it repeats (ADR-218): `tx` is folded into one
+ * world's width, and the page draws a second copy of the world one width to the right, which is
+ * all a pane at most one world wide can ever need.
  */
 export function clampGeoView(v: GeoView, vw: number, vh: number): GeoView {
   if (vw <= 0 || vh <= 0) return v;
   const scale = clampGeoScale(v.scale, vw, vh);
+  const mapW = MAP_WIDTH * scale;
   return {
     scale,
-    tx: clampAxis(v.tx, MAP_WIDTH * scale, vw),
+    tx: geoWraps(scale, vw) ? wrapAxis(v.tx, mapW) : clampAxis(v.tx, mapW, vw),
     ty: clampAxis(v.ty, MAP_HEIGHT * scale, vh),
   };
+}
+
+/**
+ * Where to draw something at map `x` so that it is on screen (ADR-218): in the first copy of the
+ * world, or one width to the right in the second.
+ *
+ * Each pin is drawn **once**, at the copy the pane shows it in. Drawing it in both copies would
+ * double every pin's Tab stop and test id, and a pane at most one world wide shows any point at
+ * most once. A view that does not wrap has its left edge at or left of zero, so nothing moves.
+ */
+export function wrapPinX(x: number, v: GeoView): number {
+  return x < -v.tx / v.scale ? x + MAP_WIDTH : x;
+}
+
+/** The inverse of `project`: map coordinates back to degrees. Longitude comes back in
+ *  `[-180, 180)` whichever copy of the world `x` was in. */
+export function unproject(p: Point): { lat: number; lon: number } {
+  const lon = (p.x / MAP_WIDTH) * 360 - 180;
+  return {
+    lat: 90 - (p.y / MAP_HEIGHT) * 180,
+    lon: ((((lon + 180) % 360) + 360) % 360) - 180,
+  };
+}
+
+/**
+ * Where the Geo map is looking, independent of the pane it is drawn in (ADR-218): the longitude
+ * and latitude at the pane's centre, and the zoom as a multiple of the pane's floor.
+ *
+ * This is what the account stores, rather than `tx`/`ty`/`scale`, because those are pixels of one
+ * pane: restored on another window or on a phone they point somewhere else (the cost ADR-134
+ * decision 7 accepted for a value kept per tab). The floor is "one world across the pane", so a
+ * multiple of it is a span of longitude and means the same on any screen.
+ */
+export interface GeoPlace {
+  lon: number;
+  lat: number;
+  zoom: number;
+}
+
+/** The place a view shows in this pane, or `null` for an unmeasured pane. */
+export function placeFromView(v: GeoView, vw: number, vh: number): GeoPlace | null {
+  if (vw <= 0 || vh <= 0 || !(v.scale > 0)) return null;
+  const c = unproject({ x: (vw / 2 - v.tx) / v.scale, y: (vh / 2 - v.ty) / v.scale });
+  return { lon: c.lon, lat: c.lat, zoom: v.scale / minGeoScale(vw, vh) };
+}
+
+/** The view that shows `place` in this pane, held inside it like every other view. */
+export function viewFromPlace(place: GeoPlace, vw: number, vh: number): GeoView {
+  if (vw <= 0 || vh <= 0) return { tx: 0, ty: 0, scale: 1 };
+  const scale = clampGeoScale(place.zoom * minGeoScale(vw, vh), vw, vh);
+  const c = project(place.lat, place.lon);
+  return clampGeoView({ tx: vw / 2 - c.x * scale, ty: vh / 2 - c.y * scale, scale }, vw, vh);
+}
+
+/** The largest zoom multiple a stored place may carry. Above the real ceiling for any pane (240
+ *  over a floor of about 0.4 on a phone), so it only refuses a value no pane could have written. */
+const MAX_PLACE_ZOOM = 10_000;
+
+/**
+ * Read a stored place out of the account's document, or `null` when it is not one.
+ *
+ * Defensive because the document is opaque to the backend (ADR-058): anything that is not three
+ * finite numbers in range is dropped, and the page then fits the pins as if nothing were stored.
+ */
+export function adoptGeoPlace(raw: unknown): GeoPlace | null {
+  if (raw == null || typeof raw !== 'object') return null;
+  const { lon, lat, zoom } = raw as Record<string, unknown>;
+  const ok = (n: unknown, lo: number, hi: number): n is number =>
+    typeof n === 'number' && Number.isFinite(n) && n >= lo && n <= hi;
+  if (!ok(lon, -180, 180) || !ok(lat, -90, 90) || !ok(zoom, 0, MAX_PLACE_ZOOM) || zoom === 0) {
+    return null;
+  }
+  return { lon, lat, zoom };
 }
 
 /**
@@ -231,7 +346,9 @@ export function fitPins(items: Placed[], vw: number, vh: number): GeoView {
     w <= 0 || h <= 0
       ? clampGeoScale(4, vw, vh)
       : clampGeoScale(Math.min((vw / w) * MARGIN, (vh / h) * MARGIN), vw, vh);
-  // Centred on the pins, then clamped: a site near the date line or a pole is shown at the edge of
-  // the pane rather than beside empty space.
+  // Centred on the pins, then clamped: a site near a pole is shown at the edge of the pane rather
+  // than beside empty space. One near the date line stays centred, with the next world beside it
+  // (ADR-218). The box is still the one that does not cross the date line, so sites on both sides
+  // of the Pacific are framed across the Atlantic, as before.
   return clampGeoView({ tx: vw / 2 - cx * scale, ty: vh / 2 - cy * scale, scale }, vw, vh);
 }

@@ -138,19 +138,17 @@ describe('last dashboard board memory (ADR-134)', () => {
 });
 
 describe('map view memory (ADR-134)', () => {
-  beforeEach(() => useMapViewStore.setState({ topo: null, topoGroup: null, geo: null }));
+  beforeEach(() => useMapViewStore.setState({ topo: null, topoGroup: null }));
 
   it('starts unpositioned on both maps, so the first measured frame still auto-fits', () => {
     expect(useMapViewStore.getState().topo).toBeNull();
-    expect(useMapViewStore.getState().geo).toBeNull();
+    expect(useMapViewStore.getState().topoGroup).toBeNull();
   });
 
-  // ⚠️ The two maps are transforms over different things (a laid-out diagram vs. a world
-  // projection), so one memory must never answer for the other.
-  it('keeps the two maps apart', () => {
-    useMapViewStore.getState().setMapView('topo', { tx: 10, ty: 20, scale: 1.5 });
-    expect(useMapViewStore.getState().topo).toEqual({ tx: 10, ty: 20, scale: 1.5 });
-    expect(useMapViewStore.getState().geo).toBeNull();
+  // The Geo map left this session memory for the account, in degrees (ADR-218). A slot left
+  // behind here would be a second answer to where it is looking.
+  it('holds no Geo map view', () => {
+    expect(Object.keys(useMapViewStore.getState())).not.toContain('geo');
   });
 
   // The full network map and the one in a folder's pane share a renderer but not a size (ADR-191
@@ -164,9 +162,9 @@ describe('map view memory (ADR-134)', () => {
   // The judgement this store exists to hold: every wheel and pinch handler in both maps passes an
   // updater, and resolving it here is what keeps it out of a `.tsx` where no test could run it.
   it('resolves an updater against the stored view', () => {
-    useMapViewStore.getState().setMapView('geo', { tx: 0, ty: 0, scale: 1 });
-    useMapViewStore.getState().setMapView('geo', (v) => (v ? { ...v, scale: v.scale * 2 } : v));
-    expect(useMapViewStore.getState().geo).toEqual({ tx: 0, ty: 0, scale: 2 });
+    useMapViewStore.getState().setMapView('topo', { tx: 0, ty: 0, scale: 1 });
+    useMapViewStore.getState().setMapView('topo', (v) => (v ? { ...v, scale: v.scale * 2 } : v));
+    expect(useMapViewStore.getState().topo).toEqual({ tx: 0, ty: 0, scale: 2 });
   });
 
   // Both maps' handlers open with `if (!v) return v`, so the updater has to survive being handed a

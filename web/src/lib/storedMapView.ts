@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // A `useState`-shaped binding to the session's remembered map view (ADR-134).
 //
-// Both maps hold their pan/zoom as `const [view, setView] = useState<View | null>(null)` and both
+// The network maps hold their pan/zoom as `const [view, setView] = useState<View | null>(null)` and
 // lean on exactly two properties of that: the setter accepts an updater function (every wheel and
 // pinch handler reads the live value), and `null` means "never positioned", which is what lets the
 // first measured frame auto-fit without the 15s refresh stomping the operator afterwards.
@@ -10,9 +10,8 @@
 // judgement: resolving an updater against the stored value happens in the store (`setMapView`),
 // where a test can run it. What is left here is the binding, which is what `.tsx` files may hold.
 //
-// ⚠️ One memory per map. `TopologyMap`'s `View` and `GeoMapPage`'s `GeoView` are the same three
-// numbers but they are transforms over different things (a laid-out diagram vs. a world
-// projection), so sharing one slot would restore a world-scale pan onto a topology.
+// ⚠️ One memory per map. The Geo map used to have a slot here too and left it for the account
+// (ADR-218): its view is stored in degrees, which this session-scoped pixel memory cannot be.
 
 import { useCallback } from 'react';
 import { useMapViewStore, type MapView, type MapViewKey } from '../store';

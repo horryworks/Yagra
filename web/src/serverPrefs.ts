@@ -26,6 +26,7 @@ import {
   type TableColumnWidths,
 } from './lib/columnWidths';
 import { adoptCollapsed } from './lib/nodeTree';
+import { adoptGeoPlace, type GeoPlace } from './pages/geoProjection';
 import type { TableId } from './lib/tableIds';
 
 /** Coalesce a burst of adjustments into one write. Same value and same reason as the dashboard's
@@ -49,6 +50,8 @@ interface ServerPrefsDoc {
   nodeTreeCollapsed?: Record<string, true>;
   /** Geo map's day/night shading switch (ADR-189). */
   geoMapDayNight?: boolean;
+  /** Where Geo map was last looking, in degrees and a zoom multiple (ADR-218). */
+  geoMapPlace?: GeoPlace;
 }
 
 /** False once the server has told us it does not serve this endpoint, so a drag on a deployment
@@ -104,6 +107,9 @@ function adopt(raw: unknown): void {
   if (typeof doc.geoMapDayNight === 'boolean') {
     usePrefsStore.getState().setGeoMapDayNight(doc.geoMapDayNight);
   }
+  // A malformed place is dropped rather than adopted, and this browser's own is kept.
+  const place = adoptGeoPlace(doc.geoMapPlace);
+  if (place) usePrefsStore.getState().setGeoMapPlace(place);
   // `null` means the account holds nothing that reads as a layout — keep this browser's, which the
   // next save then seeds the account with. An empty object is a layout: everything open.
   const collapsed = adoptCollapsed(doc.nodeTreeCollapsed);
@@ -122,6 +128,7 @@ function currentDoc(): ServerPrefsDoc {
     nodeTreeWithNodesOnly,
     nodeTreeCollapsed,
     geoMapDayNight,
+    geoMapPlace,
   } = usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
   if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
@@ -132,6 +139,9 @@ function currentDoc(): ServerPrefsDoc {
   if (nodeTreeWithNodesOnly != null) doc.nodeTreeWithNodesOnly = nodeTreeWithNodesOnly;
   // Same again (ADR-189) — here the unset value reads as *on*, so sending `false` is the whole point.
   if (geoMapDayNight != null) doc.geoMapDayNight = geoMapDayNight;
+  // Only once the operator has moved the map (ADR-218 decision 6): an account that never did keeps
+  // opening on the pins, however many sites are added later.
+  if (geoMapPlace != null) doc.geoMapPlace = geoMapPlace;
   // Omitted while empty rather than sent as `{}`: the account row has a 32 KiB ceiling every
   // preference shares, and an operator who never drags a column should cost it nothing.
   if (tableColumnWidths && Object.keys(tableColumnWidths).length > 0) {
@@ -249,6 +259,17 @@ export function setNodeTreeWithNodesOnly(on: boolean): void {
  */
 export function setGeoMapDayNight(on: boolean): void {
   usePrefsStore.getState().setGeoMapDayNight(on);
+  scheduleSave();
+}
+
+/**
+ * Record where Geo map is looking: locally now, on the account shortly (ADR-218).
+ *
+ * ⚠️ Call it once the map has come to rest, not per pointer event — the page waits for a quiet
+ * moment first, and `SAVE_DEBOUNCE_MS` coalesces what is left.
+ */
+export function setGeoMapPlace(place: GeoPlace): void {
+  usePrefsStore.getState().setGeoMapPlace(place);
   scheduleSave();
 }
 

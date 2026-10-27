@@ -8,6 +8,7 @@
 
 import { SEVERITY_ORDER, emptyStateCounts } from '../lib/nodeState';
 import { countsTotal, pinLook, type StateCounts } from '../dashboard/widgets/util';
+import { MAP_WIDTH } from './geoProjection';
 
 /** Pins whose centres are closer than this on screen are drawn as one. A pin's halo has a radius
  *  of about 9.5 px, so this is roughly where two of them visibly run into each other. */
@@ -55,20 +56,34 @@ export function clusterPins(
   const groups: PinPoint[][] = [];
   for (const p of points) {
     const home = groups.find((g) => {
-      const dx = g[0].x - p.x;
+      const dx = acrossTheSeam(g[0].x - p.x);
       const dy = g[0].y - p.y;
       return dx * dx + dy * dy < reach2;
     });
     if (home) home.push(p);
     else groups.push([p]);
   }
-  return groups.map((members) => ({
-    key: members[0].id,
-    x: members.reduce((s, m) => s + m.x, 0) / members.length,
-    y: members.reduce((s, m) => s + m.y, 0) / members.length,
-    members: worstFirst(members),
-    counts: sumCounts(members.map((m) => m.counts)),
-  }));
+  return groups.map((members) => {
+    // Each member taken to the copy of the world nearest the first one, so two sites either side
+    // of the date line average to the date line rather than to the middle of the Atlantic.
+    const first = members[0].x;
+    const mean =
+      members.reduce((s, m) => s + first - acrossTheSeam(first - m.x), 0) / members.length;
+    return {
+      key: members[0].id,
+      x: ((mean % MAP_WIDTH) + MAP_WIDTH) % MAP_WIDTH,
+      y: members.reduce((s, m) => s + m.y, 0) / members.length,
+      members: worstFirst(members),
+      counts: sumCounts(members.map((m) => m.counts)),
+    };
+  });
+}
+
+/** An east-west distance in map units measured the short way round (ADR-218): the map repeats, so
+ *  a site at 179°E and one at 179°W are neighbours on screen, not a world apart. */
+function acrossTheSeam(dx: number): number {
+  const r = ((dx % MAP_WIDTH) + MAP_WIDTH) % MAP_WIDTH;
+  return r > MAP_WIDTH / 2 ? r - MAP_WIDTH : r;
 }
 
 /** Add tallies together; `undefined` when there was nothing to add, so `pinLook` answers `empty`

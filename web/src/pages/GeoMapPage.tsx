@@ -38,8 +38,7 @@ import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { sortedAlerts, useAlertStore, useMapPaneStore } from '../store';
 import { usePrefsStore } from '../prefs';
-import { setGeoMapDayNight } from '../serverPrefs';
-import { useStoredMapView } from '../lib/storedMapView';
+import { setGeoMapDayNight, setGeoMapPlace } from '../serverPrefs';
 import {
   clampPaneHeight,
   defaultPaneHeight,
@@ -50,13 +49,19 @@ import {
   clampGeoScale,
   clampGeoView,
   fitPins,
+  geoWraps,
+  type GeoPlace,
+  type GeoView,
   GEO_TILE_UNITS,
   MAP_HEIGHT,
   MAP_WIDTH,
   MAX_GEO_SCALE,
   placedOnly,
+  placeFromView,
   project,
+  viewFromPlace,
   visibleGeoTiles,
+  wrapPinX,
   zoomGeoView,
 } from './geoProjection';
 import {
@@ -100,6 +105,13 @@ const SKY_DEPTH: Record<Sky, number> = {
   night: TWILIGHT_LEVELS.length,
 };
 const SKY_LEGEND = SKIES.map((sky) => ({ sky, depth: SKY_DEPTH[sky] }));
+
+/** How long the map must rest before where it is looking is written down (ADR-218). A drag or a
+ *  burst of wheel ticks is one move, not one save per frame. */
+const PLACE_SAVE_QUIET_MS = 500;
+
+/** The id the second copy of the world points at (ADR-218). One Geo map is mounted at a time. */
+const WORLD_ID = 'geopage-world';
 
 /**
  * The fine tiles, drawn over the world outline (ADR-207): each tile's square in the ocean colour
@@ -156,10 +168,25 @@ export function GeoMapPage() {
   const { t } = useTranslation('topology');
   const navigate = useNavigate();
   const wrapRef = useRef<HTMLDivElement | null>(null);
-  // Remembered for the session (ADR-134), like the topology map's. The pane height beside it has
-  // been persisted since ADR-074, so half this screen's layout was already remembered and half was
-  // thrown away on every navigation.
-  const [view, setView] = useStoredMapView('geo');
+  // Where the map is looking. Remembered on the account in degrees (ADR-218), not here in pixels:
+  // `geoMapPlace` is read once the pane is measured, and written back once the operator has moved
+  // the map and let it rest.
+  const [view, setView] = useState<GeoView | null>(null);
+  const storedPlace = usePrefsStore((s) => s.geoMapPlace);
+  /** Whether the operator has moved the map since this page opened. Until then the account's place
+   *  may still replace the view when it arrives, and nothing is saved: opening the page and
+   *  fitting the pins is not a choice anyone made (ADR-218 decision 6). */
+  const touched = useRef(false);
+  /** Every move the operator makes: the view changes and is marked as theirs. */
+  const moveView = useCallback(
+    (next: GeoView | null | ((prev: GeoView | null) => GeoView | null)) => {
+      touched.current = true;
+      setView(next);
+    },
+    [],
+  );
+  /** The pane's width, for whether the world repeats at this zoom (`geoWraps`). */
+  const [paneW, setPaneW] = useState(0);
   const drag = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   // Live pointers by id: one pans, two pinch-zoom. Mirrors `TopologyMap`'s gesture handling so the
   // two maps in this product feel the same under a finger.
@@ -216,33 +243,71 @@ export function GeoMapPage() {
   const fit = useCallback(() => {
     const el = wrapRef.current;
     if (!el) return;
-    setView(fitPins(placed, el.clientWidth, el.clientHeight));
-  }, [placed, setView]);
+    moveView(fitPins(placed, el.clientWidth, el.clientHeight));
+  }, [placed, moveView]);
 
-  // Fit once, on the first render that has a measured pane. The `view === null` guard is what stops
-  // the 15s poll refresh from stomping the operator's pan/zoom every tick — the same guard, and the
-  // same reason, as `TopologyMap`.
+  // Place the map once, on the first render that has a measured pane: where the operator left it
+  // (ADR-218), or around the pins. The `view === null` guard is what stops the 15s poll refresh
+  // from stomping the operator's pan/zoom every tick — the same guard, and the same reason, as
+  // `TopologyMap`.
   useEffect(() => {
-    if (view === null && wrapRef.current && wrapRef.current.clientWidth > 0) {
-      setView(fitPins(placed, wrapRef.current.clientWidth, wrapRef.current.clientHeight));
+    const el = wrapRef.current;
+    if (view === null && el && el.clientWidth > 0) {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setView(storedPlace ? viewFromPlace(storedPlace, w, h) : fitPins(placed, w, h));
     }
-  }, [view, placed, setView]);
+  }, [view, placed, storedPlace]);
+
+  // The account's place can arrive after the page has opened (a sign-in moments ago). Take it
+  // while the operator has not moved the map yet; once they have, their view wins. The page's own
+  // saves come back through here too, and are skipped by the same flag.
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!storedPlace || touched.current || !el || el.clientWidth <= 0) return;
+    setView(viewFromPlace(storedPlace, el.clientWidth, el.clientHeight));
+  }, [storedPlace]);
+
+  // Write down where the map is looking once it has rested (ADR-218), and on the way out, so a
+  // move made just before leaving the page is not lost.
+  const unsaved = useRef<GeoPlace | null>(null);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!touched.current || !view || !el) return;
+    const place = placeFromView(view, el.clientWidth, el.clientHeight);
+    if (!place) return;
+    unsaved.current = place;
+    const id = window.setTimeout(() => {
+      unsaved.current = null;
+      setGeoMapPlace(place);
+    }, PLACE_SAVE_QUIET_MS);
+    return () => window.clearTimeout(id);
+  }, [view]);
+  useEffect(
+    () => () => {
+      if (unsaved.current) setGeoMapPlace(unsaved.current);
+    },
+    [],
+  );
 
   // Refit when the operator resizes the pane. This deliberately *does* stomp the current pan/zoom,
   // unlike the poll refresh above: dragging the pane is a direct request for more (or less) map, and
   // leaving the old transform would just add empty space at the new size. The inline height is
   // applied in the same render, so `clientHeight` is already the new one by the time this runs.
+  // Not on the first render: that height is the stored one, and the view is the placement above.
+  const fittedHeight = useRef(paneHeight);
   useEffect(() => {
+    if (fittedHeight.current === paneHeight) return;
+    fittedHeight.current = paneHeight;
     const el = wrapRef.current;
-    if (el && el.clientWidth > 0) setView(fitPins(placed, el.clientWidth, el.clientHeight));
+    if (el && el.clientWidth > 0) moveView(fitPins(placed, el.clientWidth, el.clientHeight));
     // `placed` is intentionally not a dependency — a poll that returns the same sites must not
     // refit. Only a height change should.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paneHeight]);
 
-  // A view remembered from earlier in the session (ADR-134) may have been saved on a pane of another
-  // size, and the pane's width follows the window, so hold the view inside the pane whenever the
-  // pane is measured — first when it mounts, then on every resize (ADR-188). The pane is not drawn
+  // The pane's width follows the window, so hold the view inside the pane whenever the pane is
+  // measured — first when it mounts, then on every resize (ADR-188). The pane is not drawn
   // while the page is loading or failed, so this has to wait for it rather than run once on mount.
   const busy = (loading && !summary) || (groups.loading && !groups.data);
   const mapShown = !busy && !error && !groups.error;
@@ -252,12 +317,13 @@ export function GeoMapPage() {
     const hold = () => {
       const w = el.clientWidth;
       const h = el.clientHeight;
+      setPaneW(w);
       if (w > 0 && h > 0) setView((v) => (v ? clampGeoView(v, w, h) : v));
     };
     const ro = new ResizeObserver(hold);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [mapShown, setView]);
+  }, [mapShown]);
 
   /** Zoom around the pane's centre — the buttons have no cursor to anchor on. */
   const zoomCentre = useCallback(
@@ -266,9 +332,9 @@ export function GeoMapPage() {
       if (!el) return;
       const w = el.clientWidth;
       const h = el.clientHeight;
-      setView((v) => (v ? zoomGeoView(v, factor, w / 2, h / 2, w, h) : v));
+      moveView((v) => (v ? zoomGeoView(v, factor, w / 2, h / 2, w, h) : v));
     },
-    [setView],
+    [moveView],
   );
 
   const onWheel = useCallback((e: React.WheelEvent) => {
@@ -280,8 +346,8 @@ export function GeoMapPage() {
     const w = el.clientWidth;
     const h = el.clientHeight;
     // Keep the point under the cursor fixed while zooming.
-    setView((v) => (v ? zoomGeoView(v, e.deltaY < 0 ? 1.15 : 1 / 1.15, mx, my, w, h) : v));
-  }, [setView]);
+    moveView((v) => (v ? zoomGeoView(v, e.deltaY < 0 ? 1.15 : 1 / 1.15, mx, my, w, h) : v));
+  }, [moveView]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -321,7 +387,7 @@ export function GeoMapPage() {
       const my = (p1.y + p2.y) / 2 - rect.top;
       const w = el.clientWidth;
       const h = el.clientHeight;
-      setView((v) => {
+      moveView((v) => {
         if (!v) return v;
         const scale = clampGeoScale(p.scale * (dist / p.dist), w, h);
         const k = scale / p.scale;
@@ -341,12 +407,12 @@ export function GeoMapPage() {
     if (!d || !el) return;
     const w = el.clientWidth;
     const h = el.clientHeight;
-    setView((v) =>
+    moveView((v) =>
       v
         ? clampGeoView({ ...v, tx: d.tx + (e.clientX - d.x), ty: d.ty + (e.clientY - d.y) }, w, h)
         : v,
     );
-  }, [setView]);
+  }, [moveView]);
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);
@@ -361,7 +427,7 @@ export function GeoMapPage() {
     } else if (pointers.current.size === 0) {
       drag.current = null;
     }
-  }, [setView]);
+  }, []);
 
   // ── Pane resize (the handle along the bottom edge) ─────────────────────────
   const onResizeDown = useCallback(
@@ -437,11 +503,20 @@ export function GeoMapPage() {
       if (!el) return;
       const w = el.clientWidth;
       const h = el.clientHeight;
-      setView((cur) =>
-        cur ? zoomGeoView(cur, 3, c.x * cur.scale + cur.tx, c.y * cur.scale + cur.ty, w, h) : cur,
+      moveView((cur) =>
+        cur
+          ? zoomGeoView(
+              cur,
+              3,
+              wrapPinX(c.x, cur) * cur.scale + cur.tx,
+              c.y * cur.scale + cur.ty,
+              w,
+              h,
+            )
+          : cur,
       );
     },
-    [setView],
+    [moveView],
   );
 
   return (
@@ -528,23 +603,35 @@ export function GeoMapPage() {
                 onPointerLeave={onPointerUp}
               >
                 <g transform={`translate(${v.tx} ${v.ty}) scale(${v.scale})`}>
-                  {/* Ocean, so the outline reads as land rather than as floating shapes. */}
-                  <rect className="geopage-ocean" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
-                  {WORLD_OUTLINE.map((d, i) => (
-                    <path className="geopage-land" d={d} key={i} />
-                  ))}
-                  {/* Inland water, in the ocean colour, over the land it sits in. */}
-                  {WORLD_LAKES.map((d, i) => (
-                    <path className="geopage-lake" d={d} key={i} />
-                  ))}
-                  {/* The fine coastline over the world outline where it has loaded (ADR-207). */}
-                  <GeoDetailLayer tiles={detailTiles} />
-                  {/* The night side, four stacked shades from sunset to the end of astronomical
-                      twilight (ADR-189). Over the land, under the pins: a site's colour is its
-                      health and must read the same at midnight as at noon. */}
-                  {nightPaths.map((d, i) => (
-                    <path className="geopage-night" d={d} key={i} />
-                  ))}
+                  {/* One world, drawn once and shown a second time one width to the right by the
+                      `<use>` below, so a drag across the date line keeps going (ADR-218). A pane
+                      is never wider than one world, so two copies cover every view. */}
+                  <g id={WORLD_ID}>
+                    {/* Ocean, so the outline reads as land rather than as floating shapes. */}
+                    <rect
+                      className="geopage-ocean"
+                      x={0}
+                      y={0}
+                      width={MAP_WIDTH}
+                      height={MAP_HEIGHT}
+                    />
+                    {WORLD_OUTLINE.map((d, i) => (
+                      <path className="geopage-land" d={d} key={i} />
+                    ))}
+                    {/* Inland water, in the ocean colour, over the land it sits in. */}
+                    {WORLD_LAKES.map((d, i) => (
+                      <path className="geopage-lake" d={d} key={i} />
+                    ))}
+                    {/* The fine coastline over the world outline where it has loaded (ADR-207). */}
+                    <GeoDetailLayer tiles={detailTiles} />
+                    {/* The night side, four stacked shades from sunset to the end of astronomical
+                        twilight (ADR-189). Over the land, under the pins: a site's colour is its
+                        health and must read the same at midnight as at noon. */}
+                    {nightPaths.map((d, i) => (
+                      <path className="geopage-night" d={d} key={i} />
+                    ))}
+                  </g>
+                  {geoWraps(v.scale, paneW) && <use href={`#${WORLD_ID}`} x={MAP_WIDTH} />}
                   {clusters.map((c) => {
                     // Counter-scaled so a pin stays the same size on screen at any zoom — a pin that
                     // grows with the map turns into a blob that hides the site it marks.
@@ -559,7 +646,7 @@ export function GeoMapPage() {
                           className="geopage-pin geopage-cluster"
                           data-testid={TEST_IDS.geoMapCluster}
                           key={`cluster:${c.key}`}
-                          transform={`translate(${c.x} ${c.y})`}
+                          transform={`translate(${wrapPinX(c.x, v)} ${c.y})`}
                           role="button"
                           tabIndex={0}
                           aria-haspopup="dialog"
@@ -620,7 +707,7 @@ export function GeoMapPage() {
                         className="geopage-pin"
                         data-testid={TEST_IDS.geoMapPin}
                         key={g.id}
-                        transform={`translate(${g.x} ${g.y})`}
+                        transform={`translate(${wrapPinX(g.x, v)} ${g.y})`}
                         role="button"
                         tabIndex={0}
                         // ⚠️ The `group:` prefix is not decoration. `parseSelection` splits on the

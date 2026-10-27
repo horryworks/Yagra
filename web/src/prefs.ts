@@ -7,6 +7,7 @@ import { createJSONStorage, persist, type StateStorage } from 'zustand/middlewar
 import type { ColumnWidthDoc } from './lib/columnWidths';
 import { withRememberedCredentials, type DiscoveryScanMemory } from './pages/discoveryScans';
 import { withModalSize, type ModalResizeId, type ModalSize } from './lib/modalSize';
+import type { GeoPlace } from './pages/geoProjection';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no localStorage) without a persist warning. localStorage (not sessionStorage) so UI
@@ -159,6 +160,13 @@ interface PrefsStore {
    *  rather than `true` so a machine that never pressed the button does not overwrite the account's
    *  "off" with the default. Nothing should call the setter directly. */
   geoMapDayNight: boolean | null;
+  /** Where Topology ▸ Geo map was last looking (ADR-218): the centre in degrees and the zoom as a
+   *  multiple of the pane's floor, so it means the same place on any screen. `null` = the operator
+   *  never moved the map, which reads as "fit the pins".
+   *
+   *  ⚠️ **On the account as well** (ADR-058, `serverPrefs.ts`), by the operator's request, so the
+   *  map opens where they left it on every machine. Nothing should call the setter directly. */
+  geoMapPlace: GeoPlace | null;
   /** How big the operator dragged each resizable dialog (ADR-198), keyed by its `resizeId`. A
    *  dialog with no entry keeps its CSS size. Local-only, like every other size here but the
    *  Interfaces dock (ADR-074 decision: sync only with a reason, and a dialog's size has none). */
@@ -212,6 +220,9 @@ interface PrefsStore {
   /** Record the Geo map day/night switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`geoMapDayNight`]). */
   setGeoMapDayNight: (on: boolean | null) => void;
+  /** Record where the Geo map is looking locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
+   *  syncs it to the account (see [`geoMapPlace`]). */
+  setGeoMapPlace: (place: GeoPlace | null) => void;
   /** Record one dialog's size. `{ w: null, h: null }` forgets it. Call it on gesture *end*. */
   setModalSize: (id: ModalResizeId, size: ModalSize) => void;
   /** Wrap or stop wrapping long lines in the notification-template dialog. */
@@ -257,6 +268,8 @@ export const usePrefsStore = create<PrefsStore>()(
       nodeTreeWithNodesOnly: null,
       // Same again: absent before ADR-189, read as `null` (on), no migration owed.
       geoMapDayNight: null,
+      // Same again: absent before ADR-218, read as `null` (fit the pins), no migration owed.
+      geoMapPlace: null,
       // Same again: absent before ADR-198, read as `{}` / `true`, no migration owed.
       modalSizes: {},
       templateWrap: true,
@@ -299,6 +312,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
       setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
       setGeoMapDayNight: (geoMapDayNight) => set({ geoMapDayNight }),
+      setGeoMapPlace: (geoMapPlace) => set({ geoMapPlace }),
       setModalSize: (id, size) => set((s) => ({ modalSizes: withModalSize(s.modalSizes, id, size) })),
       setTemplateWrap: (templateWrap) => set({ templateWrap }),
     }),

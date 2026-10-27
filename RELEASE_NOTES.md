@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The Geo map wraps around east-west, and opens where you left it.** Dragging past the date line now carries on into the next side of the world instead of stopping at the edge, so sites on both sides of the Pacific can be seen together. How far out you can zoom is unchanged. Where the map was looking is saved to your account (as a place and a zoom, not as pixels), so it opens on the same spot after a reload, on another machine or on a phone. Until you move the map it still opens fitted to the sites.
+
 ## v0.3.61 — The bundled oxidized's routes leave the LAN-facing port, lists keep their order after an edit, and the bundled stores move to newer versions
 
 ### Improvements
