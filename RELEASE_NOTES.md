@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.60 — Fewer third-party dependencies: SNMP, ICMP, Redis and /metrics are now Yagra's own code
+
 ### Breaking changes
 
 - **Every histogram on `/metrics` is now a Prometheus histogram.** Core's `/metrics` and the poller's port 9100 used to render a histogram without configured buckets as a summary (`{quantile="0.5"}` and so on, over a rolling window). They now render `_bucket`, `_sum` and `_count` for all of them, which can be added up across pollers. A dashboard or alert built on the `quantile` series of `yagra_vm_import_seconds`, `yagra_vm_read_seconds`, `yagra_notification_delivery_seconds`, `yagra_topology_derive_seconds`, `yagra_endpoint_sweep_seconds`, `yagra_ldap_bind_duration_seconds` or `yagra_llm_latency_ms` should use `histogram_quantile()` instead. Nothing in Yagra itself read the summaries.

@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.60 — 外部の依存を減らした。SNMP・ICMP・Redis・/metrics は Yagra 自身のコードになった
+
 ### 破壊的変更
 
 - **`/metrics` のヒストグラムが、全部 Prometheus のヒストグラムになった。** core の `/metrics` と poller のポート 9100 は、バケツを指定していないヒストグラムを、時間の窓で回る要約（`{quantile="0.5"}` など）として出していました。今は全部を `_bucket`・`_sum`・`_count` で出します。こちらはポーラーをまたいで足し合わせられます。`yagra_vm_import_seconds`・`yagra_vm_read_seconds`・`yagra_notification_delivery_seconds`・`yagra_topology_derive_seconds`・`yagra_endpoint_sweep_seconds`・`yagra_ldap_bind_duration_seconds`・`yagra_llm_latency_ms` の `quantile` の系列でグラフやアラートを作っている場合は、`histogram_quantile()` に置き換えてください。Yagra 自身は要約を読んでいませんでした。

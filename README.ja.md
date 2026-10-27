@@ -26,7 +26,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > アラートも上がりません。規模が小さいほど症状は重く、初めて導入した環境ほど強く踏みます。v0.2.6 で
 > 修正済みです。詳細は [RELEASE_NOTES.ja.md](RELEASE_NOTES.ja.md) を参照してください。
 
-> ステータス: **v0.3.59 — config のバックアップをオンにした直後の取得が、失敗しなくなった**
+> ステータス: **v0.3.60 — 外部の依存を減らした。SNMP・ICMP・Redis・/metrics は Yagra 自身のコードになった**
 > ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、NetBox からのフォルダーツリー同期（読み取り専用）、受動イベント監視、探索・分類、
 > アラート、ダッシュボード、レポートを備えたスタックが、
