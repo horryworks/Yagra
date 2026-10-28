@@ -244,7 +244,7 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
   return (
     <Card title={t('settings.neighbors.title')}>
       {DISCOVERY_WALKS.map((walk) => (
-        <div key={walk}>
+        <div key={walk} className="sys-setting-group">
           <div className="sys-setting">
             <div className="sys-setting-label">
               <div className="sys-setting-name">

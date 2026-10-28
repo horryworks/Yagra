@@ -178,6 +178,19 @@ describe('isDiscoveryDirty', () => {
 });
 
 describe('describeCadence', () => {
+  // The locale keys are plural pairs (`hours_one` / `hours_other`), which i18next picks by `count`.
+  // Passing only `n` made it miss both and draw the raw key on the settings card.
+  it('passes `count` so the plural form resolves', () => {
+    const seen: Record<string, unknown>[] = [];
+    const capture = (_key: string, opts?: Record<string, unknown>) => {
+      seen.push(opts ?? {});
+      return '';
+    };
+    for (const secs of [3600, 7200, 900, 301, 0]) describeCadence(secs, capture);
+    expect(seen.map((o) => o.count)).toEqual([1, 2, 15, 301, 0]);
+    expect(seen.every((o) => o.count === o.n)).toBe(true);
+  });
+
   it('renders whole hours and whole minutes in their own units', () => {
     expect(describeCadence(3600, t)).toBe('settings.neighbors.cadence.hours:1');
     expect(describeCadence(86400, t)).toBe('settings.neighbors.cadence.hours:24');

@@ -166,10 +166,13 @@ export function describeCadence(
   secs: number,
   t: (key: string, opts?: Record<string, unknown>) => string,
 ): string {
-  if (!Number.isFinite(secs) || secs <= 0) return t('settings.neighbors.cadence.seconds', { n: 0 });
-  if (secs % 3600 === 0) return t('settings.neighbors.cadence.hours', { n: secs / 3600 });
-  if (secs % 60 === 0) return t('settings.neighbors.cadence.minutes', { n: secs / 60 });
-  return t('settings.neighbors.cadence.seconds', { n: secs });
+  // `count` is what i18next picks the `_one`/`_other` key by; without it the lookup misses both and
+  // the raw key is drawn. `n` is what the strings interpolate.
+  const say = (unit: string, n: number) => t(`settings.neighbors.cadence.${unit}`, { n, count: n });
+  if (!Number.isFinite(secs) || secs <= 0) return say('seconds', 0);
+  if (secs % 3600 === 0) return say('hours', secs / 3600);
+  if (secs % 60 === 0) return say('minutes', secs / 60);
+  return say('seconds', secs);
 }
 
 /** The sweep-limit band the server enforces (ADR-219) — a fallback for when the server's own

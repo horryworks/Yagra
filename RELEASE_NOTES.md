@@ -15,6 +15,10 @@
 - **How many addresses one discovery scan may sweep is now a setting.** Settings ▸ Monitoring defaults ▸ Discovery walks ▸ Addresses per scan. It ships at 4096 (a /20, as before) and can be raised to 65,536 (a /16) or lowered. The Discovery page, the import of what a scan found and the API (`scan_max_targets` on `GET`/`PUT /api/v1/settings/neighbors`) all follow it. A scan still marked running is now given time in proportion to its size before it is dropped (four hours per 4096 addresses). The discovery endpoints accept a request body of up to 32 MiB, so the import of a full /16 fits.
 - **The Geo map wraps around east-west, and opens where you left it.** Dragging past the date line now carries on into the next side of the world instead of stopping at the edge, so sites on both sides of the Pacific can be seen together. How far out you can zoom is unchanged. Where the map was looking is saved to your account (as a place and a zoom, not as pixels), so it opens on the same spot after a reload, on another machine or on a phone. Until you move the map it still opens fitted to the sites.
 
+### Bug Fixes
+
+- The Discovery walks card no longer shows a raw key (`settings.neighbors.cadence.hours`) under each walk interval, and its divider lines now separate one walk from the next instead of a walk's switch from its own interval.
+
 ## v0.3.61 — The bundled oxidized's routes leave the LAN-facing port, lists keep their order after an edit, and the bundled stores move to newer versions
 
 ### Improvements

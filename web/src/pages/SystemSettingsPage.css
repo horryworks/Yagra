@@ -68,3 +68,17 @@
   padding-top: 14px;
   border-top: var(--border-width) solid var(--border-color);
 }
+
+/* A group is one subject drawn as several rows (a discovery walk: its switch and its interval).
+   The rule separates subjects, so it goes between groups and after the last one, never inside. */
+.sys-setting-group + .sys-setting-group,
+.sys-setting-group + .sys-setting {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: var(--border-width) solid var(--border-color);
+}
+.sys-setting-group > .sys-setting + .sys-setting {
+  margin-top: 8px;
+  padding-top: 0;
+  border-top: none;
+}
