@@ -250,23 +250,28 @@ export function GeoMapPage() {
   // (ADR-218), or around the pins. The `view === null` guard is what stops the 15s poll refresh
   // from stomping the operator's pan/zoom every tick — the same guard, and the same reason, as
   // `TopologyMap`.
+  // 🚨 `paneW` is what makes this run when the pane first appears. The pane is drawn only once
+  // both the folders and their tallies have arrived; when the folders came first, this ran with
+  // no pane, and nothing else it watched changed when the tallies followed — the map sat unplaced
+  // until the 15s refresh re-read the folders (seen on a lab box in a fresh browser).
   useEffect(() => {
     const el = wrapRef.current;
-    if (view === null && el && el.clientWidth > 0) {
+    if (view === null && el && paneW > 0) {
       const w = el.clientWidth;
       const h = el.clientHeight;
       setView(storedPlace ? viewFromPlace(storedPlace, w, h) : fitPins(placed, w, h));
     }
-  }, [view, placed, storedPlace]);
+  }, [view, placed, storedPlace, paneW]);
 
   // The account's place can arrive after the page has opened (a sign-in moments ago). Take it
   // while the operator has not moved the map yet; once they have, their view wins. The page's own
-  // saves come back through here too, and are skipped by the same flag.
+  // saves come back through here too, and are skipped by the same flag. `paneW` for the same
+  // reason as above: the place may arrive while the pane is not drawn yet.
   useEffect(() => {
     const el = wrapRef.current;
-    if (!storedPlace || touched.current || !el || el.clientWidth <= 0) return;
+    if (!storedPlace || touched.current || !el || paneW <= 0) return;
     setView(viewFromPlace(storedPlace, el.clientWidth, el.clientHeight));
-  }, [storedPlace]);
+  }, [storedPlace, paneW]);
 
   // Write down where the map is looking once it has rested (ADR-218), and on the way out, so a
   // move made just before leaving the page is not lost.

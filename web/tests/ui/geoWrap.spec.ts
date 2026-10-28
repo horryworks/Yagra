@@ -162,3 +162,27 @@ test('a reload opens the map where it was left, from the account', async ({ page
   expect(errors.uncaught).toEqual([]);
   expect(errors.logged).toEqual([]);
 });
+
+// Found on a lab box in a fresh browser (2026-10-28): the folders arrived before the per-folder
+// tallies, so the page placed nothing while it was still loading, and once the tallies arrived
+// and the map appeared nothing the placement watches had changed. The map sat unplaced, a small
+// world in the top-left corner with no second copy, until the 15 s refresh re-read the folders.
+test('the map is placed when it appears, whichever answer arrives last', async ({ page, errors }) => {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/v1/fleet/group-summary', async (route) => {
+    await held;
+    await route.fallback();
+  });
+  const folders = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/v1/node-groups');
+  await page.goto('/topology/geo');
+  await folders;
+  release();
+  await expect(page.getByTestId('geo-map-pin')).toHaveCount(1);
+  // Well inside the 15 s refresh that used to hide the defect.
+  await expect(async () => expectCovered(page, 'as first drawn')).toPass({ timeout: 4000 });
+  expect(errors.uncaught).toEqual([]);
+  expect(errors.logged).toEqual([]);
+});
