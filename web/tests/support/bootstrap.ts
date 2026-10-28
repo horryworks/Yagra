@@ -71,6 +71,16 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // account with no pins is the honest start; `treePinned.spec.ts` brings its own.
   '/api/v1/pins': { group_ids: [], nodes: [] } satisfies Schemas['Pins'] as unknown as Json,
 
+  // The sweep limit (ADR-219). The generator answers every integer with `1`, so the Discovery page
+  // would read a one-address limit and mark its pre-filled targets as over it — a deployment no
+  // one ships. 4096 and its band are what a fresh database answers.
+  '/api/v1/settings/neighbors': {
+    ...(defaultBodyFor('/api/v1/settings/neighbors') as object),
+    scan_max_targets: 4096,
+    scan_max_targets_min: 1,
+    scan_max_targets_max: 65536,
+  } as unknown as Json,
+
   // 🚨 The generator answers a boolean with `false`, and since ADR-119 one of this body's booleans
   // decides how many tabs the node-detail screen has: `snmp_configured: false` is a ping-only
   // device, which is offered four tabs instead of six. Left generated, the route walk would visit
