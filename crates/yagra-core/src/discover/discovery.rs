@@ -115,10 +115,11 @@ const MAX_REDISCOVERIES: usize = 20;
 /// A scan of up to [`RUNNING_AGE_STEP`] targets still marked running after this is dropped: its
 /// poller died, or its final result was lost. Comfortably longer than the slowest legitimate sweep
 /// of that size (4096 targets, ~22s per target in the worst credential-probe case, 16 at a time ⇒
-/// about 94 minutes, ADR-173), plus the time a sweep can wait behind another on the poller's
-/// strictly sequential job loop, so this can only catch a sweep that is genuinely never going to
-/// report. It was two hours while the cap was 1024. A wider scan gets a multiple of it
-/// ([`running_max_age`]).
+/// about 94 minutes, ADR-173 — an upper bound: since ADR-204 the poller shares 64 probe slots
+/// across up to 16 jobs), plus the time a sweep can wait for a slot behind other jobs, so this can
+/// only catch a sweep that is genuinely never going to report. It was two hours while the cap was
+/// 1024. A wider scan gets a multiple of it ([`running_max_age`]). Measured: a /16 on the lab,
+/// mostly silent addresses, finished in 34 minutes against its 64-hour window (ADR-219).
 const RUNNING_MAX_AGE: Duration = Duration::from_secs(4 * 60 * 60);
 
 /// How many targets one [`RUNNING_MAX_AGE`] covers — the /20 it was measured for.
