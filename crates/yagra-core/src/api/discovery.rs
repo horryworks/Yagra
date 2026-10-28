@@ -2016,6 +2016,38 @@ mod tests {
         assert_eq!(jobs(MAX_DISCOVERY_MAX_TARGETS), 64);
     }
 
+    /// nginx stands in front of core and refuses a body past 1 MB unless told otherwise, so a limit
+    /// raised here alone is a limit nobody reaches: a /16 sweep was answered 413 by nginx while core
+    /// would have taken it (ADR-219, found on the lab the day it shipped). The discovery block in
+    /// `web/nginx.conf` must allow at least what core accepts.
+    #[test]
+    fn nginx_lets_the_discovery_routes_carry_what_core_accepts() {
+        let conf = include_str!("../../../../web/nginx.conf");
+        let start = conf
+            .find("location ^~ /api/v1/discovery/ {")
+            .expect("web/nginx.conf has a block for the discovery routes");
+        let block = &conf[start..start + conf[start..].find('}').expect("the block closes")];
+        let size = block
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("client_max_body_size "))
+            .expect("the block sets client_max_body_size")
+            .trim_end_matches(';');
+        let mib: usize = size
+            .strip_suffix('m')
+            .expect("written in megabytes")
+            .parse()
+            .expect("a number");
+        assert!(
+            mib * 1024 * 1024 >= DISCOVERY_BODY_LIMIT,
+            "nginx allows {mib} MiB, core accepts {DISCOVERY_BODY_LIMIT} bytes"
+        );
+        assert!(
+            block.contains("proxy_pass http://core:8080;")
+                && block.contains("yagra-proxy-core.conf"),
+            "the block must still forward to core the way /api/ does"
+        );
+    }
+
     /// The widest import an operator may allow fits the body limit these routes carry. Measured
     /// with the longest name a discovered device is given and a folder id on every row.
     #[test]
