@@ -318,12 +318,9 @@ impl NodeRepo {
             .unwrap_or(DEFAULT_DISCOVERY_MAX_TARGETS)
     }
 
-    /// Set the sweep limit, upserting the singleton row. The API edge validates the bounds
-    /// ([`discovery_max_targets_in_bounds`]); the table `CHECK` is the backstop.
-    pub async fn set_discovery_max_targets(&self, n: u32) -> anyhow::Result<()> {
-        Self::write_discovery_max_targets(&self.pool, n).await
-    }
-
+    /// Write the sweep limit, upserting the singleton row; only through [`Self::set_discovery_settings`].
+    /// The API edge validates the bounds ([`discovery_max_targets_in_bounds`]); the table `CHECK`
+    /// is the backstop.
     async fn write_discovery_max_targets(
         db: impl sqlx::PgExecutor<'_>,
         n: u32,
@@ -564,10 +561,15 @@ mod tests {
             super::DEFAULT_DISCOVERY_MAX_TARGETS,
             "migration 0158's column default and the compiled one must agree"
         );
-        repo.set_discovery_max_targets(65_536).await.expect("write");
+        let walks = repo.get_adjacency_settings().await;
+        repo.set_discovery_settings(&walks, Some(65_536))
+            .await
+            .expect("write");
         assert_eq!(repo.get_discovery_max_targets().await, 65_536);
         assert!(
-            repo.set_discovery_max_targets(65_537).await.is_err(),
+            repo.set_discovery_settings(&walks, Some(65_537))
+                .await
+                .is_err(),
             "the CHECK is the backstop past a /16"
         );
     }
