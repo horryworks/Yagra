@@ -231,6 +231,17 @@ export function GeoMapPage() {
     at: { x: number; y: number };
   } | null>(null);
   const closeClusterMenu = useCallback(() => setClusterMenu(null), []);
+  /** Counts the presses that opened a bubble, so each one replays the ripple on its marker
+   *  (ADR-206 Inc.2) — pressing the same pin twice is a new key, not the same element. */
+  const [pulse, setPulse] = useState(0);
+  const openPin = useCallback((id: string, at: { x: number; y: number }) => {
+    setPinMenu({ id, at });
+    setPulse((n) => n + 1);
+  }, []);
+  const openCluster = useCallback((cluster: PinCluster, at: { x: number; y: number }) => {
+    setClusterMenu({ cluster, at });
+    setPulse((n) => n + 1);
+  }, []);
   useEffect(() => {
     if (!dayNight) return;
     setSkyTime(new Date());
@@ -655,22 +666,14 @@ export function GeoMapPage() {
                           role="button"
                           tabIndex={0}
                           aria-haspopup="dialog"
-                          onClick={(e) =>
-                            setClusterMenu({
-                              cluster: c,
-                              at: { x: e.clientX, y: e.clientY },
-                            })
-                          }
+                          onClick={(e) => openCluster(c, { x: e.clientX, y: e.clientY })}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
                               const b = e.currentTarget.getBoundingClientRect();
-                              setClusterMenu({
-                                cluster: c,
-                                at: {
-                                  x: b.left + b.width / 2,
-                                  y: b.top + b.height / 2,
-                                },
+                              openCluster(c, {
+                                x: b.left + b.width / 2,
+                                y: b.top + b.height / 2,
                               });
                             }
                           }}
@@ -678,6 +681,9 @@ export function GeoMapPage() {
                           <title>
                             {look === 'empty' ? label : `${label} — ${stateLabel(look)}`}
                           </title>
+                          {clusterMenu?.cluster.key === c.key && (
+                            <PressMark r={r * 3} pulse={pulse} />
+                          )}
                           <circle className="geopage-pin-halo" r={r * 2.6} />
                           {look === 'empty' ? (
                             <circle className="geopage-pin-dot geopage-pin-empty" r={r * 1.7} />
@@ -723,15 +729,12 @@ export function GeoMapPage() {
                         // nodes, and where to go next. It opens at the pointer, or at the pin's
                         // centre for the keyboard.
                         aria-haspopup="dialog"
-                        onClick={(e) => setPinMenu({ id: g.id, at: { x: e.clientX, y: e.clientY } })}
+                        onClick={(e) => openPin(g.id, { x: e.clientX, y: e.clientY })}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
                             const r = e.currentTarget.getBoundingClientRect();
-                            setPinMenu({
-                              id: g.id,
-                              at: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
-                            });
+                            openPin(g.id, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
                           }
                         }}
                       >
@@ -746,6 +749,7 @@ export function GeoMapPage() {
                           {sky && ` · ${sky}`}
                         </title>
                         {/* Halo first so the dot reads against both land and ocean. */}
+                        {pinMenu?.id === g.id && <PressMark r={r * 2.3} pulse={pulse} />}
                         <circle className="geopage-pin-halo" r={r * 1.9} />
                         {/* A site with no nodes is a hollow ring: nothing there is monitored, so
                             it gets no state colour — not green, and not the grey of `unknown`. */}
@@ -840,7 +844,7 @@ export function GeoMapPage() {
           onPick={(id) => {
             const at = clusterMenu.at;
             closeClusterMenu();
-            setPinMenu({ id, at });
+            openPin(id, at);
           }}
           onZoom={() => {
             const c = clusterMenu.cluster;
@@ -864,6 +868,21 @@ export function GeoMapPage() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The mark on the marker whose bubble is open (ADR-206 Inc.2): a ring that stays until the bubble
+ * closes, and a ripple that runs once from it each time a press opens one. Drawn under the halo, so
+ * the dot and its count stay on top. `r` is already counter-scaled, so both are the same size on
+ * screen at any zoom; the ripple grows by a CSS transform, which leaves the radius alone.
+ */
+function PressMark({ r, pulse }: { r: number; pulse: number }) {
+  return (
+    <>
+      <circle className="geopage-pin-ripple" r={r} key={pulse} />
+      <circle className="geopage-pin-ring" r={r} />
+    </>
   );
 }
 

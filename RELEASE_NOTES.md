@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The Geo map marks the pin you pressed.** The pin or cluster whose bubble is open carries a ring until the bubble closes, and a small ripple runs from it once when you press it. Both stay the same size at any zoom. With reduced motion turned on in the operating system, only the ring is drawn.
+
 ## v0.3.62 — Discovery scans can be widened to a /16 from Settings, and the Geo map wraps around the world and opens where you left it
 
 ### Improvements

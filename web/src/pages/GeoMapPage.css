@@ -178,6 +178,41 @@
   stroke-width: 2;
 }
 
+/* The marker whose bubble is open (ADR-206 Inc.2): a ring that stays, and a ripple that runs once
+   from it. The stroke is non-scaling, so the ripple's transform grows the circle and not the line. */
+.geopage-pin-ring,
+.geopage-pin-ripple {
+  fill: none;
+  stroke: var(--accent-color);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.geopage-pin-ripple {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: geopage-ripple 0.45s ease-out;
+}
+
+@keyframes geopage-ripple {
+  from {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .geopage-pin-ripple {
+    animation: none;
+  }
+}
+
 /* Several sites drawn as one marker (ADR-206): the count sits on the dot. The size is set on the
    element, counter-scaled by the zoom like the dot's radius. */
 .geopage-cluster-count {
