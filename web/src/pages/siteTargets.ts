@@ -91,6 +91,26 @@ export function defaultChecked(rows: readonly PrefixRow[]): Set<string> {
 }
 
 /**
+ * The ticks carried over when the sweep limit changes under a chosen site (ADR-219): the
+ * deployment's limit arrives after the page opens, so a site picked first was ticked against the
+ * shipped default. A row whose sweepability did not change keeps the operator's choice; one that
+ * became sweepable is ticked, as picking the site would have done; one that stopped is dropped.
+ */
+export function retickForLimit(
+  checked: ReadonlySet<string>,
+  before: readonly PrefixRow[],
+  after: readonly PrefixRow[],
+): Set<string> {
+  const wasSweepable = new Set(before.filter((r) => !r.unsweepable).map((r) => r.prefix));
+  const next = new Set<string>();
+  for (const r of after) {
+    if (r.unsweepable) continue;
+    if (wasSweepable.has(r.prefix) ? checked.has(r.prefix) : true) next.add(r.prefix);
+  }
+  return next;
+}
+
+/**
  * The target spec for a set of ticked prefixes.
  *
  * Built from `rows` rather than from the set itself so the order on the wire is the order on

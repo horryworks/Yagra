@@ -19,6 +19,7 @@
 
 - A discovery scan wider than about 60,000 addresses was refused with 413 by the bundled nginx before it reached core, whose own limit had been raised for it. The discovery routes now carry up to 32 MiB through nginx as well.
 - The Discovery walks card no longer shows a raw key (`settings.neighbors.cadence.hours`) under each walk interval, and its divider lines now separate one walk from the next instead of a walk's switch from its own interval.
+- Importing what a discovery scan found no longer slows down with the square of its size: each imported device used to re-read its whole destination folder to find its place in the order, which a /16-sized import would have repeated tens of thousands of times inside one transaction. The place is now read once per folder.
 
 ## v0.3.61 — The bundled oxidized's routes leave the LAN-facing port, lists keep their order after an edit, and the bundled stores move to newer versions
 

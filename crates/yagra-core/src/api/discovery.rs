@@ -49,9 +49,12 @@ use yagra_base::secrets::CredentialStore;
 /// [`crate::discover::discovery::JOB_TARGETS`] each, because the poller's cumulative result has to
 /// fit in one NATS message; raising this number costs more jobs, never a bigger message.
 async fn max_scan_targets(admin: &super::AdminState) -> usize {
-    usize::try_from(admin.repo.get_discovery_max_targets().await)
-        .unwrap_or(usize::try_from(yagra_base::repo::DEFAULT_DISCOVERY_MAX_TARGETS).unwrap_or(4096))
+    usize::try_from(admin.repo.get_discovery_max_targets().await).unwrap_or(DEFAULT_SCAN_TARGETS)
 }
+
+/// [`yagra_base::repo::DEFAULT_DISCOVERY_MAX_TARGETS`] as a length (a `u32` fits a `usize` on every
+/// target this builds for).
+const DEFAULT_SCAN_TARGETS: usize = yagra_base::repo::DEFAULT_DISCOVERY_MAX_TARGETS as usize;
 
 /// Request-body limit on the discovery routes (ADR-219 decision 4). An import of a full /16 is
 /// about 20 MB, ten times axum's 2 MB default; every other route keeps that default.
@@ -100,6 +103,9 @@ pub(super) fn routes() -> Router<ApiState> {
             post(preview_discovery_import),
         )
         .route("/api/v1/discovery/candidates", get(discovery_candidates))
+        // On the `/discovery/` routes only, matching the nginx block that carries them; the
+        // discovered-endpoint routes below take one address each and keep axum's default.
+        .layer(DefaultBodyLimit::max(DISCOVERY_BODY_LIMIT))
         .route(
             "/api/v1/discovered-endpoints",
             get(list_discovered_endpoints),
@@ -112,7 +118,6 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/discovered-endpoints/:id/probe",
             post(probe_discovered_endpoint),
         )
-        .layer(DefaultBodyLimit::max(DISCOVERY_BODY_LIMIT))
 }
 
 /// Start-scan body: explicit target IPs (the WebUI expands a CIDR), candidate stored credentials by
@@ -1081,8 +1086,7 @@ async fn preview_discovery_import(
     // Never below the default: the preview is a lookup that sends nothing to the network, and the
     // passive endpoints' setup cells batch their questions at the default size
     // (`web/src/lib/previewBatch.ts`), so a lowered sweep limit must not start refusing them.
-    let default = usize::try_from(yagra_base::repo::DEFAULT_DISCOVERY_MAX_TARGETS).unwrap_or(4096);
-    let max = max_scan_targets(&admin).await.max(default);
+    let max = max_scan_targets(&admin).await.max(DEFAULT_SCAN_TARGETS);
     if body.addresses.len() > max {
         return Err(ApiError::bad_request(
             "too_many_addresses",
@@ -2188,7 +2192,7 @@ mod tests {
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
         // One past the default limit, which a fresh database holds (ADR-219).
-        let nodes: Vec<serde_json::Value> = (0..=4096)
+        let nodes: Vec<serde_json::Value> = (0..=DEFAULT_SCAN_TARGETS)
             .map(|i| {
                 serde_json::json!({
                     "address": format!("10.9.{}.{}", i / 250, i % 250 + 1),
@@ -2209,6 +2213,36 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "too_many_nodes");
         assert_eq!(yagra_base::pgtest::rows(&pool, "nodes").await, 0);
+    }
+
+    /// The raised body limit reaches the `/discovery/` routes nginx carries it for and stops there:
+    /// a discovered endpoint's import takes one address and keeps axum's 2 MB default (ADR-219).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_the_discovery_routes_take_the_raised_body_limit(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        // 3 MB: past axum's default, well inside DISCOVERY_BODY_LIMIT.
+        let padding = "x".repeat(3 * 1024 * 1024);
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/discovery/import-preview",
+            &tok,
+            Some(serde_json::json!({ "addresses": ["10.0.0.1"], "padding": padding })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        let (status, _) = send(
+            &st,
+            "POST",
+            &format!("/api/v1/discovered-endpoints/{}/import", Uuid::nil()),
+            &tok,
+            Some(serde_json::json!({ "padding": padding })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     // ── ADR-131: filing an import by IP range ───────────────────────────────────────────

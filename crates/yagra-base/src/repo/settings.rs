@@ -244,6 +244,30 @@ impl NodeRepo {
     /// Set the connectivity-discovery settings, upserting the singleton row. The API edge validates
     /// both cadences (`adjacency_settings::interval_in_bounds`); the table CHECKs are the backstop.
     pub async fn set_adjacency_settings(&self, s: &AdjacencySettings) -> anyhow::Result<()> {
+        Self::write_adjacency_settings(&self.pool, s).await
+    }
+
+    /// The discovery card's whole save (ADR-219): the walks' settings and, when given, the sweep
+    /// limit, in **one transaction**, so a failure of the second cannot leave the first applied
+    /// behind an error that says nothing was saved.
+    pub async fn set_discovery_settings(
+        &self,
+        s: &AdjacencySettings,
+        sweep_limit: Option<u32>,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        Self::write_adjacency_settings(&mut *tx, s).await?;
+        if let Some(n) = sweep_limit {
+            Self::write_discovery_max_targets(&mut *tx, n).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn write_adjacency_settings(
+        db: impl sqlx::PgExecutor<'_>,
+        s: &AdjacencySettings,
+    ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO app_settings \
                  (id, neighbor_discovery_enabled, neighbor_interval_secs, \
@@ -269,7 +293,7 @@ impl NodeRepo {
         .bind(i32::try_from(s.routing_interval_secs).unwrap_or(i32::MAX))
         .bind(s.media_enabled)
         .bind(i32::try_from(s.media_interval_secs).unwrap_or(i32::MAX))
-        .execute(&self.pool)
+        .execute(db)
         .await?;
         Ok(())
     }
@@ -297,13 +321,20 @@ impl NodeRepo {
     /// Set the sweep limit, upserting the singleton row. The API edge validates the bounds
     /// ([`discovery_max_targets_in_bounds`]); the table `CHECK` is the backstop.
     pub async fn set_discovery_max_targets(&self, n: u32) -> anyhow::Result<()> {
+        Self::write_discovery_max_targets(&self.pool, n).await
+    }
+
+    async fn write_discovery_max_targets(
+        db: impl sqlx::PgExecutor<'_>,
+        n: u32,
+    ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO app_settings (id, discovery_max_targets, updated_at) \
              VALUES (TRUE, $1, now()) \
              ON CONFLICT (id) DO UPDATE SET discovery_max_targets = $1, updated_at = now()",
         )
         .bind(i32::try_from(n).unwrap_or(i32::MAX))
-        .execute(&self.pool)
+        .execute(db)
         .await?;
         Ok(())
     }
@@ -538,6 +569,47 @@ mod tests {
         assert!(
             repo.set_discovery_max_targets(65_537).await.is_err(),
             "the CHECK is the backstop past a /16"
+        );
+    }
+
+    /// The discovery card's save is one transaction (ADR-219): a sweep limit the table refuses
+    /// leaves the walks' settings exactly as they were, and an accepted one lands with them.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_discovery_save_lands_whole_or_not_at_all(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_app_settings(30, 7).await.expect("seed");
+        let before = repo.get_adjacency_settings().await;
+        let mut next = before;
+        next.neighbors_enabled = !before.neighbors_enabled;
+        assert!(
+            repo.set_discovery_settings(&next, Some(65_537))
+                .await
+                .is_err(),
+            "the CHECK refuses the limit"
+        );
+        assert_eq!(
+            repo.get_adjacency_settings().await,
+            before,
+            "and nothing else landed"
+        );
+        assert_eq!(
+            repo.get_discovery_max_targets().await,
+            super::DEFAULT_DISCOVERY_MAX_TARGETS
+        );
+
+        repo.set_discovery_settings(&next, Some(8192))
+            .await
+            .expect("write");
+        assert_eq!(repo.get_adjacency_settings().await, next);
+        assert_eq!(repo.get_discovery_max_targets().await, 8192);
+        repo.set_discovery_settings(&before, None)
+            .await
+            .expect("write");
+        assert_eq!(
+            repo.get_discovery_max_targets().await,
+            8192,
+            "absent leaves it alone"
         );
     }
 

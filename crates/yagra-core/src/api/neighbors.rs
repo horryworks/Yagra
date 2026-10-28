@@ -1290,9 +1290,11 @@ async fn update_neighbor_settings(
             ));
         }
     }
+    // One transaction, so a sweep limit that fails to land does not leave the walks changed
+    // behind a 500.
     admin
         .repo
-        .set_adjacency_settings(&next)
+        .set_discovery_settings(&next, body.scan_max_targets)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -1301,15 +1303,6 @@ async fn update_neighbor_settings(
                 "failed to update neighbour settings",
             )
         })?;
-    if let Some(n) = body.scan_max_targets {
-        admin.repo.set_discovery_max_targets(n).await.map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "set discovery sweep limit",
-                "failed to update the discovery sweep limit",
-            )
-        })?;
-    }
     Ok(StatusCode::NO_CONTENT)
 }
 

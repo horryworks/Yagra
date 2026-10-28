@@ -538,9 +538,16 @@ impl NodeRepo {
                 taken.insert(addr);
             }
         }
-        // The scope is the row's own destination folder (`$8`), so this fragment is the same for
-        // every row of the batch; built once.
-        let order = crate::groups::append_base_sql("$8", "");
+        // The scope is the row's own destination folder (`$1`), so this fragment is the same for
+        // every destination of the batch; built once.
+        let base_sql = format!(
+            "SELECT {}::double precision AS base",
+            crate::groups::append_base_sql("$1", "")
+        );
+        // The next `sort_order` per destination, read once per folder rather than once per row:
+        // the base is a `MAX` over the whole folder through `IS NOT DISTINCT FROM`, which no index
+        // serves, so asking it per row made a sweep-sized import quadratic in its own length.
+        let mut next_order: HashMap<Option<Uuid>, f64> = HashMap::new();
         let mut outcome = ImportOutcome::default();
         for (i, n) in nodes.iter().enumerate() {
             // `insert` returning false is the second row of this batch at an address the first one
@@ -551,17 +558,32 @@ impl NodeRepo {
             }
             // `sort_order` is computed the same way `set_node_group` does, rather than left at
             // the column default: every imported node would otherwise share one value and sort
-            // ahead of whatever the operator had already placed in that folder. Inside the
-            // transaction each row sees the previous one, so a batch lands in order.
+            // ahead of whatever the operator had already placed in that folder. The base is read
+            // inside the transaction, under the import lock, and each row of the batch takes the
+            // next value after it, so a batch lands in order.
             //
             // 🚨 **Over the whole scope, folders included** (ADR-162): the destination folder's
             // sub-folders share this sequence, so a max taken over `nodes` alone lands the import
             // on top of them.
-            sqlx::query(&format!(
+            let order = match next_order.get_mut(&n.group) {
+                Some(last) => {
+                    *last += 1.0;
+                    *last
+                }
+                None => {
+                    let base: f64 = sqlx::query_scalar(&base_sql)
+                        .bind(n.group)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                    next_order.insert(n.group, base + 1.0);
+                    base + 1.0
+                }
+            };
+            sqlx::query(
                 "INSERT INTO nodes \
                    (id, name, address, profile_id, credential_id, vendor, model, group_id, sort_order) \
-                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, {order} + 1)"
-            ))
+                 VALUES ($1, $2, $3::inet, $4, $5, $6, $7, $8, $9)",
+            )
             .bind(Uuid::new_v4())
             .bind(n.name)
             .bind(n.address.to_string())
@@ -570,6 +592,7 @@ impl NodeRepo {
             .bind(n.vendor)
             .bind(n.model)
             .bind(n.group)
+            .bind(order)
             .execute(&mut *tx)
             .await?;
             outcome.created += 1;
@@ -3346,6 +3369,60 @@ mod tests {
             .expect("import");
         assert_eq!(outcome.created, 2, "{outcome:?}");
         assert_eq!(outcome.skipped, vec![2]);
+    }
+
+    /// An import lands after everything already in each destination — nodes and sub-folders alike
+    /// (ADR-162) — and in batch order, with each destination keeping its own sequence when the
+    /// batch interleaves two of them. The base is read once per destination, not once per row.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_import_continues_each_destinations_order_after_what_is_there(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let a = pgtest::group(&pool, "site-a").await;
+        let b = pgtest::group(&pool, "site-b").await;
+        let sub = pgtest::group(&pool, "site-a-floor").await;
+        sqlx::query("UPDATE node_groups SET parent_id = $1, sort_order = 7 WHERE id = $2")
+            .bind(a)
+            .bind(sub)
+            .execute(&pool)
+            .await
+            .expect("sub-folder");
+        let there = pgtest::node(&pool, "already-there", 1, Some(a)).await;
+        sqlx::query("UPDATE nodes SET sort_order = 5 WHERE id = $1")
+            .bind(there)
+            .execute(&pool)
+            .await
+            .expect("order");
+        let into = |name: &'static str, addr: &str, group: Uuid| NewNode {
+            group: Some(group),
+            ..new_node(name, addr)
+        };
+        repo.import_nodes(&[
+            into("a-1", "10.9.5.1", a),
+            into("b-1", "10.9.5.2", b),
+            into("a-2", "10.9.5.3", a),
+            into("b-2", "10.9.5.4", b),
+        ])
+        .await
+        .expect("import");
+        let order = |name: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, f64>("SELECT sort_order FROM nodes WHERE name = $1")
+                    .bind(name)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("row")
+            }
+        };
+        assert_eq!(
+            order("a-1").await,
+            8.0,
+            "after the sub-folder at 7, not the node at 5"
+        );
+        assert_eq!(order("a-2").await, 9.0);
+        assert_eq!(order("b-1").await, 1.0, "an empty folder starts at 1");
+        assert_eq!(order("b-2").await, 2.0);
     }
 
     /// One batch naming an address twice lands it once — the second row meets the node the first

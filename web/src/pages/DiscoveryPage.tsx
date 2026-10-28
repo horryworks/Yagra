@@ -53,6 +53,7 @@ import {
   defaultChecked,
   hostCount,
   prefixRows,
+  retickForLimit,
   siteTargetOptions,
   specFor,
   sumHosts,
@@ -395,6 +396,22 @@ export function DiscoveryPage() {
     () => prefixRows(siteOptions.find((o) => o.id === siteId)?.prefixes ?? [], sweepLimit),
     [siteOptions, siteId, sweepLimit],
   );
+
+  // A site picked before the deployment's limit arrived was ticked against the shipped default;
+  // carry the ticks over to the real limit rather than leave a now-sweepable range unticked.
+  const tickedAtLimit = useRef(sweepLimit);
+  useEffect(() => {
+    const before = tickedAtLimit.current;
+    tickedAtLimit.current = sweepLimit;
+    if (before === sweepLimit) return;
+    const picked = siteOptions.find((o) => o.id === siteId);
+    if (!picked) return;
+    setCheckedPrefixes((c) =>
+      retickForLimit(c, prefixRows(picked.prefixes, before), prefixRows(picked.prefixes, sweepLimit)),
+    );
+    // Only a change of limit re-ticks; a change of site is `pickSite`'s.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sweepLimit]);
 
   /** What the Scan button will actually send — the ticked ranges, or the typed spec. One
    *  expression, so the button, the count and the request cannot read different things. */

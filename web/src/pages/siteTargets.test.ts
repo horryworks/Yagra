@@ -7,6 +7,7 @@ import {
   defaultChecked,
   hostCount,
   prefixRows,
+  retickForLimit,
   siteTargetOptions,
   specFor,
   sumHosts,
@@ -112,6 +113,34 @@ describe('defaultChecked', () => {
 
   it('ticks nothing when no prefix can be swept', () => {
     expect(defaultChecked(prefixRows(px('2001:db8::/64')))).toEqual(new Set());
+  });
+});
+
+describe('retickForLimit', () => {
+  // A /24 the operator unticked, a /24 left ticked, and a /16 too large at the default limit.
+  const prefixes = px('192.168.1.0/24', '192.168.2.0/24', '10.20.0.0/16');
+
+  it('ticks a range the arriving limit makes sweepable and keeps the other choices', () => {
+    const before = prefixRows(prefixes, SWEEP_LIMIT);
+    const after = prefixRows(prefixes, 65536);
+    const checked = new Set(['192.168.2.0/24']);
+    expect([...retickForLimit(checked, before, after)].sort()).toEqual([
+      '10.20.0.0/16',
+      '192.168.2.0/24',
+    ]);
+  });
+
+  it('drops a range a lowered limit can no longer send', () => {
+    const before = prefixRows(prefixes, 65536);
+    const after = prefixRows(prefixes, 200);
+    const checked = defaultChecked(before);
+    expect(retickForLimit(checked, before, after)).toEqual(new Set());
+  });
+
+  it('changes nothing when the limit changes nothing', () => {
+    const rows = prefixRows(prefixes, SWEEP_LIMIT);
+    const checked = new Set(['192.168.1.0/24']);
+    expect(retickForLimit(checked, rows, prefixRows(prefixes, 8192))).toEqual(checked);
   });
 });
 
