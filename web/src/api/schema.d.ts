@@ -11152,6 +11152,22 @@ export interface components {
              *     leaves it unchanged.
              */
             routing_interval_secs?: number | null;
+            /**
+             * Format: int32
+             * @description The most addresses one discovery sweep may carry (ADR-219). The same limit bounds an import
+             *     of what a sweep found and its preview. Omitted on update leaves it unchanged.
+             */
+            scan_max_targets?: number | null;
+            /**
+             * Format: int32
+             * @description Largest sweep limit this deployment accepts — a /16.
+             */
+            scan_max_targets_max?: number;
+            /**
+             * Format: int32
+             * @description Smallest sweep limit this deployment accepts.
+             */
+            scan_max_targets_min?: number;
         };
         /** @description One page of adjacency changes, newest first. */
         NeighborHistory: {
@@ -33311,7 +33327,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The cadence is outside the allowed range */
+            /** @description A cadence or the sweep limit is outside its allowed range */
             400: {
                 headers: {
                     [name: string]: unknown;

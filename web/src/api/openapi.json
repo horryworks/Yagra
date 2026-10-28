@@ -22142,7 +22142,7 @@
             "description": "Settings updated; the change applies from the next scheduler sweep"
           },
           "400": {
-            "description": "The cadence is outside the allowed range",
+            "description": "A cadence or the sweep limit is outside its allowed range",
             "content": {
               "application/json": {
                 "schema": {
@@ -38250,6 +38250,27 @@
             ],
             "format": "int32",
             "description": "How often each SNMP node's routing adjacency is collected, in seconds. Omitted on update\nleaves it unchanged.",
+            "minimum": 0
+          },
+          "scan_max_targets": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The most addresses one discovery sweep may carry (ADR-219). The same limit bounds an import\nof what a sweep found and its preview. Omitted on update leaves it unchanged.",
+            "minimum": 0
+          },
+          "scan_max_targets_max": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Largest sweep limit this deployment accepts — a /16.",
+            "minimum": 0
+          },
+          "scan_max_targets_min": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Smallest sweep limit this deployment accepts.",
             "minimum": 0
           }
         }

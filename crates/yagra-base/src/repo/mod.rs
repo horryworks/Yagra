@@ -112,6 +112,10 @@ pub use prefix_gap_acks::StoredGapAck;
 pub use profiles::ProfileSummary;
 pub use row_names::RowNameRow;
 pub use settings::DEFAULT_POLL_INTERVAL_SECS;
+pub use settings::{
+    discovery_max_targets_in_bounds, DEFAULT_DISCOVERY_MAX_TARGETS, MAX_DISCOVERY_MAX_TARGETS,
+    MIN_DISCOVERY_MAX_TARGETS,
+};
 pub use subnet_overlaps::{OverlapRuleInput, OverlapRuleRefusal, StoredOverlapRule};
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].

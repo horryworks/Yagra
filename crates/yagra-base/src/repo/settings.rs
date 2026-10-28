@@ -32,6 +32,22 @@ use super::*;
 /// (ADR-202 Inc.5); `config.rs` reads it from here.
 pub const DEFAULT_POLL_INTERVAL_SECS: u32 = 300;
 
+/// The most addresses one discovery sweep may carry when no operator has said otherwise — a /20,
+/// the compiled limit ADR-173 set and migration 0158's column default (ADR-219).
+pub const DEFAULT_DISCOVERY_MAX_TARGETS: u32 = 4096;
+/// The smallest limit an operator may set: one address still makes a sweep.
+pub const MIN_DISCOVERY_MAX_TARGETS: u32 = 1;
+/// The largest limit an operator may set — a /16, matching the `CHECK` on
+/// `app_settings.discovery_max_targets`. Past it one request is no longer a site.
+pub const MAX_DISCOVERY_MAX_TARGETS: u32 = 65_536;
+
+/// Whether a sweep limit is inside the configurable band. The API edge rejects anything else; the
+/// table `CHECK` is the backstop.
+#[must_use]
+pub fn discovery_max_targets_in_bounds(n: u32) -> bool {
+    (MIN_DISCOVERY_MAX_TARGETS..=MAX_DISCOVERY_MAX_TARGETS).contains(&n)
+}
+
 impl NodeRepo {
     /// The global default polling interval (seconds) from the singleton `app_settings` row. Falls
     /// back to the compiled default if the row is somehow absent (it is seeded at startup).
@@ -258,6 +274,40 @@ impl NodeRepo {
         Ok(())
     }
 
+    /// The most addresses one discovery sweep may carry (ADR-219), read when a sweep, an import or
+    /// an import preview arrives.
+    ///
+    /// Falls back to [`DEFAULT_DISCOVERY_MAX_TARGETS`] on a read failure, and mid-upgrade before
+    /// migration 0158 has run — the limit that was compiled in until then, so a database blip
+    /// neither widens nor narrows what an operator may sweep.
+    pub async fn get_discovery_max_targets(&self) -> u32 {
+        let Ok(Some(row)) =
+            sqlx::query("SELECT discovery_max_targets FROM app_settings WHERE id = TRUE")
+                .fetch_optional(&self.pool)
+                .await
+        else {
+            return DEFAULT_DISCOVERY_MAX_TARGETS;
+        };
+        row.try_get::<i32, _>("discovery_max_targets")
+            .ok()
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(DEFAULT_DISCOVERY_MAX_TARGETS)
+    }
+
+    /// Set the sweep limit, upserting the singleton row. The API edge validates the bounds
+    /// ([`discovery_max_targets_in_bounds`]); the table `CHECK` is the backstop.
+    pub async fn set_discovery_max_targets(&self, n: u32) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, discovery_max_targets, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET discovery_max_targets = $1, updated_at = now()",
+        )
+        .bind(i32::try_from(n).unwrap_or(i32::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Which dependency graph the alert engine uses (ADR-043 decision 5).
     ///
     /// Degrades to [`TopologyMode::Manual`] on any read failure, and on any value it cannot parse.
@@ -470,6 +520,25 @@ mod tests {
         };
         repo.set_adjacency_settings(&want).await.expect("write");
         assert_eq!(repo.get_adjacency_settings().await, want);
+    }
+
+    /// The sweep limit starts at the compiled default and round-trips (ADR-219).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_discovery_sweep_limit_round_trips(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_app_settings(30, 7).await.expect("seed");
+        assert_eq!(
+            repo.get_discovery_max_targets().await,
+            super::DEFAULT_DISCOVERY_MAX_TARGETS,
+            "migration 0158's column default and the compiled one must agree"
+        );
+        repo.set_discovery_max_targets(65_536).await.expect("write");
+        assert_eq!(repo.get_discovery_max_targets().await, 65_536);
+        assert!(
+            repo.set_discovery_max_targets(65_537).await.is_err(),
+            "the CHECK is the backstop past a /16"
+        );
     }
 
     /// The topology mode is stored, and its timestamp moves only when the mode actually changes.

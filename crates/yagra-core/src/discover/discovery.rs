@@ -53,7 +53,7 @@ const SCAN_TIMEOUT_MS: u32 = 2000;
 /// Most targets one [`DiscoveryJob`] carries — and so the most devices one of the poller's
 /// **cumulative** results can list (ADR-173).
 ///
-/// A scan may be wider than this (`api::discovery::MAX_SCAN_TARGETS`); [`DiscoveryRunner::start`]
+/// A scan may be wider than this (the sweep limit, `api::discovery::max_scan_targets`); [`DiscoveryRunner::start`]
 /// cuts it into parts of at most this many and publishes each as a job of its own. The number is
 /// set by the bus, not by the network: the poller re-sends every device it has found so far in one
 /// message, NATS refuses a message past 1 MiB, and a refused final result leaves the scan `running`
@@ -112,12 +112,26 @@ const MAX_SCANS: usize = 20;
 /// importing from, and sweeps evict the scan an open Rediscover dialog would apply.
 const MAX_REDISCOVERIES: usize = 20;
 
-/// A scan still marked running after this is dropped: its poller died, or its final result was
-/// lost. Comfortably longer than the slowest legitimate sweep (4096 targets, ~22s per target in the
-/// worst credential-probe case, 16 at a time ⇒ about 94 minutes, ADR-173), plus the time a sweep can
-/// wait behind another on the poller's strictly sequential job loop, so this can only catch a sweep
-/// that is genuinely never going to report. It was two hours while the cap was 1024.
+/// A scan of up to [`RUNNING_AGE_STEP`] targets still marked running after this is dropped: its
+/// poller died, or its final result was lost. Comfortably longer than the slowest legitimate sweep
+/// of that size (4096 targets, ~22s per target in the worst credential-probe case, 16 at a time ⇒
+/// about 94 minutes, ADR-173), plus the time a sweep can wait behind another on the poller's
+/// strictly sequential job loop, so this can only catch a sweep that is genuinely never going to
+/// report. It was two hours while the cap was 1024. A wider scan gets a multiple of it
+/// ([`running_max_age`]).
 const RUNNING_MAX_AGE: Duration = Duration::from_secs(4 * 60 * 60);
+
+/// How many targets one [`RUNNING_MAX_AGE`] covers — the /20 it was measured for.
+const RUNNING_AGE_STEP: u32 = 4096;
+
+/// How long a scan of `total` targets may stay running before it is dropped (ADR-219 decision 5):
+/// [`RUNNING_MAX_AGE`] for every [`RUNNING_AGE_STEP`] targets begun, so the window grows with the
+/// work it has to cover. Since the sweep limit became a setting a scan can be a /16 — at the worst
+/// case above about 25 hours, which a flat four hours would have dropped while it was still
+/// probing.
+fn running_max_age(total: u32) -> Duration {
+    RUNNING_MAX_AGE * total.div_ceil(RUNNING_AGE_STEP).max(1)
+}
 
 /// One device a scan found, with a suggested profile for the operator to confirm on import.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -499,7 +513,7 @@ impl ScanState {
 /// Three rules, in this order — the order matters, because the age rules are what stop a
 /// never-reporting sweep from consuming the cap forever:
 ///
-/// 1. a **running** scan older than [`RUNNING_MAX_AGE`] is gone (its poller is never going to
+/// 1. a **running** scan older than its [`running_max_age`] is gone (its poller is never going to
 ///    report),
 /// 2. a **terminal** scan whose last update is older than [`FINISHED_TTL`] is gone,
 /// 3. if more than [`MAX_SCANS`] sweeps (or [`MAX_REDISCOVERIES`] rediscoveries) remain, the
@@ -520,7 +534,7 @@ fn evict(scans: &mut HashMap<Uuid, ScanState>, now: DateTime<Utc>) {
         if s.state.is_terminal() {
             !older_than(s.updated_at, FINISHED_TTL)
         } else {
-            !older_than(s.started_at, RUNNING_MAX_AGE)
+            !older_than(s.started_at, running_max_age(s.total()))
         }
     });
     // Each origin has its own cap: a run of rediscoveries must not push a finished sweep off the
@@ -1182,6 +1196,36 @@ mod tests {
         s.state = state;
         s.updated_at = now - updated_ago;
         s
+    }
+
+    /// ADR-219 decision 5: a /16 sweep is not retired at the /20's four hours while it can still
+    /// legitimately be probing, and is retired once even its own window has passed.
+    #[test]
+    fn a_wide_running_scan_gets_a_window_as_wide_as_its_work() {
+        assert_eq!(running_max_age(0), RUNNING_MAX_AGE);
+        assert_eq!(running_max_age(1), RUNNING_MAX_AGE);
+        assert_eq!(running_max_age(4096), RUNNING_MAX_AGE);
+        assert_eq!(running_max_age(4097), RUNNING_MAX_AGE * 2);
+        assert_eq!(running_max_age(65_536), RUNNING_MAX_AGE * 16);
+
+        let now = Utc::now();
+        let wide = |started_ago: chrono::Duration| {
+            let mut s = ScanState::new(Uuid::nil(), wide_targets(65_536), None, now - started_ago);
+            s.state = DiscoveryScanState::Running;
+            s.updated_at = now;
+            s
+        };
+        let probing = Uuid::from_u128(1);
+        let lost = Uuid::from_u128(2);
+        let mut scans = HashMap::new();
+        scans.insert(probing, wide(chrono::Duration::hours(30)));
+        scans.insert(lost, wide(chrono::Duration::hours(65)));
+        evict(&mut scans, now);
+        assert!(
+            scans.contains_key(&probing),
+            "30 hours into a /16 is not abandoned"
+        );
+        assert!(!scans.contains_key(&lost), "past 64 hours even a /16 is");
     }
 
     #[test]

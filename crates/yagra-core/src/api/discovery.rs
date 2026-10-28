@@ -10,8 +10,8 @@
 //! error this module can return about a credential names an **id and a static reason, never any
 //! secret content** (security.md).
 //!
-//! The sweep is bounded at [`MAX_SCAN_TARGETS`] because it is the one endpoint that turns a single
-//! request into a large amount of outbound traffic.
+//! The sweep is bounded by the deployment's sweep limit ([`max_scan_targets`]) because it is the
+//! one endpoint that turns a single request into a large amount of outbound traffic.
 //!
 //! ## Two ways a device gets found, and why they meet only at import
 //!
@@ -28,7 +28,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Leader, RequireManageConfig, RequireView, Scoped};
 use super::ApiState;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -40,15 +40,22 @@ use std::time::Instant;
 use uuid::Uuid;
 use yagra_base::secrets::CredentialStore;
 
-/// Most targets a single scan may sweep — a /20 (ADR-173). The cap is what keeps one request from
-/// becoming an unbounded outbound scan of someone else's network. The import and its preview hold
-/// to it too: they carry what one sweep found.
+/// Most targets a single scan may sweep: the operator's setting (ADR-219), 4096 (a /20, ADR-173)
+/// unless changed, a /16 at most. The cap is what keeps one request from becoming an unbounded
+/// outbound scan of someone else's network. The import and its preview hold to it too: they carry
+/// what one sweep found. Read on every request, so a change applies to the next one.
 ///
 /// ⚠️ **Not the size of a bus message.** A scan this wide goes out as several jobs of at most
-/// [`crate::discover::discovery::JOB_TARGETS`] each, because the poller's cumulative result has to fit in
-/// one NATS message; raising this number costs more jobs, never a bigger message. It was 1024
-/// while one scan was one job.
-const MAX_SCAN_TARGETS: usize = 4096;
+/// [`crate::discover::discovery::JOB_TARGETS`] each, because the poller's cumulative result has to
+/// fit in one NATS message; raising this number costs more jobs, never a bigger message.
+async fn max_scan_targets(admin: &super::AdminState) -> usize {
+    usize::try_from(admin.repo.get_discovery_max_targets().await)
+        .unwrap_or(usize::try_from(yagra_base::repo::DEFAULT_DISCOVERY_MAX_TARGETS).unwrap_or(4096))
+}
+
+/// Request-body limit on the discovery routes (ADR-219 decision 4). An import of a full /16 is
+/// about 20 MB, ten times axum's 2 MB default; every other route keeps that default.
+const DISCOVERY_BODY_LIMIT: usize = 32 * 1024 * 1024;
 
 /// Default page size for the discovered-endpoint list.
 const ENDPOINT_DEFAULT_LIMIT: i64 = 100;
@@ -105,6 +112,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/discovered-endpoints/:id/probe",
             post(probe_discovered_endpoint),
         )
+        .layer(DefaultBodyLimit::max(DISCOVERY_BODY_LIMIT))
 }
 
 /// Start-scan body: explicit target IPs (the WebUI expands a CIDR), candidate stored credentials by
@@ -276,10 +284,11 @@ async fn start_discovery_scan(
     _leader: Leader,
     Json(body): Json<StartScan>,
 ) -> ApiResult<(StatusCode, Json<StartedScan>)> {
-    if body.targets.is_empty() || body.targets.len() > MAX_SCAN_TARGETS {
+    let max = max_scan_targets(&admin).await;
+    if body.targets.is_empty() || body.targets.len() > max {
         return Err(ApiError::bad_request(
             "invalid_scan",
-            format!("targets must be 1..={MAX_SCAN_TARGETS} addresses"),
+            format!("targets must be 1..={max} addresses"),
         ));
     }
     // Parsed into `IpAddr` here, so nothing that is not an address reaches the sweep.
@@ -784,11 +793,12 @@ async fn import_discovered(
     // same cap the preview holds it to. Checked first: past it, every check below is a round trip or
     // an allocation per row, and the insert is one transaction holding a connection throughout
     // (ADR-158 B7).
-    if body.nodes.len() > MAX_SCAN_TARGETS {
+    let max = max_scan_targets(&admin).await;
+    if body.nodes.len() > max {
         return Err(ApiError::bad_request(
             "too_many_nodes",
             format!(
-                "at most {MAX_SCAN_TARGETS} nodes may be imported in one request, got {}",
+                "at most {max} nodes may be imported in one request, got {}",
                 body.nodes.len()
             ),
         ));
@@ -1068,11 +1078,16 @@ async fn preview_discovery_import(
     admin: Admin,
     Json(body): Json<ImportPreviewQuery>,
 ) -> ApiResult<Json<ImportPreviewResult>> {
-    if body.addresses.len() > MAX_SCAN_TARGETS {
+    // Never below the default: the preview is a lookup that sends nothing to the network, and the
+    // passive endpoints' setup cells batch their questions at the default size
+    // (`web/src/lib/previewBatch.ts`), so a lowered sweep limit must not start refusing them.
+    let default = usize::try_from(yagra_base::repo::DEFAULT_DISCOVERY_MAX_TARGETS).unwrap_or(4096);
+    let max = max_scan_targets(&admin).await.max(default);
+    if body.addresses.len() > max {
         return Err(ApiError::bad_request(
             "too_many_addresses",
             format!(
-                "at most {MAX_SCAN_TARGETS} addresses may be examined in one request, got {}",
+                "at most {max} addresses may be examined in one request, got {}",
                 body.addresses.len()
             ),
         ));
@@ -1909,7 +1924,7 @@ mod tests {
     /// is cumulative by design, so that an older core reading one message as final still converges
     /// (ADR-017). The largest such message a single request can provoke is therefore bounded by
     /// the widest **job**, [`JOB_TARGETS`] — since ADR-173 a scan wider than that goes out as
-    /// several jobs, so [`MAX_SCAN_TARGETS`] no longer sets it — and the ceiling it must clear is
+    /// several jobs, so the sweep limit no longer sets it — and the ceiling it must clear is
     /// NATS's `max_payload`, which is 1 MiB unless the server config says otherwise
     /// (`docker/nats/nats-server.conf` now says so out loud rather than inheriting it).
     ///
@@ -1986,14 +2001,41 @@ mod tests {
             "the budget absorbs a sysDescr of {break_even} bytes on every one of              {JOB_TARGETS} devices before the message stops fitting. Below 750 the margin              over the {OBSERVED_WORST_SYSDESCR} bytes measured on real hardware is too thin to              call a margin -- if a field was just added to DiscoveredDevice, this is the number              that has to be re-decided rather than the floor that has to be lowered. At {CEILING}              nothing was found to fail at all, which would mean this test measures nothing."
         );
     }
-    /// The other half of ADR-173: the widest scan the API accepts is a handful of jobs, each no
-    /// wider than the one the test above measured. A cap raised past four jobs is a decision about
-    /// how long a sweep may hold the poller's sequential job loop, not a free change.
+    /// The other half of ADR-173: the widest scan the API accepts is a bounded number of jobs,
+    /// each no wider than the one the test above measured. Four by default; 64 at the /16 an
+    /// operator may set (ADR-219). Raising the ceiling further is a decision about how long a sweep
+    /// may hold the poller's sequential job loop, not a free change.
     #[test]
-    fn the_widest_scan_is_a_few_jobs_no_wider_than_one_bus_message_holds() {
+    fn the_widest_scan_is_a_bounded_number_of_jobs_no_wider_than_one_bus_message_holds() {
         use crate::discover::discovery::JOB_TARGETS;
-        assert_eq!(MAX_SCAN_TARGETS, 4096, "a /20");
-        assert_eq!(MAX_SCAN_TARGETS.div_ceil(JOB_TARGETS), 4);
+        use yagra_base::repo::{DEFAULT_DISCOVERY_MAX_TARGETS, MAX_DISCOVERY_MAX_TARGETS};
+        let jobs = |n: u32| usize::try_from(n).unwrap().div_ceil(JOB_TARGETS);
+        assert_eq!(DEFAULT_DISCOVERY_MAX_TARGETS, 4096, "a /20");
+        assert_eq!(jobs(DEFAULT_DISCOVERY_MAX_TARGETS), 4);
+        assert_eq!(MAX_DISCOVERY_MAX_TARGETS, 65_536, "a /16");
+        assert_eq!(jobs(MAX_DISCOVERY_MAX_TARGETS), 64);
+    }
+
+    /// The widest import an operator may allow fits the body limit these routes carry. Measured
+    /// with the longest name a discovered device is given and a folder id on every row.
+    #[test]
+    fn an_import_of_the_widest_sweep_fits_the_body_limit() {
+        let row = serde_json::json!({
+            "address": "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+            "name": "x".repeat(128),
+            "group_id": Uuid::nil().to_string(),
+            "profile_id": Uuid::nil().to_string(),
+            "credential_id": Uuid::nil().to_string(),
+            "vendor": "x".repeat(64),
+            "model": "x".repeat(64),
+        });
+        let per_row = serde_json::to_vec(&row).unwrap().len() + 1;
+        let widest =
+            per_row * usize::try_from(yagra_base::repo::MAX_DISCOVERY_MAX_TARGETS).unwrap();
+        assert!(
+            widest < DISCOVERY_BODY_LIMIT,
+            "{widest} bytes for a full /16 import against a {DISCOVERY_BODY_LIMIT}-byte limit"
+        );
     }
 
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
@@ -2113,7 +2155,8 @@ mod tests {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
         let tok = token(&st, yagra_common::Role::Admin);
-        let nodes: Vec<serde_json::Value> = (0..=MAX_SCAN_TARGETS)
+        // One past the default limit, which a fresh database holds (ADR-219).
+        let nodes: Vec<serde_json::Value> = (0..=4096)
             .map(|i| {
                 serde_json::json!({
                     "address": format!("10.9.{}.{}", i / 250, i % 250 + 1),

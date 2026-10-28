@@ -5,7 +5,12 @@ import {
   discoveryFormFrom,
   isDiscoveryDirty,
   parseDiscoveryForm,
+  parseScanLimit,
+  scanLimitFrom,
+  sweepLimitOf,
   DISCOVERY_WALKS,
+  MAX_SCAN_MAX_TARGETS,
+  MIN_SCAN_MAX_TARGETS,
   MAX_NEIGHBOR_INTERVAL_SECS,
   MIN_NEIGHBOR_INTERVAL_SECS,
   type DiscoveryForm,
@@ -189,5 +194,31 @@ describe('describeCadence', () => {
   it('does not crash on a nonsense value from a newer server', () => {
     expect(describeCadence(0, t)).toBe('settings.neighbors.cadence.seconds:0');
     expect(describeCadence(Number.NaN, t)).toBe('settings.neighbors.cadence.seconds:0');
+  });
+});
+
+describe('the sweep limit (ADR-219)', () => {
+  it('reads the server value, and the shipped default when there is none', () => {
+    expect(sweepLimitOf({ ...SAVED, scan_max_targets: 65536 })).toBe(65536);
+    expect(sweepLimitOf({ ...SAVED, scan_max_targets: null })).toBe(4096);
+    expect(sweepLimitOf(null)).toBe(4096);
+    expect(scanLimitFrom({ ...SAVED, scan_max_targets: 16384 })).toBe('16384');
+  });
+
+  it('accepts whole numbers inside the band and refuses the rest', () => {
+    expect(parseScanLimit(' 65536 ')).toEqual({ ok: true, value: 65536 });
+    expect(parseScanLimit('1')).toEqual({ ok: true, value: 1 });
+    for (const bad of ['', '0', '65537', '4096.5', 'abc', '-1']) {
+      expect(parseScanLimit(bad)).toEqual({
+        ok: false,
+        min: MIN_SCAN_MAX_TARGETS,
+        max: MAX_SCAN_MAX_TARGETS,
+      });
+    }
+  });
+
+  it('prefers the band the server reported', () => {
+    expect(parseScanLimit('300', { min: 256, max: 1024 }).ok).toBe(true);
+    expect(parseScanLimit('2000', { min: 256, max: 1024 })).toEqual({ ok: false, min: 256, max: 1024 });
   });
 });

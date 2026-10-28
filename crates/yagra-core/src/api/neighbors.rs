@@ -29,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_base::repo::adjacency_settings::{self, AdjacencySettings};
-use yagra_base::repo::AddressClaim;
+use yagra_base::repo::{self, AddressClaim};
 use yagra_common::{Neighbor, NeighborCapability, NeighborIdKind, NeighborSet};
 
 /// Default page size for the change history.
@@ -1172,6 +1172,16 @@ pub(crate) struct NeighborConfig {
     /// Largest cadence this deployment accepts, in seconds.
     #[serde(default)]
     pub max_interval_secs: u32,
+    /// The most addresses one discovery sweep may carry (ADR-219). The same limit bounds an import
+    /// of what a sweep found and its preview. Omitted on update leaves it unchanged.
+    #[serde(default)]
+    pub scan_max_targets: Option<u32>,
+    /// Smallest sweep limit this deployment accepts.
+    #[serde(default)]
+    pub scan_max_targets_min: u32,
+    /// Largest sweep limit this deployment accepts — a /16.
+    #[serde(default)]
+    pub scan_max_targets_max: u32,
 }
 
 /// The deployment's adjacency-collection settings, with the accepted cadence range.
@@ -1210,6 +1220,9 @@ pub(crate) async fn adjacency_config(admin: &super::AdminState) -> NeighborConfi
         media_interval_secs: Some(s.media_interval_secs),
         min_interval_secs: adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS,
         max_interval_secs: adjacency_settings::MAX_NEIGHBOR_INTERVAL_SECS,
+        scan_max_targets: Some(admin.repo.get_discovery_max_targets().await),
+        scan_max_targets_min: repo::MIN_DISCOVERY_MAX_TARGETS,
+        scan_max_targets_max: repo::MAX_DISCOVERY_MAX_TARGETS,
     }
 }
 
@@ -1222,7 +1235,7 @@ pub(crate) async fn adjacency_config(admin: &super::AdminState) -> NeighborConfi
     request_body = NeighborConfig,
     responses(
         (status = 204, description = "Settings updated; the change applies from the next scheduler sweep"),
-        (status = 400, description = "The cadence is outside the allowed range", body = super::error::ErrorBody),
+        (status = 400, description = "A cadence or the sweep limit is outside its allowed range", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
@@ -1265,6 +1278,18 @@ async fn update_neighbor_settings(
             ),
         ));
     }
+    if let Some(n) = body.scan_max_targets {
+        if !repo::discovery_max_targets_in_bounds(n) {
+            return Err(ApiError::bad_request(
+                "invalid_scan_max_targets",
+                format!(
+                    "the sweep limit must be between {} and {} addresses",
+                    repo::MIN_DISCOVERY_MAX_TARGETS,
+                    repo::MAX_DISCOVERY_MAX_TARGETS,
+                ),
+            ));
+        }
+    }
     admin
         .repo
         .set_adjacency_settings(&next)
@@ -1276,6 +1301,15 @@ async fn update_neighbor_settings(
                 "failed to update neighbour settings",
             )
         })?;
+    if let Some(n) = body.scan_max_targets {
+        admin.repo.set_discovery_max_targets(n).await.map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set discovery sweep limit",
+                "failed to update the discovery sweep limit",
+            )
+        })?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1443,7 +1477,22 @@ mod tests {
             media_interval_secs: Some(3600),
             min_interval_secs: adjacency_settings::MIN_NEIGHBOR_INTERVAL_SECS,
             max_interval_secs: adjacency_settings::MAX_NEIGHBOR_INTERVAL_SECS,
+            scan_max_targets: Some(repo::DEFAULT_DISCOVERY_MAX_TARGETS),
+            scan_max_targets_min: repo::MIN_DISCOVERY_MAX_TARGETS,
+            scan_max_targets_max: repo::MAX_DISCOVERY_MAX_TARGETS,
         };
+        assert!(repo::discovery_max_targets_in_bounds(
+            cfg.scan_max_targets_min
+        ));
+        assert!(repo::discovery_max_targets_in_bounds(
+            cfg.scan_max_targets_max
+        ));
+        assert!(!repo::discovery_max_targets_in_bounds(
+            cfg.scan_max_targets_min - 1
+        ));
+        assert!(!repo::discovery_max_targets_in_bounds(
+            cfg.scan_max_targets_max + 1
+        ));
         assert!(adjacency_settings::interval_in_bounds(
             cfg.min_interval_secs
         ));
@@ -1652,6 +1701,49 @@ mod tests {
         let settings = admin.repo.get_adjacency_settings().await;
         assert!(settings.neighbors_enabled);
         assert_eq!(settings.neighbors_interval_secs, 1800);
+        // Absent from the body above, so the sweep limit stayed at its default.
+        assert_eq!(admin.repo.get_discovery_max_targets().await, 4096);
+    }
+
+    /// The sweep limit is written, read back, and refused past a /16 (ADR-219).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_sweep_limit_is_accepted_inside_its_band_and_refused_outside(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let put = |n: u32| serde_json::json!({ "enabled": true, "interval_secs": 3600, "scan_max_targets": n });
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/settings/neighbors",
+            &tok,
+            Some(put(65_536)),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let (status, body) = send(&st, "GET", "/api/v1/settings/neighbors", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body["scan_max_targets"], 65_536, "{body}");
+        assert_eq!(body["scan_max_targets_max"], 65_536, "{body}");
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            "/api/v1/settings/neighbors",
+            &tok,
+            Some(put(65_537)),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        let (status, _) = send(&st, "PUT", "/api/v1/settings/neighbors", &tok, Some(put(0))).await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        let admin = st.admin.clone().expect("live state");
+        assert_eq!(
+            admin.repo.get_discovery_max_targets().await,
+            65_536,
+            "a refusal writes nothing"
+        );
     }
 }
 

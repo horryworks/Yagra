@@ -85,6 +85,12 @@ describe('prefixRows', () => {
   it('treats a /19 as too large, because one sweep is capped at 4096 addresses (ADR-173)', () => {
     expect(prefixRows(px('10.0.0.0/19'))[0].unsweepable).toBe('tooLarge');
     expect(prefixRows(px('10.0.0.0/20'))[0].unsweepable).toBeUndefined();
+    // A wider sweep limit (ADR-219) makes a wider range sweepable, up to the /16 the expander allows.
+    expect(prefixRows(px('10.0.0.0/19'), 65536)[0].unsweepable).toBeUndefined();
+    expect(prefixRows(px('10.0.0.0/16'), 65536)[0].unsweepable).toBeUndefined();
+    expect(prefixRows(px('10.0.0.0/15'), 65536)[0].unsweepable).toBe('tooLarge');
+    // And a narrower one refuses what the default would take.
+    expect(prefixRows(px('10.0.0.0/24'), 100)[0].unsweepable).toBe('tooLarge');
     expect(prefixRows(px('10.0.0.0/20'))[0].hosts).toBe(4094);
   });
 

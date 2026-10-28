@@ -36,6 +36,10 @@ import {
   discoveryFormFrom,
   isDiscoveryDirty,
   parseDiscoveryForm,
+  parseScanLimit,
+  scanLimitFrom,
+  MIN_SCAN_MAX_TARGETS,
+  MAX_SCAN_MAX_TARGETS,
   DISCOVERY_WALKS,
   MAX_NEIGHBOR_INTERVAL_SECS,
   MIN_NEIGHBOR_INTERVAL_SECS,
@@ -167,6 +171,8 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
   const { t } = useTranslation('system');
   const [saved, setSavedCfg] = useState<NeighborConfig | null>(null);
   const [form, setForm] = useState<DiscoveryForm | null>(null);
+  // The sweep limit (ADR-219) is not a walk, so it sits beside the walks' form rather than in it.
+  const [limit, setLimit] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -177,6 +183,7 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
       .then((cfg) => {
         setSavedCfg(cfg);
         setForm(discoveryFormFrom(cfg));
+        setLimit(scanLimitFrom(cfg));
       })
       .catch(() => undefined);
   }, []);
@@ -191,7 +198,7 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
   };
 
   const save = () => {
-    if (!form) return;
+    if (!form || limit === null) return;
     const parsed = parseDiscoveryForm(form, {
       min: saved?.min_interval_secs,
       max: saved?.max_interval_secs,
@@ -207,11 +214,20 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
       setOk(false);
       return;
     }
+    const sweep = parseScanLimit(limit, {
+      min: saved?.scan_max_targets_min,
+      max: saved?.scan_max_targets_max,
+    });
+    if (!sweep.ok) {
+      setError(t('settings.neighbors.err.scanLimit', { min: sweep.min, max: sweep.max }));
+      setOk(false);
+      return;
+    }
     setBusy(true);
     setError(null);
     setOk(false);
     api
-      .setNeighborSettings(parsed.values)
+      .setNeighborSettings({ ...parsed.values, scan_max_targets: sweep.value })
       .then(() => {
         setOk(true);
         load();
@@ -220,7 +236,10 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
       .finally(() => setBusy(false));
   };
 
-  const dirty = saved && form ? isDiscoveryDirty(form, saved) : false;
+  const dirty =
+    saved && form && limit !== null
+      ? isDiscoveryDirty(form, saved) || limit.trim() !== scanLimitFrom(saved)
+      : false;
 
   return (
     <Card title={t('settings.neighbors.title')}>
@@ -284,6 +303,31 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
           </div>
         </div>
       ))}
+      <div className="sys-setting">
+        <div className="sys-setting-label">
+          <div className="sys-setting-name">{t('settings.neighbors.scanLimit.name')}</div>
+        </div>
+        <div className="sys-setting-control">
+          <TextInput
+            className="sys-setting-input"
+            value={limit ?? ''}
+            onChange={(e) => {
+              setLimit(e.target.value);
+              setOk(false);
+            }}
+            inputMode="numeric"
+            disabled={!canConfig || limit === null || busy}
+            aria-label={t('settings.neighbors.scanLimit.name')}
+          />
+          <span className="sys-setting-unit muted">{t('settings.neighbors.scanLimit.unit')}</span>
+          <span className="sys-setting-band muted">
+            {t('settings.retention.band', {
+              min: saved?.scan_max_targets_min || MIN_SCAN_MAX_TARGETS,
+              max: saved?.scan_max_targets_max || MAX_SCAN_MAX_TARGETS,
+            })}
+          </span>
+        </div>
+      </div>
       {canConfig && (
         <div className="sys-setting-actions">
           <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>

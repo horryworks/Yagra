@@ -13,6 +13,7 @@
 // It also closes a real gap: the interface-address walk (ADR-043 Increment 1) has had settings on
 // the API since it shipped and no UI at all, because the card only ever knew about adjacency.
 
+import { SWEEP_LIMIT } from '../lib/cidr';
 import type { NeighborConfig } from '../types/api';
 
 /** The cadence band the server enforces. Mirrored here so the form can refuse before a round trip;
@@ -63,10 +64,8 @@ export interface WalkForm {
 /** The whole card's state: every walk, always present. */
 export type DiscoveryForm = Record<DiscoveryWalk, WalkForm>;
 
-/** The body `PUT /api/v1/settings/neighbors` accepts. Every field is sent, so a save can never
- *  half-apply — the server treats an absent field as "leave it", which is right for an old client
- *  and wrong for this one. */
-export interface DiscoverySettingsBody {
+/** The walks' half of the body `PUT /api/v1/settings/neighbors` accepts. */
+export interface WalkSettingsBody {
   enabled: boolean;
   interval_secs: number;
   l3_enabled: boolean;
@@ -79,8 +78,15 @@ export interface DiscoverySettingsBody {
   media_interval_secs: number;
 }
 
+/** The body `PUT /api/v1/settings/neighbors` accepts. Every field is sent, so a save can never
+ *  half-apply — the server treats an absent field as "leave it", which is right for an old client
+ *  and wrong for this one. */
+export interface DiscoverySettingsBody extends WalkSettingsBody {
+  scan_max_targets: number;
+}
+
 export type DiscoveryParse =
-  | { ok: true; values: DiscoverySettingsBody }
+  | { ok: true; values: WalkSettingsBody }
   | { ok: false; walk: DiscoveryWalk; min: number; max: number };
 
 /** What the server most recently reported, per walk. */
@@ -164,4 +170,36 @@ export function describeCadence(
   if (secs % 3600 === 0) return t('settings.neighbors.cadence.hours', { n: secs / 3600 });
   if (secs % 60 === 0) return t('settings.neighbors.cadence.minutes', { n: secs / 60 });
   return t('settings.neighbors.cadence.seconds', { n: secs });
+}
+
+/** The sweep-limit band the server enforces (ADR-219) — a fallback for when the server's own
+ *  `scan_max_targets_min`/`_max` are absent, exactly as the cadence band above is. */
+export const MIN_SCAN_MAX_TARGETS = 1;
+export const MAX_SCAN_MAX_TARGETS = 65536;
+
+/** The most addresses one discovery sweep may carry, as the server reported it — the default
+ *  limit when it did not (a server older than ADR-219, or no answer yet). */
+export function sweepLimitOf(cfg: NeighborConfig | null | undefined): number {
+  const n = cfg?.scan_max_targets;
+  return n != null && n > 0 ? n : SWEEP_LIMIT;
+}
+
+/** The sweep-limit field's text for a server response. */
+export function scanLimitFrom(cfg: NeighborConfig): string {
+  return String(sweepLimitOf(cfg));
+}
+
+export type ScanLimitParse = { ok: true; value: number } | { ok: false; min: number; max: number };
+
+/** Validate the sweep-limit field against the band the server reported, falling back to the
+ *  compiled mirror. */
+export function parseScanLimit(
+  text: string,
+  band?: { min?: number | null; max?: number | null },
+): ScanLimitParse {
+  const min = band?.min != null && band.min > 0 ? band.min : MIN_SCAN_MAX_TARGETS;
+  const max = band?.max != null && band.max > 0 ? band.max : MAX_SCAN_MAX_TARGETS;
+  const n = Number(text.trim());
+  if (!text.trim() || !Number.isInteger(n) || n < min || n > max) return { ok: false, min, max };
+  return { ok: true, value: n };
 }

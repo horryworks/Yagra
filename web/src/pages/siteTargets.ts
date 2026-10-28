@@ -6,11 +6,12 @@
 // (`tsxJudgement.test.ts`).
 //
 // ⚠️ **This module does not expand anything.** `lib/cidr.ts` is the one expander in the repository
-// and it owns the 4096-address ceiling, the /20 shape limit and the network/broadcast rules. What
+// and it owns the address ceiling, the /16 shape limit and the network/broadcast rules. The ceiling
+// is the deployment's sweep limit (ADR-219), so every function here that asks the expander takes it. What
 // is decided here is only *which prefixes can be offered*, *how many addresses each covers* and
 // *what to say about the ones that cannot be swept*.
 
-import { expandCidr, expandTargets } from '../lib/cidr';
+import { expandCidr, expandTargets, SWEEP_LIMIT } from '../lib/cidr';
 import { groupPath } from '../lib/nodeTree';
 import type { NodeGroup } from '../types/api';
 
@@ -66,7 +67,10 @@ function hostsIn(prefix: string): number {
  * could narrow in NetBox. Folding them into "unsupported" would tell someone to go and fix the
  * unfixable one.
  */
-export function prefixRows(prefixes: readonly { prefix: string; description: string }[]): PrefixRow[] {
+export function prefixRows(
+  prefixes: readonly { prefix: string; description: string }[],
+  max: number = SWEEP_LIMIT,
+): PrefixRow[] {
   return prefixes.map((p) => {
     const row: PrefixRow = {
       prefix: p.prefix,
@@ -76,7 +80,7 @@ export function prefixRows(prefixes: readonly { prefix: string; description: str
     if (isV6(p.prefix)) row.unsweepable = 'v6';
     // The expander is the authority on what can actually be sent, so it is asked rather than
     // re-derived: a shape rule added there must not need a second edit here to take effect.
-    else if (expandCidr(p.prefix).length === 0) row.unsweepable = 'tooLarge';
+    else if (expandCidr(p.prefix, max).length === 0) row.unsweepable = 'tooLarge';
     return row;
   });
 }
@@ -110,7 +114,7 @@ export function sumHosts(rows: readonly PrefixRow[], checked: ReadonlySet<string
 /**
  * How many addresses a target spec covers, or `null` when it is not usable as it stands.
  *
- * `null` folds together every reason `expandTargets` returns nothing — malformed, wider than /20,
+ * `null` folds together every reason `expandTargets` returns nothing — malformed, wider than `max`,
  * or past the sweep limit in total — because the free-text field's own error message already names
  * all three and a second wording of it would be a second thing to keep in step.
  *
@@ -118,9 +122,9 @@ export function sumHosts(rows: readonly PrefixRow[], checked: ReadonlySet<string
  * one site are counted once. That is why the picker prefers this number and falls back to the sum
  * only when the spec is refused outright.
  */
-export function hostCount(spec: string): number | null {
+export function hostCount(spec: string, max: number = SWEEP_LIMIT): number | null {
   if (!spec.trim()) return null;
-  const n = expandTargets(spec).length;
+  const n = expandTargets(spec, max).length;
   return n === 0 ? null : n;
 }
 
@@ -138,9 +142,9 @@ export type TypedTargets =
  * placeholder and enforced here, so the error appears only when it applies. The parse is
  * [`hostCount`]'s, so the number on screen and the one Scan sends cannot disagree.
  */
-export function typedTargets(spec: string): TypedTargets {
+export function typedTargets(spec: string, max: number = SWEEP_LIMIT): TypedTargets {
   if (!spec.trim()) return { kind: 'empty' };
-  const count = hostCount(spec);
+  const count = hostCount(spec, max);
   return count === null ? { kind: 'invalid' } : { kind: 'count', count };
 }
 

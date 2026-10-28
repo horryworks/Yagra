@@ -4,9 +4,10 @@
 // A spec is a comma/whitespace-separated list whose tokens may each be a single IPv4, an IPv4
 // CIDR, or an inclusive range.
 
-/** The most addresses one sweep may carry — a /20 (`MAX_SCAN_TARGETS` in `api/discovery.rs`,
- *  ADR-173). Core cuts a sweep this wide into several poller jobs; the screen never needs to know.
- *  It was 1024 while one sweep was one job. */
+/** The most addresses one sweep may carry until the deployment says otherwise — a /20 (ADR-173).
+ *  Since ADR-219 the real limit is a setting (`scan_max_targets` on `GET /api/v1/settings/neighbors`,
+ *  up to a /16); this is the default it ships with and what a screen uses until that answer
+ *  arrives. Core cuts a wide sweep into several poller jobs; the screen never needs to know. */
 export const SWEEP_LIMIT = 4096;
 
 /** Parse a dotted-quad IPv4 into a uint32, or null if malformed. */

@@ -85,7 +85,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-tokens': [812, 442],
   'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   suppression: [866, 571],
-  system: [14109, 7892], // the config backup Git destination page and its connection test (ADR-210 stage 4, 2026-10-23)
+  system: [14178, 7939], // the sweep limit field's out-of-range error (ADR-219, 2026-10-28)
   topology: [3104, 1758], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   troubleshoot: [3370, 1768], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
 };

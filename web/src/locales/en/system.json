@@ -392,6 +392,10 @@
           "info": "The physical medium of each Ethernet port, shown in the Interfaces tab. Many devices do not report it."
         }
       },
+      "scanLimit": {
+        "name": "Addresses per scan",
+        "unit": "addresses"
+      },
       "cadence": {
         "hours_one": "every hour",
         "hours_other": "every {{n}} hours",
@@ -402,6 +406,7 @@
       },
       "err": {
         "rangeFor": "{{walk}}: enter a whole number of seconds between {{min}} and {{max}}.",
+        "scanLimit": "Addresses per scan: enter a whole number between {{min}} and {{max}}.",
         "save": "failed to save discovery walk settings"
       }
     },

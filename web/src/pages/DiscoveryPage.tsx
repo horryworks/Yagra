@@ -59,6 +59,7 @@ import {
   SWEEP_LIMIT,
   typedTargets,
 } from './siteTargets';
+import { sweepLimitOf } from './neighborSettings';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
@@ -255,6 +256,8 @@ export function DiscoveryPage() {
   const [importNote, setImportNote] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
+  /** The deployment's sweep limit (ADR-219); the shipped default until the settings answer. */
+  const [sweepLimit, setSweepLimit] = useState(SWEEP_LIMIT);
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -308,6 +311,13 @@ export function DiscoveryPage() {
     setError(null);
     setImportNote(null);
     setImportError(null);
+  }, []);
+
+  useEffect(() => {
+    api
+      .getNeighborSettings()
+      .then((cfg) => setSweepLimit(sweepLimitOf(cfg)))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -382,8 +392,8 @@ export function DiscoveryPage() {
 
   /** The chosen site's ranges, as rows with their address counts and their reasons. */
   const siteRows = useMemo(
-    () => prefixRows(siteOptions.find((o) => o.id === siteId)?.prefixes ?? []),
-    [siteOptions, siteId],
+    () => prefixRows(siteOptions.find((o) => o.id === siteId)?.prefixes ?? [], sweepLimit),
+    [siteOptions, siteId, sweepLimit],
   );
 
   /** What the Scan button will actually send — the ticked ranges, or the typed spec. One
@@ -393,19 +403,22 @@ export function DiscoveryPage() {
   /** How many addresses that covers, or `null` when it will not run as it stands.
    *
    *  🚨 On screen at all times, not only after a failure. Three ordinary /24s come to 762
-   *  addresses (measured on the lab), and a site's /20 is 4094 against a 4096 limit, so the ceiling
+   *  addresses (measured on the lab), and a site's /20 is 4094 against the default 4096 limit, so the ceiling
    *  is reached by ordinary use — and past it `expandTargets` returns an empty list, which makes pressing Scan look like
    *  it did nothing. */
-  const exactCount = useMemo(() => hostCount(effectiveSpec), [effectiveSpec]);
+  const exactCount = useMemo(
+    () => hostCount(effectiveSpec, sweepLimit),
+    [effectiveSpec, sweepLimit],
+  );
 
   /** The ticked total, which unlike `exactCount` still answers past the limit. Shown when the
    *  exact count cannot answer, so an over-large selection reads as "1,524 — too many" rather than
    *  as nothing at all. It does not de-duplicate; `exactCount` does, and wins whenever it can. */
   const tickedTotal = sumHosts(siteRows, checkedPrefixes);
   const shownCount = exactCount ?? (siteId ? tickedTotal : null);
-  const overLimit = exactCount === null && tickedTotal > SWEEP_LIMIT;
+  const overLimit = exactCount === null && tickedTotal > sweepLimit;
   /** The free-text field's live line — its count, or its format error (ADR-200 Inc.11). */
-  const typed = useMemo(() => typedTargets(targetSpec), [targetSpec]);
+  const typed = useMemo(() => typedTargets(targetSpec, sweepLimit), [targetSpec, sweepLimit]);
 
   /** Choose a site — or leave it, which brings the free-text field back. */
   const pickSite = (id: string) => {
@@ -413,7 +426,9 @@ export function DiscoveryPage() {
     const picked = siteOptions.find((o) => o.id === id);
     // Everything sweepable, ticked. The alternative — nothing ticked — makes the common case
     // ("sweep this site") three clicks and reads as though the site had no ranges.
-    setCheckedPrefixes(picked ? defaultChecked(prefixRows(picked.prefixes)) : new Set());
+    setCheckedPrefixes(
+      picked ? defaultChecked(prefixRows(picked.prefixes, sweepLimit)) : new Set(),
+    );
   };
 
   const togglePrefix = (prefix: string) => {
@@ -482,7 +497,7 @@ export function DiscoveryPage() {
     // Validate before clearing anything. A range that does not parse started nothing, so nothing
     // that describes the previous sweep should disappear — the operator gets an error line above
     // results that are still theirs.
-    const targets = expandTargets(effectiveSpec);
+    const targets = expandTargets(effectiveSpec, sweepLimit);
     if (targets.length === 0) {
       // Two ways to get here and they need different sentences: a site with nothing usable ticked,
       // and a typed spec that does not parse. The typed one's message names the syntax; saying
@@ -494,7 +509,7 @@ export function DiscoveryPage() {
           ? t('discovery.site.err.nothingTicked')
           : typed.kind === 'invalid'
             ? null
-            : t('discovery.err.badTargets'),
+            : t('discovery.err.badTargets', { max: sweepLimit }),
       );
       return;
     }
@@ -905,7 +920,7 @@ export function DiscoveryPage() {
                             <span className="disco-prefix-desc">{r.description}</span>
                           )}
                           <span className="disco-prefix-why">
-                            {t(`discovery.site.cannot.${r.unsweepable}`, { max: SWEEP_LIMIT })}
+                            {t(`discovery.site.cannot.${r.unsweepable}`, { max: sweepLimit })}
                           </span>
                         </div>
                       ) : (
@@ -935,8 +950,8 @@ export function DiscoveryPage() {
                     {shownCount === null
                       ? t('discovery.site.noneTicked')
                       : overLimit
-                        ? t('discovery.site.overLimit', { count: shownCount, max: SWEEP_LIMIT })
-                        : t('discovery.site.addresses', { count: shownCount, max: SWEEP_LIMIT })}
+                        ? t('discovery.site.overLimit', { count: shownCount, max: sweepLimit })
+                        : t('discovery.site.addresses', { count: shownCount, max: sweepLimit })}
                   </span>
                 </div>
               ) : (
@@ -957,11 +972,11 @@ export function DiscoveryPage() {
                       would have shown, so it is not repeated there (`startScan`). */}
                   {typed.kind === 'count' && (
                     <span className="form-status">
-                      {t('discovery.site.addresses', { count: typed.count, max: SWEEP_LIMIT })}
+                      {t('discovery.site.addresses', { count: typed.count, max: sweepLimit })}
                     </span>
                   )}
                   {typed.kind === 'invalid' && (
-                    <FieldError>{t('discovery.err.badTargets')}</FieldError>
+                    <FieldError>{t('discovery.err.badTargets', { max: sweepLimit })}</FieldError>
                   )}
                 </label>
               )}
