@@ -25,10 +25,11 @@ import type { TFunction } from 'i18next';
 /** Whether the sweep read the device over SNMP (ADR-053 Inc.12). */
 export const CANDIDATE_SNMP = ['answered', 'none'] as const;
 
-/** A candidate carries a matched credential exactly when an SNMP credential got its sysDescr, so
- *  "the scan matched one" and "SNMP answered" are the same question. */
+/** Whether the device answered SNMP: a stored credential matched, or it reported an identity only
+ *  SNMP carries. The second half is a scan started with ad-hoc `communities` (the API's automation
+ *  path), whose match carries no credential id. */
 export const candidateSnmp = (c: DiscoveryCandidate): (typeof CANDIDATE_SNMP)[number] =>
-  c.matched_credential_id ? 'answered' : 'none';
+  c.matched_credential_id || c.sysdescr || c.sysobjectid || c.sysname ? 'answered' : 'none';
 
 /**
  * The sweep-results filter row.

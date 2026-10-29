@@ -1682,9 +1682,10 @@ impl NodeRepo {
     /// does per name: a serial more nodes than that report identifies none of them (ADR-148
     /// decision 3). Returns each match with the key it matched.
     ///
-    /// ⚠️ No index serves this: the stored value is a list, split here. It is read on a scan
-    /// refresh only when a candidate reported a serial, and its cost at fifty thousand nodes has not
-    /// been measured.
+    /// ⚠️ No index serves this: the stored value is a list, split here. Each node's list is split
+    /// once and joined to the keys by equality, so the planner can hash the keys rather than
+    /// compare every key with every node's list — the read runs on every scan-status poll once a
+    /// candidate has reported a serial. Its cost at fifty thousand nodes has not been measured.
     pub async fn device_nodes_with_serials(
         &self,
         serials: &[String],
@@ -1701,8 +1702,10 @@ impl NodeRepo {
                FROM (SELECT n.id, n.name, n.address, n.sys_object_id, {serial} AS known \
                      FROM nodes n \
                      WHERE n.address IS NOT NULL AND {scope} AND {device}) d \
-               JOIN unnest($2::text[]) AS q(s) \
-                 ON q.s = ANY(SELECT upper(btrim(p)) FROM unnest(string_to_array(d.known, ',')) p) \
+               CROSS JOIN LATERAL ( \
+                 SELECT DISTINCT upper(btrim(p)) AS s FROM unnest(string_to_array(d.known, ',')) p \
+               ) part \
+               JOIN unnest($2::text[]) AS q(s) ON q.s = part.s \
              ) matched WHERE rn <= $3",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,

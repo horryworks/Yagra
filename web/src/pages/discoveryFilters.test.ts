@@ -85,6 +85,10 @@ describe('the sweep-results filter row', () => {
     expect(hasCand(silent, cf({ credential: 'none' }))).toBe(true);
     expect(hasCand(spoke, cf({ credential: 'none' }))).toBe(false);
     expect(hasCand(silent, cf({ credential: 'answered,none' }))).toBe(true);
+    // An ad-hoc community (the API's `communities`) matches with no credential id.
+    const adHoc = cand({ matched_credential_id: null, sysname: null, sysdescr: 'Cisco IOS Software' });
+    expect(hasCand(adHoc, cf({ credential: 'answered' }))).toBe(true);
+    expect(hasCand(adHoc, cf({ credential: 'none' }))).toBe(false);
     // The option labels are the two locale keys the row renders.
     const col = C_COLS.find((c) => c.key === 'credential');
     const spec = col?.filter;
