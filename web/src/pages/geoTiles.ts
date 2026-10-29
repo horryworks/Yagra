@@ -58,6 +58,14 @@ export function tileOrigin(key: string): { x: number; y: number } {
   return { x: c * GEO_TILE_UNITS, y: r * GEO_TILE_UNITS };
 }
 
+/** Each loaded tile with its corner and the transform that places its paths in map units. */
+export function placeGeoTiles(tiles: readonly [string, GeoTile][]) {
+  return tiles.map(([key, tile]) => {
+    const o = tileOrigin(key);
+    return { key, tile, o, at: `translate(${o.x} ${o.y}) scale(${GEO_TILE_PATH_SCALE})` };
+  });
+}
+
 /** Keep the keys that have a file, in a stable order, so an unchanged set compares equal. */
 export function wantedTiles(visible: readonly string[]): string[] {
   return visible.filter(hasGeoTile).sort();

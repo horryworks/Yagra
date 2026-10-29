@@ -282,6 +282,21 @@
      ground, so the night reads as night rather than as dirt. */
   --geo-night: #1b2448;
   --geo-night-step: 0.11;
+  /* Geo map's relief (ADR-220): sea-0 is the deepest water and sea-1..4 the bands from -5000 m
+     to -200 m; lowland is land below 200 m and land-1..6 the bands from 200 m to 4500 m. All
+     muted, because the pins on top carry the status colours and must not sink into the ground. */
+  --geo-relief-sea-0: #c9d6e3;
+  --geo-relief-sea-1: #d2dee9;
+  --geo-relief-sea-2: #dbe5ee;
+  --geo-relief-sea-3: #e3ebf2;
+  --geo-relief-sea-4: #eaf0f5;
+  --geo-relief-lowland: #e6e8d6;
+  --geo-relief-land-1: #e9e6d0;
+  --geo-relief-land-2: #e8dfc4;
+  --geo-relief-land-3: #e2d3b4;
+  --geo-relief-land-4: #d8c5a6;
+  --geo-relief-land-5: #cfbfa8;
+  --geo-relief-land-6: #ebe8e3;
 }
 
 /* ---- Dark theme — blue-slate, lets the complementary orange pop (§1.5) ---- */
@@ -297,6 +312,19 @@
   /* The dark map ground is already near-night, so the shade is black and a step stronger. */
   --geo-night: #000;
   --geo-night-step: 0.15;
+  /* Geo map's relief (ADR-220), darker and as muted, for the same reason. */
+  --geo-relief-sea-0: #121a24;
+  --geo-relief-sea-1: #151e29;
+  --geo-relief-sea-2: #18222e;
+  --geo-relief-sea-3: #1b2633;
+  --geo-relief-sea-4: #1f2b38;
+  --geo-relief-lowland: #262b26;
+  --geo-relief-land-1: #2b2f27;
+  --geo-relief-land-2: #312f26;
+  --geo-relief-land-3: #373226;
+  --geo-relief-land-4: #3d3629;
+  --geo-relief-land-5: #433c30;
+  --geo-relief-land-6: #4d4a46;
 
   /* The tree's one-letter brand badges, lifted to read on the dark ground (see :root). */
   --brand-meraki-ink: #7cc35a;

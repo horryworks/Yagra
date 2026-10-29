@@ -50,6 +50,8 @@ interface ServerPrefsDoc {
   nodeTreeCollapsed?: Record<string, true>;
   /** Geo map's day/night shading switch (ADR-189). */
   geoMapDayNight?: boolean;
+  /** Geo map's elevation colouring switch (ADR-220). */
+  geoMapRelief?: boolean;
   /** Where Geo map was last looking, in degrees and a zoom multiple (ADR-218). */
   geoMapPlace?: GeoPlace;
 }
@@ -107,6 +109,9 @@ function adopt(raw: unknown): void {
   if (typeof doc.geoMapDayNight === 'boolean') {
     usePrefsStore.getState().setGeoMapDayNight(doc.geoMapDayNight);
   }
+  if (typeof doc.geoMapRelief === 'boolean') {
+    usePrefsStore.getState().setGeoMapRelief(doc.geoMapRelief);
+  }
   // A malformed place is dropped rather than adopted, and this browser's own is kept.
   const place = adoptGeoPlace(doc.geoMapPlace);
   if (place) usePrefsStore.getState().setGeoMapPlace(place);
@@ -128,6 +133,7 @@ function currentDoc(): ServerPrefsDoc {
     nodeTreeWithNodesOnly,
     nodeTreeCollapsed,
     geoMapDayNight,
+    geoMapRelief,
     geoMapPlace,
   } = usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
@@ -139,6 +145,9 @@ function currentDoc(): ServerPrefsDoc {
   if (nodeTreeWithNodesOnly != null) doc.nodeTreeWithNodesOnly = nodeTreeWithNodesOnly;
   // Same again (ADR-189) — here the unset value reads as *on*, so sending `false` is the whole point.
   if (geoMapDayNight != null) doc.geoMapDayNight = geoMapDayNight;
+  // Same again (ADR-220); here the unset value reads as off, so it is `false` that may be left out
+  // — but a machine that switched it back off must still say so to the account.
+  if (geoMapRelief != null) doc.geoMapRelief = geoMapRelief;
   // Only once the operator has moved the map (ADR-218 decision 6): an account that never did keeps
   // opening on the pins, however many sites are added later.
   if (geoMapPlace != null) doc.geoMapPlace = geoMapPlace;
@@ -259,6 +268,15 @@ export function setNodeTreeWithNodesOnly(on: boolean): void {
  */
 export function setGeoMapDayNight(on: boolean): void {
   usePrefsStore.getState().setGeoMapDayNight(on);
+  scheduleSave();
+}
+
+/**
+ * Record Geo map's relief switch: locally now, on the account shortly (ADR-220). One press is
+ * one save, as for the day/night switch above.
+ */
+export function setGeoMapRelief(on: boolean): void {
+  usePrefsStore.getState().setGeoMapRelief(on);
   scheduleSave();
 }
 

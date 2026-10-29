@@ -134,6 +134,60 @@
   vector-effect: non-scaling-stroke;
 }
 
+/* The relief (ADR-220), drawn instead of the surface colours above while the switch is on. These
+   come after `.geopage-land` and its siblings, so a shape carrying both classes takes the relief
+   fill and keeps the outline's hairline shore. Each
+   class names its token; `geoRelief.test.ts` checks every band has both. The bands' edges are
+   cut by a grid, not a coast, so none of them is stroked. */
+.geopage-relief-sea-0 {
+  fill: var(--geo-relief-sea-0);
+}
+.geopage-relief-sea-1 {
+  fill: var(--geo-relief-sea-1);
+}
+.geopage-relief-sea-2 {
+  fill: var(--geo-relief-sea-2);
+}
+.geopage-relief-sea-3 {
+  fill: var(--geo-relief-sea-3);
+}
+.geopage-relief-sea-4 {
+  fill: var(--geo-relief-sea-4);
+}
+.geopage-relief-lowland {
+  fill: var(--geo-relief-lowland);
+}
+.geopage-relief-land-1 {
+  fill: var(--geo-relief-land-1);
+}
+.geopage-relief-land-2 {
+  fill: var(--geo-relief-land-2);
+}
+.geopage-relief-land-3 {
+  fill: var(--geo-relief-land-3);
+}
+.geopage-relief-land-4 {
+  fill: var(--geo-relief-land-4);
+}
+.geopage-relief-land-5 {
+  fill: var(--geo-relief-land-5);
+}
+.geopage-relief-land-6 {
+  fill: var(--geo-relief-land-6);
+}
+.geopage-relief-sea-1,
+.geopage-relief-sea-2,
+.geopage-relief-sea-3,
+.geopage-relief-sea-4,
+.geopage-relief-land-1,
+.geopage-relief-land-2,
+.geopage-relief-land-3,
+.geopage-relief-land-4,
+.geopage-relief-land-5,
+.geopage-relief-land-6 {
+  fill-rule: evenodd;
+}
+
 /* The night side (ADR-189). Four of these stack, so each is faint on its own; the colour and the
    per-step strength are tokens because the dark theme's ground is already near-night. */
 .geopage-night {
@@ -253,18 +307,21 @@
   transition: color var(--transition), border-color var(--transition);
 }
 
-.geopage-ctl-daynight {
+.geopage-ctl-daynight,
+.geopage-ctl-relief {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
-.geopage-ctl-daynight svg {
+.geopage-ctl-daynight svg,
+.geopage-ctl-relief svg {
   width: 14px;
   height: 14px;
 }
 
-.geopage-ctl-daynight[aria-pressed='true'] {
+.geopage-ctl-daynight[aria-pressed='true'],
+.geopage-ctl-relief[aria-pressed='true'] {
   color: var(--text-primary);
   background: var(--bg-tertiary);
 }
@@ -310,6 +367,14 @@
 
 /* A patch of the map's ground with the night shade stacked on it as many times as the map stacks
    it there — the same token at the same strength, so it matches without a computed colour. */
+/* One relief swatch per land level (ADR-220), drawn with the band's own class so it cannot drift. */
+.geopage-relief-swatch {
+  width: 14px;
+  height: 9px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 2px;
+}
+
 .geopage-sky-swatch {
   position: relative;
   width: 14px;

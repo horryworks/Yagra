@@ -42,6 +42,7 @@ import {
   setNodeTreePinnedOnly,
   setNodeTreeWithNodesOnly,
   setGeoMapDayNight,
+  setGeoMapRelief,
   setGeoMapPlace,
 } from './serverPrefs';
 import { MAX_STORED_COLLAPSED } from './lib/nodeTree';
@@ -63,6 +64,7 @@ beforeEach(() => {
   usePrefsStore.getState().setNodeTreePinnedOnly(null);
   usePrefsStore.getState().setNodeTreeWithNodesOnly(null);
   usePrefsStore.getState().setGeoMapDayNight(null);
+  usePrefsStore.getState().setGeoMapRelief(null);
   usePrefsStore.getState().setGeoMapPlace(null);
   usePrefsStore.getState().setNodeTreeCollapsed({});
   usePrefsStore.getState().setTableColumnWidths({});
@@ -254,6 +256,38 @@ describe('the Geo map day/night switch (ADR-189)', () => {
     setGeoMapDayNight(false);
     vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
     expect(putPreferences).toHaveBeenCalledWith({ geoMapDayNight: false });
+  });
+
+  it('sends nothing for a machine that never touched it', () => {
+    setInterfaceDockHeight(360);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
+  });
+});
+
+describe('the Geo map relief switch (ADR-220)', () => {
+  it('reads as unset until someone presses it', () => {
+    expect(usePrefsStore.getState().geoMapRelief).toBeNull();
+  });
+
+  it("adopts the account's answer, and nothing that is not a boolean", async () => {
+    getPreferences.mockResolvedValue({ geoMapRelief: true });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().geoMapRelief).toBe(true);
+    for (const value of ['false', 0, null, {}]) {
+      getPreferences.mockResolvedValue({ geoMapRelief: value });
+      await loadServerPrefs();
+      expect(usePrefsStore.getState().geoMapRelief).toBe(true);
+    }
+  });
+
+  it('saves switching it on, and switching it back off', () => {
+    setGeoMapRelief(true);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenLastCalledWith({ geoMapRelief: true });
+    setGeoMapRelief(false);
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenLastCalledWith({ geoMapRelief: false });
   });
 
   it('sends nothing for a machine that never touched it', () => {

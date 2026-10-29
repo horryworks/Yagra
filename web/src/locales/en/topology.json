@@ -195,6 +195,11 @@
     "noNodes": "No nodes",
     "pinTitle": "{{name}} — {{state}} · {{count}} node(s)",
     "resize": "Drag to resize the map (double-click to reset)",
+    "relief": {
+      "toggle": "Colour by elevation",
+      "label": "Relief",
+      "level": "{{level}} m"
+    },
     "dayNight": {
       "toggle": "Show day and night",
       "label": "Day/night",

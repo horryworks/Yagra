@@ -38,7 +38,7 @@ import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { sortedAlerts, useAlertStore, useMapPaneStore } from '../store';
 import { usePrefsStore } from '../prefs';
-import { setGeoMapDayNight, setGeoMapPlace } from '../serverPrefs';
+import { setGeoMapDayNight, setGeoMapPlace, setGeoMapRelief } from '../serverPrefs';
 import {
   clampPaneHeight,
   defaultPaneHeight,
@@ -64,13 +64,7 @@ import {
   wrapPinX,
   zoomGeoView,
 } from './geoProjection';
-import {
-  GEO_TILE_PATH_SCALE,
-  type GeoTile,
-  tileOrigin,
-  useGeoTiles,
-  wantedTiles,
-} from './geoTiles';
+import { type GeoTile, placeGeoTiles, useGeoTiles, wantedTiles } from './geoTiles';
 import {
   SKIES,
   type Sky,
@@ -81,6 +75,7 @@ import {
   twilightPaths,
 } from './geoDayNight';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
+import { RELIEF_LEGEND, reliefLayers, useGeoRelief, type ReliefLayer } from './geoRelief';
 import { nodeHref, nodesPageHref, topologyMapHref } from '../lib/entityHref';
 import { AnchoredPopover } from '../components/ui/AnchoredPopover';
 import { AlertWhatText } from '../widgets/AlertWhatText';
@@ -113,6 +108,9 @@ const PLACE_SAVE_QUIET_MS = 500;
 /** The id the second copy of the world points at (ADR-218). One Geo map is mounted at a time. */
 const WORLD_ID = 'geopage-world';
 
+/** A hair beyond a tile's square, as its filled shapes are, so two squares leave no seam. */
+const TILE_PAD = 0.01;
+
 /**
  * The fine tiles, drawn over the world outline (ADR-207): each tile's square in the ocean colour
  * first, so the coarser land cannot show past the finer coast, then every tile's land, its inland
@@ -121,12 +119,8 @@ const WORLD_ID = 'geopage-world';
  */
 const GeoDetailLayer = memo(function GeoDetailLayer({ tiles }: { tiles: [string, GeoTile][] }) {
   if (tiles.length === 0) return null;
-  // A hair beyond the square, as the filled shapes are, so two squares leave no seam between them.
-  const pad = 0.01;
-  const placed = tiles.map(([key, tile]) => {
-    const o = tileOrigin(key);
-    return { key, tile, o, at: `translate(${o.x} ${o.y}) scale(${GEO_TILE_PATH_SCALE})` };
-  });
+  const pad = TILE_PAD;
+  const placed = placeGeoTiles(tiles);
   return (
     <g>
       {placed.map(({ key, o }) => (
@@ -150,6 +144,96 @@ const GeoDetailLayer = memo(function GeoDetailLayer({ tiles }: { tiles: [string,
         <g transform={at} key={key}>
           {tile.water.map((d, i) => (
             <path className="geopage-detail-water" d={d} key={i} />
+          ))}
+        </g>
+      ))}
+      {placed.map(({ key, tile, at }) => (
+        <g transform={at} key={key}>
+          {tile.coast.map((d, i) => (
+            <path className="geopage-coast" d={d} key={i} />
+          ))}
+        </g>
+      ))}
+    </g>
+  );
+});
+
+/** The id the relief's sea bands are drawn under, so the fine tiles can show them again. */
+const RELIEF_SEA_ID = 'geopage-relief-sea';
+/** The clip that limits that second showing to the squares whose fine tiles have loaded. */
+const RELIEF_TILES_CLIP_ID = 'geopage-relief-tiles';
+
+/**
+ * The world in relief colours (ADR-220), in place of the ocean, outline, lakes and detail layer.
+ * The order is the point: the sea bands under the land; under the fine tiles' land, the sea bands
+ * again, clipped to the loaded squares, so the coarse outline's overhang into the sea takes the
+ * right depth colour instead of a flat square; the land bands over every land; and the water
+ * last, so a lake high in the mountains is not painted over by the band it sits in.
+ */
+const GeoReliefLayer = memo(function GeoReliefLayer({
+  sea,
+  land,
+  tiles,
+}: {
+  sea: ReliefLayer[];
+  land: ReliefLayer[];
+  tiles: [string, GeoTile][];
+}) {
+  const pad = TILE_PAD;
+  const placed = placeGeoTiles(tiles);
+  return (
+    <g>
+      <rect className="geopage-relief-sea-0" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
+      <g id={RELIEF_SEA_ID}>
+        {sea.map((l) => (
+          <path className={l.className} d={l.d} key={l.className} />
+        ))}
+      </g>
+      {WORLD_OUTLINE.map((d, i) => (
+        <path className="geopage-land geopage-relief-lowland" d={d} key={i} />
+      ))}
+      {placed.length > 0 && (
+        <>
+          <clipPath id={RELIEF_TILES_CLIP_ID}>
+            {placed.map(({ key, o }) => (
+              <rect
+                key={key}
+                x={o.x - pad}
+                y={o.y - pad}
+                width={GEO_TILE_UNITS + 2 * pad}
+                height={GEO_TILE_UNITS + 2 * pad}
+              />
+            ))}
+          </clipPath>
+          <g clipPath={`url(#${RELIEF_TILES_CLIP_ID})`}>
+            <rect
+              className="geopage-relief-sea-0"
+              x={0}
+              y={0}
+              width={MAP_WIDTH}
+              height={MAP_HEIGHT}
+            />
+            <use href={`#${RELIEF_SEA_ID}`} />
+          </g>
+          {placed.map(({ key, tile, at }) => (
+            <g transform={at} key={key}>
+              {tile.land.map((d, i) => (
+                <path className="geopage-detail-land geopage-relief-lowland" d={d} key={i} />
+              ))}
+            </g>
+          ))}
+        </>
+      )}
+      {land.map((l) => (
+        <path className={l.className} d={l.d} key={l.className} />
+      ))}
+      {WORLD_LAKES.map((d, i) => (
+        <path className="geopage-lake geopage-relief-sea-4" d={d} key={i} />
+      ))}
+      {placed.map(({ key, tile, at }) => (
+        <g transform={at} key={key}>
+          {tile.water.map((d, i) => (
+            <path className="geopage-detail-water geopage-relief-sea-4" d={d} key={i} />
           ))}
         </g>
       ))}
@@ -220,6 +304,11 @@ export function GeoMapPage() {
   // Day/night shading (ADR-189). On unless this account switched it off; the clock it is drawn for
   // moves once a minute, and only while the shading is showing.
   const dayNight = usePrefsStore((s) => s.geoMapDayNight) !== false;
+  // Elevation colouring (ADR-220). Off unless this account switched it on; the bands are fetched
+  // the first time it is, and the map stays grey until they arrive.
+  const reliefOn = usePrefsStore((s) => s.geoMapRelief) === true;
+  const relief = useGeoRelief(reliefOn);
+  const reliefBands = useMemo(() => (relief ? reliefLayers(relief) : null), [relief]);
   const [skyTime, setSkyTime] = useState(() => new Date());
   /** The pin whose bubble is open, and where (ADR-191). */
   const [pinMenu, setPinMenu] = useState<{ id: string; at: { x: number; y: number } } | null>(null);
@@ -581,6 +670,18 @@ export function GeoMapPage() {
                   {t('geo.dayNight.label')}
                 </button>
                 <button
+                  className="geopage-ctl geopage-ctl-relief"
+                  onClick={() => setGeoMapRelief(!reliefOn)}
+                  aria-pressed={reliefOn}
+                  title={t('geo.relief.toggle')}
+                  aria-label={t('geo.relief.toggle')}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M1 13.5 6 5l3 5 2-3 4 6.5z" fill="currentColor" />
+                  </svg>
+                  {t('geo.relief.label')}
+                </button>
+                <button
                   className="geopage-ctl"
                   onClick={fit}
                   title={t('map.control.fitToView')}
@@ -623,23 +724,33 @@ export function GeoMapPage() {
                       `<use>` below, so a drag across the date line keeps going (ADR-218). A pane
                       is never wider than one world, so two copies cover every view. */}
                   <g id={WORLD_ID}>
-                    {/* Ocean, so the outline reads as land rather than as floating shapes. */}
-                    <rect
-                      className="geopage-ocean"
-                      x={0}
-                      y={0}
-                      width={MAP_WIDTH}
-                      height={MAP_HEIGHT}
-                    />
-                    {WORLD_OUTLINE.map((d, i) => (
-                      <path className="geopage-land" d={d} key={i} />
-                    ))}
-                    {/* Inland water, in the ocean colour, over the land it sits in. */}
-                    {WORLD_LAKES.map((d, i) => (
-                      <path className="geopage-lake" d={d} key={i} />
-                    ))}
-                    {/* The fine coastline over the world outline where it has loaded (ADR-207). */}
-                    <GeoDetailLayer tiles={detailTiles} />
+                    {reliefBands ? (
+                      <GeoReliefLayer
+                        sea={reliefBands.sea}
+                        land={reliefBands.land}
+                        tiles={detailTiles}
+                      />
+                    ) : (
+                      <>
+                        {/* Ocean, so the outline reads as land rather than as floating shapes. */}
+                        <rect
+                          className="geopage-ocean"
+                          x={0}
+                          y={0}
+                          width={MAP_WIDTH}
+                          height={MAP_HEIGHT}
+                        />
+                        {WORLD_OUTLINE.map((d, i) => (
+                          <path className="geopage-land" d={d} key={i} />
+                        ))}
+                        {/* Inland water, in the ocean colour, over the land it sits in. */}
+                        {WORLD_LAKES.map((d, i) => (
+                          <path className="geopage-lake" d={d} key={i} />
+                        ))}
+                        {/* The fine coastline over the world outline where it has loaded (ADR-207). */}
+                        <GeoDetailLayer tiles={detailTiles} />
+                      </>
+                    )}
                     {/* The night side, four stacked shades from sunset to the end of astronomical
                         twilight (ADR-189). Over the land, under the pins: a site's colour is its
                         health and must read the same at midnight as at noon. */}
@@ -806,6 +917,19 @@ export function GeoMapPage() {
                   <span className="geopage-swatch geopage-swatch-empty" />
                   {t('geo.noNodes')}
                 </li>
+              )}
+              {reliefBands && (
+                <>
+                  <li className="geopage-legend-sep" aria-hidden="true" />
+                  {RELIEF_LEGEND.map(({ className, level }) => (
+                    <li key={className}>
+                      <svg className="geopage-relief-swatch" aria-hidden="true">
+                        <rect className={className} width="100%" height="100%" />
+                      </svg>
+                      {t('geo.relief.level', { level })}
+                    </li>
+                  ))}
+                </>
               )}
               {dayNight && (
                 <>

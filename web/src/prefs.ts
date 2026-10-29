@@ -160,6 +160,12 @@ interface PrefsStore {
    *  rather than `true` so a machine that never pressed the button does not overwrite the account's
    *  "off" with the default. Nothing should call the setter directly. */
   geoMapDayNight: boolean | null;
+  /** Whether Topology ▸ Geo map colours the land by elevation and the sea by depth (ADR-220).
+   *  `null` = never set, which reads as **off** — the grey map is the default.
+   *
+   *  ⚠️ **On the account as well** (ADR-058, `serverPrefs.ts`), like `geoMapDayNight`. Nothing
+   *  should call the setter directly. */
+  geoMapRelief: boolean | null;
   /** Where Topology ▸ Geo map was last looking (ADR-218): the centre in degrees and the zoom as a
    *  multiple of the pane's floor, so it means the same place on any screen. `null` = the operator
    *  never moved the map, which reads as "fit the pins".
@@ -220,6 +226,9 @@ interface PrefsStore {
   /** Record the Geo map day/night switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`geoMapDayNight`]). */
   setGeoMapDayNight: (on: boolean | null) => void;
+  /** Record the Geo map relief switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
+   *  syncs it to the account (see [`geoMapRelief`]). */
+  setGeoMapRelief: (on: boolean | null) => void;
   /** Record where the Geo map is looking locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`geoMapPlace`]). */
   setGeoMapPlace: (place: GeoPlace | null) => void;
@@ -268,6 +277,8 @@ export const usePrefsStore = create<PrefsStore>()(
       nodeTreeWithNodesOnly: null,
       // Same again: absent before ADR-189, read as `null` (on), no migration owed.
       geoMapDayNight: null,
+      // Same again: absent before ADR-220, read as `null` (off), no migration owed.
+      geoMapRelief: null,
       // Same again: absent before ADR-218, read as `null` (fit the pins), no migration owed.
       geoMapPlace: null,
       // Same again: absent before ADR-198, read as `{}` / `true`, no migration owed.
@@ -312,6 +323,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setNodeTreePinnedOnly: (nodeTreePinnedOnly) => set({ nodeTreePinnedOnly }),
       setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
       setGeoMapDayNight: (geoMapDayNight) => set({ geoMapDayNight }),
+      setGeoMapRelief: (geoMapRelief) => set({ geoMapRelief }),
       setGeoMapPlace: (geoMapPlace) => set({ geoMapPlace }),
       setModalSize: (id, size) => set((s) => ({ modalSizes: withModalSize(s.modalSizes, id, size) })),
       setTemplateWrap: (templateWrap) => set({ templateWrap }),

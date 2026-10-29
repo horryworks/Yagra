@@ -187,6 +187,11 @@
     "noNodes": "ノードなし",
     "pinTitle": "{{name}} — {{state}} · ノード {{count}} 件",
     "resize": "ドラッグで地図の高さを変更（ダブルクリックで既定に戻す）",
+    "relief": {
+      "toggle": "標高と水深で色分け",
+      "label": "標高",
+      "level": "{{level}} m"
+    },
     "dayNight": {
       "toggle": "昼と夜を表示",
       "label": "昼夜",

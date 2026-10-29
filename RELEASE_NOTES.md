@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **The Geo map can colour the land by elevation and the sea by depth.** A **Relief** switch beside **Day/night** draws six land bands (200 m to 4,500 m) and four sea bands (−200 m to −5,000 m) from NOAA's ETOPO 2022 data, with the levels in the legend. The grey map stays the default; the bands (about 1 MB compressed) are fetched only once someone switches them on, and the choice is kept on the account like the day/night switch.
+
 ### Improvements
 
 - **A CLI login no longer needs a username.** A device whose lines check a password alone (Cisco `login` + `password` on the vty) can now have its config backed up: the username field may be left empty, and the login is handed to the bundled oxidized with an empty username. The password is still required.

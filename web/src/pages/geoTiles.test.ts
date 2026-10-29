@@ -7,7 +7,14 @@
 
 import { describe, expect, it } from 'vitest';
 import { GEO_TILE_UNITS, MAP_HEIGHT, MAP_WIDTH, project } from './geoProjection';
-import { type GeoTile, hasGeoTile, tileKeyOf, tileOrigin, wantedTiles } from './geoTiles';
+import {
+  type GeoTile,
+  hasGeoTile,
+  placeGeoTiles,
+  tileKeyOf,
+  tileOrigin,
+  wantedTiles,
+} from './geoTiles';
 import { WORLD_LAKES, WORLD_OUTLINE } from './worldOutline';
 
 const FILES = import.meta.glob<GeoTile>('./geoTileData/*.json', { eager: true, import: 'default' });
@@ -158,5 +165,15 @@ describe('the fine coastline tiles', () => {
     expect(hasGeoTile(japan)).toBe(true);
     expect(hasGeoTile(pacific)).toBe(false);
     expect(wantedTiles([pacific, japan, '30_5'])).toEqual(['30_5', japan]);
+  });
+});
+
+describe('placeGeoTiles', () => {
+  it('puts each tile at its square, scaled from path units to map units', () => {
+    const tile: GeoTile = { land: [], water: [], coast: [] };
+    const [p] = placeGeoTiles([['3_2', tile]]);
+    expect(p.o).toEqual({ x: 3 * GEO_TILE_UNITS, y: 2 * GEO_TILE_UNITS });
+    expect(p.at).toBe(`translate(${3 * GEO_TILE_UNITS} ${2 * GEO_TILE_UNITS}) scale(0.001)`);
+    expect(p.tile).toBe(tile);
   });
 });
