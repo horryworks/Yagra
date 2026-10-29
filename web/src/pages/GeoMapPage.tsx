@@ -162,6 +162,8 @@ const GeoDetailLayer = memo(function GeoDetailLayer({ tiles }: { tiles: [string,
 const RELIEF_SEA_ID = 'geopage-relief-sea';
 /** The clip that limits that second showing to the squares whose fine tiles have loaded. */
 const RELIEF_TILES_CLIP_ID = 'geopage-relief-tiles';
+/** How far the relief runs past 180° on each side, in map units — the generator's `EW_OVERLAP`. */
+const RELIEF_EW_OVERLAP = 0.1;
 
 /**
  * The world in relief colours (ADR-220), in place of the ocean, outline, lakes and detail layer.
@@ -183,7 +185,15 @@ const GeoReliefLayer = memo(function GeoReliefLayer({
   const placed = placeGeoTiles(tiles);
   return (
     <g>
-      <rect className="geopage-relief-sea-0" x={0} y={0} width={MAP_WIDTH} height={MAP_HEIGHT} />
+      {/* A hair wider than the world, as the bands are, so the wrapped copy overlaps this one
+          at 180° rather than leaving an anti-aliased line where the two meet. */}
+      <rect
+        className="geopage-relief-sea-0"
+        x={-RELIEF_EW_OVERLAP}
+        y={0}
+        width={MAP_WIDTH + 2 * RELIEF_EW_OVERLAP}
+        height={MAP_HEIGHT}
+      />
       <g id={RELIEF_SEA_ID}>
         {sea.map((l) => (
           <path className={l.className} d={l.d} key={l.className} />

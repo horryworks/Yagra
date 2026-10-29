@@ -27,6 +27,8 @@ import { gzipSync, inflateSync } from 'node:zlib';
 
 const MAP_WIDTH = 720;
 const MAP_HEIGHT = 360;
+/** How far a band runs past 180° on each side, in map units (the smallest step the output keeps). */
+const EW_OVERLAP = 0.1;
 
 /** The levels, in metres. Must match `RELIEF_SEA_LEVELS` / `RELIEF_LAND_LEVELS` in
  *  `src/pages/geoRelief.ts`, which a test compares with this file's output. */
@@ -135,14 +137,25 @@ function readGrid() {
 /** Closed rings bounding { v >= level }, in map units. Rings are joined by edge id rather than by
  *  float coordinates, so a ring never fails to close over a rounding difference. */
 function superlevelRings(grid, w, h, level) {
-  const PW = w + 2;
-  const PH = h + 2;
+  // Two rings of padding. The outer one is "outside", so every ring closes. The inner one repeats
+  // the grid's own edge (wrapped east-west, the pole rows repeated), and both lie past the map's
+  // edge and are clamped onto it — so a band reaches the edge exactly. With "outside" next to the
+  // grid instead, every band stopped half a cell short of 180°, and the page's wrapped second
+  // world showed that sliver as a seam of the deepest-water colour.
+  const PW = w + 4;
+  const PH = h + 4;
   const OUTSIDE = -1e9;
-  const val = (i, j) =>
-    i <= 0 || j <= 0 || i >= PW - 1 || j >= PH - 1 ? OUTSIDE : grid[(j - 1) * w + (i - 1)];
-  // Padded point (i, j) is the centre of source cell (i-1, j-1).
-  const px = (i) => Math.max(0, Math.min(MAP_WIDTH, ((i - 0.5) / w) * MAP_WIDTH));
-  const py = (j) => Math.max(0, Math.min(MAP_HEIGHT, ((j - 0.5) / h) * MAP_HEIGHT));
+  const val = (i, j) => {
+    if (i <= 0 || j <= 0 || i >= PW - 1 || j >= PH - 1) return OUTSIDE;
+    const si = (i - 2 + w) % w;
+    const sj = Math.max(0, Math.min(h - 1, j - 2));
+    return grid[sj * w + si];
+  };
+  // Padded point (i, j) is the centre of source cell (i-2, j-2), clamped onto the map — east-west
+  // a hair past it, so the two worlds' bands overlap at 180° instead of abutting: two shapes that
+  // only meet are each anti-aliased at the shared edge, and the ground shows through as a line.
+  const px = (i) => Math.max(-EW_OVERLAP, Math.min(MAP_WIDTH + EW_OVERLAP, ((i - 1.5) / w) * MAP_WIDTH));
+  const py = (j) => Math.max(0, Math.min(MAP_HEIGHT, ((j - 1.5) / h) * MAP_HEIGHT));
   const H = (i, j) => 2 * (j * PW + i);
   const V = (i, j) => 2 * (j * PW + i) + 1;
 

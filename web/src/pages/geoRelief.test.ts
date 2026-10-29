@@ -46,7 +46,7 @@ describe('the generated relief (ADR-220)', () => {
   it('holds exactly the levels the page has colours for, in painting order', () => {
     expect(data.sea.map((b) => b.level)).toEqual([...RELIEF_SEA_LEVELS]);
     expect(data.land.map((b) => b.level)).toEqual([...RELIEF_LAND_LEVELS]);
-    for (const b of [...data.sea, ...data.land]) expect(b.d).toMatch(/^M[\d. L]+Z/);
+    for (const b of [...data.sea, ...data.land]) expect(b.d).toMatch(/^M[-\d. L]+Z/);
   });
 
   // Points sit well inside their bands: the generator averages 0.1° cells, and a point near an
@@ -61,6 +61,16 @@ describe('the generated relief (ADR-220)', () => {
   ] as const)('puts %s between its levels', (_, lon, lat, above, below) => {
     if (above !== null) expect(inside(band(above), at(lon, lat))).toBe(true);
     if (below !== null) expect(inside(band(below), at(lon, lat))).toBe(false);
+  });
+
+  // The second world is drawn one width to the right (ADR-218), so a band that stops short of
+  // 0 or 720 leaves a seam of the deepest-water colour down the map. The generator once did.
+  it('reaches both edges of the map, so the wrapped world shows no seam', () => {
+    for (const level of [-5000, -200, 200]) {
+      const xs = [...band(level).matchAll(/[ML](-?[\d.]+) /g)].map((m) => Number(m[1]));
+      // A hair past both edges, so the two copies overlap rather than meet.
+      expect([Math.min(...xs), Math.max(...xs)], `${level} m`).toEqual([-0.1, 720.1]);
+    }
   });
 
   it('leaves Tokyo below the first land level', () => {
