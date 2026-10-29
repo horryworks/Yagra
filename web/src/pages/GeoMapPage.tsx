@@ -35,6 +35,7 @@ import {
   stateLabel,
 } from '../lib/format';
 import { DISPLAY_ORDER } from '../lib/nodeState';
+import { formatCount } from '../lib/format';
 import { api } from '../services/api';
 import { sortedAlerts, useAlertStore, useMapPaneStore } from '../store';
 import { usePrefsStore } from '../prefs';
@@ -936,7 +937,7 @@ export function GeoMapPage() {
                       <svg className="geopage-relief-swatch" aria-hidden="true">
                         <rect className={className} width="100%" height="100%" />
                       </svg>
-                      {t('geo.relief.level', { level })}
+                      {t('geo.relief.level', { level: formatCount(level) })}
                     </li>
                   ))}
                 </>

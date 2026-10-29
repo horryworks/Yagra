@@ -81,6 +81,7 @@ import {
   isRevealableCredentialKind,
   REVEAL_AUTO_CLOSE_MS,
   secretReplacementFor,
+  shownRevealFields,
   type CredentialGroup,
   type CredentialKind,
 } from '../lib/credentialKinds';
@@ -657,7 +658,7 @@ function RevealCredentialModal({ cred, onClose }: { cred: CredentialSummary; onC
         </p>
       )}
       {!revealed && !error && <p className="form-status">{t('common:loading')}</p>}
-      {revealed?.fields.map((f) => (
+      {shownRevealFields(revealed?.fields ?? []).map((f) => (
         <div className="modal-field" key={f.field}>
           <label className="modal-field-label">{t(`cred.reveal.field.${f.field}`)}</label>
           <div className="cred-reveal-row">

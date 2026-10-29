@@ -148,3 +148,10 @@ export function credentialGroupOf(kind: string): CredentialGroup {
 export function creatableKindsIn(group: CredentialGroup): CredentialKind[] {
   return CREDENTIAL_KINDS.filter((k) => credentialGroupOf(k) === group);
 }
+
+/** The revealed fields worth a row: an empty one has nothing to read or copy. A password-only
+ *  CLI login reveals an empty user name (ADR-210), which would otherwise draw a blank box with a
+ *  Copy button that copies nothing. */
+export function shownRevealFields<F extends { value: string }>(fields: readonly F[]): F[] {
+  return fields.filter((f) => f.value !== '');
+}

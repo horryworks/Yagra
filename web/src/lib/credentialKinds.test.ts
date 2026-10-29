@@ -13,6 +13,7 @@ import {
   creatableKindsIn,
   credentialGroupOf,
   integrationSecret,
+  shownRevealFields,
   isHttpCredentialKind,
   isCliCredentialKind,
   isRevealableCredentialKind,
@@ -141,5 +142,16 @@ describe('isRevealableCredentialKind', () => {
     for (const kind of INTEGRATION_CREDENTIAL_KINDS) expect(isRevealableCredentialKind(kind)).toBe(false);
     // A kind a newer core wrote might be anything, so it is not offered.
     for (const kind of ['ssh_login', '', 'SNMP_V2C']) expect(isRevealableCredentialKind(kind)).toBe(false);
+  });
+});
+
+describe('shownRevealFields', () => {
+  it('drops an empty field and keeps the rest in order', () => {
+    const fields = [
+      { field: 'username', value: '' },
+      { field: 'password', value: 'pw' },
+      { field: 'enable', value: 'en' },
+    ];
+    expect(shownRevealFields(fields).map((f) => f.field)).toEqual(['password', 'enable']);
   });
 });
