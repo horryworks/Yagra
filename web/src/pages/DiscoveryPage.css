@@ -81,12 +81,18 @@ html[data-viewport='mobile'] .disco-actions .btn {
 
 /* ⚠️ ONE declaration, THREE grids — header, filter row (ADR-053 Inc.6) and every data row. The
    same discipline `DataTable` enforces with a shared template const: a fourth template computed
-   anywhere else puts the filter controls under the wrong columns, and `.tsx` tests never run. */
+   anywhere else puts the filter controls under the wrong columns, and `.tsx` tests never run.
+   ⚠️ Each row is a grid of its own, so a bare `1fr` (which is `minmax(auto, 1fr)`) grows to its
+   own row's content: a folder picker sized by its longest option, or an unbroken sysDescr, widened
+   that row's tracks and left every row's columns somewhere other than under their headers. The
+   `minmax(0, …)` makes the template the only thing deciding a width. */
 .disco-head,
 .disco-filters,
 .disco-row {
   display: grid;
-  grid-template-columns: 28px 1.4fr 2fr 1.4fr 1.2fr 1.2fr 1.2fr;
+  grid-template-columns:
+    28px minmax(0, 1.4fr) minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1.2fr)
+    minmax(0, 1.2fr);
   align-items: center;
   gap: 12px;
   padding: 8px 0;
@@ -108,6 +114,14 @@ html[data-viewport='mobile'] .disco-actions .btn {
 
 .disco-row:last-child {
   border-bottom: none;
+}
+
+/* A control fills its track rather than sizing itself: a `<select>` is as wide as its longest
+   option, which would otherwise spill into the next column now that the track cannot grow. */
+.disco-row > .field,
+.disco-dest > .field {
+  width: 100%;
+  min-width: 0;
 }
 
 .disco-h {
