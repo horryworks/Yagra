@@ -273,8 +273,13 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
 .disco-seen-row {
   display: grid;
   /* The last three tracks carry the monitoring-setup cell (Detect, then two labelled dropdowns and
-     up to two buttons), so they get the room; the MAC is a fixed-width string. */
-  grid-template-columns: 1.1fr 0.9fr 1.4fr 1.4fr 1.4fr auto;
+     up to two buttons), so they get the room; the MAC is a fixed-width string.
+     ⚠️ No `auto` and no bare `fr`: either sizes to its own row's content, and the last track held
+     nothing in the header, the Monitored filter in the filter row and Detect in a data row, so the
+     three grids resolved this template to three different sets of widths. */
+  grid-template-columns:
+    minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.4fr)
+    minmax(0, 1.4fr);
   align-items: center;
   gap: 12px;
   padding: 8px 0;

@@ -111,3 +111,51 @@ test('the Credential filter keeps the devices SNMP answered', async ({ page, err
   );
   expect(errors.uncaught).toEqual([]);
 });
+
+// Unregistered devices: the same three-grids-one-template shape. Its last track was `auto`, which
+// sizes to its own row's content (empty in the header, the Monitored filter in the filter row,
+// Detect in a data row), so every row resolved the template to different widths and the columns
+// shifted under their headers even with ordinary data.
+test.describe('Unregistered devices', () => {
+  type Row = Schemas['DiscoveredEndpointRow'];
+  const page0 = defaultBodyFor('/api/v1/discovered-endpoints') as unknown as Schemas['DiscoveredEndpointPage'];
+  const base = page0.endpoints[0];
+  const row = (id: string, ip: string, extra: Partial<Row>): Row => ({
+    ...base,
+    id,
+    ip,
+    promoted_node_id: null,
+    ...extra,
+  });
+
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/discovered-endpoints': {
+          ...page0,
+          endpoints: [
+            row('00000000-0000-4000-8000-0000000000e1', '192.0.2.10', { name: null, mac: null }),
+            row('00000000-0000-4000-8000-0000000000e2', '192.0.2.11', {
+              name: 'ymock-a-very-long-lldp-system-name-that-runs-on-and-on-without-a-break',
+            }),
+          ],
+        } as unknown as Json,
+      },
+    },
+  });
+
+  test('every row resolves the column template the header does', async ({ page, errors }) => {
+    await page.goto('/nodes/discovery?tab=unregistered');
+    await expect(page.locator('.disco-seen-row')).toHaveCount(2);
+    const templates = await page
+      .locator('.disco-seen-head, .disco-seen-filters, .disco-seen-row')
+      .evaluateAll((els) => els.map((e) => getComputedStyle(e).gridTemplateColumns));
+    // Head, filter row, two data rows.
+    expect(templates).toHaveLength(4);
+    for (const [i, tpl] of templates.entries()) {
+      expect(tpl, `grid ${i + 1}`).toBe(templates[0]);
+    }
+    expect(errors.uncaught).toEqual([]);
+  });
+});
