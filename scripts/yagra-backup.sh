@@ -82,7 +82,7 @@ CORE_CID="$(dc ps -q core)"
 # network and core's own loopback. It never pulls: on a host that does not have the image, these
 # probes degrade to what they did before rather than blocking a backup on a registry that an
 # air-gapped site cannot reach anyway.
-HTTP_IMAGE="${HTTP_IMAGE:-alpine:3.24.2}"
+HTTP_IMAGE="${HTTP_IMAGE:-alpine:3.24.3}"
 http() {  # http <wget args…> — empty output on any failure, never fatal
   docker image inspect "$HTTP_IMAGE" >/dev/null 2>&1 || return 0
   docker run --rm --network "container:$CORE_CID" "$HTTP_IMAGE" wget -qO- "$@" 2>/dev/null || true

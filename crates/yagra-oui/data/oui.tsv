@@ -4,7 +4,7 @@
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
 # fetched: 2026-10-29
-# counts: MA-L=40310 MA-L-repeats-dropped=3 MA-M=6581 MA-S=7219 withheld=3
+# counts: MA-L=40312 MA-L-repeats-dropped=3 MA-M=6581 MA-S=7219 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -35599,6 +35599,7 @@
 888914	All Components Incorporated
 88892F	HUAWEI TECHNOLOGIES CO.,LTD
 888964	GSI Electronics Inc.
+888AF5	Intel Corporate
 888B5D	Storage Appliance Corporation
 888C19	Brady Corp Asia Pacific Ltd
 888C1B	EM Microelectronic
@@ -41362,6 +41363,7 @@
 9CAA5D	GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD
 9CAC6D	Universal Electronics, Inc.
 9CAD97	Hon Hai Precision Ind. Co.,Ltd.
+9CADE0	Intel Corporate
 9CADEF	Obihai Technology, Inc.
 9CAED3	Seiko Epson Corporation
 9CAF6F	ITEL MOBILE LIMITED

@@ -18,6 +18,10 @@
 
 - **A CLI login no longer needs a username.** A device whose lines check a password alone (Cisco `login` + `password` on the vty) can now have its config backed up: the username field may be left empty, and the login is handed to the bundled oxidized with an empty username. The password is still required.
 
+### Security
+
+- **The bundled `alpine` image moves to 3.24.3.** The IP-to-ASN updater and the backup's HTTP helper now run `alpine:3.24.3`, which carries the fixed zlib. The advisory does not reach Yagra's use of either container; the bump removes one of the weekly image scan's findings.
+
 ## v0.3.63 — Discovery recognises a device you already monitor by its serial number, and the Geo map marks the pin you pressed
 
 ### New Features

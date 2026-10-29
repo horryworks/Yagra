@@ -827,7 +827,7 @@ services:
   # fetches once on start. $$ escapes keep the shell vars for the container, not compose.
   ipasn-updater:
     # A patch release, a week old or more (ADR-211 decision 5). 3.20 is past its support window.
-    image: alpine:3.24.2
+    image: alpine:3.24.3
     restart: unless-stopped
     environment:
       YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}

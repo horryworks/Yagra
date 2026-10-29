@@ -396,7 +396,7 @@ services:
   # YAGRA_IPASN_* env lines plus the `ipasndata:/data/ipasn:ro` mount on core. $$ escapes keep the
   # shell vars for the container, not compose.
   # ipasn-updater:
-  #   image: alpine:3.24.2
+  #   image: alpine:3.24.3
   #   restart: unless-stopped
   #   environment:
   #     YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}
