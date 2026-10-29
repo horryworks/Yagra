@@ -17,11 +17,11 @@ import type {
 } from '../types/api';
 import { keepListed } from '../lib/selection';
 
+const STRONGEST_GROUP_INFO = 'monitoring:duplicates.confidenceInfo.confident.info';
+
 /** What each group badge opens: what put the group at that confidence. The likely-duplicate one
  *  also carries the case where deleting is wrong — two routers sharing a VRRP/HSRP address join on
  *  strong evidence. A `Record`, so a new confidence cannot be added without deciding this. */
-const STRONGEST_GROUP_INFO = 'monitoring:duplicates.confidenceInfo.confident.info';
-
 export const CONFIDENCE_INFO: Record<DuplicateConfidence, string> = {
   // Only a Discovery candidate is judged `exact` (ADR-139 Inc.5); a group never is, so it shares
   // the strongest group's explanation rather than owning one nobody reads.

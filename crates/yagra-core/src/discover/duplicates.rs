@@ -174,7 +174,7 @@ impl DuplicateEvidenceKind {
     }
 }
 
-/// How sure a group is.
+/// How sure a duplicate group, or a Discovery candidate's same-device match, is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DuplicateConfidence {

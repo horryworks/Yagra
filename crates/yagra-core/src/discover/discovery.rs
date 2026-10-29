@@ -156,8 +156,9 @@ pub struct Candidate {
     /// preselects it on import so the working secret is bound automatically.
     pub matched_credential_id: Option<Uuid>,
     /// The serial number the device reported, a stack's members joined with `, ` (ADR-139 Inc.5)
-    /// — what says it is a device already monitored at another address. `None` from a poller that
-    /// predates the field, and from a device with no ENTITY-MIB.
+    /// — what says it is a device already monitored at another address. `None` when none was read:
+    /// the poller predates the field, the device did not answer `sysDescr`, has no ENTITY-MIB or
+    /// listed more rows than the sweep reads, the scan was stopped, or the value was a placeholder.
     pub serial_number: Option<String>,
 }
 

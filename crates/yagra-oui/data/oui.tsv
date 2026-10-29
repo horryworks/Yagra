@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-28
-# counts: MA-L=40310 MA-L-repeats-dropped=3 MA-M=6580 MA-S=7219 withheld=3
+# fetched: 2026-10-29
+# counts: MA-L=40310 MA-L-repeats-dropped=3 MA-M=6581 MA-S=7219 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -45057,6 +45057,7 @@ B8F44F	u-blox AG
 B8F453	IEEE Registration Authority
 B8F4531	GANZHOU DEHUIDA TECHNOLOGY CO., LTD
 B8F4532	Hamamatsu Photonics K.K.
+B8F4534	Ontic Engineering & Manufacturing
 B8F4538	ViewSonic Corp
 B8F453A	Skeleton Technologies OÜ
 B8F453B	SDMT Limited

@@ -993,7 +993,8 @@ export const DUPLICATE_EVIDENCE_KINDS = [
 ] as const;
 export type DuplicateEvidenceKind = (typeof DUPLICATE_EVIDENCE_KINDS)[number];
 
-/** How sure a duplicate group is. Same reason as above. */
+/** How sure a duplicate group, or a Discovery candidate's same-device match, is. Same reason as
+ *  above. */
 export const DUPLICATE_CONFIDENCES = ['exact', 'confident', 'possible'] as const;
 export type DuplicateConfidence = (typeof DUPLICATE_CONFIDENCES)[number];
 

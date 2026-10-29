@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // "Monitored at another address as …" — the nodes a discovered device looks like (ADR-139 Inc.3),
-// with the evidence for each and a line saying what pressing on does. Drawn by the Scan tab's
+// with the evidence for each and, on the Scan tab, a line saying what pressing on does (Monitor's
+// confirmation says it in the setup cell, ADR-139 Inc.5). Drawn by the Scan tab's
 // candidate rows and, after a Detect, by the Monitoring setup cell that Discovery ▸ Unregistered
 // devices and Node ▸ Neighbors share (Inc.4). One component, so the two cannot word it differently.
 //

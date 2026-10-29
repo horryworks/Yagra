@@ -589,11 +589,14 @@ mod address_owner_reads {
         let other = pgtest::group(&pool, "site-b").await;
         let core = pgtest::node_at(&pool, "core-1", ip("192.0.2.1"), Some(seen)).await;
         let hidden = pgtest::node_at(&pool, "core-2", ip("192.0.2.2"), Some(other)).await;
-        sqlx::query("UPDATE nodes SET sys_object_id = '1.3.6.1.4.1.9.1.1208' WHERE id = $1")
-            .bind(core)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE nodes SET sys_object_id = '1.3.6.1.4.1.9.1.1208', \
+             serial_number = 'FOC0000A1AA, FOC0000B2BB' WHERE id = $1",
+        )
+        .bind(core)
+        .execute(&pool)
+        .await
+        .unwrap();
         l3(&pool, core, &["192.0.2.1", "198.51.100.7"]).await;
         l3(&pool, hidden, &["198.51.100.7"]).await;
 
@@ -619,6 +622,11 @@ mod address_owner_reads {
         assert_eq!(node.name, "core-1");
         assert_eq!(node.address, ip("192.0.2.1"));
         assert_eq!(node.sys_object_id.as_deref(), Some("1.3.6.1.4.1.9.1.1208"));
+        // ADR-139 Inc.5 decision 4 reads a carrier's serials: a pair whose serials differ ends.
+        assert_eq!(
+            node.serial_number.as_deref(),
+            Some("FOC0000A1AA, FOC0000B2BB")
+        );
     }
 
     /// A VRRP/HSRP virtual address (`anycast`) and a broadcast address are carried by more than one
@@ -692,6 +700,11 @@ mod address_owner_reads {
     async fn nodes_are_found_by_name_up_to_one_past_the_cap(pool: sqlx::PgPool) {
         let repo = pgtest::repo(pool.clone());
         let core = pgtest::node_at(&pool, " Core-1 ", ip("192.0.2.1"), None).await;
+        sqlx::query("UPDATE nodes SET serial_number = 'FDO0000A1BC' WHERE id = $1")
+            .bind(core)
+            .execute(&pool)
+            .await
+            .unwrap();
         let cap = yagra_base::repo::SHARED_VALUE_MAX;
         for i in 0..cap + 3 {
             pgtest::node_at(&pool, "switch", ip(&format!("198.51.100.{}", i + 1)), None).await;
@@ -702,6 +715,9 @@ mod address_owner_reads {
             .unwrap();
         assert_eq!(found.iter().filter(|n| n.id == core).count(), 1);
         assert_eq!(found.iter().filter(|n| n.name == "switch").count(), cap + 1);
+        // ADR-139 Inc.5 decision 4 reads a named node's serials too.
+        let named = found.iter().find(|n| n.id == core).expect("core-1");
+        assert_eq!(named.serial_number.as_deref(), Some("FDO0000A1BC"));
     }
 
     /// ADR-139 Inc.5: a node is found by any member of its stored serial list, case-blind and

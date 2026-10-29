@@ -428,6 +428,13 @@ impl NodeRepo {
         Ok(id)
     }
 
+    /// Every serial number a `nodes n` row's device is known by, as one text value: the serial the
+    /// device reported (`nodes.serial_number`, a stack's members joined with `, `) and a Meraki
+    /// device's, joined the same way, or `NULL` when there is neither (ADR-139 Inc.5). The reader
+    /// splits it as `duplicates::serial_parts` does, the rule Nodes ▸ Duplicates keeps.
+    pub const DEVICE_SERIAL_SQL: &'static str = "NULLIF(concat_ws(', ', n.serial_number, \
+         (SELECT m.serial FROM meraki_devices m WHERE m.node_id = n.id)), '')";
+
     /// "This `nodes n` row is a **device**": no URL monitor and no DNS monitor is bound to it
     /// (ADR-139 decision 1). Interpolated after an `AND`; the row must be aliased `n`.
     ///
@@ -437,16 +444,11 @@ impl NodeRepo {
     /// matching on the address alone would refuse to import the router itself — with no way round
     /// it. A Meraki device is a device and does count.
     ///
-    /// One copy, read by [`Self::device_nodes_at`], [`Self::import_nodes`] and
-    /// `DiscoveredRepo::reconcile_promotions`, so the Discovery screen's two tables cannot
-    /// disagree about the same address.
-    /// Every serial number a `nodes n` row's device is known by, as one text value: the serial the
-    /// device reported (`nodes.serial_number`, a stack's members joined with `, `) and a Meraki
-    /// device's, joined the same way, or `NULL` when there is neither (ADR-139 Inc.5). The reader
-    /// splits it as `duplicates::serial_parts` does, the rule Nodes ▸ Duplicates keeps.
-    pub const DEVICE_SERIAL_SQL: &'static str = "NULLIF(concat_ws(', ', n.serial_number, \
-         (SELECT m.serial FROM meraki_devices m WHERE m.node_id = n.id)), '')";
-
+    /// One copy, read by [`Self::device_nodes_at`], [`Self::import_nodes`],
+    /// `DiscoveredRepo::reconcile_promotions` and the three same-device readers
+    /// ([`Self::device_nodes_carrying`], [`Self::device_nodes_named`],
+    /// [`Self::device_nodes_with_serials`]), so the Discovery screen's two tables cannot disagree
+    /// about the same address.
     pub const DEVICE_NODE_PREDICATE: &'static str =
         "NOT EXISTS (SELECT 1 FROM url_checks uc WHERE uc.node_id = n.id) \
          AND NOT EXISTS (SELECT 1 FROM dns_checks dc WHERE dc.node_id = n.id)";
