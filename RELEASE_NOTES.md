@@ -12,6 +12,7 @@
 
 ### Improvements
 
+- **Discovery ▸ Scan a range: the Discovered devices table can show only the devices SNMP answered.** The Credential column has a filter under its header — **SNMP answered** or **No SNMP**, with a count beside each — decided by the credential the scan matched, not by the one picked since. It is kept in the URL like the other filters.
 - **The Geo map marks the pin you pressed.** The pin or cluster whose bubble is open carries a ring until the bubble closes, and a small ripple runs from it once when you press it. Both stay the same size at any zoom. With reduced motion turned on in the operating system, only the ring is drawn.
 
 ### Bug Fixes

@@ -1205,10 +1205,11 @@ export function DiscoveryPage() {
               <div className="disco-h">{t('discovery.cols.credential')}</div>
             </div>
             {/* Filter row under the header — same CSS grid rule as `.disco-head` and every
-                `.disco-row` (ADR-053 Inc.6 decision F). Four of the six tracks carry an empty cell:
-                the first is 28px and belongs to the select checkbox, and the last three are the
-                operator's *input* for the import about to happen — filtering a field you are typing
-                into would take the row out from under the cursor.
+                `.disco-row` (ADR-053 Inc.6 decision F). Four of the seven tracks carry an empty cell:
+                the first is 28px and belongs to the select checkbox, and folder, name and profile
+                are the operator's *input* for the import about to happen — filtering a field you
+                are typing into would take the row out from under the cursor. The credential track
+                filters on what the scan matched, not on the picker (Inc.12).
                 ⚠️ A reachability control was put in that 28px track and shipped unusable, which is
                 what a filter row costs when nothing renders it in a test. It is gone rather than
                 relocated; `discoveryFilters.ts` says why.
@@ -1218,7 +1219,7 @@ export function DiscoveryPage() {
                 width and every control sat somewhere other than under its column. */}
             <ColumnFilterRow
               columns={candCols}
-              slots={[null, 'address', 'identity', null, null, null, null]}
+              slots={[null, 'address', 'identity', null, null, null, 'credential']}
               filters={filters}
               onChange={setFilters}
               counts={candCounts}

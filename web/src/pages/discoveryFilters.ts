@@ -22,12 +22,22 @@ import type { TFunction } from 'i18next';
 
 // ───────────────────────────────────────────────────────────── sweep candidates
 
+/** Whether the sweep read the device over SNMP (ADR-053 Inc.12). */
+export const CANDIDATE_SNMP = ['answered', 'none'] as const;
+
+/** A candidate carries a matched credential exactly when an SNMP credential got its sysDescr, so
+ *  "the scan matched one" and "SNMP answered" are the same question. */
+export const candidateSnmp = (c: DiscoveryCandidate): (typeof CANDIDATE_SNMP)[number] =>
+  c.matched_credential_id ? 'answered' : 'none';
+
 /**
  * The sweep-results filter row.
  *
- * Only two columns carry a control. Name, profile and credential are the operator's *input* for the
- * import about to happen — a filter on a field you are in the middle of typing would remove the row
- * out from under the cursor.
+ * Three columns carry a control. Name and profile are the operator's *input* for the import about
+ * to happen — a filter on a field you are in the middle of typing would remove the row out from
+ * under the cursor. The credential column is input too, and its filter is the exception that rule
+ * allows (ADR-053 Inc.12): it reads what the **scan** matched, never the credential picked since, so
+ * changing the picker cannot take the row away.
  *
  * ⚠️ **There is no reachability filter, and the "Answered only" checkbox that used to be here is
  * gone.** Two reasons, and the second is why it is not worth relocating:
@@ -64,6 +74,16 @@ export function candidateFilters(
       containsSemantics: 'substring',
       placeholder: t('discovery.cols.identity'),
     },
+    credential: {
+      kind: 'enum',
+      options: CANDIDATE_SNMP.map((v) => ({
+        value: v,
+        label: t(`discovery.filter.snmp.${v}`),
+      })),
+      readValue: candidateSnmp,
+      allLabel: t('discovery.cols.credential'),
+      counts: 'client',
+    },
   };
 }
 
@@ -75,6 +95,7 @@ export function candidateLabels(t: TFunction): Record<string, string> {
   return {
     address: t('discovery.cols.address'),
     identity: t('discovery.cols.identity'),
+    credential: t('discovery.cols.credential'),
   };
 }
 

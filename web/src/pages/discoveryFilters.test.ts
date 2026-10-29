@@ -15,6 +15,7 @@ import {
   candidateLabels,
   endpointColumns,
   endpointLabels,
+  CANDIDATE_SNMP,
   ENDPOINT_DEFAULT_MONITORED,
 } from './discoveryFilters';
 
@@ -70,9 +71,26 @@ describe('the sweep-results filter row', () => {
     // must not go with it is the *row*: `!reachable` here does not mean "did not answer" — the
     // poller reports a candidate that answered SNMP but not ICMP — so a filter that quietly kept
     // those out would hide exactly the devices worth looking at.
-    expect(C_COLS.map((c) => c.key)).toEqual(['address', 'identity']);
+    expect(C_COLS.map((c) => c.key)).toEqual(['address', 'identity', 'credential']);
     expect(hasCand(cand({ reachable: false }), C_DEFAULTS)).toBe(true);
     expect(hasCand(cand({ reachable: true }), C_DEFAULTS)).toBe(true);
+  });
+
+  it('narrows to the devices SNMP answered, by what the scan matched (ADR-053 Inc.12)', () => {
+    const spoke = cand({ matched_credential_id: 'c1' });
+    const silent = cand({ matched_credential_id: null, sysname: null, sysdescr: null });
+    expect(C_DEFAULTS.credential).toBe('');
+    expect(hasCand(spoke, cf({ credential: 'answered' }))).toBe(true);
+    expect(hasCand(silent, cf({ credential: 'answered' }))).toBe(false);
+    expect(hasCand(silent, cf({ credential: 'none' }))).toBe(true);
+    expect(hasCand(spoke, cf({ credential: 'none' }))).toBe(false);
+    expect(hasCand(silent, cf({ credential: 'answered,none' }))).toBe(true);
+    // The option labels are the two locale keys the row renders.
+    const col = C_COLS.find((c) => c.key === 'credential');
+    const spec = col?.filter;
+    expect(spec?.kind === 'enum' && spec.options.map((o) => o.label)).toEqual(
+      CANDIDATE_SNMP.map((v) => `discovery.filter.snmp.${v}`),
+    );
   });
 
   it('asks the address and the identity separately, where the box asked both at once', () => {

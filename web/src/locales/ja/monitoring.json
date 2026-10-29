@@ -718,7 +718,11 @@
       "import": "監視を開始できませんでした"
     },
     "filter": {
-      "candidateNoun": "件のアドレス"
+      "candidateNoun": "件のアドレス",
+      "snmp": {
+        "answered": "SNMP 応答あり",
+        "none": "SNMP 応答なし"
+      }
     },
     "fileByPrefix": {
       "label": "IP レンジに合うグループへ入れる"

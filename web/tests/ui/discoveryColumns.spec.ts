@@ -41,6 +41,7 @@ const scan = (url: URL): Json => {
         sysobjectid: '1.3.6.1.4.1.99999.1.2.3.4.5.6.7.8.9',
         vendor: 'Ymock',
         model: 'YM-9000-48X',
+        matched_credential_id: '00000000-0000-4000-8000-0000000000c1',
       }),
       candidate('192.0.2.2', {}),
       candidate('192.0.2.3', { reachable: false }),
@@ -88,5 +89,25 @@ test('every discovered row lays its cells out under the header columns', async (
       expect(cells[c][1], `row ${i + 1} cell ${c + 1}`).toBeLessThanOrEqual(head[c + 1]);
     }
   }
+  expect(errors.uncaught).toEqual([]);
+});
+
+// ADR-053 Inc.12: the Credential column narrows to the devices SNMP answered, and its control sits
+// under the Credential header like the other two.
+test('the Credential filter keeps the devices SNMP answered', async ({ page, errors }) => {
+  await page.goto('/nodes/discovery?candidates.credential=answered');
+  const rows = page.locator('.disco-row');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('192.0.2.1');
+
+  const cells = page.locator('.disco-filters > *');
+  await expect(cells).toHaveCount(7);
+  const heads = page.locator('.disco-head > *');
+  const left = async (l: typeof cells) =>
+    Math.round((await l.boundingBox())?.x ?? Number.NaN);
+  expect(await left(cells.nth(6))).toBe(await left(heads.nth(6)));
+  await expect(cells.nth(6).getByRole('button', { name: 'Filter by Credential' })).toContainText(
+    'SNMP answered',
+  );
   expect(errors.uncaught).toEqual([]);
 });

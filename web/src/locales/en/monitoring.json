@@ -741,7 +741,11 @@
       "import": "failed to import"
     },
     "filter": {
-      "candidateNoun": "addresses"
+      "candidateNoun": "addresses",
+      "snmp": {
+        "answered": "SNMP answered",
+        "none": "No SNMP"
+      }
     },
     "fileByPrefix": {
       "label": "File each device by its IP range"
