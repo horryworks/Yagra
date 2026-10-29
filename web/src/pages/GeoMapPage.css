@@ -169,7 +169,11 @@
   opacity: 1;
 }
 
-.geopage-pin:focus-visible {
+/* No browser outline on ANY focus, not only `:focus-visible` (ADR-206 Inc.2). A mouse press focuses
+   the pin for as long as the button is down (the bubble takes the focus on release), and Chrome
+   draws its `outline: auto` ring then: 5px in the map's own units, so at 240x it covers the pane as
+   a white ring around a black disc. Keyboard focus keeps its own mark, below. */
+.geopage-pin:focus {
   outline: none;
 }
 

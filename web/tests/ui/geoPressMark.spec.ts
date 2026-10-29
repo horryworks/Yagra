@@ -158,3 +158,28 @@ test.describe('with reduced motion', () => {
     expect(errors.logged).toEqual([]);
   });
 });
+
+// While the button is down the pin holds the focus (the bubble takes it on release), and Chrome's
+// `outline: auto` ring is measured in the map's units: at the zoom ceiling it covered the pane as a
+// white ring around a black disc. The ring must not be drawn for any focus, mouse or keyboard.
+test('a pin held down carries no browser focus ring', async ({ page, errors }) => {
+  await page.goto('/topology/geo');
+  const pin = page.getByTestId('geo-map-pin').first();
+  let at = (await pin.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  for (let i = 0; i < 12; i++) await page.mouse.wheel(0, -200);
+  at = (await pin.boundingBox())!;
+  await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+  await page.mouse.down();
+  const held = await pin.evaluate((el) => ({
+    focused: document.activeElement === el,
+    outline: getComputedStyle(el).outlineStyle,
+  }));
+  await page.mouse.up();
+  // The press did focus the pin, so the check below is about the focused state.
+  expect(held.focused).toBe(true);
+  expect(held.outline).toBe('none');
+
+  expect(errors.uncaught).toEqual([]);
+  expect(errors.logged).toEqual([]);
+});
