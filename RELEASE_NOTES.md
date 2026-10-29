@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.64 — The Geo map can colour the land by elevation and the sea by depth, and a CLI login no longer needs a username
+
 ### New Features
 
 - **The Geo map can colour the land by elevation and the sea by depth.** A **Relief** switch beside **Day/night** draws six land bands (200 m to 4,500 m) and four sea bands (−200 m to −5,000 m) from NOAA's ETOPO 2022 data, with the levels in the legend. The grey map stays the default; the bands (about 1 MB compressed) are fetched only once someone switches them on, and the choice is kept on the account like the day/night switch.
