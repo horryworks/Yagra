@@ -131,7 +131,7 @@
       "username": "ユーザー名",
       "password": "パスワード",
       "enable": "enable パスワード",
-      "enableNone": "なし"
+      "none": "なし"
     }
   },
   "users": {

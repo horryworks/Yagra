@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A CLI login no longer needs a username.** A device whose lines check a password alone (Cisco `login` + `password` on the vty) can now have its config backed up: the username field may be left empty, and the login is handed to the bundled oxidized with an empty username. The password is still required.
+
 ## v0.3.63 — Discovery recognises a device you already monitor by its serial number, and the Geo map marks the pin you pressed
 
 ### New Features

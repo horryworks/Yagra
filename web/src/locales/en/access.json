@@ -134,7 +134,7 @@
       "username": "Username",
       "password": "Password",
       "enable": "Enable password",
-      "enableNone": "None"
+      "none": "None"
     }
   },
   "users": {

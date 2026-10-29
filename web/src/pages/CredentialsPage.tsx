@@ -150,6 +150,7 @@ function CliLoginFields({
         <TextInput
           id="cred-cli-user"
           autoComplete="off"
+          placeholder={t('cred.cli.none')}
           value={value.username}
           onChange={(e) => onChange({ ...value, username: e.target.value })}
         />
@@ -172,7 +173,7 @@ function CliLoginFields({
         <SecretInput
           id="cred-cli-enable"
           stored={false}
-          placeholder={t('cred.cli.enableNone')}
+          placeholder={t('cred.cli.none')}
           value={value.enable}
           onChange={(enable) => onChange({ ...value, enable })}
         />

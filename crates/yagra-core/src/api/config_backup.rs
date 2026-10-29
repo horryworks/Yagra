@@ -1544,6 +1544,34 @@ mod tests {
         )
         .await
         .expect("dispatch");
+        // A device whose lines check a password alone: its login has no user name.
+        let bare = yagra_base::pgtest::node(&pool, "sw-11", 11, None).await;
+        let bare_login = admin
+            .creds
+            .create("line", "cli_login", br#"{"username":"","password":"pw"}"#)
+            .await
+            .expect("password-only login");
+        repo.put(
+            bare,
+            &NodeConfigBackup {
+                enabled: true,
+                login_order: None,
+                input: BackupInput::Telnet,
+                model_override: Some("ios".to_owned()),
+                scan_mode: ScanMode::Normal,
+            },
+            true,
+        )
+        .await
+        .expect("put");
+        repo.dispatch(
+            bare,
+            bare_login,
+            Utc::now(),
+            Utc::now() - rotation::REQUEST_TIMEOUT,
+        )
+        .await
+        .expect("dispatch");
 
         let router = crate::api::router(st.clone());
         let res = router
@@ -1576,6 +1604,20 @@ mod tests {
         assert_eq!(ssh % 2, 0);
         // oxidized never learns the device's own address (the fixture's `10.0.0.10`).
         assert!(!body.windows(b"10.0.0.10".len()).any(|w| w == b"10.0.0.10"));
+        // The password-only login is handed over with an EMPTY user name, never without one —
+        // a missing key would fall back to the `username` in oxidized's own config.
+        let bare_entry = list
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|n| n["name"] == bare.to_string())
+            .expect("the password-only node is listed");
+        assert!(
+            bare_entry["ssh_port"].as_u64().is_some(),
+            "handed a login, not parked"
+        );
+        assert_eq!(bare_entry["username"], "");
+        assert_eq!(bare_entry["password"], "pw");
 
         admin.config_relay.record_failure(node);
         let res = router

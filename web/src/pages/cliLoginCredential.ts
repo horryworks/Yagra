@@ -8,6 +8,7 @@
 
 /** The sub-form's fields. */
 export interface CliLoginState {
+  /** Empty for a device whose lines check a password alone. */
   username: string;
   password: string;
   /** The privileged-mode password; empty means the account lands privileged. */
@@ -16,12 +17,15 @@ export interface CliLoginState {
 
 export const emptyCliLogin = (): CliLoginState => ({ username: '', password: '', enable: '' });
 
-/** Whether the server will accept the document: a user name and a password. */
+/** Whether the server will accept the document: a password, with or without a user name. */
 export function cliLoginReady(s: CliLoginState): boolean {
-  return s.username.trim() !== '' && s.password !== '';
+  return s.password !== '';
 }
 
-/** The sealed document. An empty enable is left out rather than sent blank. */
+/**
+ * The sealed document. A blank user name is sent as `""`, never left out, so oxidized is handed
+ * an empty one rather than its own config's default. An empty enable is left out.
+ */
 export function buildCliLoginSecret(s: CliLoginState): string {
   const doc: { username: string; password: string; enable?: string } = {
     username: s.username.trim(),

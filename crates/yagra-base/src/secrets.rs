@@ -251,8 +251,14 @@ pub const KIND_CLI_LOGIN: &str = "cli_login";
 
 /// The sealed JSON shape of a `cli_login` credential. `enable` is the privileged-mode password a
 /// Cisco-style device asks for after the login; absent when the account lands privileged.
+///
+/// `username` may be empty: a device whose lines check a password alone (Cisco `login` +
+/// `password` on the vty) asks for no user name over telnet and ignores the one SSH must send.
+/// It is handed to oxidized as `""`, never left out — a missing key would fall back to the
+/// `username` in oxidized's own config.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CliLoginSecret {
+    #[serde(default)]
     pub username: String,
     pub password: String,
     #[serde(default)]
@@ -265,11 +271,12 @@ impl CliLoginSecret {
     pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
         let mut secret: Self =
             serde_json::from_slice(bytes).map_err(|_| "not a valid CLI login JSON document")?;
-        if secret.username.trim().is_empty() {
-            return Err("username must not be empty");
-        }
         if secret.password.is_empty() {
             return Err("password must not be empty");
+        }
+        // A blank user name is "none", so the device is never sent a line of spaces.
+        if secret.username.trim().is_empty() {
+            secret.username.clear();
         }
         // An empty enable is "none", so a form that always sends the field cannot store a blank
         // password the device would then be sent.
@@ -804,6 +811,26 @@ mod tests {
         }
         assert!(!is_never_snmp(KIND_SNMP_V3));
         assert!(!is_never_snmp("snmp_v2c"));
+    }
+
+    /// A password-only login (no user name) is a CLI login; a missing password is not.
+    #[test]
+    fn a_cli_login_may_have_no_user_name_but_needs_a_password() {
+        for doc in [
+            &br#"{"username":"","password":"pw"}"#[..],
+            br#"{"username":"   ","password":"pw"}"#,
+            br#"{"password":"pw"}"#,
+        ] {
+            let s = CliLoginSecret::parse(doc).expect("password-only login");
+            assert_eq!(s.username, "");
+            assert_eq!(s.password, "pw");
+        }
+        let s = CliLoginSecret::parse(br#"{"username":"ops","password":"pw","enable":""}"#)
+            .expect("full login");
+        assert_eq!(s.username, "ops");
+        assert_eq!(s.enable, None);
+        assert!(CliLoginSecret::parse(br#"{"username":"ops","password":""}"#).is_err());
+        assert!(CliLoginSecret::parse(br#"{"username":""}"#).is_err());
     }
     use yagra_secrets::KeyProvider;
 
