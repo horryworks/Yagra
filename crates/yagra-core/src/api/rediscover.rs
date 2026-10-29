@@ -541,6 +541,7 @@ mod tests {
                     sysname: Some("sw-01".to_owned()),
                     sysobjectid: oid.map(str::to_owned),
                     matched_credential: None,
+                    serial_number: None,
                 }],
                 probed: 1,
                 total: 1,

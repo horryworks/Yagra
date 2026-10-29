@@ -46,7 +46,7 @@ pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 /// line card, power supply and transceiver is some hundreds of rows per column; the cap is what
 /// keeps an hourly read from turning into a dump of a device listing thousands of sensors. A walk it
 /// stops sends no serial rather than a partial list (ADR-147 decision 4).
-const SERIAL_ENTITY_ROWS: usize = 4096;
+pub(crate) const SERIAL_ENTITY_ROWS: usize = 4096;
 
 /// The most rows the serial read takes from a vendor's own MIB (ADR-147 Increment 2). A Juniper
 /// Virtual Chassis has at most ten members and the box serial is one row, so this is room to spare,
@@ -131,9 +131,24 @@ pub(super) struct ScalarRead<'a> {
 /// Capturing it here lets everything above it — the scalar GET, the column walk, the interface
 /// metadata fold, the identity probe — be written once instead of twice: v2c and v3 differ only in
 /// which transport method carries the credential, never in what is done with the rows.
-pub(super) enum SnmpWalker {
+pub(crate) enum SnmpWalker {
     V2c(String),
     V3(SnmpV3Params),
+}
+
+/// What [`SnmpWalker::read_serial_number`] found, and which read decided it.
+pub(crate) struct SerialRead {
+    pub(crate) serial: Option<String>,
+    source: &'static str,
+    result: &'static str,
+}
+
+impl SerialRead {
+    /// One count per hourly probe under [`SERIAL_PROBES_METRIC`], under the read that decided it.
+    fn count(&self) {
+        metrics::counter!(SERIAL_PROBES_METRIC, "source" => self.source, "result" => self.result)
+            .increment(1);
+    }
 }
 
 impl SnmpWalker {
@@ -278,14 +293,18 @@ impl SnmpWalker {
         // Only a device that answered `sysDescr` is walked for a serial: one that did not is not
         // going to answer a table, and the walk would spend the probe's time waiting on silence.
         let serial_number = if sys_descr.is_some() {
-            self.read_serial_number(
-                transport,
-                target,
-                sys_object_id,
-                chassis.serial,
-                identity_column_timeout(timeout),
-            )
-            .await
+            let read = self
+                .read_serial_number(
+                    transport,
+                    target,
+                    sys_object_id,
+                    chassis.serial,
+                    identity_column_timeout(timeout),
+                    SERIAL_ENTITY_ROWS,
+                )
+                .await;
+            read.count();
+            read.serial
         } else {
             None
         };
@@ -320,30 +339,34 @@ impl SnmpWalker {
     /// ENTITY-MIB walk was heard out and its chassis rule found nothing. A Cisco AireOS controller is
     /// that case — no class column, and its access points' serials beside its own. A walk that did
     /// not finish still sends nothing, so the fallback cannot overwrite a stack's list either.
-    async fn read_serial_number(
+    ///
+    /// `max_entity_rows` caps the ENTITY-MIB walk: [`SERIAL_ENTITY_ROWS`] for the hourly probe, less
+    /// for a Discovery sweep that reads every device of a range (ADR-139 Inc.5 decision 1). The
+    /// answer says which read decided it; only the hourly probe counts it under
+    /// [`SERIAL_PROBES_METRIC`], whose meaning is the monitored fleet's coverage.
+    pub(crate) async fn read_serial_number(
         &self,
         transport: &dyn Transport,
         target: IpAddr,
         sys_object_id: Option<&str>,
         row_serial: Option<String>,
         timeout: Duration,
-    ) -> Option<String> {
-        // One count per probe, under the read that decided it.
-        let count = |source: &'static str, result: &'static str| {
-            metrics::counter!(SERIAL_PROBES_METRIC, "source" => source, "result" => result)
-                .increment(1);
-        };
-        if let Some(read) = serial::vendor_read(sys_object_id) {
-            let columns: Vec<String> = read.columns.iter().map(|c| c.oid().to_owned()).collect();
+        max_entity_rows: usize,
+    ) -> SerialRead {
+        let read =
+            |source: &'static str, result: &'static str, serial: Option<String>| SerialRead {
+                serial,
+                source,
+                result,
+            };
+        if let Some(vendor) = serial::vendor_read(sys_object_id) {
+            let columns: Vec<String> = vendor.columns.iter().map(|c| c.oid().to_owned()).collect();
             let walk = match self
                 .walk_instance_columns(transport, target, &columns, timeout, SERIAL_VENDOR_ROWS)
                 .await
             {
                 Ok(walk) if walk.every_column_answered => walk,
-                Ok(_) | Err(_) => {
-                    count(read.name, "unread");
-                    return None;
-                }
+                Ok(_) | Err(_) => return read(vendor.name, "unread", None),
             };
             let mut rows: std::collections::BTreeMap<
                 String,
@@ -361,9 +384,8 @@ impl SnmpWalker {
                         .insert(index, String::from_utf8_lossy(&bytes).into_owned());
                 }
             }
-            if let Some(found) = serial::resolve_vendor(read, &rows) {
-                count(read.name, "serial");
-                return Some(found);
+            if let Some(found) = serial::resolve_vendor(vendor, &rows) {
+                return read(vendor.name, "serial", Some(found));
             }
         }
         let mut columns = vec![
@@ -375,14 +397,11 @@ impl SnmpWalker {
             columns.push(serial::OID_ENT_PHYSICAL_CONTAINED_IN.to_owned());
         }
         let walk = match self
-            .walk_instance_columns(transport, target, &columns, timeout, SERIAL_ENTITY_ROWS)
+            .walk_instance_columns(transport, target, &columns, timeout, max_entity_rows)
             .await
         {
             Ok(walk) if walk.every_column_answered => walk,
-            Ok(_) | Err(_) => {
-                count("entity", "unread");
-                return None;
-            }
+            Ok(_) | Err(_) => return read("entity", "unread", None),
         };
         let mut classes = std::collections::BTreeMap::new();
         let mut serials = std::collections::BTreeMap::new();
@@ -427,19 +446,15 @@ impl SnmpWalker {
         // and this is `None` (Increments 4 and 5). Out of the same walk as the chassis rows, so
         // decision 4 still holds.
         if let Some(found) = serial::resolve_huawei_boards(&classes, &names, &parents, &serials) {
-            count("huawei", "serial");
-            return Some(found);
+            return read("huawei", "serial", Some(found));
         }
         if let Some(found) = serial::resolve(&classes, &serials) {
-            count("entity", "serial");
-            return Some(found);
+            return read("entity", "serial", Some(found));
         }
         if let Some(found) = row_serial {
-            count("os_row", "serial");
-            return Some(found);
+            return read("os_row", "serial", Some(found));
         }
-        count("entity", "none");
-        None
+        read("entity", "none", None)
     }
 
     /// Read integer-valued instance OIDs, keyed by the instance OID — the scalar GET, which both

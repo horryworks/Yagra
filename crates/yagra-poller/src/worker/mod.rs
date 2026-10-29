@@ -70,7 +70,9 @@ use interfaces::{execute_snmp_table, execute_snmp_v3_table};
 use meraki::execute_meraki;
 use physical::{execute_mau, execute_optical};
 use probes::{execute_dns, execute_http, execute_icmp};
-use snmp::{execute_scalar_get, ScalarRead, SnmpWalker};
+use snmp::{execute_scalar_get, ScalarRead};
+// The Discovery probe reads a serial the way the hourly identity probe does (ADR-139 Inc.5).
+pub(crate) use snmp::{SnmpWalker, SERIAL_ENTITY_ROWS};
 pub(crate) use stream::{run_stream, POLL_PHASE_BUCKETS, POLL_PHASE_METRIC};
 use wlan::{execute_wlan, WlanPlan};
 

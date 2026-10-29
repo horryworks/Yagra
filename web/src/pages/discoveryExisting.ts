@@ -11,7 +11,8 @@
 // and coming back — offered the same devices for import again, and the server created a second
 // node at the same address every time.
 
-import type { InventoryMatch, SameDeviceMatch } from '../types/api';
+import type { Tone } from '../components/ui/Badge';
+import type { DuplicateConfidence, InventoryMatch, SameDeviceMatch } from '../types/api';
 
 /** The server's answer, keyed by the candidate's own address string.
  *
@@ -73,15 +74,16 @@ export function sameDeviceByAddress(
 type EvidenceKind = SameDeviceMatch['nodes'][number]['evidence'][number];
 
 /** The sentence key for one piece of evidence, or `null` for a kind a candidate is never judged by
- *  (the server only sends the two below — the rest belong to Nodes ▸ Duplicates). */
+ *  (the server only sends the three below — the rest belong to Nodes ▸ Duplicates). */
 export function sameDeviceReasonKey(kind: EvidenceKind): string | null {
   switch (kind) {
+    case 'serial':
+      return 'discovery.sameDevice.reason.serial';
     case 'own_ip_one_way':
       return 'discovery.sameDevice.reason.ownIp';
     case 'name':
       return 'discovery.sameDevice.reason.name';
     case 'address':
-    case 'serial':
     case 'own_ip':
     case 'arp_mac':
     case 'lldp_chassis':
@@ -97,9 +99,60 @@ export function sameDeviceReasonKey(kind: EvidenceKind): string | null {
   }
 }
 
+/** How a marked row is drawn and confirmed, per level (ADR-139 Inc.5): the badge's words, its
+ *  colour, and the sentence Monitor's confirmation says. One table, so a level cannot have a
+ *  badge without a confirmation. */
+const SAME_DEVICE_LEVEL: Record<DuplicateConfidence, { badge: string; tone: Tone; confirm: string }> = {
+  exact: {
+    badge: 'discovery.sameDevice.exact',
+    tone: 'same-exact',
+    confirm: 'discovery.sameDevice.confirm.exact',
+  },
+  confident: {
+    badge: 'discovery.sameDevice.likely',
+    tone: 'same-likely',
+    confirm: 'discovery.sameDevice.confirm.likely',
+  },
+  possible: {
+    badge: 'discovery.sameDevice.maybe',
+    tone: 'same-maybe',
+    confirm: 'discovery.sameDevice.confirm.maybe',
+  },
+};
+
+/** The most convincing level among a marked row's nodes. A level this bundle does not know (a
+ *  newer core, N-1) counts as `possible`. */
+export function sameDeviceLevel(m: SameDeviceMatch): DuplicateConfidence {
+  const has = (c: DuplicateConfidence) => m.nodes.some((n) => n.confidence === c);
+  if (has('exact')) return 'exact';
+  if (has('confident')) return 'confident';
+  return 'possible';
+}
+
 /** The badge a marked row carries: the most convincing of its nodes decides it. */
 export function sameDeviceBadgeKey(m: SameDeviceMatch): string {
-  return m.nodes.some((n) => n.confidence === 'confident')
-    ? 'discovery.sameDevice.likely'
-    : 'discovery.sameDevice.maybe';
+  return SAME_DEVICE_LEVEL[sameDeviceLevel(m)].badge;
+}
+
+/** The badge's colour, by the same level. */
+export function sameDeviceTone(m: SameDeviceMatch): Tone {
+  return SAME_DEVICE_LEVEL[sameDeviceLevel(m)].tone;
+}
+
+/** The sentence Monitor's confirmation says, by the same level; `{{nodes}}` names the nodes. */
+export function sameDeviceConfirmKey(m: SameDeviceMatch): string {
+  return SAME_DEVICE_LEVEL[sameDeviceLevel(m)].confirm;
+}
+
+/** The reasons behind a marked row, each once, strongest first — the line under the
+ *  confirmation's sentence. */
+export function sameDeviceReasonKeys(m: SameDeviceMatch): string[] {
+  const out: string[] = [];
+  for (const n of m.nodes) {
+    for (const k of n.evidence) {
+      const key = sameDeviceReasonKey(k);
+      if (key !== null && !out.includes(key)) out.push(key);
+    }
+  }
+  return out;
 }

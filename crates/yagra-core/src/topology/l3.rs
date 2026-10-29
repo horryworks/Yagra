@@ -703,4 +703,92 @@ mod address_owner_reads {
         assert_eq!(found.iter().filter(|n| n.id == core).count(), 1);
         assert_eq!(found.iter().filter(|n| n.name == "switch").count(), cap + 1);
     }
+
+    /// ADR-139 Inc.5: a node is found by any member of its stored serial list, case-blind and
+    /// trimmed, and by its Meraki device's serial; each match carries the key it matched and the
+    /// whole list; a node outside the caller's folders is not returned; one serial returns at most
+    /// one row past the cap.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn nodes_are_found_by_any_serial_they_are_known_by(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let folder = pgtest::group(&pool, "Site A").await;
+        let stack = pgtest::node_at(&pool, "stack-1", ip("192.0.2.1"), Some(folder)).await;
+        let mx = pgtest::node_at(&pool, "mx-1", ip("192.0.2.2"), None).await;
+        let set = |id, serial: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query("UPDATE nodes SET serial_number = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(serial)
+                    .execute(&pool)
+                    .await
+                    .expect("serial");
+            }
+        };
+        set(stack, "FOC0000A1AA, foc0000b2bb ").await;
+        let credential = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO meraki_orgs (id, org_id, name, credential_id) VALUES ($1, '1', 'Org', $2)",
+        )
+        .bind(org)
+        .bind(credential)
+        .execute(&pool)
+        .await
+        .expect("org");
+        sqlx::query(
+            "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
+             VALUES ($1, $2, 'Q2AA-0000-0001', 'N_1', 'appliance')",
+        )
+        .bind(mx)
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("meraki device");
+        let cap = yagra_base::repo::SHARED_VALUE_MAX;
+        for i in 0..cap + 3 {
+            let n = pgtest::node_at(&pool, "sim", ip(&format!("198.51.100.{}", i + 1)), None).await;
+            set(n, "SIM0000REC").await;
+        }
+
+        let keys = ["FOC0000B2BB", "Q2AA-0000-0001", "SIM0000REC", "NOBODY0001"].map(str::to_owned);
+        let found = repo.device_nodes_with_serials(&keys, None).await.unwrap();
+        let by = |key: &str| -> Vec<&yagra_base::repo::DeviceIdentity> {
+            found
+                .iter()
+                .filter(|(k, _)| k == key)
+                .map(|(_, n)| n)
+                .collect()
+        };
+        let member = by("FOC0000B2BB");
+        assert_eq!(member.len(), 1);
+        assert_eq!(member[0].id, stack);
+        assert_eq!(
+            member[0].serial_number.as_deref(),
+            Some("FOC0000A1AA, foc0000b2bb ")
+        );
+        assert_eq!(
+            by("Q2AA-0000-0001")
+                .iter()
+                .map(|n| n.id)
+                .collect::<Vec<_>>(),
+            vec![mx]
+        );
+        assert_eq!(by("SIM0000REC").len(), cap + 1);
+        assert!(by("NOBODY0001").is_empty());
+
+        // The folder scope: the stack's folder is not among the caller's.
+        let elsewhere = [uuid::Uuid::new_v4()];
+        let scoped = repo
+            .device_nodes_with_serials(&keys[..1], Some(&elsewhere))
+            .await
+            .unwrap();
+        assert!(scoped.is_empty(), "{scoped:?}");
+        assert!(repo
+            .device_nodes_with_serials(&[], None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
 }

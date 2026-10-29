@@ -46,6 +46,30 @@
    Taller and rounder than its siblings because it reads as an object on the page rather than as an
    annotation on a number. ⚠️ The border is kept and coloured to the fill rather than removed, so
    the box stays the same size as every other badge's and a row of mixed badges still lines up. */
+.badge-same-exact,
+.badge-same-likely,
+.badge-same-maybe {
+  font-weight: var(--weight-semibold);
+}
+
+.badge-same-exact {
+  background: var(--same-exact-bg);
+  border-color: var(--same-exact-bg);
+  color: var(--same-exact-fg);
+}
+
+.badge-same-likely {
+  background: var(--same-likely-bg);
+  border-color: var(--same-likely-bg);
+  color: var(--same-likely-fg);
+}
+
+.badge-same-maybe {
+  background: var(--same-maybe-bg);
+  border-color: var(--same-maybe-bg);
+  color: var(--same-maybe-fg);
+}
+
 .badge-tag {
   height: 20px;
   padding: 0 var(--space-2);

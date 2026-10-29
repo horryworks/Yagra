@@ -288,6 +288,10 @@ pub struct DeviceIdentity {
     pub address: IpAddr,
     /// What the device last said it is; `None` ⇒ never read (see `migrations/0113`).
     pub sys_object_id: Option<String>,
+    /// The serial numbers the device is known by — its own (a stack's members joined with `, `)
+    /// and a Meraki device's, joined the same way — or `None` when it has reported none
+    /// ([`NodeRepo::DEVICE_SERIAL_SQL`], ADR-139 Inc.5).
+    pub serial_number: Option<String>,
 }
 
 /// The folder groups a query is restricted to, or `None` for no restriction at all (ADR-014).

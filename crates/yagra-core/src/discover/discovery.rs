@@ -155,6 +155,10 @@ pub struct Candidate {
     /// The stored credential that answered SNMP, by reference (never the value) — the UI
     /// preselects it on import so the working secret is bound automatically.
     pub matched_credential_id: Option<Uuid>,
+    /// The serial number the device reported, a stack's members joined with `, ` (ADR-139 Inc.5)
+    /// — what says it is a device already monitored at another address. `None` from a poller that
+    /// predates the field, and from a device with no ENTITY-MIB.
+    pub serial_number: Option<String>,
 }
 
 /// Where a scan is in its life (ADR-068).
@@ -401,6 +405,11 @@ impl ScanState {
                     vendor,
                     model,
                     matched_credential_id: d.matched_credential,
+                    // Sanitized again here, as the poll path does: the poller is not trusted to.
+                    serial_number: d
+                        .serial_number
+                        .as_deref()
+                        .and_then(yagra_discovery::serial::sanitize),
                 }
             })
             .collect();
@@ -920,6 +929,7 @@ mod tests {
             sysname: Some(format!("dev{last_octet}")),
             sysobjectid: Some("1.3.6.1.4.1.2011.2.1".to_owned()),
             matched_credential: cred,
+            serial_number: None,
         }
     }
 
@@ -990,6 +1000,7 @@ mod tests {
             sysname: Some("srv01".to_owned()),
             sysobjectid: None,
             matched_credential: None,
+            serial_number: None,
         };
         s.apply(partial(1, true, vec![dev]), &classifier(), Utc::now());
         let st = s.status(Uuid::nil());
@@ -1031,6 +1042,7 @@ mod tests {
                     sysname: Some("dev1".to_owned()),
                     sysobjectid: None,
                     matched_credential: None,
+                    serial_number: None,
                 }],
                 probed: 0,
                 total: 0,

@@ -28912,6 +28912,13 @@
           "reachable": {
             "type": "boolean"
           },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The serial number the device reported, a stack's members joined with `, ` (ADR-139 Inc.5)\n— what says it is a device already monitored at another address. `None` from a poller that\npredates the field, and from a device with no ENTITY-MIB."
+          },
           "suggested_profile_id": {
             "type": [
               "string",
@@ -32203,6 +32210,7 @@
         "type": "string",
         "description": "How sure a group is.",
         "enum": [
+          "exact",
           "confident",
           "possible"
         ]
@@ -43932,14 +43940,14 @@
           },
           "confidence": {
             "$ref": "#/components/schemas/DuplicateConfidence",
-            "description": "`confident` when the node's interface list carries the candidate's address and both report\nthe same `sysObjectID`; `possible` otherwise."
+            "description": "`exact` when the candidate reports a serial number the node is known by; `confident` when\nthe node's interface list carries the candidate's address and both report the same\n`sysObjectID`; `possible` otherwise."
           },
           "evidence": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DuplicateEvidenceKind"
             },
-            "description": "`own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`\n(same name and the same `sysObjectID`)."
+            "description": "`serial` (a serial number both are known by), `own_ip_one_way` (the node's interface list\ncarries the candidate's address) and/or `name` (same name and the same `sysObjectID`)."
           },
           "id": {
             "type": "string",

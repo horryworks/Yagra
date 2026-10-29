@@ -178,6 +178,10 @@ impl DuplicateEvidenceKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DuplicateConfidence {
+    /// The device reports a serial number the node is known by (ADR-139 Inc.5). Only a Discovery
+    /// candidate is judged this way; a Nodes ▸ Duplicates group is at most [`Self::Confident`].
+    /// First, because the variants are ordered strongest first and sorted on.
+    Exact,
     /// Joined by strong evidence, and nothing in the group contradicts it.
     Confident,
     /// Joined only by two kinds of weak evidence, or contradicted by something in the group.
@@ -724,6 +728,8 @@ pub struct CandidateIdentity<'a> {
     pub address: IpAddr,
     pub sysname: Option<&'a str>,
     pub sys_object_id: Option<&'a str>,
+    /// The serial number the probe read, a stack's members joined with `, ` (ADR-139 Inc.5).
+    pub serial: Option<&'a str>,
 }
 
 /// One device node a candidate looks like, and why.
@@ -743,22 +749,71 @@ fn oid_key(oid: Option<&str>) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
-/// Which device nodes each Discovery candidate may be, at another address (ADR-139 Inc.3).
+/// The serial keys the candidates' reported serials name, as [`serial_parts`] spells them, each
+/// once — what [`yagra_base::repo::NodeRepo::device_nodes_with_serials`] is asked for.
+#[must_use]
+pub fn candidate_serial_keys<'a>(serials: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let keys: BTreeSet<String> = serials.into_iter().flat_map(serial_parts).collect();
+    keys.into_iter().collect()
+}
+
+/// Group `(key, node)` rows by key, each node once, dropping a key more than [`SHARED_VALUE_MAX`]
+/// nodes share — it identifies none of them (ADR-148 decision 3).
+fn index_by<'n, K: Eq + std::hash::Hash + Clone>(
+    rows: impl IntoIterator<Item = (K, &'n yagra_base::repo::DeviceIdentity)>,
+) -> HashMap<K, Vec<&'n yagra_base::repo::DeviceIdentity>> {
+    let mut out: HashMap<K, Vec<&yagra_base::repo::DeviceIdentity>> = HashMap::new();
+    for (key, node) in rows {
+        let list = out.entry(key).or_default();
+        if !list.iter().any(|n| n.id == node.id) {
+            list.push(node);
+        }
+    }
+    out.retain(|_, list| list.len() <= SHARED_VALUE_MAX);
+    out
+}
+
+/// Record one piece of evidence that a candidate is `node`, once per kind.
+fn note<'n>(
+    hits: &mut BTreeMap<
+        Uuid,
+        (
+            &'n yagra_base::repo::DeviceIdentity,
+            Vec<DuplicateEvidenceKind>,
+        ),
+    >,
+    node: &'n yagra_base::repo::DeviceIdentity,
+    kind: DuplicateEvidenceKind,
+) {
+    let entry = hits.entry(node.id).or_insert_with(|| (node, Vec::new()));
+    if !entry.1.contains(&kind) {
+        entry.1.push(kind);
+    }
+}
+
+/// Which device nodes each Discovery candidate may be, at another address (ADR-139 Inc.3 and 5).
 ///
 /// - `carriers`: a node whose own interface-address list carries a candidate's address, paired with
-///   that address. `named`: nodes whose name matches some candidate's sysName (the reader returns at
-///   most one more than [`SHARED_VALUE_MAX`] per name).
+///   that address.
+/// - `named`: nodes whose name matches some candidate's sysName (the reader returns at most one more
+///   than [`SHARED_VALUE_MAX`] per name).
+/// - `serialed`: nodes known by one of the candidates' serials, paired with the key that matched
+///   (at most one more than [`SHARED_VALUE_MAX`] per serial).
 /// - `already_at`: addresses a device node is monitored at. Those candidates are ADR-139's
 ///   `existing` and are not judged again here.
 ///
 /// The rules, and why each one is the strength it is:
+/// - **A shared serial** is [`DuplicateConfidence::Exact`], whatever else either side reports: a
+///   chassis serial (one member of a stack's list) names one device (Inc.5 decision 3).
+/// - **Two serials that share nothing** end the pair: both devices said who they are, and they are
+///   different (Inc.5 decision 4, ADR-148's `SerialDiffers`).
 /// - **The interface list** is `confident` only when both sides report the same `sysObjectID`. On
 ///   its own it is one direction of ADR-148's `own_ip` — a candidate has no list to confirm it — and
 ///   sites that reuse one private address plan put the same address on different routers.
 /// - **The name** counts only with the same `sysObjectID`, and only as `possible`: two devices of
 ///   one model called `core-sw` is ordinary.
-/// - **Two `sysObjectID`s that differ** end the pair: those are different models, so different
-///   devices. This is what drops most of the reused-address case.
+/// - **Two `sysObjectID`s that differ** end the pair unless a serial is shared: those are different
+///   models, so different devices. This is what drops most of the reused-address case.
 /// - A value more than [`SHARED_VALUE_MAX`] nodes share names none of them.
 #[must_use]
 pub fn same_device_candidates(
@@ -766,23 +821,15 @@ pub fn same_device_candidates(
     already_at: &HashSet<IpAddr>,
     carriers: &[(IpAddr, yagra_base::repo::DeviceIdentity)],
     named: &[yagra_base::repo::DeviceIdentity],
+    serialed: &[(String, yagra_base::repo::DeviceIdentity)],
 ) -> Vec<SameDevice> {
-    let mut by_carried: HashMap<IpAddr, Vec<&yagra_base::repo::DeviceIdentity>> = HashMap::new();
-    for (ip, node) in carriers {
-        let list = by_carried.entry(*ip).or_default();
-        if !list.iter().any(|n| n.id == node.id) {
-            list.push(node);
-        }
-    }
-    let mut by_name: HashMap<String, Vec<&yagra_base::repo::DeviceIdentity>> = HashMap::new();
-    for node in named {
-        if let Some(key) = name_key(&node.name) {
-            let list = by_name.entry(key).or_default();
-            if !list.iter().any(|n| n.id == node.id) {
-                list.push(node);
-            }
-        }
-    }
+    let by_carried = index_by(carriers.iter().map(|(ip, n)| (*ip, n)));
+    let by_name = index_by(
+        named
+            .iter()
+            .filter_map(|n| name_key(&n.name).map(|k| (k, n))),
+    );
+    let by_serial = index_by(serialed.iter().map(|(s, n)| (s.clone(), n)));
 
     let mut out = Vec::new();
     let mut seen: HashSet<IpAddr> = HashSet::new();
@@ -793,18 +840,14 @@ pub fn same_device_candidates(
         {
             continue;
         }
-        let carried: &[&yagra_base::repo::DeviceIdentity] = by_carried
-            .get(&c.address)
-            .map(Vec::as_slice)
-            .filter(|l| l.len() <= SHARED_VALUE_MAX)
-            .unwrap_or(&[]);
-        let same_name: &[&yagra_base::repo::DeviceIdentity] = c
+        let none: &[&yagra_base::repo::DeviceIdentity] = &[];
+        let carried = by_carried.get(&c.address).map_or(none, Vec::as_slice);
+        let same_name = c
             .sysname
             .and_then(name_key)
             .and_then(|k| by_name.get(&k))
-            .map(Vec::as_slice)
-            .filter(|l| l.len() <= SHARED_VALUE_MAX)
-            .unwrap_or(&[]);
+            .map_or(none, Vec::as_slice);
+        let cand_serials = c.serial.map(serial_parts).unwrap_or_default();
         let cand_oid = oid_key(c.sys_object_id);
 
         let mut hits: BTreeMap<
@@ -815,16 +858,15 @@ pub fn same_device_candidates(
             ),
         > = BTreeMap::new();
         for n in carried {
-            hits.entry(n.id)
-                .or_insert_with(|| (n, Vec::new()))
-                .1
-                .push(DuplicateEvidenceKind::OwnIpOneWay);
+            note(&mut hits, n, DuplicateEvidenceKind::OwnIpOneWay);
         }
         for n in same_name {
-            hits.entry(n.id)
-                .or_insert_with(|| (n, Vec::new()))
-                .1
-                .push(DuplicateEvidenceKind::Name);
+            note(&mut hits, n, DuplicateEvidenceKind::Name);
+        }
+        for part in &cand_serials {
+            for n in by_serial.get(part).map_or(none, Vec::as_slice) {
+                note(&mut hits, n, DuplicateEvidenceKind::Serial);
+            }
         }
 
         let mut found: Vec<(SameDevice, &str)> = Vec::new();
@@ -832,10 +874,25 @@ pub fn same_device_candidates(
             if node.address == c.address {
                 continue;
             }
+            let shares_serial = evidence.contains(&DuplicateEvidenceKind::Serial);
+            if !shares_serial {
+                let node_serials = node
+                    .serial_number
+                    .as_deref()
+                    .map(serial_parts)
+                    .unwrap_or_default();
+                // Both said who they are, and it is not the same device (decision 4).
+                if !cand_serials.is_empty()
+                    && !node_serials.is_empty()
+                    && !node_serials.iter().any(|s| cand_serials.contains(s))
+                {
+                    continue;
+                }
+            }
             let node_oid = oid_key(node.sys_object_id.as_deref());
             let same_model = match (cand_oid, node_oid) {
-                (Some(a), Some(b)) if a != b => continue,
-                (Some(_), Some(_)) => true,
+                (Some(a), Some(b)) if a != b && !shares_serial => continue,
+                (Some(a), Some(b)) => a == b,
                 _ => false,
             };
             // A name is evidence only beside a model both sides reported (decision A).
@@ -846,8 +903,9 @@ pub fn same_device_candidates(
                 continue;
             }
             evidence.sort();
-            let confidence = if same_model && evidence.contains(&DuplicateEvidenceKind::OwnIpOneWay)
-            {
+            let confidence = if shares_serial {
+                DuplicateConfidence::Exact
+            } else if same_model && evidence.contains(&DuplicateEvidenceKind::OwnIpOneWay) {
                 DuplicateConfidence::Confident
             } else {
                 DuplicateConfidence::Possible
@@ -1480,6 +1538,7 @@ mod tests {
             name: name.to_owned(),
             address: address.parse().expect("a test address"),
             sys_object_id: oid.map(str::to_owned),
+            serial_number: None,
         }
     }
 
@@ -1492,6 +1551,7 @@ mod tests {
             address: address.parse().expect("a test address"),
             sysname,
             sys_object_id: oid,
+            serial: None,
         }
     }
 
@@ -1512,6 +1572,7 @@ mod tests {
             &HashSet::new(),
             &[(ip("198.51.100.1"), core.clone())],
             &[core],
+            &[],
         );
         assert_eq!(
             found,
@@ -1535,6 +1596,7 @@ mod tests {
             &HashSet::new(),
             &[(ip("198.51.100.1"), core)],
             &[],
+            &[],
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].confidence, DuplicateConfidence::Possible);
@@ -1550,6 +1612,7 @@ mod tests {
             &HashSet::new(),
             &[(ip("10.0.0.1"), other.clone())],
             &[other],
+            &[],
         );
         assert!(found.is_empty(), "{found:?}");
     }
@@ -1563,6 +1626,7 @@ mod tests {
             &HashSet::new(),
             &[],
             &[a, b],
+            &[],
         );
         assert_eq!(
             found,
@@ -1580,6 +1644,7 @@ mod tests {
             &HashSet::new(),
             &[],
             &named,
+            &[],
         );
         assert!(none.is_empty(), "{none:?}");
     }
@@ -1602,6 +1667,7 @@ mod tests {
             &HashSet::new(),
             &[],
             &named,
+            &[],
         );
         assert!(found.is_empty(), "{found:?}");
         // At the cap it still counts.
@@ -1610,6 +1676,7 @@ mod tests {
             &HashSet::new(),
             &[],
             &named[..SHARED_VALUE_MAX],
+            &[],
         );
         assert_eq!(found.len(), SHARED_VALUE_MAX);
     }
@@ -1630,6 +1697,7 @@ mod tests {
             &already,
             &carriers,
             &[],
+            &[],
         );
         assert!(found.is_empty(), "{found:?}");
         // A node's own monitored address on its list is not "another address".
@@ -1637,6 +1705,7 @@ mod tests {
             &[cand("192.0.2.1", None, Some(CATALYST))],
             &HashSet::new(),
             &[(ip("192.0.2.1"), core)],
+            &[],
             &[],
         );
         assert!(found.is_empty(), "{found:?}");
@@ -1654,6 +1723,7 @@ mod tests {
             &HashSet::new(),
             &[(ip("198.51.100.1"), b), (ip("198.51.100.1"), a)],
             &[],
+            &[],
         );
         let order: Vec<(Uuid, DuplicateConfidence)> =
             found.iter().map(|f| (f.node, f.confidence)).collect();
@@ -1662,6 +1732,186 @@ mod tests {
             vec![
                 (id(1), DuplicateConfidence::Confident),
                 (id(2), DuplicateConfidence::Possible)
+            ]
+        );
+    }
+
+    // ── Discovery candidates by serial number (ADR-139 Inc.5) ──
+
+    fn serialed(
+        serial: &str,
+        node: &yagra_base::repo::DeviceIdentity,
+    ) -> (String, yagra_base::repo::DeviceIdentity) {
+        (serial.to_owned(), node.clone())
+    }
+
+    fn known_by(
+        mut node: yagra_base::repo::DeviceIdentity,
+        serial: &str,
+    ) -> yagra_base::repo::DeviceIdentity {
+        node.serial_number = Some(serial.to_owned());
+        node
+    }
+
+    fn cand_serial<'a>(
+        address: &str,
+        oid: Option<&'a str>,
+        serial: &'a str,
+    ) -> CandidateIdentity<'a> {
+        CandidateIdentity {
+            serial: Some(serial),
+            ..cand(address, None, oid)
+        }
+    }
+
+    #[test]
+    fn a_shared_serial_is_the_same_device_whatever_the_model_says() {
+        // The model check would end this pair; a serial both are known by overrides it.
+        let node = known_by(device(1, "core-1", "192.0.2.1", Some(NEXUS)), "FDO0000A1BC");
+        let found = same_device_candidates(
+            &[cand_serial("198.51.100.1", Some(CATALYST), " fdo0000a1bc ")],
+            &HashSet::new(),
+            &[],
+            &[],
+            &[serialed("FDO0000A1BC", &node)],
+        );
+        assert_eq!(
+            found,
+            vec![SameDevice {
+                candidate: ip("198.51.100.1"),
+                node: id(1),
+                confidence: DuplicateConfidence::Exact,
+                evidence: vec![DuplicateEvidenceKind::Serial],
+            }]
+        );
+    }
+
+    #[test]
+    fn one_member_of_a_stack_is_enough() {
+        let stack = known_by(
+            device(1, "stack-1", "192.0.2.1", Some(CATALYST)),
+            "FOC0000A1AA, FOC0000B2BB, FOC0000C3CC",
+        );
+        let keys = candidate_serial_keys(["foc0000b2bb"]);
+        assert_eq!(keys, vec!["FOC0000B2BB".to_owned()]);
+        let found = same_device_candidates(
+            &[cand_serial("198.51.100.1", Some(CATALYST), "foc0000b2bb")],
+            &HashSet::new(),
+            &[],
+            &[],
+            &[serialed(&keys[0], &stack)],
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].confidence, DuplicateConfidence::Exact);
+    }
+
+    #[test]
+    fn two_serials_that_share_nothing_are_two_devices() {
+        // Same name and model: `possible` before Inc.5. Both reported a serial and they differ.
+        let node = known_by(
+            device(1, "core-1", "192.0.2.1", Some(CATALYST)),
+            "FDO0000A1BC",
+        );
+        let found = same_device_candidates(
+            &[CandidateIdentity {
+                sysname: Some("core-1"),
+                ..cand_serial("198.51.100.1", Some(CATALYST), "FDO0000Z9ZZ")
+            }],
+            &HashSet::new(),
+            &[(ip("198.51.100.1"), node.clone())],
+            &[node],
+            &[],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_serial_known_on_one_side_only_leaves_the_old_judgement_alone() {
+        // The node has never reported one (no ENTITY-MIB, or registered within the hour).
+        let node = device(1, "core-1", "192.0.2.1", Some(CATALYST));
+        let found = same_device_candidates(
+            &[CandidateIdentity {
+                sysname: Some("core-1"),
+                ..cand_serial("198.51.100.1", Some(CATALYST), "FDO0000Z9ZZ")
+            }],
+            &HashSet::new(),
+            &[],
+            &[node],
+            &[],
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].confidence, DuplicateConfidence::Possible);
+        assert_eq!(found[0].evidence, vec![DuplicateEvidenceKind::Name]);
+    }
+
+    #[test]
+    fn a_placeholder_serial_asks_for_nothing_and_contradicts_nothing() {
+        assert!(candidate_serial_keys(["N/A", "0", "  ", "Serial Number"]).is_empty());
+        let node = known_by(
+            device(1, "core-1", "192.0.2.1", Some(CATALYST)),
+            "FDO0000A1BC",
+        );
+        let found = same_device_candidates(
+            &[CandidateIdentity {
+                sysname: Some("core-1"),
+                ..cand_serial("198.51.100.1", Some(CATALYST), "N/A")
+            }],
+            &HashSet::new(),
+            &[],
+            &[node],
+            &[],
+        );
+        assert_eq!(found.len(), 1, "a placeholder is not a serial that differs");
+        assert_eq!(found[0].confidence, DuplicateConfidence::Possible);
+    }
+
+    #[test]
+    fn a_serial_more_nodes_share_than_the_cap_names_none_of_them() {
+        let rows: Vec<_> = (1..=u128::try_from(SHARED_VALUE_MAX + 1).expect("small"))
+            .map(|n| {
+                let node = known_by(
+                    device(
+                        n,
+                        &format!("sim-{n}"),
+                        &format!("192.0.2.{n}"),
+                        Some(CATALYST),
+                    ),
+                    "SIM0000REC",
+                );
+                serialed("SIM0000REC", &node)
+            })
+            .collect();
+        let found = same_device_candidates(
+            &[cand_serial("198.51.100.1", Some(CATALYST), "SIM0000REC")],
+            &HashSet::new(),
+            &[],
+            &[],
+            &rows,
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn an_exact_match_comes_before_a_confident_one() {
+        let by_list = device(1, "a-router", "192.0.2.1", Some(CATALYST));
+        let by_serial = known_by(
+            device(2, "z-router", "192.0.2.2", Some(CATALYST)),
+            "FDO0000A1BC",
+        );
+        let found = same_device_candidates(
+            &[cand_serial("198.51.100.1", Some(CATALYST), "FDO0000A1BC")],
+            &HashSet::new(),
+            &[(ip("198.51.100.1"), by_list)],
+            &[],
+            &[serialed("FDO0000A1BC", &by_serial)],
+        );
+        let order: Vec<(Uuid, DuplicateConfidence)> =
+            found.iter().map(|f| (f.node, f.confidence)).collect();
+        assert_eq!(
+            order,
+            vec![
+                (id(2), DuplicateConfidence::Exact),
+                (id(1), DuplicateConfidence::Confident)
             ]
         );
     }

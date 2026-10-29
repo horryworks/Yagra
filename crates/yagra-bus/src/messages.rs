@@ -2961,6 +2961,12 @@ pub struct DiscoveredDevice {
     /// when an ad-hoc community matched or nothing answered.
     #[serde(default)]
     pub matched_credential: Option<Uuid>,
+    /// The device's serial number, read the way the hourly identity probe reads it (ADR-139 Inc.5)
+    /// — a stack's members joined with `, `. `None` when it did not answer `sysDescr`, has no
+    /// ENTITY-MIB, listed more rows than the sweep reads, or the poller predates the field.
+    /// Device-supplied: treat as untrusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<String>,
 }
 
 /// A (possibly partial) result of one [`DiscoveryJob`]. The poller publishes progress as
@@ -4688,6 +4694,25 @@ mod tests {
     /// failing — because a failure would take the whole `PollResult` with it. The `schema_version`
     /// key is sent on purpose; it is what an N-1 producer actually puts on the wire (the field was
     /// removed from the structs but old binaries still write it), and ignoring it is the property.
+    /// ADR-139 Inc.5's field. An N-1 poller sends no `serial_number`; a device without one keeps the
+    /// wire form it had (an N-1 core reads it as before); and a read one survives the round trip.
+    #[test]
+    fn a_discovered_device_serial_number_tolerates_missing_and_unknown_fields() {
+        let json = r#"{"address":"192.0.2.10","reachable":true,"sysdescr":"x","future_field":1}"#;
+        let mut dev: DiscoveredDevice = serde_json::from_str(json).unwrap();
+        assert!(dev.serial_number.is_none());
+        let wire = serde_json::to_string(&dev).unwrap();
+        assert!(!wire.contains("serial_number"), "{wire}");
+
+        dev.serial_number = Some("FCW0000A0AA, FCW0000B0BB".to_owned());
+        let back: DiscoveredDevice =
+            serde_json::from_str(&serde_json::to_string(&dev).unwrap()).unwrap();
+        assert_eq!(
+            back.serial_number.as_deref(),
+            Some("FCW0000A0AA, FCW0000B0BB")
+        );
+    }
+
     #[test]
     fn a_discovery_result_tolerates_missing_and_unknown_fields() {
         // The N-1 producer: a poller that predates ADR-068 Inc.2 sends no `cancelled`. The default

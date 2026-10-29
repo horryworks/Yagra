@@ -113,6 +113,25 @@
      yellow on the light ground, where #ffd400 all but disappears against white. */
   --pin-color: #d09c00;
 
+  /* ---- same device (ADR-139 Inc.5) — a Discovery candidate already monitored elsewhere ----
+     Three filled chips, one per level of the judgement: the serial matched (red), the node's
+     interface list carries the address on the same model (orange), or only the name and model
+     agree (yellow). Filled because the mark exists to stop a second registration, and an outline
+     chip is read past.
+
+     🚨 Not a --status-*: a candidate is not in any monitoring state, and the row it sits in may
+     carry a real status dot beside it — so each value is shifted off the status hue (crimson, not
+     --status-critical's red). The orange is also lighter and yellower than --brand, which §1.1
+     reserves for active/selected/focus. Same in both themes, like --tag-*: the ink is fixed, so the
+     contrast is decided once — white on the crimson, dark on the two light fills (white on this
+     orange falls short of 4.5:1). */
+  --same-exact-bg: #b3204d;
+  --same-exact-fg: var(--on-status);
+  --same-likely-bg: #f0913a;
+  --same-likely-fg: #1f1f1f;
+  --same-maybe-bg: #f5d547;
+  --same-maybe-fg: #1f1f1f;
+
   /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */
   --status-up: #2e7d32;
   --status-warning: #c77a0b;

@@ -440,6 +440,13 @@ impl NodeRepo {
     /// One copy, read by [`Self::device_nodes_at`], [`Self::import_nodes`] and
     /// `DiscoveredRepo::reconcile_promotions`, so the Discovery screen's two tables cannot
     /// disagree about the same address.
+    /// Every serial number a `nodes n` row's device is known by, as one text value: the serial the
+    /// device reported (`nodes.serial_number`, a stack's members joined with `, `) and a Meraki
+    /// device's, joined the same way, or `NULL` when there is neither (ADR-139 Inc.5). The reader
+    /// splits it as `duplicates::serial_parts` does, the rule Nodes ▸ Duplicates keeps.
+    pub const DEVICE_SERIAL_SQL: &'static str = "NULLIF(concat_ws(', ', n.serial_number, \
+         (SELECT m.serial FROM meraki_devices m WHERE m.node_id = n.id)), '')";
+
     pub const DEVICE_NODE_PREDICATE: &'static str =
         "NOT EXISTS (SELECT 1 FROM url_checks uc WHERE uc.node_id = n.id) \
          AND NOT EXISTS (SELECT 1 FROM dns_checks dc WHERE dc.node_id = n.id)";
@@ -1631,8 +1638,9 @@ impl NodeRepo {
             return Ok(Vec::new());
         }
         let sql = format!(
-            "SELECT id, name, address, sys_object_id FROM ( \
+            "SELECT id, name, address, sys_object_id, serial_number FROM ( \
                SELECT n.id, n.name, host(n.address) AS address, n.sys_object_id, \
+                      {serial} AS serial_number, \
                       row_number() OVER (PARTITION BY lower(btrim(n.name)) ORDER BY n.id) AS rn \
                FROM nodes n \
                WHERE lower(btrim(n.name)) = ANY($2::text[]) AND n.address IS NOT NULL \
@@ -1640,6 +1648,7 @@ impl NodeRepo {
              ) named WHERE rn <= $3",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
+            serial = Self::DEVICE_SERIAL_SQL,
         );
         let per_name = i64::try_from(super::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
         let rows = sqlx::query(&sql)
@@ -1658,7 +1667,69 @@ impl NodeRepo {
                 name: row.try_get("name")?,
                 address,
                 sys_object_id: row.try_get("sys_object_id")?,
+                serial_number: row.try_get("serial_number")?,
             });
+        }
+        Ok(out)
+    }
+
+    /// The device nodes the caller may see that are known by one of `serials` (ADR-139 Inc.5) —
+    /// what a Discovery candidate's serial is compared against. Each key is one serial as
+    /// `duplicates::serial_parts` spells it (trimmed, upper-cased), and a node matches when any
+    /// member of its [`Self::DEVICE_SERIAL_SQL`] list does, so a stack is found by any member.
+    ///
+    /// At most `SHARED_VALUE_MAX + 1` nodes come back per serial, as [`Self::device_nodes_named`]
+    /// does per name: a serial more nodes than that report identifies none of them (ADR-148
+    /// decision 3). Returns each match with the key it matched.
+    ///
+    /// ⚠️ No index serves this: the stored value is a list, split here. It is read on a scan
+    /// refresh only when a candidate reported a serial, and its cost at fifty thousand nodes has not
+    /// been measured.
+    pub async fn device_nodes_with_serials(
+        &self,
+        serials: &[String],
+        groups: GroupFilter<'_>,
+    ) -> anyhow::Result<Vec<(String, DeviceIdentity)>> {
+        if serials.is_empty() {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "SELECT matched, id, name, address, sys_object_id, serial_number FROM ( \
+               SELECT q.s AS matched, d.id, d.name, host(d.address) AS address, d.sys_object_id, \
+                      d.known AS serial_number, \
+                      row_number() OVER (PARTITION BY q.s ORDER BY d.id) AS rn \
+               FROM (SELECT n.id, n.name, n.address, n.sys_object_id, {serial} AS known \
+                     FROM nodes n \
+                     WHERE n.address IS NOT NULL AND {scope} AND {device}) d \
+               JOIN unnest($2::text[]) AS q(s) \
+                 ON q.s = ANY(SELECT upper(btrim(p)) FROM unnest(string_to_array(d.known, ',')) p) \
+             ) matched WHERE rn <= $3",
+            scope = Self::SCOPE_PREDICATE,
+            device = Self::DEVICE_NODE_PREDICATE,
+            serial = Self::DEVICE_SERIAL_SQL,
+        );
+        let per_serial = i64::try_from(super::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
+        let rows = sqlx::query(&sql)
+            .bind(Self::scope_bind(groups))
+            .bind(serials)
+            .bind(per_serial)
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let Ok(address) = row.try_get::<String, _>("address")?.parse::<IpAddr>() else {
+                continue;
+            };
+            out.push((
+                row.try_get("matched")?,
+                DeviceIdentity {
+                    id: row.try_get("id")?,
+                    name: row.try_get("name")?,
+                    address,
+                    sys_object_id: row.try_get("sys_object_id")?,
+                    serial_number: row.try_get("serial_number")?,
+                },
+            ));
         }
         Ok(out)
     }

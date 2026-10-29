@@ -95,6 +95,7 @@ import {
   importableCandidates,
   sameDeviceBadgeKey,
   sameDeviceByAddress,
+  sameDeviceTone,
   selectedForImport,
 } from './discoveryExisting';
 import {
@@ -1254,8 +1255,8 @@ export function DiscoveryPage() {
                     {inTree ? (
                       <Badge tone="neutral">{t('discovery.badge.inTree')}</Badge>
                     ) : alike ? (
-                      // Neutral, like `inTree`: a status tone would claim a monitoring state.
-                      <Badge tone="neutral">
+                      // Its own tone per level, never a status one (ADR-139 Inc.5).
+                      <Badge tone={sameDeviceTone(alike)}>
                         {t(sameDeviceBadgeKey(alike))}
                       </Badge>
                     ) : c.reachable ? (

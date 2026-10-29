@@ -19,8 +19,19 @@ import './Badge.css';
  *
  *  ⚠️ **Do not reach for `tag` to make something stand out.** It says "this is a label an operator
  *  hung on this thing". A second filled tone for a different purpose wants its own token and its
- *  own reason, not this one. */
-export type Tone = 'neutral' | 'critical' | 'warning' | 'up' | 'info' | 'tag';
+ *  own reason, not this one — as the three `same-*` tones have. */
+export type Tone =
+  | 'neutral'
+  | 'critical'
+  | 'warning'
+  | 'up'
+  | 'info'
+  | 'tag'
+  // A Discovery candidate already monitored at another address, by how sure the judgement is
+  // (ADR-139 Inc.5). Filled, with tokens of their own — `--same-*` in `tokens.css` says why.
+  | 'same-exact'
+  | 'same-likely'
+  | 'same-maybe';
 
 export function Badge({
   tone = 'neutral',

@@ -9,7 +9,11 @@ import {
   isImportable,
   sameDeviceBadgeKey,
   sameDeviceByAddress,
+  sameDeviceConfirmKey,
+  sameDeviceLevel,
   sameDeviceReasonKey,
+  sameDeviceReasonKeys,
+  sameDeviceTone,
   selectedForImport,
 } from './discoveryExisting';
 
@@ -65,14 +69,14 @@ describe('existing devices', () => {
 });
 
 describe('the same device at another address (ADR-139 increment 3)', () => {
-  const node = (confidence: 'confident' | 'possible') => ({
+  const node = (confidence: 'exact' | 'confident' | 'possible') => ({
     id: '00000000-0000-0000-0000-00000000000b',
     name: 'core-1',
     address: '192.0.2.1',
     confidence,
     evidence: ['own_ip_one_way' as const],
   });
-  const marked = (address: string, ...conf: ('confident' | 'possible')[]): SameDeviceMatch => ({
+  const marked = (address: string, ...conf: ('exact' | 'confident' | 'possible')[]): SameDeviceMatch => ({
     address,
     nodes: conf.map(node),
   });
@@ -101,7 +105,48 @@ describe('the same device at another address (ADR-139 increment 3)', () => {
   it('names a sentence for each kind the server judges a candidate by, and none for the rest', () => {
     expect(sameDeviceReasonKey('own_ip_one_way')).toBe('discovery.sameDevice.reason.ownIp');
     expect(sameDeviceReasonKey('name')).toBe('discovery.sameDevice.reason.name');
-    expect(sameDeviceReasonKey('serial')).toBeNull();
+    expect(sameDeviceReasonKey('serial')).toBe('discovery.sameDevice.reason.serial');
+    expect(sameDeviceReasonKey('address')).toBeNull();
+  });
+
+  it('draws and confirms each level from one table, the strongest node deciding (ADR-139 Inc.5)', () => {
+    const exact = marked('a', 'possible', 'exact', 'confident');
+    expect(sameDeviceLevel(exact)).toBe('exact');
+    expect(sameDeviceBadgeKey(exact)).toBe('discovery.sameDevice.exact');
+    expect(sameDeviceTone(exact)).toBe('same-exact');
+    expect(sameDeviceConfirmKey(exact)).toBe('discovery.sameDevice.confirm.exact');
+
+    const likely = marked('a', 'possible', 'confident');
+    expect(sameDeviceTone(likely)).toBe('same-likely');
+    expect(sameDeviceConfirmKey(likely)).toBe('discovery.sameDevice.confirm.likely');
+
+    const maybe = marked('a', 'possible');
+    expect(sameDeviceTone(maybe)).toBe('same-maybe');
+    expect(sameDeviceConfirmKey(maybe)).toBe('discovery.sameDevice.confirm.maybe');
+  });
+
+  it('reads a level from a newer core as maybe', () => {
+    const future = {
+      address: 'a',
+      nodes: [{ ...node('confident'), confidence: 'certain' as unknown as 'possible' }],
+    };
+    expect(sameDeviceLevel(future)).toBe('possible');
+  });
+
+  it('lists each reason once, in the order the nodes give them', () => {
+    const m: SameDeviceMatch = {
+      address: 'a',
+      nodes: [
+        { ...node('exact'), evidence: ['serial'] },
+        { ...node('confident'), evidence: ['own_ip_one_way', 'name'] },
+        { ...node('possible'), evidence: ['name'] },
+      ],
+    };
+    expect(sameDeviceReasonKeys(m)).toEqual([
+      'discovery.sameDevice.reason.serial',
+      'discovery.sameDevice.reason.ownIp',
+      'discovery.sameDevice.reason.name',
+    ]);
   });
 
   it('names nothing for a kind a newer core added — never the raw token as a key', () => {

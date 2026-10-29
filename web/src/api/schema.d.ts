@@ -6693,6 +6693,12 @@ export interface components {
             model?: string | null;
             reachable: boolean;
             /**
+             * @description The serial number the device reported, a stack's members joined with `, ` (ADR-139 Inc.5)
+             *     — what says it is a device already monitored at another address. `None` from a poller that
+             *     predates the field, and from a device with no ENTITY-MIB.
+             */
+            serial_number?: string | null;
+            /**
              * Format: uuid
              * @description Suggested device profile, resolved **server-side** via the classification rules (by
              *     sysObjectID prefix, else sysDescr regex, else "Generic SNMP" when SNMP answered). An id,
@@ -8127,7 +8133,7 @@ export interface components {
          * @description How sure a group is.
          * @enum {string}
          */
-        DuplicateConfidence: "confident" | "possible";
+        DuplicateConfidence: "exact" | "confident" | "possible";
         /**
          * @description Something in a group that says its members are *not* one device (decision 4).
          * @enum {string}
@@ -13861,13 +13867,14 @@ export interface components {
             /** @description The address the node is monitored at. */
             address: string;
             /**
-             * @description `confident` when the node's interface list carries the candidate's address and both report
-             *     the same `sysObjectID`; `possible` otherwise.
+             * @description `exact` when the candidate reports a serial number the node is known by; `confident` when
+             *     the node's interface list carries the candidate's address and both report the same
+             *     `sysObjectID`; `possible` otherwise.
              */
             confidence: components["schemas"]["DuplicateConfidence"];
             /**
-             * @description `own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`
-             *     (same name and the same `sysObjectID`).
+             * @description `serial` (a serial number both are known by), `own_ip_one_way` (the node's interface list
+             *     carries the candidate's address) and/or `name` (same name and the same `sysObjectID`).
              */
             evidence: components["schemas"]["DuplicateEvidenceKind"][];
             /** Format: uuid */

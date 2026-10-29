@@ -139,6 +139,8 @@ use yagra_discovery::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 use yagra_telemetry::{spawn_cancellable, CancellationToken};
 use yagra_transport::{SnmpV3Params, Transport};
 
+use crate::worker::{SnmpWalker, SERIAL_ENTITY_ROWS};
+
 /// sysDescr column base — walking it yields the `.0` scalar instance (v2c path).
 const SYSDESCR_BASE: &str = "1.3.6.1.2.1.1.1";
 /// sysObjectID column base — the vendor-assigned enterprise OID identifying device type.
@@ -382,6 +384,23 @@ struct SweepCtx {
     /// filtered out, which is how the condition stayed invisible. One line at the end says the same
     /// thing and says how big it was.
     icmp_errors: AtomicUsize,
+    /// The most ENTITY-MIB rows a device's serial read may take (ADR-139 Inc.5 decision 1).
+    serial_rows: usize,
+}
+
+/// The ENTITY-MIB row cap for a sweep of more than one address (ADR-139 Inc.5 decision 1). A sweep
+/// reads every device in a range, so it takes less than the hourly probe's [`SERIAL_ENTITY_ROWS`];
+/// a chassis listing more rows than this sends no serial and is judged as it was before.
+const SWEEP_SERIAL_ROWS: usize = 512;
+
+/// How many ENTITY-MIB rows a job's serial reads may take: the hourly probe's cap for a Detect of
+/// one address, [`SWEEP_SERIAL_ROWS`] for a range.
+fn serial_rows_for(targets: usize) -> usize {
+    if targets <= 1 {
+        SERIAL_ENTITY_ROWS
+    } else {
+        SWEEP_SERIAL_ROWS
+    }
 }
 
 /// Everything one sweep holds constant, built from the job that asked for it.
@@ -407,6 +426,7 @@ fn sweep_ctx(job: &DiscoveryJob, cancels: Arc<CancelSet>, slots: Arc<Semaphore>)
         snmp_when_unreachable: job.snmp_when_unreachable,
         slots,
         icmp_errors: AtomicUsize::new(0),
+        serial_rows: serial_rows_for(job.targets.len()),
     }
 }
 
@@ -741,6 +761,7 @@ async fn probe_one(
     let mut limiter = CredentialProbeLimiter::<IpAddr>::new(ctx.rate);
     let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
+    let mut matched = None;
     let mut tried = vec![false; ctx.candidates.len()];
     // The tally is read again before every attempt (ADR-204): a match another target finds while
     // this one is between attempts changes what this one tries next.
@@ -778,10 +799,27 @@ async fn probe_one(
             ctx.hits.record(i);
             identity = id;
             matched_credential = cand.cred_ref();
+            matched = Some(i);
             break;
         }
         limiter.record_failure(target, now_ms());
     }
+
+    // The serial, under the credential that answered (ADR-139 Inc.5): only a device that answered
+    // `sysDescr`, the same rule the hourly identity probe keeps, and not once a stop has arrived.
+    let serial_number = match matched {
+        Some(i) if identity.sysdescr.is_some() && !ctx.stopping() => {
+            read_serial(
+                target,
+                &ctx.candidates[i],
+                identity.sysobjectid.as_deref(),
+                ctx,
+                transport,
+            )
+            .await
+        }
+        _ => None,
+    };
 
     if reachable
         || identity.sysdescr.is_some()
@@ -795,10 +833,38 @@ async fn probe_one(
             sysname: identity.sysname,
             sysobjectid: identity.sysobjectid,
             matched_credential,
+            serial_number,
         })
     } else {
         None
     }
+}
+
+/// The device's serial number, read the way the hourly identity probe reads it
+/// ([`SnmpWalker::read_serial_number`]) — one reader, so a sweep and a poll cannot disagree about
+/// which row is the chassis. No OS-version row is read here, so its last resort is not available.
+async fn read_serial(
+    target: IpAddr,
+    cand: &SnmpCandidate,
+    sys_object_id: Option<&str>,
+    ctx: &SweepCtx,
+    transport: &dyn Transport,
+) -> Option<String> {
+    let walker = match cand {
+        SnmpCandidate::V2c { community, .. } => SnmpWalker::V2c(community.clone()),
+        SnmpCandidate::V3 { params, .. } => SnmpWalker::V3(params.clone()),
+    };
+    walker
+        .read_serial_number(
+            transport,
+            target,
+            sys_object_id,
+            None,
+            ctx.timeout,
+            ctx.serial_rows,
+        )
+        .await
+        .serial
 }
 
 /// SNMP identity scalars a discovery probe collects from a device (each optional — a device
@@ -1128,17 +1194,46 @@ mod tests {
             Ok(empty_walk())
         }
 
+        /// A chassis row of ENTITY-MIB under the good community — one class and one serial — so
+        /// a match also carries a serial (ADR-139 Inc.5). A walk asked for fewer rows than that
+        /// stops, as the transport's does.
         async fn snmp_walk_instances(
             &self,
             _target: IpAddr,
-            _community: &str,
-            _column_oids: &[String],
+            community: &str,
+            column_oids: &[String],
             _timeout: Duration,
-            _max_rows: usize,
+            max_rows: usize,
         ) -> Result<yagra_transport::InstanceWalk, TransportError> {
+            if Some(community) != self.good_community.as_deref() {
+                return Ok(yagra_transport::InstanceWalk {
+                    rows: Vec::new(),
+                    every_column_answered: true,
+                });
+            }
+            let rows: Vec<yagra_transport::SnmpInstanceRow> = column_oids
+                .iter()
+                .filter_map(|base| {
+                    let value = match base.as_str() {
+                        yagra_discovery::serial::OID_ENT_PHYSICAL_CLASS => {
+                            yagra_transport::SnmpValue::Int(3)
+                        }
+                        yagra_discovery::serial::OID_ENT_PHYSICAL_SERIAL_NUM => {
+                            yagra_transport::SnmpValue::Bytes(b"FOC0000A1AA".to_vec())
+                        }
+                        _ => return None,
+                    };
+                    Some(yagra_transport::SnmpInstanceRow {
+                        oid_base: base.clone(),
+                        instance: vec![1],
+                        value,
+                    })
+                })
+                .collect();
+            let every_column_answered = rows.len() <= max_rows;
             Ok(yagra_transport::InstanceWalk {
-                rows: Vec::new(),
-                every_column_answered: true,
+                rows: rows.into_iter().take(max_rows).collect(),
+                every_column_answered,
             })
         }
 
@@ -1266,6 +1361,7 @@ mod tests {
             snmp_when_unreachable: true,
             slots: Arc::new(Semaphore::new(SWEEP_CONCURRENCY)),
             icmp_errors: AtomicUsize::new(0),
+            serial_rows: SERIAL_ENTITY_ROWS,
         }
     }
 
@@ -1297,6 +1393,42 @@ mod tests {
         assert_eq!(d.sysname.as_deref(), Some("sw01"));
         // sysObjectID (OID-typed) is rendered dotted and carried for classification.
         assert_eq!(d.sysobjectid.as_deref(), Some("1.3.6.1.4.1.9.1.516"));
+    }
+
+    /// ADR-139 Inc.5: the matched credential reads the chassis serial, the way the hourly
+    /// identity probe does — and a walk the sweep's row cap stops sends none, leaving the rest of
+    /// the device as it was.
+    #[tokio::test]
+    async fn a_match_carries_the_chassis_serial_unless_the_row_cap_stops_the_walk() {
+        let id = Uuid::from_u128(1);
+        let fake = SelectiveFake {
+            ping: Ping::Answers,
+            good_community: Some("secret".to_owned()),
+            good_v3_user: None,
+        };
+        let cands = || candidates_of(&job(vec![v2c_cred(id, "secret")], vec![]));
+        let d = probe_one(target(), &ctx(cands()), &fake)
+            .await
+            .expect("device answers");
+        assert_eq!(d.serial_number.as_deref(), Some("FOC0000A1AA"));
+
+        let capped = SweepCtx {
+            serial_rows: 1,
+            ..ctx(cands())
+        };
+        let d = probe_one(target(), &capped, &fake)
+            .await
+            .expect("device answers");
+        assert_eq!(d.serial_number, None);
+        assert_eq!(d.matched_credential, Some(id));
+        assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
+    }
+
+    #[test]
+    fn a_detect_reads_as_many_rows_as_the_hourly_probe_and_a_range_fewer() {
+        assert_eq!(serial_rows_for(1), SERIAL_ENTITY_ROWS);
+        assert_eq!(serial_rows_for(254), SWEEP_SERIAL_ROWS);
+        const { assert!(SWEEP_SERIAL_ROWS < SERIAL_ENTITY_ROWS) };
     }
 
     #[tokio::test]

@@ -390,6 +390,7 @@ mod tests {
             vendor: None,
             model: None,
             matched_credential_id: None,
+            serial_number: None,
         }
     }
 

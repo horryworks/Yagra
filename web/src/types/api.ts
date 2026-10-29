@@ -994,7 +994,7 @@ export const DUPLICATE_EVIDENCE_KINDS = [
 export type DuplicateEvidenceKind = (typeof DUPLICATE_EVIDENCE_KINDS)[number];
 
 /** How sure a duplicate group is. Same reason as above. */
-export const DUPLICATE_CONFIDENCES = ['confident', 'possible'] as const;
+export const DUPLICATE_CONFIDENCES = ['exact', 'confident', 'possible'] as const;
 export type DuplicateConfidence = (typeof DUPLICATE_CONFIDENCES)[number];
 
 /** What in a group says its members are not one device. Same reason as above. */

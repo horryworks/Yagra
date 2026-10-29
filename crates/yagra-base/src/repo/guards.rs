@@ -84,6 +84,9 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
             "profiles",
             "url_checks",
             "dns_checks",
+            // Named only by `DEVICE_SERIAL_SQL` (ADR-139 Inc.5): a Meraki device's serial is the
+            // device, and a Discovery candidate is compared against it as against the node's own.
+            "meraki_devices",
         ],
     ),
     // Which nodes claim an address, by inventory address or by an interface address (ADR-180).

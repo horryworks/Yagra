@@ -10,16 +10,17 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import type { SameDeviceMatch } from '../../types/api';
-import { sameDeviceBadgeKey, sameDeviceReasonKey } from '../../pages/discoveryExisting';
+import { sameDeviceBadgeKey, sameDeviceReasonKey, sameDeviceTone } from '../../pages/discoveryExisting';
 import { nodeHref } from '../../lib/entityHref';
 import { Badge } from '../ui/Badge';
 import './SameDeviceNote.css';
 
 interface Props {
   match: SameDeviceMatch;
-  /** What the operator can still do, in the surface's own terms — a tick box on one, a button on
-   *  the other. Shown in the row, never only as a `title=` (ADR-055 R4). */
-  hint: string;
+  /** What the operator can still do, in the surface's own terms — the Scan tab's tick box. Shown in
+   *  the row, never only as a `title=` (ADR-055 R4). Omitted where Monitor's confirmation says it
+   *  instead (ADR-139 Inc.5). */
+  hint?: string;
   /** Draw the badge at the start. The Scan tab puts it beside the address instead. */
   badge?: boolean;
 }
@@ -30,9 +31,10 @@ export function SameDeviceNote({ match, hint, badge = false }: Props) {
   return (
     <span className="same-note">
       {badge && (
-        // Neutral: a status tone would claim a monitoring state.
+        // A tone of its own per level, never a status one: a status tone would claim a
+        // monitoring state (ADR-139 Inc.5).
         <>
-          <Badge tone="neutral">{t(sameDeviceBadgeKey(match))}</Badge>{' '}
+          <Badge tone={sameDeviceTone(match)}>{t(sameDeviceBadgeKey(match))}</Badge>{' '}
         </>
       )}
       <span className="muted">{t('discovery.sameDevice.as')}</span>{' '}
@@ -51,7 +53,7 @@ export function SameDeviceNote({ match, hint, badge = false }: Props) {
           </span>
         );
       })}
-      <span className="muted same-note-small same-note-hint">{hint}</span>
+      {hint !== undefined && <span className="muted same-note-small same-note-hint">{hint}</span>}
     </span>
   );
 }

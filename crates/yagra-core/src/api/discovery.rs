@@ -382,11 +382,12 @@ pub(crate) struct SameDeviceNode {
     name: String,
     /// The address the node is monitored at.
     address: String,
-    /// `confident` when the node's interface list carries the candidate's address and both report
-    /// the same `sysObjectID`; `possible` otherwise.
+    /// `exact` when the candidate reports a serial number the node is known by; `confident` when
+    /// the node's interface list carries the candidate's address and both report the same
+    /// `sysObjectID`; `possible` otherwise.
     confidence: crate::discover::duplicates::DuplicateConfidence,
-    /// `own_ip_one_way` (the node's interface list carries the candidate's address) and/or `name`
-    /// (same name and the same `sysObjectID`).
+    /// `serial` (a serial number both are known by), `own_ip_one_way` (the node's interface list
+    /// carries the candidate's address) and/or `name` (same name and the same `sysObjectID`).
     evidence: Vec<crate::discover::duplicates::DuplicateEvidenceKind>,
 }
 
@@ -396,6 +397,7 @@ fn same_device_matches(
     existing: &[yagra_base::repo::AddressMatch],
     carriers: &[(IpAddr, yagra_base::repo::DeviceIdentity)],
     named: &[yagra_base::repo::DeviceIdentity],
+    serialed: &[(String, yagra_base::repo::DeviceIdentity)],
 ) -> Vec<SameDeviceMatch> {
     let parsed: Vec<(IpAddr, &crate::discover::discovery::Candidate)> = candidates
         .iter()
@@ -408,6 +410,7 @@ fn same_device_matches(
                 address: *address,
                 sysname: c.sysname.as_deref(),
                 sys_object_id: c.sysobjectid.as_deref(),
+                serial: c.serial_number.as_deref(),
             },
         )
         .collect();
@@ -417,11 +420,13 @@ fn same_device_matches(
         &already_at,
         carriers,
         named,
+        serialed,
     );
     let nodes: HashMap<Uuid, &yagra_base::repo::DeviceIdentity> = carriers
         .iter()
         .map(|(_, n)| n)
         .chain(named.iter())
+        .chain(serialed.iter().map(|(_, n)| n))
         .map(|n| (n.id, n))
         .collect();
     // The first candidate's spelling, as `same_device_candidates` and `inventory_matches` both
@@ -544,12 +549,23 @@ pub(crate) async fn scan_view(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let (found, carriers, named) = tokio::try_join!(
+    // Candidate serials, as `duplicates::same_device_candidates` compares them (ADR-139 Inc.5).
+    // Empty — and so no read — while no candidate has reported one.
+    let serials = crate::discover::duplicates::candidate_serial_keys(
+        status
+            .candidates
+            .iter()
+            .filter_map(|c| c.serial_number.as_deref()),
+    );
+    let (found, carriers, named, serialed) = tokio::try_join!(
         admin.repo.device_nodes_at(&addresses, scope.group_filter()),
         admin
             .repo
             .device_nodes_carrying(&addresses, scope.group_filter()),
         admin.repo.device_nodes_named(&names, scope.group_filter()),
+        admin
+            .repo
+            .device_nodes_with_serials(&serials, scope.group_filter()),
     )
     .map_err(|e| {
         ApiError::from_internal(
@@ -559,7 +575,7 @@ pub(crate) async fn scan_view(
         )
     })?;
     let existing = inventory_matches(&status.candidates, &found);
-    let same_device = same_device_matches(&status.candidates, &found, &carriers, &named);
+    let same_device = same_device_matches(&status.candidates, &found, &carriers, &named, &serialed);
     Ok(Some(ScanView {
         status,
         existing,
@@ -1973,6 +1989,7 @@ mod tests {
                     sysname: Some("edge-router-with-a-long-hostname.example.net".to_owned()),
                     sysobjectid: Some("1.3.6.1.4.1.2011.2.240.121".to_owned()),
                     matched_credential: Some(Uuid::from_u128(1)),
+                    serial_number: None,
                 })
                 .collect();
             let targets = u32::try_from(JOB_TARGETS).unwrap_or(u32::MAX);
@@ -2654,6 +2671,7 @@ mod tests {
             vendor: None,
             model: None,
             matched_credential_id: None,
+            serial_number: None,
         }
     }
 
@@ -2735,6 +2753,7 @@ mod tests {
             name: "core-1".to_owned(),
             address: "192.0.2.1".parse().expect("address"),
             sys_object_id: Some(oid.to_owned()),
+            serial_number: None,
         };
         let mut lan = candidate("2001:db8:0:0::7");
         lan.sysobjectid = Some(oid.to_owned());
@@ -2745,7 +2764,7 @@ mod tests {
             ("198.51.100.9".parse().expect("address"), core),
         ];
         let existing = vec![device("198.51.100.9", "elsewhere", false)];
-        let got = same_device_matches(&[lan, taken], &existing, &carriers, &[]);
+        let got = same_device_matches(&[lan, taken], &existing, &carriers, &[], &[]);
         assert_eq!(
             serde_json::to_value(&got).expect("serialize"),
             serde_json::json!([{
@@ -2761,6 +2780,35 @@ mod tests {
         );
     }
 
+    /// ADR-139 Inc.5: a node found only by its serial is named in the answer — it is in no other
+    /// list the entry is built from — as `exact`, with `serial` as the evidence.
+    #[test]
+    fn a_node_found_only_by_its_serial_is_an_exact_entry() {
+        let node = yagra_base::repo::DeviceIdentity {
+            id: Uuid::from_u128(1),
+            name: "core-1".to_owned(),
+            address: "192.0.2.1".parse().expect("address"),
+            sys_object_id: None,
+            serial_number: Some("FDO0000A1BC".to_owned()),
+        };
+        let mut lan = candidate("198.51.100.1");
+        lan.serial_number = Some("fdo0000a1bc".to_owned());
+        let got = same_device_matches(&[lan], &[], &[], &[], &[("FDO0000A1BC".to_owned(), node)]);
+        assert_eq!(
+            serde_json::to_value(&got).expect("serialize"),
+            serde_json::json!([{
+                "address": "198.51.100.1",
+                "nodes": [{
+                    "id": Uuid::from_u128(1),
+                    "name": "core-1",
+                    "address": "192.0.2.1",
+                    "confidence": "exact",
+                    "evidence": ["serial"],
+                }],
+            }])
+        );
+    }
+
     /// Two spellings of one address: the entry names the **first**, the one `existing` and the
     /// judgement both use, so the WebUI marks the row it judged rather than its twin.
     #[test]
@@ -2771,13 +2819,14 @@ mod tests {
             name: "core-1".to_owned(),
             address: "192.0.2.1".parse().expect("address"),
             sys_object_id: Some(oid.to_owned()),
+            serial_number: None,
         };
         let mut first = candidate("2001:db8:0:0::7");
         first.sysobjectid = Some(oid.to_owned());
         let mut second = candidate("2001:db8::7");
         second.sysobjectid = Some(oid.to_owned());
         let carriers = vec![("2001:db8::7".parse().expect("address"), core)];
-        let got = same_device_matches(&[first, second], &[], &carriers, &[]);
+        let got = same_device_matches(&[first, second], &[], &carriers, &[], &[]);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].address, "2001:db8:0:0::7");
     }

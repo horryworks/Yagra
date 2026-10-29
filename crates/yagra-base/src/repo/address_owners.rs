@@ -54,8 +54,9 @@ impl NodeRepo {
             .map(yagra_common::L3AddrType::as_str)
             .collect();
         let sql = format!(
-            "SELECT carried, id, name, address, sys_object_id FROM ( \
+            "SELECT carried, id, name, address, sys_object_id, serial_number FROM ( \
                SELECT q.ip AS carried, n.id, n.name, host(n.address) AS address, n.sys_object_id, \
+                      {serial} AS serial_number, \
                       row_number() OVER (PARTITION BY q.ip ORDER BY n.id) AS rn \
                FROM unnest($2::text[]) AS q(ip) \
                JOIN node_l3 l \
@@ -69,6 +70,7 @@ impl NodeRepo {
              ) carriers WHERE rn <= $4",
             scope = Self::SCOPE_PREDICATE,
             device = Self::DEVICE_NODE_PREDICATE,
+            serial = Self::DEVICE_SERIAL_SQL,
         );
         let per_address = i64::try_from(super::SHARED_VALUE_MAX + 1).unwrap_or(i64::MAX);
         let rows = sqlx::query(&sql)
@@ -94,6 +96,7 @@ impl NodeRepo {
                     name: row.try_get("name")?,
                     address,
                     sys_object_id: row.try_get("sys_object_id")?,
+                    serial_number: row.try_get("serial_number")?,
                 },
             ));
         }

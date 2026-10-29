@@ -201,6 +201,7 @@
       "dependents": "Dependents"
     },
     "confidence": {
+      "exact": "Same device",
       "confident": "Likely duplicate",
       "possible": "To check"
     },
@@ -649,9 +650,6 @@
         "trap": "Trap"
       },
       "senderOnly": "Only a syslog or trap sender vouches for this address, and a sender's address can be forged — so it is not detected or monitored from here. If it is yours, add it with Add node.",
-      "sameDevice": {
-        "hint": "Monitor adds it as another node. If it is the same device, do not add it."
-      },
       "more": {
         "button": "Load {{n}} more",
         "loaded": "{{loaded}} of {{total}} unregistered devices loaded. Filters search only the loaded rows."
@@ -685,13 +683,23 @@
       "outsideScope": "Monitored in a folder you can't see"
     },
     "sameDevice": {
+      "exact": "Same device",
       "likely": "Likely the same device",
       "maybe": "Maybe the same device",
       "as": "Monitored at another address as",
       "hint": "Not selected for you. If it is a different device, tick it to import it anyway.",
       "reason": {
+        "serial": "Same serial number",
         "ownIp": "This address is on one of its interfaces",
         "name": "Same name and model"
+      },
+      "confirm": {
+        "title": "Add as another node?",
+        "exact": "This is the same device as {{nodes}}, which is already monitored.",
+        "likely": "This is likely the same device as {{nodes}}, which is already monitored.",
+        "maybe": "This may be the same device as {{nodes}}, which is already monitored.",
+        "node": "{{name}} ({{address}})",
+        "add": "Add anyway"
       }
     },
     "cols": {
