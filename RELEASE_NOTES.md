@@ -10,13 +10,15 @@
 
 ## Unreleased
 
+## v0.3.63 — Discovery recognises a device you already monitor by its serial number, and the Geo map marks the pin you pressed
+
 ### New Features
 
 - **Discovery reads each device's serial number and says when it is a device you already monitor.** A scan and a Detect now read the serial the way the hourly identity probe does. When it matches a node's serial (one member of a stack is enough, and a Meraki device's serial counts), the row is marked **Same device**, whatever else the two report. When both have a serial and they differ, the row is no longer marked on name and model alone. The marks are now filled — red for **Same device**, orange for **Likely the same device**, yellow for **Maybe the same device** — and **Monitor** on a marked row asks before adding another node. The API's `same_device` entries can carry a new `confidence`, `exact`, with the evidence `serial`, and each scan candidate carries `serial_number`. A poller on an older version sends no serial, so its candidates are judged as before.
 
 ### Improvements
 
-- **Discovery ▸ Scan a range: the Discovered devices table can show only the devices SNMP answered.** The Credential column has a filter under its header — **SNMP answered** or **No SNMP**, with a count beside each — decided by what the scan read — a matched credential or an identity only SNMP reports — not by the credential picked since. It is kept in the URL like the other filters.
+- **Discovery ▸ Scan a range: the Discovered devices table can show only the devices SNMP answered.** The Credential column has a filter under its header — **SNMP answered** or **No SNMP**, with a count beside each — decided by what the scan read (a matched credential, or an identity only SNMP reports), not by the credential picked since. It is kept in the URL like the other filters.
 - **The Geo map marks the pin you pressed.** The pin or cluster whose bubble is open carries a ring until the bubble closes, and a small ripple runs from it once when you press it. Both stay the same size at any zoom. With reduced motion turned on in the operating system, only the ring is drawn.
 
 ### Bug Fixes
