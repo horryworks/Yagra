@@ -21,6 +21,7 @@ import { LABEL_ROTATION, gutterLabels, labelFits, mirrorLayout, type MirrorAxis 
 import { usePrefsStore } from '../../prefs';
 import { PALETTE } from './palette';
 import { MIN_PLOT_HEIGHT, fillSplit } from './fillLayout';
+import { displayTimeZone } from '../../lib/timeZone';
 
 /** Static fallbacks for the `--series-*` tokens, used only if computed style can't resolve them
  *  (e.g. the var is missing). Mirror tokens.css so a fallback still looks right. */
@@ -243,6 +244,9 @@ export function MetricChart({
         ? Math.max(MIN_PLOT_HEIGHT, (el.clientHeight || height) - FILL_CHROME_ESTIMATE)
         : height,
       axes: [axis, yAxis],
+      // The time axis and the legend read the display zone (ADR-221). Read once per instance:
+      // `AppShell` remounts the page when the zone changes, which rebuilds the chart.
+      tzDate: (ts: number) => uPlot.tzDate(new Date(ts * 1000), displayTimeZone()),
       // Pin the Y range (e.g. 0–100% gauges) and/or the X window when the caller asks; each axis
       // auto-fits its data otherwise. A getter, NOT the values: uPlot keeps whatever it is handed
       // here for the life of the instance, so the axes have to be able to ask for the pins that are

@@ -8,6 +8,7 @@
 
 import i18n from '../i18n';
 import { intlLocale } from './locale';
+import { displayTimeZone, wallClock, zonedWallToMs } from './timeZone';
 import metricUnits from '../api/metricUnits.json';
 import { alertTitle } from './alertName';
 import type { Tone } from '../components/ui/Badge';
@@ -96,21 +97,21 @@ export const SEVERITY_TONE: Record<Severity, Tone> = {
   info: 'info',
 };
 
-/** Format a Unix-ms timestamp as a local date-time string in the active interface language's
- *  locale (pass `locale` to override). Zone is always the browser's local zone. */
+/** Format a Unix-ms timestamp as a date-time string in the active interface language's locale
+ *  (pass `locale` to override), in the display zone (ADR-221). */
 export function formatTimestamp(unixMs: number, locale: string = intlLocale(i18n.language)): string {
-  return new Date(unixMs).toLocaleString(locale);
+  return new Date(unixMs).toLocaleString(locale, { timeZone: displayTimeZone() });
 }
 
-/** Exact timestamp as a stable, locale-independent `YYYY-MM-DD HH:MM:SS` in the browser's
- *  local zone (sv-SE renders ISO-like regardless of the user's locale). For forensic screens
- *  (audit) where the precise instant is the primary value. */
+/** Exact timestamp as a stable, locale-independent `YYYY-MM-DD HH:MM:SS` in the display zone
+ *  (sv-SE renders ISO-like regardless of the user's locale). For forensic screens (audit) where
+ *  the precise instant is the primary value. */
 export function formatExactTime(iso: string): string {
-  return new Date(iso).toLocaleString('sv-SE').replace('T', ' ');
+  return new Date(iso).toLocaleString('sv-SE', { timeZone: displayTimeZone() }).replace('T', ' ');
 }
 
 /** A scheduled boundary — a maintenance window's start/end, a mute's expiry — in the browser's
- *  locale and zone, to the minute. Suppression is scheduled to the minute, so seconds would be
+ *  locale and the display zone, to the minute. Suppression is scheduled to the minute, so seconds would be
  *  noise on a row an operator scans.
  *
  *  Shared because the Maintenance page, the Mutes page and the inventory tree's release panel all
@@ -118,6 +119,7 @@ export function formatExactTime(iso: string): string {
  *  have been the point where they started to disagree (`extensibility.md` §3). */
 export function formatScheduleTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
+    timeZone: displayTimeZone(),
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -126,9 +128,15 @@ export function formatScheduleTime(iso: string): string {
   });
 }
 
-/** Date-only `YYYY-MM-DD` in the local zone (en-CA renders ISO-like). */
+/** Date-only `YYYY-MM-DD` in the display zone (en-CA renders ISO-like). */
 export function dateOnly(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-CA');
+  return new Date(iso).toLocaleDateString('en-CA', { timeZone: displayTimeZone() });
+}
+
+/** `HH:MM` of an instant in the display zone — a chart axis tick, a widget's "as of". */
+export function formatClockTime(unixMs: number): string {
+  const w = wallClock(unixMs);
+  return `${String(w.hour).padStart(2, '0')}:${String(w.minute).padStart(2, '0')}`;
 }
 
 /** Compact relative time ("just now" / "5m ago" / "3h ago" / "Yesterday" / "12d ago"), or
@@ -219,15 +227,10 @@ export function initials(name: string): string {
   return pick.toUpperCase();
 }
 
-/** The browser's IANA time-zone name (e.g. "Asia/Tokyo"), used to label datetime-local
- *  inputs so operators know they're entering local time (stored as UTC). Falls back to a
- *  generic phrase if the runtime can't resolve a zone. */
+/** The display zone's IANA name (e.g. "Asia/Tokyo", ADR-221), used to label datetime-local
+ *  inputs so operators know which zone they are typing in (stored as UTC). */
 export function localTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || i18n.t('format:localTimeZoneFallback');
-  } catch {
-    return i18n.t('format:localTimeZoneFallback');
-  }
+  return displayTimeZone();
 }
 
 /** Format a millisecond RTT value. */
@@ -814,13 +817,24 @@ export function formatSi(n: number): string {
 export const agoSec = (sec: number | null): string =>
   sec == null ? '—' : relativeTimeMs(sec * 1000);
 
-/** 'YYYY-MM-DDTHH:MM' (local wall-clock, an `<input type="datetime-local">`) → unix seconds, or
- *  null if empty/unparseable. `new Date(v)` with no zone suffix is interpreted as local time, so
- *  this round-trips with `RangeControl`'s `unixToLocalInput`. */
+/** 'YYYY-MM-DDTHH:MM' (a wall time in the display zone, an `<input type="datetime-local">`) →
+ *  unix seconds, or null if empty/unparseable. A wall time inside a daylight-saving gap is the
+ *  instant the gap ends, one inside an overlap its first occurrence (ADR-221). Round-trips with
+ *  {@link unixToLocalInput}. */
 export function localInputToUnix(v: string): number | null {
-  if (!v) return null;
-  const ms = new Date(v).getTime();
-  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(v ?? '');
+  if (!m) return null;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
+  return Math.floor(zonedWallToMs(y, mo, d, h, mi) / 1000);
+}
+
+/** Unix seconds → 'YYYY-MM-DDTHH:MM', the wall time an `<input type="datetime-local">` shows, in
+ *  the display zone. */
+export function unixToLocalInput(s: number): string {
+  const w = wallClock(s * 1000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${w.year}-${p(w.month)}-${p(w.day)}T${p(w.hour)}:${p(w.minute)}`;
 }
 
 /** The same input → RFC 3339 (UTC), or undefined when empty or unparseable — the one conversion

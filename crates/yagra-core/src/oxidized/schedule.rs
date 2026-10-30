@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! When config backups are fetched (ADR-210 stage 6, decisions 58-68): every day from one UTC time,
-//! so many nodes at a time, oldest backup first, until every node has been tried once.
+//! When config backups are fetched (ADR-210 stage 6, decisions 58-68): every day from one wall
+//! time in one zone (ADR-221), so many nodes at a time, oldest backup first, until every node has
+//! been tried once.
 //!
 //! oxidized fetches nothing on its own any more (`interval: 0`, decision 58): it fetches a node only
 //! when asked through `/node/next`. Before, it fetched a node a day after its last fetch, and since
@@ -25,10 +26,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, NaiveTime, TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use uuid::Uuid;
 use yagra_base::config_backup::{BackupSchedule, BackupTarget, ConfigBackupRepo, ScheduleNode};
 use yagra_base::secrets::CredentialStore;
+use yagra_base::wall_clock;
 
 use super::client::OxidizedClient;
 use super::relay::Relay;
@@ -75,33 +77,40 @@ pub(crate) struct Progress {
     pub total: usize,
 }
 
-/// The start time on `day`'s date, in UTC.
-fn on_day(s: &BackupSchedule, day: DateTime<Utc>) -> DateTime<Utc> {
-    let time = NaiveTime::from_hms_opt(u32::from(s.at_hour), u32::from(s.at_minute), 0)
-        .unwrap_or(NaiveTime::MIN);
-    day.date_naive().and_time(time).and_utc()
+/// The start instants on the dates around `t` in the schedule's zone (ADR-221), earliest first.
+/// Three dates, because "today" in a zone far from UTC can sit on either side of `t`'s UTC date;
+/// a daylight-saving gap or overlap resolves the way `yagra_base::wall_clock::resolve` says.
+fn starts_around(s: &BackupSchedule, t: DateTime<Utc>) -> [DateTime<Utc>; 4] {
+    let today = wall_clock::local_date(s.time_zone, t);
+    let at = |d: i64| {
+        wall_clock::resolve(
+            s.time_zone,
+            today + TimeDelta::days(d),
+            u32::from(s.at_hour),
+            u32::from(s.at_minute),
+        )
+    };
+    [at(-1), at(0), at(1), at(2)]
 }
 
 /// The latest start instant at or before `now`.
 #[must_use]
 pub(crate) fn latest_start(s: &BackupSchedule, now: DateTime<Utc>) -> DateTime<Utc> {
-    let today = on_day(s, now);
-    if today <= now {
-        today
-    } else {
-        today - TimeDelta::days(1)
-    }
+    let [before, today, tomorrow, _] = starts_around(s, now);
+    [tomorrow, today, before]
+        .into_iter()
+        .find(|t| *t <= now)
+        .unwrap_or(before - TimeDelta::days(1))
 }
 
 /// The first start instant after `t`.
 #[must_use]
 pub(crate) fn next_start(s: &BackupSchedule, t: DateTime<Utc>) -> DateTime<Utc> {
-    let today = on_day(s, t);
-    if today > t {
-        today
-    } else {
-        today + TimeDelta::days(1)
-    }
+    let around = starts_around(s, t);
+    around
+        .into_iter()
+        .find(|x| *x > t)
+        .unwrap_or(around[3] + TimeDelta::days(1))
 }
 
 /// Whether a run is going.
@@ -394,6 +403,27 @@ mod tests {
         assert_eq!(
             next_run_at(&s, at("2026-10-30T01:00:00Z")),
             at("2026-10-30T02:00:00Z")
+        );
+    }
+
+    #[test]
+    fn the_start_time_is_a_wall_time_in_the_schedules_zone() {
+        // 02:00 in Tokyo is 17:00Z the day before.
+        let s = BackupSchedule {
+            time_zone: yagra_base::wall_clock::Tz::Asia__Tokyo,
+            ..sched(1)
+        };
+        assert_eq!(
+            next_start(&s, at("2026-10-30T12:00:00Z")),
+            at("2026-10-30T17:00:00Z")
+        );
+        assert_eq!(
+            latest_start(&s, at("2026-10-30T12:00:00Z")),
+            at("2026-10-29T17:00:00Z")
+        );
+        assert_eq!(
+            latest_start(&s, at("2026-10-30T17:00:00Z")),
+            at("2026-10-30T17:00:00Z")
         );
     }
 

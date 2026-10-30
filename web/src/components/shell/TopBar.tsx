@@ -10,6 +10,7 @@ import { useAlertStore, useCan, useSectionRouteStore } from '../../store';
 import { Logo } from './Logo';
 import { UserMenu } from './UserMenu';
 import { GlobalSearch } from './GlobalSearch';
+import { ZoneClock } from './ZoneClock';
 import './TopBar.css';
 
 export function TopBar() {
@@ -53,6 +54,9 @@ export function TopBar() {
       <div className="topbar-right">
         {/* Global search is a permanent affordance (decision 3). Nodes only for now — the popover
             says so, because a nodes-only result set that looks fleet-wide is worse than none. */}
+        {/* The display zone's clock and its picker (ADR-221): left of search, where the operator
+            reads the screen's other "where am I" answers. */}
+        <ZoneClock />
         <GlobalSearch />
         {/* The bell is a shortcut to Active alerts, not a popover: the count it carries is the
             same set that page lists, so a menu would be a second rendering of one list. */}

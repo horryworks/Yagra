@@ -447,6 +447,7 @@ pub(super) async fn write<'a>(
             s.day_of_month,
             s.at_hour,
             s.at_minute,
+            s.time_zone.as_deref(),
             now,
         );
         notes.add(
@@ -457,13 +458,14 @@ pub(super) async fn write<'a>(
         sqlx::query(
             "INSERT INTO report_schedules (id, definition_id, frequency, day_of_week, \
                                                day_of_month, at_hour, at_minute, enabled, \
-                                               next_run_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                                               next_run_at, time_zone) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
                  ON CONFLICT (id) DO UPDATE SET definition_id = EXCLUDED.definition_id, \
                      frequency = EXCLUDED.frequency, day_of_week = EXCLUDED.day_of_week, \
                      day_of_month = EXCLUDED.day_of_month, at_hour = EXCLUDED.at_hour, \
                      at_minute = EXCLUDED.at_minute, enabled = EXCLUDED.enabled, \
-                     next_run_at = EXCLUDED.next_run_at, updated_at = now()",
+                     next_run_at = EXCLUDED.next_run_at, time_zone = EXCLUDED.time_zone, \
+                     updated_at = now()",
         )
         .bind(s.id)
         .bind(s.definition_id)
@@ -474,6 +476,7 @@ pub(super) async fn write<'a>(
         .bind(s.at_minute)
         .bind(s.enabled)
         .bind(next)
+        .bind(s.time_zone.as_deref())
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, s.id);
@@ -506,6 +509,7 @@ pub(super) async fn write<'a>(
             s.day_of_month,
             s.at_hour,
             s.at_minute,
+            s.time_zone.as_deref(),
             now,
         );
         notes.add(
@@ -516,15 +520,17 @@ pub(super) async fn write<'a>(
         sqlx::query(
             "INSERT INTO analysis_schedules (id, tool, scope_kind, scope_id, scope_label, \
                                                  params, frequency, day_of_week, day_of_month, \
-                                                 at_hour, at_minute, enabled, next_run_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                                                 at_hour, at_minute, enabled, next_run_at, \
+                                                 time_zone) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
                  ON CONFLICT (id) DO UPDATE SET tool = EXCLUDED.tool, \
                      scope_kind = EXCLUDED.scope_kind, scope_id = EXCLUDED.scope_id, \
                      scope_label = EXCLUDED.scope_label, params = EXCLUDED.params, \
                      frequency = EXCLUDED.frequency, day_of_week = EXCLUDED.day_of_week, \
                      day_of_month = EXCLUDED.day_of_month, at_hour = EXCLUDED.at_hour, \
                      at_minute = EXCLUDED.at_minute, enabled = EXCLUDED.enabled, \
-                     next_run_at = EXCLUDED.next_run_at, updated_at = now()",
+                     next_run_at = EXCLUDED.next_run_at, time_zone = EXCLUDED.time_zone, \
+                     updated_at = now()",
         )
         .bind(s.id)
         .bind(&s.tool)
@@ -539,6 +545,7 @@ pub(super) async fn write<'a>(
         .bind(s.at_minute)
         .bind(s.enabled)
         .bind(next)
+        .bind(s.time_zone.as_deref())
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, s.id);

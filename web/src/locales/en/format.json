@@ -43,7 +43,6 @@
     "left_one": "{{count}} day left",
     "left_other": "{{count}} days left"
   },
-  "localTimeZoneFallback": "your local time",
   "liveness": "Reachability",
   "alertCondition": "{{direction}} {{value}}",
   "alertObservedWas": "was {{value}}",

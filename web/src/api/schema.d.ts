@@ -6033,6 +6033,11 @@ export interface components {
             /** @description `all` | `group` | `node`. */
             scope_kind: string;
             scope_label: string;
+            /**
+             * @description The IANA zone `at_hour`/`at_minute` and the day are a wall time in; null means UTC
+             *     (ADR-221).
+             */
+            time_zone?: string | null;
             /** @description Which diagnostic runs, as an `AnalysisTool` token. */
             tool: string;
         };
@@ -6073,6 +6078,8 @@ export interface components {
             scope_label: string;
             /** Format: double */
             sensitivity?: number | null;
+            /** @description The IANA zone the day and time are a wall time in. Absent or null means UTC. */
+            time_zone?: string | null;
             /** @description Which diagnostic to run (an `AnalysisTool` token, e.g. `anomaly`). */
             tool: string;
             /** Format: int64 */
@@ -6097,6 +6104,11 @@ export interface components {
             scope_id?: string | null;
             scope_kind: string;
             scope_label: string;
+            /**
+             * @description The zone the day and time are a wall time in (ADR-221). Absent in a bundle from an older
+             *     deployment, which means UTC.
+             */
+            time_zone?: string | null;
             tool: string;
         };
         /**
@@ -7162,7 +7174,7 @@ export interface components {
         ConfigBackupScheduleBody: {
             /**
              * Format: int32
-             * @description 0–23, UTC.
+             * @description 0–23, a wall time in `time_zone`.
              */
             at_hour: number;
             /**
@@ -7175,12 +7187,14 @@ export interface components {
              * @description 1 to `max_concurrency`.
              */
             concurrency: number;
+            /** @description The IANA zone of the start time. Absent or null means UTC. */
+            time_zone?: string | null;
         };
         /** @description When config backups are fetched, and where the latest run stands (ADR-210 stage 6). */
         ConfigBackupScheduleView: {
             /**
              * Format: int32
-             * @description The start time, UTC.
+             * @description The start time, a wall time in `time_zone`.
              */
             at_hour: number;
             /** Format: int32 */
@@ -7212,6 +7226,8 @@ export interface components {
             run_started_at?: string | null;
             /** @description A run is going. */
             running: boolean;
+            /** @description The IANA zone of the start time; `null` means UTC (ADR-221). */
+            time_zone?: string | null;
             total?: number | null;
             /**
              * Format: date-time
@@ -13694,6 +13710,11 @@ export interface components {
             last_status?: null | components["schemas"]["ReportScheduleStatus"];
             /** Format: int64 */
             next_run_ms: number;
+            /**
+             * @description The IANA zone `at_hour`/`at_minute` and the day are a wall time in; null means UTC
+             *     (ADR-221).
+             */
+            time_zone?: string | null;
         };
         /** @description Create/update body for a schedule (preset cadence). */
         ReportScheduleBody: {
@@ -13709,6 +13730,8 @@ export interface components {
             definition_id: string;
             enabled?: boolean | null;
             frequency: string;
+            /** @description The IANA zone the day and time are a wall time in. Absent or null means UTC. */
+            time_zone?: string | null;
         };
         /** @description A recurring report run. */
         ReportScheduleRow: {
@@ -13726,6 +13749,11 @@ export interface components {
             frequency: string;
             /** Format: uuid */
             id: string;
+            /**
+             * @description The zone the day and time are a wall time in (ADR-221). Absent in a bundle from an older
+             *     deployment, which means UTC.
+             */
+            time_zone?: string | null;
         };
         /**
          * @description Outcome of a schedule's most recent firing.
@@ -18438,7 +18466,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description When config backups are fetched — every day from one UTC time, so many nodes at a time — and where the latest run stands */
+            /** @description When config backups are fetched — every day from one wall time in one zone, so many nodes at a time — and where the latest run stands */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -18489,7 +18517,7 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigBackupScheduleView"];
                 };
             };
-            /** @description An hour, minute or count out of range (`invalid_config_backup_schedule`) */
+            /** @description An hour, minute or count out of range (`invalid_config_backup_schedule`), or an unknown zone (`invalid_time_zone`) */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -166,6 +166,13 @@ interface PrefsStore {
    *  ⚠️ **On the account as well** (ADR-058, `serverPrefs.ts`), like `geoMapDayNight`. Nothing
    *  should call the setter directly. */
   geoMapRelief: boolean | null;
+  /** The zone every time on screen is shown in (ADR-221): an IANA name. `null` = never set and
+   *  `''` = the operator chose "follow the browser" — both read as the browser's own zone, and the
+   *  second is kept apart so that choice reaches the account and overrides another machine's pick.
+   *
+   *  ⚠️ **On the account as well** (ADR-058, `serverPrefs.ts`). Nothing should call the setter
+   *  directly. */
+  timeZone: string | null;
   /** Where Topology ▸ Geo map was last looking (ADR-218): the centre in degrees and the zoom as a
    *  multiple of the pane's floor, so it means the same place on any screen. `null` = the operator
    *  never moved the map, which reads as "fit the pins".
@@ -229,6 +236,9 @@ interface PrefsStore {
   /** Record the Geo map relief switch locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`geoMapRelief`]). */
   setGeoMapRelief: (on: boolean | null) => void;
+  /** Record the display zone locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also syncs it to
+   *  the account (see [`timeZone`]). */
+  setTimeZone: (zone: string | null) => void;
   /** Record where the Geo map is looking locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`geoMapPlace`]). */
   setGeoMapPlace: (place: GeoPlace | null) => void;
@@ -279,6 +289,8 @@ export const usePrefsStore = create<PrefsStore>()(
       geoMapDayNight: null,
       // Same again: absent before ADR-220, read as `null` (off), no migration owed.
       geoMapRelief: null,
+      // Same again: absent before ADR-221, read as `null` (the browser's zone), no migration owed.
+      timeZone: null,
       // Same again: absent before ADR-218, read as `null` (fit the pins), no migration owed.
       geoMapPlace: null,
       // Same again: absent before ADR-198, read as `{}` / `true`, no migration owed.
@@ -324,6 +336,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setNodeTreeWithNodesOnly: (nodeTreeWithNodesOnly) => set({ nodeTreeWithNodesOnly }),
       setGeoMapDayNight: (geoMapDayNight) => set({ geoMapDayNight }),
       setGeoMapRelief: (geoMapRelief) => set({ geoMapRelief }),
+      setTimeZone: (timeZone) => set({ timeZone }),
       setGeoMapPlace: (geoMapPlace) => set({ geoMapPlace }),
       setModalSize: (id, size) => set((s) => ({ modalSizes: withModalSize(s.modalSizes, id, size) })),
       setTemplateWrap: (templateWrap) => set({ templateWrap }),

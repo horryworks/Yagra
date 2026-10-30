@@ -1162,9 +1162,11 @@ async fn oxidized_event(
 /// When config backups are fetched, and where the latest run stands (ADR-210 stage 6).
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ConfigBackupScheduleView {
-    /// The start time, UTC.
+    /// The start time, a wall time in `time_zone`.
     at_hour: u8,
     at_minute: u8,
+    /// The IANA zone of the start time; `null` means UTC (ADR-221).
+    time_zone: Option<String>,
     /// How many nodes are fetched at once.
     concurrency: u8,
     /// The most `concurrency` may be.
@@ -1211,6 +1213,8 @@ pub(crate) async fn schedule_view(
     Ok(ConfigBackupScheduleView {
         at_hour: s.at_hour,
         at_minute: s.at_minute,
+        time_zone: (s.time_zone != yagra_base::wall_clock::Tz::UTC)
+            .then(|| s.time_zone.name().to_owned()),
         concurrency: s.concurrency,
         max_concurrency: yagra_base::config_backup::MAX_CONCURRENCY,
         running,
@@ -1225,7 +1229,7 @@ pub(crate) async fn schedule_view(
 #[utoipa::path(
     get, path = "/api/v1/config-backup-schedule", tag = "nodes",
     responses(
-        (status = 200, description = "When config backups are fetched — every day from one UTC time, so many nodes at a time — and where the latest run stands", body = ConfigBackupScheduleView),
+        (status = 200, description = "When config backups are fetched — every day from one wall time in one zone, so many nodes at a time — and where the latest run stands", body = ConfigBackupScheduleView),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -1241,10 +1245,13 @@ async fn get_schedule(
 /// A new start time and how many nodes are fetched at once.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(crate) struct ConfigBackupScheduleBody {
-    /// 0–23, UTC.
+    /// 0–23, a wall time in `time_zone`.
     at_hour: u8,
     /// 0–59.
     at_minute: u8,
+    /// The IANA zone of the start time. Absent or null means UTC.
+    #[serde(default)]
+    time_zone: Option<String>,
     /// 1 to `max_concurrency`.
     concurrency: u8,
 }
@@ -1254,7 +1261,7 @@ pub(crate) struct ConfigBackupScheduleBody {
     request_body = ConfigBackupScheduleBody,
     responses(
         (status = 200, description = "Saved. The new time takes effect the next time it comes round; a run already going is left to finish", body = ConfigBackupScheduleView),
-        (status = 400, description = "An hour, minute or count out of range (`invalid_config_backup_schedule`)", body = super::error::ErrorBody),
+        (status = 400, description = "An hour, minute or count out of range (`invalid_config_backup_schedule`), or an unknown zone (`invalid_time_zone`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Lacks manage-config, or sees only some folders (`scope_unsupported`): the schedule is the whole deployment's", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -1280,9 +1287,10 @@ async fn put_schedule(
     if !(1..=yagra_base::config_backup::MAX_CONCURRENCY).contains(&body.concurrency) {
         return Err(bad("concurrency must be 1-8"));
     }
+    let time_zone = super::util::parse_time_zone(body.time_zone.as_deref())?;
     admin
         .config_backup
-        .set_schedule(body.at_hour, body.at_minute, body.concurrency)
+        .set_schedule(body.at_hour, body.at_minute, time_zone, body.concurrency)
         .await
         .map_err(|e| {
             ApiError::from_internal(

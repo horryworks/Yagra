@@ -3,7 +3,7 @@
 //
 // The same two halves as the report schedule editor: what to run, and when. The "what" half is the
 // launch drawer's fields (tool / scope / window / sensitivity / notify) and the "when" half is the
-// shared preset cadence — times are UTC, because that is what the backend computes `next_run_at` in.
+// shared preset cadence — the time is a wall time in the schedule's zone (ADR-221).
 //
 // Every decision lives in `scheduleForm.ts` so it can be tested; this file is layout.
 
@@ -29,6 +29,7 @@ import {
   timeLabel,
   type ScheduleForm,
 } from './scheduleForm';
+import { zoneAbbreviation } from '../lib/timeZone';
 
 interface Props {
   /** The schedule to edit, or null to create one. */
@@ -192,7 +193,7 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
         )}
 
         <label className="rb-field">
-          <span>{t('reports:schedule.timeUtc')}</span>
+          <span>{t('reports:schedule.time', { zone: zoneAbbreviation(form.timeZone) })}</span>
           <input
             className="field"
             type="time"

@@ -3262,7 +3262,7 @@
         "operationId": "get_schedule",
         "responses": {
           "200": {
-            "description": "When config backups are fetched — every day from one UTC time, so many nodes at a time — and where the latest run stands",
+            "description": "When config backups are fetched — every day from one wall time in one zone, so many nodes at a time — and where the latest run stands",
             "content": {
               "application/json": {
                 "schema": {
@@ -3320,7 +3320,7 @@
             }
           },
           "400": {
-            "description": "An hour, minute or count out of range (`invalid_config_backup_schedule`)",
+            "description": "An hour, minute or count out of range (`invalid_config_backup_schedule`), or an unknown zone (`invalid_time_zone`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -27688,6 +27688,13 @@
           "scope_label": {
             "type": "string"
           },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone `at_hour`/`at_minute` and the day are a wall time in; null means UTC\n(ADR-221)."
+          },
           "tool": {
             "type": "string",
             "description": "Which diagnostic runs, as an `AnalysisTool` token."
@@ -27789,6 +27796,13 @@
             ],
             "format": "double"
           },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone the day and time are a wall time in. Absent or null means UTC."
+          },
           "tool": {
             "type": "string",
             "description": "Which diagnostic to run (an `AnalysisTool` token, e.g. `anomaly`)."
@@ -27859,6 +27873,13 @@
           },
           "scope_label": {
             "type": "string"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The zone the day and time are a wall time in (ADR-221). Absent in a bundle from an older\ndeployment, which means UTC."
           },
           "tool": {
             "type": "string"
@@ -29939,7 +29960,7 @@
           "at_hour": {
             "type": "integer",
             "format": "int32",
-            "description": "0–23, UTC.",
+            "description": "0–23, a wall time in `time_zone`.",
             "minimum": 0
           },
           "at_minute": {
@@ -29953,6 +29974,13 @@
             "format": "int32",
             "description": "1 to `max_concurrency`.",
             "minimum": 0
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone of the start time. Absent or null means UTC."
           }
         }
       },
@@ -29970,7 +29998,7 @@
           "at_hour": {
             "type": "integer",
             "format": "int32",
-            "description": "The start time, UTC.",
+            "description": "The start time, a wall time in `time_zone`.",
             "minimum": 0
           },
           "at_minute": {
@@ -30017,6 +30045,13 @@
           "running": {
             "type": "boolean",
             "description": "A run is going."
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone of the start time; `null` means UTC (ADR-221)."
           },
           "total": {
             "type": [
@@ -43545,6 +43580,13 @@
           "next_run_ms": {
             "type": "integer",
             "format": "int64"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone `at_hour`/`at_minute` and the day are a wall time in; null means UTC\n(ADR-221)."
           }
         }
       },
@@ -43592,6 +43634,13 @@
           },
           "frequency": {
             "type": "string"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone the day and time are a wall time in. Absent or null means UTC."
           }
         }
       },
@@ -43642,6 +43691,13 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The zone the day and time are a wall time in (ADR-221). Absent in a bundle from an older\ndeployment, which means UTC."
           }
         }
       },

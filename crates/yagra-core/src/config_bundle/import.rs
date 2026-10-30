@@ -107,6 +107,7 @@ pub(super) fn next_run(
     day_of_month: Option<i16>,
     at_hour: i16,
     at_minute: i16,
+    time_zone: Option<&str>,
     now: DateTime<Utc>,
 ) -> DateTime<Utc> {
     compute_next_run(
@@ -116,6 +117,9 @@ pub(super) fn next_run(
             day_of_month,
             at_hour,
             at_minute,
+            // A name the source deployment knew and this build does not is carried as it is and
+            // read as UTC until a core that knows it runs here.
+            time_zone: yagra_base::wall_clock::zone_or_utc(time_zone),
         },
         now,
     )
@@ -234,7 +238,7 @@ mod tests {
             // An unknown cadence from a newer core still yields a usable instant.
             ("hourly-ish", None, None),
         ] {
-            let next = next_run(freq, dow, dom, 2, 15, now);
+            let next = next_run(freq, dow, dom, 2, 15, None, now);
             assert!(next > now, "{freq} produced a past instant: {next}");
         }
     }

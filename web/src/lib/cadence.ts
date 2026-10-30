@@ -12,6 +12,7 @@
 
 import type { TFunction } from 'i18next';
 import { CADENCES, type Cadence } from '../types/api';
+import { zoneAbbreviation } from './timeZone';
 
 /** Cadence label key + which extra field it interpolates.
  *
@@ -52,7 +53,8 @@ export function weekdayName(t: TFunction, dow: number): string {
   return t(`reports:weekday.${key}`);
 }
 
-/** Human-readable cadence for a schedule (e.g. "Weekly · Monday 09:00 UTC"). Word order comes from
+/** Human-readable cadence for a schedule (e.g. "Weekly · Monday 09:00 JST"), in the schedule's own
+ *  zone. Word order comes from
  *  the translation so a language like Japanese can reorder it. */
 export function cadenceLabel(
   t: TFunction,
@@ -66,9 +68,12 @@ export function cadenceLabel(
     day_of_month?: number | null;
     at_hour: number;
     at_minute: number;
+    /** The schedule's zone (ADR-221); absent or null is UTC. */
+    time_zone?: string | null;
   },
 ): string {
-  const time = `${String(s.at_hour).padStart(2, '0')}:${String(s.at_minute).padStart(2, '0')} UTC`;
+  const zone = zoneAbbreviation(s.time_zone || 'UTC');
+  const time = `${String(s.at_hour).padStart(2, '0')}:${String(s.at_minute).padStart(2, '0')} ${zone}`;
   // Registry-driven, not a switch: the `default:` this replaces rendered an unrecognised cadence as
   // "Daily", which is a claim about when the report fires rather than an admission of ignorance.
   const spec = CADENCE[s.frequency];

@@ -51,6 +51,7 @@ pub mod stored_enum;
 /// The TLS client configuration for the outbound connections that are not HTTP: syslog over TLS
 /// and directory sign-in. Beside `http` for the same reason.
 pub mod tls;
+pub mod wall_clock;
 
 /// What `token_enum!` expands to needs, reachable from a crate that does not name it.
 #[doc(hidden)]

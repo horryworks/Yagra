@@ -417,6 +417,9 @@ pub struct AnalysisSchedule {
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
     pub at_minute: i16,
+    /// The IANA zone `at_hour`/`at_minute` and the day are a wall time in; null means UTC
+    /// (ADR-221).
+    pub time_zone: Option<String>,
     pub enabled: bool,
     pub next_run_ms: i64,
     pub last_run_ms: Option<i64>,
@@ -430,6 +433,8 @@ pub struct ScheduleInput {
     /// path uses — so a schedule cannot be saved with a window a direct launch would refuse.
     pub params: JobParams,
     pub cadence: crate::runtime::cadence::Schedule,
+    /// What the `time_zone` column stores: the zone's IANA name, or `None` for UTC.
+    pub time_zone: Option<String>,
     pub enabled: bool,
 }
 

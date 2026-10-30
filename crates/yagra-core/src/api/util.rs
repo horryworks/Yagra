@@ -219,10 +219,14 @@ pub(crate) struct CadenceBody {
     pub day_of_week: Option<i16>,
     /// 1 … 28. Read only for `monthly`.
     pub day_of_month: Option<i16>,
-    /// Hour of day to fire, UTC.
+    /// Hour of day to fire, as a wall time in `time_zone`.
     pub at_hour: i16,
     /// Minute of the hour to fire.
     pub at_minute: i16,
+    /// The IANA zone the day and time are a wall time in (`Asia/Tokyo`). Absent or null means
+    /// UTC, which is what a schedule written before zones existed meant. An unknown name is 400.
+    #[serde(default)]
+    pub time_zone: Option<String>,
 }
 
 /// Validate a cadence body into a [`crate::runtime::cadence::Schedule`].
@@ -245,6 +249,7 @@ pub(crate) fn parse_cadence(
             "frequency must be daily|weekly|monthly",
         ));
     }
+    let time_zone = parse_time_zone(body.time_zone.as_deref())?;
     Ok(crate::runtime::cadence::Schedule {
         frequency,
         // Each day field is kept only for the cadence that reads it, so a weekly schedule cannot
@@ -255,7 +260,33 @@ pub(crate) fn parse_cadence(
             .then(|| body.day_of_month.unwrap_or(1).clamp(1, 28)),
         at_hour: body.at_hour.clamp(0, 23),
         at_minute: body.at_minute.clamp(0, 59),
+        time_zone: time_zone.unwrap_or(yagra_base::wall_clock::Tz::UTC),
     })
+}
+
+/// Validate an optional IANA zone name from a request body. `None` stays `None` (the caller
+/// stores NULL, meaning UTC); a name this build's zone database does not know is refused rather
+/// than stored and silently read back as UTC (ADR-221 decision 5).
+pub(crate) fn parse_time_zone(
+    name: Option<&str>,
+) -> Result<Option<yagra_base::wall_clock::Tz>, ApiError> {
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        None => Ok(None),
+        Some(n) => yagra_base::wall_clock::parse_zone(n)
+            .map(Some)
+            .ok_or_else(|| {
+                ApiError::bad_request("invalid_time_zone", "time_zone must be an IANA zone name")
+            }),
+    }
+}
+
+/// What a schedule stores in its `time_zone` column for a validated body: the canonical name, or
+/// NULL when the body named none.
+pub(crate) fn stored_time_zone(name: Option<&str>) -> Option<String> {
+    name.map(str::trim)
+        .filter(|n| !n.is_empty())
+        .and_then(yagra_base::wall_clock::parse_zone)
+        .map(|tz| tz.name().to_owned())
 }
 
 /// Append one audit row, logging rather than failing if the write does not land.

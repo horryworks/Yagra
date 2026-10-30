@@ -405,7 +405,7 @@ impl ConfigBundleRepo {
         let mut report_schedules = Vec::new();
         for row in sqlx::query(
             "SELECT id, definition_id, frequency, day_of_week, day_of_month, at_hour, at_minute, \
-                    enabled \
+                    time_zone, enabled \
              FROM report_schedules ORDER BY id",
         )
         .fetch_all(&mut *conn)
@@ -419,6 +419,7 @@ impl ConfigBundleRepo {
                 day_of_month: row.try_get("day_of_month")?,
                 at_hour: row.try_get("at_hour")?,
                 at_minute: row.try_get("at_minute")?,
+                time_zone: row.try_get("time_zone")?,
                 enabled: row.try_get("enabled")?,
             });
         }
@@ -427,7 +428,7 @@ impl ConfigBundleRepo {
         let mut analysis_schedules = Vec::new();
         for row in sqlx::query(
             "SELECT id, tool, scope_kind, scope_id, scope_label, params, frequency, day_of_week, \
-                    day_of_month, at_hour, at_minute, enabled \
+                    day_of_month, at_hour, at_minute, time_zone, enabled \
              FROM analysis_schedules ORDER BY id",
         )
         .fetch_all(&mut *conn)
@@ -445,6 +446,7 @@ impl ConfigBundleRepo {
                 day_of_month: row.try_get("day_of_month")?,
                 at_hour: row.try_get("at_hour")?,
                 at_minute: row.try_get("at_minute")?,
+                time_zone: row.try_get("time_zone")?,
                 enabled: row.try_get("enabled")?,
             });
         }

@@ -131,7 +131,7 @@
     "freqChoose": "Choose how often…",
     "dayOfWeek": "Day of week",
     "dayOfMonth": "Day of month (1–28)",
-    "timeUtc": "Time (UTC)",
+    "time": "Time ({{zone}})",
     "enabled": "Enabled",
     "freq": {
       "daily": "Daily",

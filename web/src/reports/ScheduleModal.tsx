@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Schedule editor — create/edit a preset cadence for a report definition. Times are UTC (the
-// backend computes next_run_at in UTC). Weekly adds a weekday picker; monthly a day-of-month.
+// Schedule editor — create/edit a preset cadence for a report definition. The time is a wall time
+// in the schedule's zone (ADR-221): the display zone for a new one, its own for an existing one. Weekly adds a weekday picker; monthly a day-of-month.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -14,6 +14,7 @@ import type { ReportDefinition, Cadence, ReportSchedule } from '../types/api';
 import { WEEKDAY_OPTIONS } from '../lib/cadence';
 import { SELECTABLE_CADENCES } from '../lib/cadence';
 import { timeValue } from '../lib/format';
+import { scheduleZone, zoneAbbreviation } from '../lib/timeZone';
 
 interface Props {
   definitions: ReportDefinition[];
@@ -40,6 +41,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
     timeValue(schedule?.at_hour ?? 9, schedule?.at_minute ?? 0),
   );
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
+  const zone = scheduleZone(schedule?.time_zone, !schedule);
   const form = useSubmit({ errorFallback: t('schedule.err.saveFailed'), onDone: onSaved });
 
   function save() {
@@ -65,6 +67,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       day_of_month: frequency === 'monthly' ? dayOfMonth : null,
       at_hour,
       at_minute,
+      time_zone: zone,
       enabled,
     };
     form.submit(async () => {
@@ -153,7 +156,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
         )}
 
         <label className="rb-field">
-          <span>{t('schedule.timeUtc')}</span>
+          <span>{t('schedule.time', { zone: zoneAbbreviation(zone) })}</span>
           <input
             className="field"
             type="time"

@@ -166,6 +166,10 @@
     "passwordAtDirectory": "Password managed by your directory",
     "logOut": "Log out",
     "signIn": "Sign in",
-    "publicDashboard": "Public dashboard — what people see without signing in"
+    "publicDashboard": "Public dashboard — what people see without signing in",
+    "timeZone": "Time zone",
+    "timeZoneSearch": "Tokyo, UTC, New York",
+    "followBrowser": "Follow browser ({{zone}})",
+    "noTimeZone": "No matching zone"
   }
 }

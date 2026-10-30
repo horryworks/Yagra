@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The config backup schedule's dialog (ADR-210 stage 6): the daily start time, in UTC, and how many
-// nodes are fetched at once. What it may send is `configBackupSchedule.ts`.
+// The config backup schedule's dialog (ADR-210 stage 6): the daily start time, in the schedule's
+// own zone (UTC until one is saved, ADR-221), and how many nodes are fetched at once. What it may send is `configBackupSchedule.ts`.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +13,7 @@ import { useSubmit } from '../lib/useSubmit';
 import { timeValue } from '../lib/format';
 import type { ConfigBackupScheduleView } from '../types/api';
 import { scheduleBody } from './configBackupSchedule';
+import { scheduleZone, zoneAbbreviation } from '../lib/timeZone';
 
 interface Props {
   schedule: ConfigBackupScheduleView;
@@ -24,11 +25,14 @@ export function ConfigBackupScheduleModal({ schedule, onClose, onSaved }: Props)
   const { t } = useTranslation('nodes');
   const [time, setTime] = useState(timeValue(schedule.at_hour, schedule.at_minute));
   const [count, setCount] = useState(schedule.concurrency);
+  // There is always one schedule, so it is never "new": a saved zone stays, and one that never
+  // saved a zone is offered in the display zone, which saving then records.
+  const zone = scheduleZone(schedule.time_zone, schedule.time_zone == null);
   const form = useSubmit({ errorFallback: t('config.schedule.err.save'), onDone: onSaved });
   const counts = Array.from({ length: schedule.max_concurrency }, (_, i) => i + 1);
 
   function save() {
-    const parsed = scheduleBody(time, count, schedule.max_concurrency);
+    const parsed = scheduleBody(time, count, schedule.max_concurrency, zone);
     if (!parsed.ok) {
       form.refuse(t(parsed.key));
       return;
@@ -53,7 +57,10 @@ export function ConfigBackupScheduleModal({ schedule, onClose, onSaved }: Props)
         />
       }
     >
-      <Field label={t('config.schedule.start')} htmlFor="cfgbl-sched-time">
+      <Field
+        label={t('config.schedule.start', { zone: zoneAbbreviation(zone) })}
+        htmlFor="cfgbl-sched-time"
+      >
         <input
           id="cfgbl-sched-time"
           className="field"

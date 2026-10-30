@@ -803,7 +803,8 @@ impl ConfigBackupRepo {
     /// inserted by migration 0159; a deployment that lost it reads the defaults.
     pub async fn schedule(&self) -> anyhow::Result<BackupSchedule> {
         let row = sqlx::query(
-            "SELECT at_hour, at_minute, concurrency, run_started_at, run_finished_at, updated_at \
+            "SELECT at_hour, at_minute, time_zone, concurrency, run_started_at, run_finished_at, \
+                    updated_at \
              FROM config_backup_schedule",
         )
         .fetch_optional(&self.pool)
@@ -814,6 +815,9 @@ impl ConfigBackupRepo {
         Ok(BackupSchedule {
             at_hour: small(&r, "at_hour")?,
             at_minute: small(&r, "at_minute")?,
+            time_zone: crate::wall_clock::zone_or_utc(
+                r.try_get::<Option<String>, _>("time_zone")?.as_deref(),
+            ),
             concurrency: small(&r, "concurrency")?,
             run_started_at: r.try_get("run_started_at")?,
             run_finished_at: r.try_get("run_finished_at")?,
@@ -821,25 +825,29 @@ impl ConfigBackupRepo {
         })
     }
 
-    /// Change the start time and how many nodes are fetched at once. Moves `updated_at`, so the new
-    /// time takes effect the next time it comes round; a run already going is left to finish.
-    /// The bounds are the table's CHECKs; the caller validates first so a person gets a 400.
+    /// Change the start time, its zone and how many nodes are fetched at once. Moves `updated_at`,
+    /// so the new time takes effect the next time it comes round; a run already going is left to
+    /// finish. The bounds are the table's CHECKs; the caller validates first so a person gets a
+    /// 400. `time_zone` `None` stores NULL, which reads back as UTC (ADR-221).
     pub async fn set_schedule(
         &self,
         at_hour: u8,
         at_minute: u8,
+        time_zone: Option<crate::wall_clock::Tz>,
         concurrency: u8,
     ) -> anyhow::Result<BackupSchedule> {
         sqlx::query(
-            "INSERT INTO config_backup_schedule (id, at_hour, at_minute, concurrency, updated_at) \
-             VALUES (TRUE, $1, $2, $3, now()) \
+            "INSERT INTO config_backup_schedule \
+               (id, at_hour, at_minute, concurrency, time_zone, updated_at) \
+             VALUES (TRUE, $1, $2, $3, $4, now()) \
              ON CONFLICT (id) DO UPDATE SET at_hour = EXCLUDED.at_hour, \
                at_minute = EXCLUDED.at_minute, concurrency = EXCLUDED.concurrency, \
-               updated_at = now()",
+               time_zone = EXCLUDED.time_zone, updated_at = now()",
         )
         .bind(i16::from(at_hour))
         .bind(i16::from(at_minute))
         .bind(i16::from(concurrency))
+        .bind(time_zone.map(|tz| tz.name()))
         .execute(&self.pool)
         .await?;
         self.schedule().await
@@ -913,12 +921,14 @@ fn small(r: &sqlx::postgres::PgRow, col: &str) -> anyhow::Result<u8> {
     u8::try_from(v).map_err(|_| anyhow::anyhow!("{col} out of range: {v}"))
 }
 
-/// When config backups are fetched (ADR-210 stage 6): every day from one UTC time, so many nodes
-/// at a time, and where the latest run stands.
+/// When config backups are fetched (ADR-210 stage 6): every day from one wall time in one zone
+/// (ADR-221), so many nodes at a time, and where the latest run stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackupSchedule {
     pub at_hour: u8,
     pub at_minute: u8,
+    /// The zone `at_hour`/`at_minute` are a wall time in. UTC when the row names none.
+    pub time_zone: crate::wall_clock::Tz,
     /// How many nodes are fetched at once, 1 to [`MAX_CONCURRENCY`].
     pub concurrency: u8,
     /// When the latest run started; `None` before the first.
@@ -939,6 +949,7 @@ impl Default for BackupSchedule {
         Self {
             at_hour: 2,
             at_minute: 0,
+            time_zone: crate::wall_clock::Tz::UTC,
             concurrency: 1,
             run_started_at: None,
             run_finished_at: None,

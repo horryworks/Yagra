@@ -277,6 +277,7 @@ pub(super) fn full_bundle() -> ConfigBundle {
             day_of_month: None,
             at_hour: 6,
             at_minute: 30,
+            time_zone: Some("Asia/Tokyo".to_owned()),
             enabled: true,
         }],
         analysis_schedules: vec![AnalysisScheduleRow {
@@ -291,6 +292,7 @@ pub(super) fn full_bundle() -> ConfigBundle {
             day_of_month: None,
             at_hour: 3,
             at_minute: 0,
+            time_zone: None,
             enabled: true,
         }],
         ..empty_bundle()

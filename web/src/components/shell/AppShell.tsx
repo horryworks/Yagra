@@ -30,10 +30,14 @@ import { useTroubleshootStream } from '../../troubleshoot/useTroubleshootStream'
 import { TroubleshootToast } from '../../troubleshoot/TroubleshootToast';
 import { useAlertStream } from '../../hooks/useAlertStream';
 import { useConfigChangeStream } from '../../lib/configChanges';
+import { usePrefsStore } from '../../prefs';
 import './AppShell.css';
 
 export function AppShell() {
   const mobile = useViewportMode() === 'mobile';
+  // A new display zone (ADR-221) remounts the routed page, so every time on it, and every chart,
+  // is drawn again in that zone. The shell around it keeps its state.
+  const zoneKey = usePrefsStore((s) => s.timeZone) ?? '';
   const [drawerOpen, setDrawerOpen] = useState(false);
   const { pathname, search } = useLocation();
   const rememberRoute = useSectionRouteStore((s) => s.rememberRoute);
@@ -66,7 +70,7 @@ export function AppShell() {
       <div className="shell">
         <MobileTopBar onOpenMenu={() => setDrawerOpen(true)} />
         <main className="shell-content shell-content--mobile">
-          <Outlet />
+          <Outlet key={zoneKey} />
         </main>
         <MobileNavDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
         <TroubleshootToast />
@@ -80,7 +84,7 @@ export function AppShell() {
       <div className="shell-body">
         <SideBar />
         <main className="shell-content">
-          <Outlet />
+          <Outlet key={zoneKey} />
         </main>
       </div>
       <TroubleshootToast />

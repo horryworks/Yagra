@@ -127,7 +127,7 @@ export function ConfigBackupsPage() {
       />
       {sched && schedule.data && (
         <p className="cfgbl-sched">
-          <span>{t('config.schedule.rule', { time: sched.time, count: sched.count })}</span>
+          <span>{t('config.schedule.rule', { time: sched.time, zone: sched.zone, count: sched.count })}</span>
           <span>
             {sched.state.key === 'config.schedule.next' &&
               t(sched.state.key, { at: formatTimestamp(Date.parse(sched.state.at)) })}

@@ -789,6 +789,9 @@ pub(super) struct AnalysisScheduleBody {
     day_of_month: Option<i16>,
     at_hour: i16,
     at_minute: i16,
+    /// The IANA zone the day and time are a wall time in. Absent or null means UTC.
+    #[serde(default)]
+    time_zone: Option<String>,
     /// Defaults to enabled.
     enabled: Option<bool>,
 }
@@ -817,7 +820,9 @@ fn parse_schedule_body(
         day_of_month: body.day_of_month,
         at_hour: body.at_hour,
         at_minute: body.at_minute,
+        time_zone: body.time_zone.clone(),
     })?;
+    let time_zone = super::util::stored_time_zone(body.time_zone.as_deref());
     let params = job_params(AnalysisRequest {
         tool: body.tool,
         scope_kind: body.scope_kind,
@@ -845,6 +850,7 @@ fn parse_schedule_body(
         crate::analysis::ScheduleInput {
             params,
             cadence,
+            time_zone,
             enabled: body.enabled.unwrap_or(true),
         },
         next,
@@ -1565,6 +1571,7 @@ mod tests {
             day_of_month: None,
             at_hour: 3,
             at_minute: 0,
+            time_zone: None,
             enabled: true,
             next_run_ms: 0,
             last_run_ms: None,

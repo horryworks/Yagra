@@ -38,7 +38,6 @@
     "today": "本日期限切れ",
     "left_other": "残り {{count}} 日"
   },
-  "localTimeZoneFallback": "ローカル時刻",
   "liveness": "到達性",
   "alertCondition": "{{value}} を{{direction}}",
   "alertObservedWas": "実測 {{value}}",

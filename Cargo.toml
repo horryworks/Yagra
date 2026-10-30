@@ -181,6 +181,9 @@ regex = "1"
 minijinja = { version = "2", default-features = false, features = ["builtins", "serde", "json", "fuel", "debug", "std_collections"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+# IANA zone rules for preset schedules (ADR-221): a schedule holds its wall time in a named zone,
+# and the next run is resolved through that zone's DST rules. Core-only (via yagra-base).
+chrono-tz = "0.10"
 # Support bundle (ADR-045): one downloadable archive of logs + status for a deployment nobody can
 # reach a shell on. `tar` + `flate2` rather than `zip` because both are pure Rust with no C
 # toolchain in the way (flate2 defaults to the miniz_oxide backend), and because the archive holds

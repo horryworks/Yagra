@@ -164,6 +164,10 @@
     "passwordAtDirectory": "パスワードはディレクトリ側で管理",
     "logOut": "ログアウト",
     "signIn": "サインイン",
-    "publicDashboard": "公開ダッシュボード — サインインしない相手に見えるもの"
+    "publicDashboard": "公開ダッシュボード — サインインしない相手に見えるもの",
+    "timeZone": "タイムゾーン",
+    "timeZoneSearch": "Tokyo, UTC, New York",
+    "followBrowser": "ブラウザに合わせる（{{zone}}）",
+    "noTimeZone": "一致するゾーンなし"
   }
 }

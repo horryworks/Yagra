@@ -98,7 +98,7 @@ pub(super) const FINDING_SEARCH_BINDS: usize = 12;
 /// Columns selected for a schedule row (timestamps projected to epoch-millis, as the job rows are).
 pub(super) const SCHED_COLS: &str =
     "id, tool, scope_kind, scope_id, scope_label, params, frequency, \
-     day_of_week, day_of_month, at_hour, at_minute, enabled, last_status, \
+     day_of_week, day_of_month, at_hour, at_minute, time_zone, enabled, last_status, \
      (EXTRACT(EPOCH FROM next_run_at) * 1000)::bigint AS next_run_ms, \
      (EXTRACT(EPOCH FROM last_run_at) * 1000)::bigint AS last_run_ms";
 
@@ -115,6 +115,7 @@ pub(super) fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<Anal
         day_of_month: row.try_get("day_of_month")?,
         at_hour: row.try_get("at_hour")?,
         at_minute: row.try_get("at_minute")?,
+        time_zone: row.try_get("time_zone")?,
         enabled: row.try_get("enabled")?,
         next_run_ms: row.try_get("next_run_ms")?,
         last_run_ms: row.try_get("last_run_ms")?,
@@ -416,8 +417,8 @@ impl AnalysisRepo {
         sqlx::query(
             "INSERT INTO analysis_schedules \
              (id, tool, scope_kind, scope_id, scope_label, params, frequency, day_of_week, \
-              day_of_month, at_hour, at_minute, enabled, next_run_at, updated_by) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+              day_of_month, at_hour, at_minute, enabled, next_run_at, updated_by, time_zone) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(id)
         .bind(input.params.tool.as_str())
@@ -433,6 +434,7 @@ impl AnalysisRepo {
         .bind(input.enabled)
         .bind(next_run_at)
         .bind(updated_by)
+        .bind(input.time_zone.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -449,7 +451,7 @@ impl AnalysisRepo {
             "UPDATE analysis_schedules SET tool = $2, scope_kind = $3, scope_id = $4, \
              scope_label = $5, params = $6, frequency = $7, day_of_week = $8, day_of_month = $9, \
              at_hour = $10, at_minute = $11, enabled = $12, next_run_at = $13, updated_by = $14, \
-             updated_at = now() WHERE id = $1",
+             time_zone = $15, updated_at = now() WHERE id = $1",
         )
         .bind(id)
         .bind(input.params.tool.as_str())
@@ -465,6 +467,7 @@ impl AnalysisRepo {
         .bind(input.enabled)
         .bind(next_run_at)
         .bind(updated_by)
+        .bind(input.time_zone.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -1126,7 +1129,9 @@ mod tests {
                 day_of_month: None,
                 at_hour: 3,
                 at_minute: 30,
+                time_zone: yagra_base::wall_clock::Tz::Asia__Tokyo,
             },
+            time_zone: Some("Asia/Tokyo".to_owned()),
             enabled,
         }
     }
@@ -1151,6 +1156,7 @@ mod tests {
         assert_eq!(got.frequency, crate::runtime::cadence::Cadence::Daily);
         assert_eq!(got.at_hour, 3);
         assert_eq!(got.at_minute, 30);
+        assert_eq!(got.time_zone.as_deref(), Some("Asia/Tokyo"));
         assert_eq!(got.day_of_week, None);
         assert_eq!(got.day_of_month, None);
         assert!(got.enabled);

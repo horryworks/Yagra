@@ -12,11 +12,15 @@
 
 ### New Features
 
-- **Config backups run on a schedule you set.** Nodes ▸ Config backups shows when they run — every day from one UTC time, so many devices at a time (one by default, up to eight) — and how far tonight's run has got; **Change** sets both. Devices are fetched oldest backup first, and a run that is interrupted carries on where it was. The default is 02:00 UTC, one at a time.
+- **Pick the time zone every screen shows times in, from the clock in the top bar.** The clock shows the time now and the zone's short name; press it to choose a zone, or **Follow browser** to go back to your browser's (the default). The choice is saved to your account and applies to every time on screen, the charts' time axis, and the time and date pickers. A dot on the clock says a zone was chosen. PDF reports, e-mail and chat notifications, and notification templates stay in UTC.
+- **Schedules keep the zone they were set in.** A report, Troubleshoot or config backup schedule saved now is a wall time in the zone you were using — "the 1st at 07:00 JST" fires on the 1st in Tokyo — and stays at that wall time through daylight saving. On the day a wall time does not exist it fires at the end of the gap; on the day it happens twice it fires once, at the first. Schedules saved before this read as UTC, as they always did, and say so.
+- `time_zone` (an IANA name, optional; absent or null = UTC) on the bodies and rows of `/api/v1/reports/schedules`, `/api/v1/analysis/schedules` and `/api/v1/config-backup-schedule`, and in the configuration bundle. An unknown name is refused with `400 invalid_time_zone`.
+- **Config backups run on a schedule you set.** Nodes ▸ Config backups shows when they run — every day from one time, so many devices at a time (one by default, up to eight) — and how far tonight's run has got; **Change** sets both. Devices are fetched oldest backup first, and a run that is interrupted carries on where it was. The default is 02:00 UTC, one at a time.
 - `GET`/`PUT /api/v1/config-backup-schedule`, and a `config_schedule` section in the MCP tool `get_system_health`.
 
 ### Improvements
 
+- While an HA pair is being upgraded and the older core still leads, a schedule saved with a zone fires at its hour read as UTC; it is back on its own zone once the new core leads.
 - **Restarting or upgrading no longer fetches every device's configuration again.** The bundled oxidized used to fetch each device a day after its last fetch and forgot those fetches on every restart, so each upgrade backed the whole fleet up at whatever time it happened. It now fetches only what Yagra asks for: the scheduled run, the search for a working login, and **Fetch now**. A device whose login works is next fetched in the next scheduled run.
 
 ## v0.3.64 — The Geo map can colour the land by elevation and the sea by depth, and a CLI login no longer needs a username

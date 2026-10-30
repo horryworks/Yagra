@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11338, 6793], // Monitor's same-device confirmation, three sentences in place of one hint (ADR-139 Inc.5, 2026-10-29)
   nav: [3007, 1415], // + Nodes ▸ Config backups and its one-line description (ADR-210 stage 3, 2026-10-22)
-  nodes: [16429, 9362], // + the three error lines of the config backup schedule dialog (ADR-210 stage 6, 2026-10-30)
+  nodes: [16434, 9367], // + the zone in the config backup schedule's rule and start label (ADR-221, 2026-10-30)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

@@ -128,7 +128,7 @@
     "freqChoose": "頻度を選択…",
     "dayOfWeek": "曜日",
     "dayOfMonth": "日付 (1–28)",
-    "timeUtc": "時刻 (UTC)",
+    "time": "時刻（{{zone}}）",
     "enabled": "有効",
     "freq": {
       "daily": "毎日",

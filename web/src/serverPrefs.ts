@@ -27,6 +27,7 @@ import {
 } from './lib/columnWidths';
 import { adoptCollapsed } from './lib/nodeTree';
 import { adoptGeoPlace, type GeoPlace } from './pages/geoProjection';
+import { isKnownTimeZone } from './lib/timeZone';
 import type { TableId } from './lib/tableIds';
 
 /** Coalesce a burst of adjustments into one write. Same value and same reason as the dashboard's
@@ -52,6 +53,8 @@ interface ServerPrefsDoc {
   geoMapDayNight?: boolean;
   /** Geo map's elevation colouring switch (ADR-220). */
   geoMapRelief?: boolean;
+  /** The display zone, an IANA name, or `''` for "follow the browser" (ADR-221). */
+  timeZone?: string;
   /** Where Geo map was last looking, in degrees and a zoom multiple (ADR-218). */
   geoMapPlace?: GeoPlace;
 }
@@ -112,6 +115,11 @@ function adopt(raw: unknown): void {
   if (typeof doc.geoMapRelief === 'boolean') {
     usePrefsStore.getState().setGeoMapRelief(doc.geoMapRelief);
   }
+  // A name this browser does not know is dropped rather than adopted (ADR-221): the account may
+  // have been written by a newer runtime, and adopting it would show every time in UTC here.
+  if (typeof doc.timeZone === 'string' && (doc.timeZone === '' || isKnownTimeZone(doc.timeZone))) {
+    usePrefsStore.getState().setTimeZone(doc.timeZone);
+  }
   // A malformed place is dropped rather than adopted, and this browser's own is kept.
   const place = adoptGeoPlace(doc.geoMapPlace);
   if (place) usePrefsStore.getState().setGeoMapPlace(place);
@@ -135,6 +143,7 @@ function currentDoc(): ServerPrefsDoc {
     geoMapDayNight,
     geoMapRelief,
     geoMapPlace,
+    timeZone,
   } = usePrefsStore.getState();
   const doc: ServerPrefsDoc = {};
   if (interfaceDockHeight != null) doc.interfaceDockHeight = interfaceDockHeight;
@@ -148,6 +157,9 @@ function currentDoc(): ServerPrefsDoc {
   // Same again (ADR-220); here the unset value reads as off, so it is `false` that may be left out
   // — but a machine that switched it back off must still say so to the account.
   if (geoMapRelief != null) doc.geoMapRelief = geoMapRelief;
+  // Once chosen at all — `''` included, so "follow the browser" on one machine undoes a zone
+  // picked on another (ADR-221).
+  if (timeZone != null) doc.timeZone = timeZone;
   // Only once the operator has moved the map (ADR-218 decision 6): an account that never did keeps
   // opening on the pins, however many sites are added later.
   if (geoMapPlace != null) doc.geoMapPlace = geoMapPlace;
@@ -277,6 +289,13 @@ export function setGeoMapDayNight(on: boolean): void {
  */
 export function setGeoMapRelief(on: boolean): void {
   usePrefsStore.getState().setGeoMapRelief(on);
+  scheduleSave();
+}
+
+/** Record the display zone: locally now, on the account shortly (ADR-221). `''` follows the
+ *  browser. */
+export function setTimeZone(zone: string): void {
+  usePrefsStore.getState().setTimeZone(zone);
   scheduleSave();
 }
 

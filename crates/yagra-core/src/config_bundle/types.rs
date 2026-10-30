@@ -417,6 +417,10 @@ pub struct ReportScheduleRow {
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
     pub at_minute: i16,
+    /// The zone the day and time are a wall time in (ADR-221). Absent in a bundle from an older
+    /// deployment, which means UTC.
+    #[serde(default)]
+    pub time_zone: Option<String>,
     pub enabled: bool,
 }
 
@@ -437,6 +441,10 @@ pub struct AnalysisScheduleRow {
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
     pub at_minute: i16,
+    /// The zone the day and time are a wall time in (ADR-221). Absent in a bundle from an older
+    /// deployment, which means UTC.
+    #[serde(default)]
+    pub time_zone: Option<String>,
     pub enabled: bool,
 }
 

@@ -774,6 +774,9 @@ pub(super) struct ReportScheduleBody {
     day_of_month: Option<i16>,
     at_hour: i16,
     at_minute: i16,
+    /// The IANA zone the day and time are a wall time in. Absent or null means UTC.
+    #[serde(default)]
+    time_zone: Option<String>,
     enabled: Option<bool>,
 }
 
@@ -794,6 +797,7 @@ fn parse_schedule_body(
         day_of_month: body.day_of_month,
         at_hour: body.at_hour,
         at_minute: body.at_minute,
+        time_zone: body.time_zone.clone(),
     })?;
     let input = ScheduleInput {
         definition_id: body.definition_id,
@@ -802,6 +806,7 @@ fn parse_schedule_body(
         day_of_month: cadence.day_of_month,
         at_hour: cadence.at_hour,
         at_minute: cadence.at_minute,
+        time_zone: super::util::stored_time_zone(body.time_zone.as_deref()),
         enabled: body.enabled.unwrap_or(true),
     };
     let next = crate::runtime::cadence::compute_next_run(cadence, chrono::Utc::now());
@@ -1124,6 +1129,7 @@ mod tests {
             day_of_month: dom,
             at_hour: 99,
             at_minute: 99,
+            time_zone: None,
             enabled: None,
         };
         assert_eq!(

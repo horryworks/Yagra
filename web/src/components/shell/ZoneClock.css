@@ -1,0 +1,123 @@
+.zclock {
+  position: relative;
+}
+
+.zclock-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  background: none;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.zclock-btn:hover {
+  border-color: var(--border-color);
+}
+
+.zclock-zone {
+  color: var(--text-secondary);
+}
+
+/* A zone was chosen rather than followed: the clock is not the browser's. */
+.zclock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-color);
+}
+
+.zclock-pop {
+  width: 300px;
+  padding: 6px;
+}
+
+.zclock-searchbox {
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.zclock-search {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}
+
+.zclock-search:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.zclock-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.zclock-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.zclock-item:hover {
+  background: var(--bg-tertiary);
+}
+
+.zclock-item.is-current {
+  color: var(--accent-color);
+}
+
+.zclock-abbr {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.zclock-sep {
+  height: 0;
+  margin: 4px 0;
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.zclock-empty {
+  padding: 6px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+/* Fluid reflow (a page-local width, ui-conventions channel 3): adding the clock left the desktop
+   top bar about 100px too wide at 1000px. Below 1180px the clock shows the time alone — the zone's
+   name is still in the picker, and the dot still says one was chosen — and the search box gives up
+   the rest. */
+@media (max-width: 1180px) {
+  .zclock-zone {
+    display: none;
+  }
+
+  .topbar .gsearch-box {
+    width: 140px;
+  }
+}

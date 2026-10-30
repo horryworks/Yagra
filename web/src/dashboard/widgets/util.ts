@@ -15,7 +15,7 @@ import {
   type RankedInterfaces,
   type TopologyNode,
 } from '../../types/api';
-import { formatBps } from '../../lib/format';
+import { formatBps, formatClockTime } from '../../lib/format';
 import type { DeltaRow } from '../primitives/DeltaBars';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
 import { SEVERITY_ORDER, emptyStateCounts, worstState } from '../../lib/nodeState';
@@ -394,7 +394,7 @@ export function timeColLabels(timestamps: number[]): string[] {
   const every = Math.max(1, Math.ceil(timestamps.length / 6));
   return timestamps.map((t, i) =>
     i % every === 0
-      ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      ? formatClockTime(t * 1000)
       : '',
   );
 }

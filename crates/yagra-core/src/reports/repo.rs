@@ -65,7 +65,7 @@ const RUN_COLS: &str = "id, definition_id, name, trigger, state, pct, error, \
      (EXTRACT(EPOCH FROM finished_at) * 1000)::bigint AS finished_ms";
 
 const SCHED_COLS: &str = "s.id, s.definition_id, d.name AS definition_name, s.frequency, \
-     s.day_of_week, s.day_of_month, s.at_hour, s.at_minute, s.enabled, \
+     s.day_of_week, s.day_of_month, s.at_hour, s.at_minute, s.time_zone, s.enabled, \
      (EXTRACT(EPOCH FROM s.next_run_at) * 1000)::bigint AS next_run_ms, \
      (EXTRACT(EPOCH FROM s.last_run_at) * 1000)::bigint AS last_run_ms, s.last_status";
 
@@ -110,6 +110,7 @@ fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<ReportSchedule>
         day_of_month: row.try_get("day_of_month")?,
         at_hour: row.try_get("at_hour")?,
         at_minute: row.try_get("at_minute")?,
+        time_zone: row.try_get("time_zone")?,
         enabled: row.try_get("enabled")?,
         next_run_ms: row.try_get("next_run_ms")?,
         last_run_ms: row.try_get("last_run_ms")?,
@@ -129,6 +130,8 @@ pub struct ScheduleInput {
     pub day_of_month: Option<i16>,
     pub at_hour: i16,
     pub at_minute: i16,
+    /// The zone's IANA name, or `None` for UTC.
+    pub time_zone: Option<String>,
     pub enabled: bool,
 }
 
@@ -238,8 +241,8 @@ impl ReportsRepo {
         sqlx::query(
             "INSERT INTO report_schedules \
              (id, definition_id, frequency, day_of_week, day_of_month, at_hour, at_minute, \
-              enabled, next_run_at, updated_by) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+              enabled, next_run_at, updated_by, time_zone) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(id)
         .bind(input.definition_id)
@@ -251,6 +254,7 @@ impl ReportsRepo {
         .bind(input.enabled)
         .bind(next_run_at)
         .bind(updated_by)
+        .bind(input.time_zone.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -266,7 +270,7 @@ impl ReportsRepo {
         let res = sqlx::query(
             "UPDATE report_schedules SET definition_id = $2, frequency = $3, day_of_week = $4, \
              day_of_month = $5, at_hour = $6, at_minute = $7, enabled = $8, next_run_at = $9, \
-             updated_by = $10, updated_at = now() WHERE id = $1",
+             updated_by = $10, time_zone = $11, updated_at = now() WHERE id = $1",
         )
         .bind(id)
         .bind(input.definition_id)
@@ -278,6 +282,7 @@ impl ReportsRepo {
         .bind(input.enabled)
         .bind(next_run_at)
         .bind(updated_by)
+        .bind(input.time_zone.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -502,6 +507,7 @@ mod tests {
             day_of_month: None,
             at_hour: 6,
             at_minute: 30,
+            time_zone: Some("Asia/Tokyo".to_owned()),
             enabled: true,
         }
     }
@@ -592,6 +598,7 @@ mod tests {
         assert_eq!(made.definition_id, def.id);
         assert_eq!(made.definition_name, "weekly health");
         assert_eq!(made.frequency, Cadence::Weekly);
+        assert_eq!(made.time_zone.as_deref(), Some("Asia/Tokyo"));
         assert!(made.enabled);
         assert!(made.last_status.is_none());
 

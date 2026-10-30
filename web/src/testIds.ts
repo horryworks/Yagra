@@ -24,6 +24,9 @@ export const TEST_IDS = {
   geoMapPin: 'geo-map-pin',
   /** Several Geo map sites drawn as one marker because they overlap on screen (ADR-206). */
   geoMapCluster: 'geo-map-cluster',
+  /** The dot on the top-bar clock saying a zone was chosen rather than followed (ADR-221). A
+   *  purely visual mark with no text. */
+  zoneClockDot: 'zone-clock-dot',
 } as const;
 
 export type TestId = (typeof TEST_IDS)[keyof typeof TEST_IDS];

@@ -4,6 +4,7 @@
 
 import type { ConfigBackupScheduleView } from '../types/api';
 import { timeValue } from '../lib/format';
+import { zoneAbbreviation } from '../lib/timeZone';
 
 /** Where the latest run stands, as the second half of the line. */
 export type ScheduleState =
@@ -14,6 +15,8 @@ export type ScheduleState =
 /** The line: the rule (start time and how many at once) and the state. */
 export interface ScheduleLine {
   time: string;
+  /** The start time's zone, as a device would print it (`JST`, `UTC`). */
+  zone: string;
   count: number;
   state: ScheduleState;
 }
@@ -32,7 +35,7 @@ export function scheduleLine(s: ConfigBackupScheduleView): ScheduleLine {
   } else {
     state = { key: 'config.schedule.runningBare' };
   }
-  return { time, count: s.concurrency, state };
+  return { time, zone: zoneAbbreviation(s.time_zone || 'UTC'), count: s.concurrency, state };
 }
 
 /** The body the dialog sends, or the key of why it cannot. */
@@ -40,8 +43,12 @@ export function scheduleBody(
   time: string,
   concurrency: number,
   max: number,
+  timeZone: string,
 ):
-  | { ok: true; body: { at_hour: number; at_minute: number; concurrency: number } }
+  | {
+      ok: true;
+      body: { at_hour: number; at_minute: number; concurrency: number; time_zone: string };
+    }
   | { ok: false; key: 'config.schedule.err.time' | 'config.schedule.err.count' } {
   const m = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
   const at_hour = m ? Number(m[1]) : NaN;
@@ -52,5 +59,5 @@ export function scheduleBody(
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > max) {
     return { ok: false, key: 'config.schedule.err.count' };
   }
-  return { ok: true, body: { at_hour, at_minute, concurrency } };
+  return { ok: true, body: { at_hour, at_minute, concurrency, time_zone: timeZone } };
 }

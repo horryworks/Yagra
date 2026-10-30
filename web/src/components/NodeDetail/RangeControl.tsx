@@ -11,7 +11,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CalendarIcon } from '../ui/icons';
-import { localInputToUnix } from '../../lib/format';
+import { localInputToUnix, unixToLocalInput } from '../../lib/format';
+import { wallClock } from '../../lib/timeZone';
 import './RangeControl.css';
 
 export type Range =
@@ -51,22 +52,20 @@ export function resolveRange(range: Range): { from: number; to: number } {
 /** Two-digit zero pad, for the local-time inputs. Exported for its test. */
 export const pad2 = (n: number) => String(n).padStart(2, '0');
 
-/** Compact range readout for the calendar button, e.g. "6/12 12:00–6/17 09:30" (local time). */
+/** Compact range readout for the calendar button, e.g. "6/12 12:00–6/17 09:30", in the display
+ *  zone (ADR-221). */
 // TODO(i18n): M/D HH:MM ordering is hardcoded; route through a formatting layer when localization lands.
 export function formatCompactRange(from: number, to: number): string {
   const fmt = (s: number) => {
-    const d = new Date(s * 1000);
-    return `${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const w = wallClock(s * 1000);
+    return `${w.month}/${w.day} ${pad2(w.hour)}:${pad2(w.minute)}`;
   };
   return `${fmt(from)}–${fmt(to)}`;
 }
 
-/** unix seconds → 'YYYY-MM-DDTHH:MM' in LOCAL time for an <input type="datetime-local">. Built from
- *  local getters (not toISOString, which is UTC and would shift the value by the timezone offset). */
-export function unixToLocalInput(s: number): string {
-  const d = new Date(s * 1000);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
+/** unix seconds → 'YYYY-MM-DDTHH:MM' for an <input type="datetime-local">, in the display zone.
+ *  Re-exported from `lib/format`, where its inverse lives. */
+export { unixToLocalInput };
 
 /** Whether the From/To draft inputs form a valid absolute window (both parse, from < to). */
 export function rangeInputsValid(fromStr: string, toStr: string): boolean {

@@ -2609,6 +2609,9 @@ async fn run_report_scheduler(
                             day_of_month: sched.day_of_month,
                             at_hour: sched.at_hour,
                             at_minute: sched.at_minute,
+                            time_zone: yagra_base::wall_clock::zone_or_utc(
+                                sched.time_zone.as_deref(),
+                            ),
                         },
                         Utc::now(),
                     );
@@ -2723,6 +2726,7 @@ async fn advance(
             day_of_month: sched.day_of_month,
             at_hour: sched.at_hour,
             at_minute: sched.at_minute,
+            time_zone: yagra_base::wall_clock::zone_or_utc(sched.time_zone.as_deref()),
         },
         chrono::Utc::now(),
     );

@@ -26,6 +26,7 @@ import { applyLanguage, applyTheme, usePrefsStore } from './prefs';
 import { loadServerPrefs, resetServerPrefs } from './serverPrefs';
 import { usePinsStore } from './pinsStore';
 import { applyViewportMode, useViewportMode } from './lib/viewport';
+import { setDisplayTimeZone } from './lib/timeZone';
 import i18n from './i18n';
 import { useAuthStore, useConfigStore } from './store';
 
@@ -40,6 +41,10 @@ export function App() {
   const setRoleMatrix = useAuthStore((s) => s.setRoleMatrix);
   const theme = usePrefsStore((s) => s.theme);
   const language = usePrefsStore((s) => s.language);
+  // The display zone (ADR-221) is applied while rendering, not in an effect, so the first paint
+  // and every page below already read it. Idempotent, so a re-render costs nothing.
+  const timeZone = usePrefsStore((s) => s.timeZone);
+  setDisplayTimeZone(timeZone || null);
   const viewportMode = useViewportMode();
   // In a store rather than local state: the dashboard layout stores read `public_dashboard` from
   // outside React to decide whether there is a row to fetch (`layoutAccess.ts`).

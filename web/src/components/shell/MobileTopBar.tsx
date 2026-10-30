@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { useAlertStore } from '../../store';
 import { Logo } from './Logo';
 import { UserMenu } from './UserMenu';
+import { ZoneClock } from './ZoneClock';
 import { GlobalSearch } from './GlobalSearch';
 import './MobileTopBar.css';
 
@@ -93,6 +94,8 @@ export function MobileTopBar({ onOpenMenu }: Props) {
           </span>
           {alertCount > 0 && <span className="mtopbar-bell-badge">{alertCount}</span>}
         </button>
+        {/* The display zone travels with the person (ADR-221), so the phone shows it too. */}
+        <ZoneClock />
         <UserMenu />
       </div>
 

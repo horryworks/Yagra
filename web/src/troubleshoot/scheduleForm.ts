@@ -18,6 +18,7 @@ import type { ScopeValue } from '../components/ScopePicker/scope';
 // the module that owns them rather than restated here; the modal lists the choices from the same
 // place (ADR-184 increment 6).
 import { BASELINE_SECS, DEFAULT_WINDOW_SECS } from './analysisDefaults';
+import { scheduleZone } from '../lib/timeZone';
 
 /** The form's state. Mirrors the launch drawer's fields plus the cadence. */
 export interface ScheduleForm {
@@ -34,6 +35,8 @@ export interface ScheduleForm {
   dayOfMonth: number;
   atHour: number;
   atMinute: number;
+  /** The zone `atHour`/`atMinute` and the day are a wall time in (ADR-221). */
+  timeZone: string;
   enabled: boolean;
 }
 
@@ -56,6 +59,7 @@ export function blankSchedule(scope: ScopeValue): ScheduleForm {
     dayOfMonth: 1,
     atHour: 3,
     atMinute: 0,
+    timeZone: scheduleZone(null, true),
     enabled: true,
   };
 }
@@ -81,6 +85,7 @@ export function formFromSchedule(s: AnalysisSchedule, scope: ScopeValue): Schedu
     dayOfMonth: s.day_of_month ?? 1,
     atHour: s.at_hour,
     atMinute: s.at_minute,
+    timeZone: scheduleZone(s.time_zone, false),
     enabled: s.enabled,
   };
 }
@@ -137,6 +142,7 @@ export function scheduleBody(f: ScheduleForm, windowLabel: string): AnalysisSche
     day_of_month: f.frequency === 'monthly' ? f.dayOfMonth : null,
     at_hour: f.atHour,
     at_minute: f.atMinute,
+    time_zone: f.timeZone,
     enabled: f.enabled,
   };
 }
