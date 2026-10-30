@@ -109,7 +109,8 @@ pub(crate) struct SourceNode {
 }
 
 /// The address a parked node is handed to oxidized with: its own loopback, where nothing listens,
-/// so a fetch oxidized starts on its own schedule is refused at once and no login leaves it.
+/// so a fetch nobody in Yagra asked for is refused at once and no login leaves it. oxidized runs
+/// with `interval: 0` (stage 6) and should start none; this holds if it ever does.
 pub(crate) const PARKED_IP: &str = "127.0.0.1";
 /// The login a parked node carries. Never sent anywhere: the connection to [`PARKED_IP`] is refused
 /// before a login is asked for.
@@ -135,7 +136,7 @@ fn parked(name: String, model: String, input: &'static str) -> SourceNode {
 
 /// Whether a node's login may be handed to oxidized now: it is known to work, or a fetch Yagra
 /// asked for is out — a login nobody has confirmed is tried only when the limits allowed it, never
-/// by oxidized's own daily schedule — and the node is still at the address it was saved with.
+/// by a fetch Yagra did not ask for — and the node is still at the address it was saved with.
 #[must_use]
 pub(crate) fn hands_login(t: &BackupTarget, now: DateTime<Utc>) -> bool {
     !t.address_changed

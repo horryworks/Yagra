@@ -25,3 +25,14 @@
   color: var(--text-primary);
   font-weight: 600;
 }
+
+/* When the backups are fetched (ADR-210 stage 6), one line above the list. */
+.cfgbl-sched {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}

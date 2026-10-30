@@ -44,7 +44,7 @@ const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 6;
+pub(crate) const CONFIG_REVISION: u32 = 7;
 
 const TOKEN_LEN: usize = 40;
 
@@ -97,8 +97,11 @@ pub(crate) fn read_token(home: &Path) -> std::io::Result<String> {
 ///
 /// - `remove_secret` strips passwords and keys from what is stored, model by model — it is not
 ///   exhaustive, which is why the text stays behind `ManageConfig` and off MCP.
-/// - `interval` is a day; Yagra asks for an earlier fetch with `/node/next`, which
-///   `next_adds_job` turns into an immediate job.
+/// - `interval: 0` means oxidized fetches nothing on its own (stage 6 decision 58): every fetch is
+///   one Yagra asked for with `/node/next`, which `next_adds_job` turns into an immediate job —
+///   the scheduled run, the rotation, or a person's "fetch now". oxidized 0.37's worker stops at a
+///   node that was not asked for when the interval is zero (measured in `worker.rb`); with a day,
+///   it fetched every node again after each restart, since it does not remember its fetches.
 /// - `input.default` is SSH alone. Every node is handed its own `input`, so this applies only to a
 ///   node the source left without one — and telnet, which carries the login in cleartext, is never
 ///   reached by falling back from a blocked port 22 unless a person chose it for that node.
@@ -124,7 +127,7 @@ username: unused
 password: unused
 model: ios
 resolve_dns: false
-interval: 86400
+interval: 0
 threads: 8
 timeout: 30
 timelimit: 300
@@ -291,7 +294,7 @@ mod tests {
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "5dbb67c880c7988cfe454c993ec3e6705d0e077901da5d7e8a874fd026258d63",
+            "b9691a6c6ef4720b3010189fd41c626dde8d54754182a550d3d76c905ebfb2a9",
         )];
         assert_eq!(
             pinned,

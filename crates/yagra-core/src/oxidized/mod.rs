@@ -12,6 +12,8 @@
 //!   last reported into `config_backup_status`.
 //! - [`rotation`] tries each node's CLI logins in turn and remembers the one that works, within
 //!   the lockout limits (stage 3): the pure choice, and the leader loop that acts on it.
+//! - [`schedule`] decides when the nodes whose login works are fetched: every day from one UTC
+//!   time, so many at a time (stage 6). oxidized fetches nothing on its own.
 //!
 //! - [`relay`] carries oxidized's login sessions to the poller assigned to each device (stage 5):
 //!   oxidized connects to core, never to a device.
@@ -27,6 +29,7 @@ pub(crate) mod config;
 pub(crate) mod push;
 pub(crate) mod relay;
 pub(crate) mod rotation;
+pub(crate) mod schedule;
 pub(crate) mod source;
 pub(crate) mod status;
 

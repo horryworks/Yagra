@@ -45,6 +45,7 @@ pub(super) enum HealthSection {
     Upgrade,
     ConfigBackups,
     ConfigPush,
+    ConfigSchedule,
 }
 
 yagra_base::stored_enum::token_enum!(HealthSection, [
@@ -64,6 +65,7 @@ yagra_base::stored_enum::token_enum!(HealthSection, [
     Upgrade => "upgrade",
     ConfigBackups => "config_backups",
     ConfigPush => "config_push",
+    ConfigSchedule => "config_schedule",
 ]);
 
 impl HealthSection {
@@ -88,6 +90,7 @@ impl HealthSection {
             Self::Upgrade => "upgrade",
             Self::ConfigBackups => "config_backups",
             Self::ConfigPush => "config_push",
+            Self::ConfigSchedule => "config_schedule",
         }
     }
 }
@@ -523,7 +526,9 @@ impl YagraMcp {
                        up: whether a login has been found that works, whether a fetch is out, when \
                        the lockout limits next allow a login, and the last attempt), config_push \
                        (whether config backups are reaching their Git destination: its host, the \
-                       last push that arrived and the last failure). \
+                       last push that arrived and the last failure), config_schedule (when \
+                       config backups are fetched: the daily UTC start, how many nodes at once, \
+                       and how far the latest run has got). \
                        Sections require different permissions: most need view, \
                        forwarding and upgrade need manage-system, credentials needs \
                        manage-credentials."
@@ -677,6 +682,13 @@ impl YagraMcp {
             HealthSection::ConfigPush => match admin {
                 Some(a) => match crate::api::config_remote::push_status_of(a).await {
                     Ok(status) => ok_json(TOOL, &status),
+                    Err(e) => tool_api_error(TOOL, &e),
+                },
+                None => tool_unavailable(TOOL, "config backups require live mode"),
+            },
+            HealthSection::ConfigSchedule => match admin {
+                Some(a) => match crate::api::config_backup::schedule_view(a, scope).await {
+                    Ok(view) => ok_json(TOOL, &view),
                     Err(e) => tool_api_error(TOOL, &e),
                 },
                 None => tool_unavailable(TOOL, "config backups require live mode"),
@@ -1434,7 +1446,7 @@ mod tests {
         }
         assert_eq!(
             HealthSection::NAMES.len(),
-            16,
+            17,
             "the advertised section list changed; check the description and folded.rs together"
         );
     }

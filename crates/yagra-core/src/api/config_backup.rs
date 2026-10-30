@@ -72,6 +72,8 @@ use crate::oxidized::{
     cancel_fetch,
     rescan_logins,
     list_config_backups,
+    get_schedule,
+    put_schedule,
     oxidized_source,
     oxidized_event
 ))]
@@ -106,6 +108,10 @@ pub(super) fn routes() -> Router<ApiState> {
             post(rescan_logins),
         )
         .route("/api/v1/config-backups", get(list_config_backups))
+        .route(
+            "/api/v1/config-backup-schedule",
+            get(get_schedule).put(put_schedule),
+        )
         .route("/internal/oxidized/nodes", get(oxidized_source))
         .route("/internal/oxidized/events", post(oxidized_event))
 }
@@ -836,7 +842,7 @@ async fn fetch_now(
     post, path = "/api/v1/nodes/{node_id}/config-backup/cancel", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     responses(
-        (status = 204, description = "The fetch that was out is cut: its relay connection is closed, a new one is refused until that fetch has reported (five minutes at most), and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer. A node still looking for a login tries the same one again after the interval a silent device gets; a node whose login works is fetched again on oxidized's own daily schedule"),
+        (status = 204, description = "The fetch that was out is cut: its relay connection is closed, a new one is refused until that fetch has reported (five minutes at most), and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer. A node still looking for a login tries the same one again after the interval a silent device gets; a node whose login works is fetched again in the next scheduled run"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
@@ -1153,6 +1159,141 @@ async fn oxidized_event(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// When config backups are fetched, and where the latest run stands (ADR-210 stage 6).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct ConfigBackupScheduleView {
+    /// The start time, UTC.
+    at_hour: u8,
+    at_minute: u8,
+    /// How many nodes are fetched at once.
+    concurrency: u8,
+    /// The most `concurrency` may be.
+    max_concurrency: u8,
+    /// A run is going.
+    running: bool,
+    /// The latest run; `null` before the first.
+    run_started_at: Option<DateTime<Utc>>,
+    /// When it finished; `null` while it is going.
+    run_finished_at: Option<DateTime<Utc>>,
+    /// When the next run starts; `null` while one is going.
+    upcoming_start_at: Option<DateTime<Utc>>,
+    /// Nodes the latest run has tried, and nodes it covers: the nodes switched on whose login is
+    /// known to work. `null` for a caller who does not see the whole fleet.
+    done: Option<usize>,
+    total: Option<usize>,
+}
+
+fn schedule_failed(e: &anyhow::Error) -> ApiError {
+    ApiError::from_internal(
+        e.as_ref(),
+        "config backup schedule",
+        "failed to read the config backup schedule",
+    )
+}
+
+/// The schedule as `GET /api/v1/config-backup-schedule` and `get_system_health`'s
+/// `config_schedule` section answer it.
+pub(crate) async fn schedule_view(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+) -> ApiResult<ConfigBackupScheduleView> {
+    let now = Utc::now();
+    let (s, cands, _) =
+        oxidized::schedule::read(&admin.config_backup, &admin.creds, &admin.config_relay, now)
+            .await
+            .map_err(|e| schedule_failed(&e))?;
+    let running = oxidized::schedule::running(&s);
+    // The counts are the whole fleet's: a scoped caller would read them as its own.
+    let progress = s
+        .run_started_at
+        .filter(|_| scope.is_all())
+        .map(|started| oxidized::schedule::progress(started, &cands));
+    Ok(ConfigBackupScheduleView {
+        at_hour: s.at_hour,
+        at_minute: s.at_minute,
+        concurrency: s.concurrency,
+        max_concurrency: yagra_base::config_backup::MAX_CONCURRENCY,
+        running,
+        run_started_at: s.run_started_at,
+        run_finished_at: s.run_finished_at,
+        upcoming_start_at: (!running).then(|| oxidized::schedule::next_run_at(&s, now)),
+        done: progress.map(|p| p.done),
+        total: progress.map(|p| p.total),
+    })
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/config-backup-schedule", tag = "nodes",
+    responses(
+        (status = 200, description = "When config backups are fetched — every day from one UTC time, so many nodes at a time — and where the latest run stands", body = ConfigBackupScheduleView),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_schedule(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    admin: Admin,
+) -> ApiResult<Json<ConfigBackupScheduleView>> {
+    Ok(Json(schedule_view(&admin, &scope).await?))
+}
+
+/// A new start time and how many nodes are fetched at once.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct ConfigBackupScheduleBody {
+    /// 0–23, UTC.
+    at_hour: u8,
+    /// 0–59.
+    at_minute: u8,
+    /// 1 to `max_concurrency`.
+    concurrency: u8,
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/config-backup-schedule", tag = "nodes",
+    request_body = ConfigBackupScheduleBody,
+    responses(
+        (status = 200, description = "Saved. The new time takes effect the next time it comes round; a run already going is left to finish", body = ConfigBackupScheduleView),
+        (status = 400, description = "An hour, minute or count out of range (`invalid_config_backup_schedule`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Lacks manage-config, or sees only some folders (`scope_unsupported`): the schedule is the whole deployment's", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn put_schedule(
+    _perm: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<ConfigBackupScheduleBody>,
+) -> ApiResult<Json<ConfigBackupScheduleView>> {
+    super::scope::require_fleet_wide(
+        &scope,
+        "the config backup schedule is the whole deployment's",
+    )?;
+    let bad = |m: &'static str| ApiError::bad_request("invalid_config_backup_schedule", m);
+    if body.at_hour > 23 {
+        return Err(bad("at_hour must be 0-23"));
+    }
+    if body.at_minute > 59 {
+        return Err(bad("at_minute must be 0-59"));
+    }
+    if !(1..=yagra_base::config_backup::MAX_CONCURRENCY).contains(&body.concurrency) {
+        return Err(bad("concurrency must be 1-8"));
+    }
+    admin
+        .config_backup
+        .set_schedule(body.at_hour, body.at_minute, body.concurrency)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "config backup schedule",
+                "failed to store the config backup schedule",
+            )
+        })?;
+    Ok(Json(schedule_view(&admin, &scope).await?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1193,6 +1334,57 @@ mod tests {
         assert!(check_oid(&"A".repeat(40)).is_err());
         assert!(check_oid("abc").is_err());
         assert!(check_oid(&format!("{}&group=x", "a".repeat(31))).is_err());
+    }
+
+    /// The schedule (ADR-210 stage 6) starts at migration 0159's defaults, a new time and count are
+    /// accepted and stored, and an out-of-range one and a Viewer are refused.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_schedule_is_changed_and_read_back(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let path = "/api/v1/config-backup-schedule";
+        let operator = token(&st, yagra_common::Role::Operator);
+
+        let (status, body) = send(&st, "GET", path, &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["at_hour"], 2);
+        assert_eq!(body["concurrency"], 1);
+        assert_eq!(body["max_concurrency"], 8);
+        assert_eq!(body["running"], false);
+        assert!(body["upcoming_start_at"].is_string(), "{body}");
+
+        let new = serde_json::json!({"at_hour": 17, "at_minute": 30, "concurrency": 3});
+        let (status, body) = send(&st, "PUT", path, &operator, Some(new)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["at_hour"], 17);
+        assert_eq!(body["at_minute"], 30);
+        assert_eq!(body["concurrency"], 3);
+        let (stored, count): (i16, i16) =
+            sqlx::query_as("SELECT at_hour, concurrency FROM config_backup_schedule")
+                .fetch_one(&pool)
+                .await
+                .expect("row");
+        assert_eq!((stored, count), (17, 3));
+
+        for bad in [
+            serde_json::json!({"at_hour": 24, "at_minute": 0, "concurrency": 1}),
+            serde_json::json!({"at_hour": 2, "at_minute": 60, "concurrency": 1}),
+            serde_json::json!({"at_hour": 2, "at_minute": 0, "concurrency": 0}),
+            serde_json::json!({"at_hour": 2, "at_minute": 0, "concurrency": 9}),
+        ] {
+            let (status, body) = send(&st, "PUT", path, &operator, Some(bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(
+                body["error"]["code"], "invalid_config_backup_schedule",
+                "{body}"
+            );
+        }
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let back = serde_json::json!({"at_hour": 2, "at_minute": 0, "concurrency": 1});
+        let (status, _) = send(&st, "PUT", path, &viewer, Some(back)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     /// A configuration written by a person is accepted and read back; a Viewer cannot write one.

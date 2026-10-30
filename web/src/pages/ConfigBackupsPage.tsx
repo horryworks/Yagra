@@ -5,7 +5,7 @@
 // Config tab; this list is where to see at a glance which nodes are backed up and which need
 // attention. The state word is `lib/configBackupMarks.ts`, the same one the tree's mark draws.
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
@@ -25,6 +25,9 @@ import { markOf, stateKeyOf } from '../lib/configBackupMarks';
 import { attemptLine, loginLabel } from '../components/NodeDetail/configBackupForm';
 import { GIT_REMOTE_PATH, pushLine } from './integrations/gitRemote';
 import { formatTimestamp } from '../lib/format';
+import { Button } from '../components/ui/Button';
+import { scheduleLine } from './configBackupSchedule';
+import { ConfigBackupScheduleModal } from './ConfigBackupScheduleModal';
 import './ConfigBackupsPage.css';
 
 export function ConfigBackupsPage() {
@@ -44,6 +47,14 @@ export function ConfigBackupsPage() {
     intervalMs: 60_000,
   });
   const line = push.data?.configured ? pushLine(push.data) : null;
+  // When the backups are fetched (ADR-210 stage 6): the daily start and how far a run has got.
+  const canConfig = useCan('manage_config');
+  const [editing, setEditing] = useState(false);
+  const schedule = useLoad(() => api.getConfigBackupSchedule(), [], {
+    initial: null,
+    intervalMs: 30_000,
+  });
+  const sched = schedule.data ? scheduleLine(schedule.data) : null;
   const names = useMemo(
     () =>
       new Map(creds.data.filter((c) => isCliCredentialKind(c.kind)).map((c) => [c.id, c.name])),
@@ -114,6 +125,33 @@ export function ConfigBackupsPage() {
         title={t('nav:nodes.configBackups')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.configBackups') }]}
       />
+      {sched && schedule.data && (
+        <p className="cfgbl-sched">
+          <span>{t('config.schedule.rule', { time: sched.time, count: sched.count })}</span>
+          <span>
+            {sched.state.key === 'config.schedule.next' &&
+              t(sched.state.key, { at: formatTimestamp(Date.parse(sched.state.at)) })}
+            {sched.state.key === 'config.schedule.running' &&
+              t(sched.state.key, { done: sched.state.done, total: sched.state.total })}
+            {sched.state.key === 'config.schedule.runningBare' && t(sched.state.key)}
+          </span>
+          {canConfig && (
+            <Button onClick={() => setEditing(true)}>
+              {t('config.schedule.change')}
+            </Button>
+          )}
+        </p>
+      )}
+      {editing && schedule.data && (
+        <ConfigBackupScheduleModal
+          schedule={schedule.data}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            schedule.reload();
+          }}
+        />
+      )}
       {line && (
         <p className={`cfgbl-push ${line.key === 'git.push.failed' ? 'bad' : ''}`}>
           <Link to={GIT_REMOTE_PATH}>{t('system:git.name')}</Link>

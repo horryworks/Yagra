@@ -1281,8 +1281,8 @@ impl LeaderTasks {
         self.spawn_flow_pipeline().await?;
         self.spawn_schedulers();
         self.spawn_refresh_loops(&delivery);
-        // Config backup (ADR-210 stages 2 and 3). Leader-only for the reasons `oxidized/status.rs`
-        // and `oxidized/rotation.rs` give.
+        // Config backup (ADR-210 stages 2, 3 and 6). Leader-only for the reasons
+        // `oxidized/status.rs`, `oxidized/rotation.rs` and `oxidized/schedule.rs` give.
         if let Some(client) = self.oxidized.clone() {
             spawn_cancellable(
                 &self.shutdown,
@@ -1291,6 +1291,15 @@ impl LeaderTasks {
             spawn_cancellable(
                 &self.shutdown,
                 oxidized::rotation::run_rotation_loop(
+                    client.clone(),
+                    self.config_backup.clone(),
+                    self.creds.clone(),
+                    self.config_relay.clone(),
+                ),
+            );
+            spawn_cancellable(
+                &self.shutdown,
+                oxidized::schedule::run_schedule_loop(
                     client,
                     self.config_backup.clone(),
                     self.creds.clone(),

@@ -1325,6 +1325,23 @@
     "rescan": "ログインを探し直す",
     "changeOrder": "試す順を変える",
     "addLogin": "CLI ログインを追加",
-    "cancelFetch": "取得をやめる"
+    "cancelFetch": "取得をやめる",
+    "schedule": {
+      "title": "バックアップの予定",
+      "rule": "毎日 {{time}} UTC から {{count}} 台ずつ",
+      "next": "次: {{at}}",
+      "running": "実行中: {{total}} 台中 {{done}} 台",
+      "runningBare": "実行中",
+      "change": "変更",
+      "start": "開始（UTC）",
+      "atOnce": "同時に取る台数",
+      "save": "保存",
+      "saving": "保存中…",
+      "err": {
+        "save": "予定を保存できませんでした。",
+        "time": "開始時刻を入力してください。",
+        "count": "同時に取る台数を選んでください。"
+      }
+    }
   }
 }

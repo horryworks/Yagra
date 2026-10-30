@@ -20,8 +20,10 @@
 //!
 //! Only Yagra starts a login with a candidate nobody has confirmed: such a node carries its login
 //! in oxidized's node list only while a fetch Yagra asked for is outstanding, and is parked the
-//! rest of the time (`source::source_nodes`), so oxidized's own daily schedule cannot spend an
-//! attempt the limits did not allow.
+//! rest of the time (`source::source_nodes`), so no fetch Yagra did not ask for can spend an
+//! attempt the limits did not allow. A node whose login works is not this loop's: the scheduled
+//! run fetches it (`schedule.rs`, stage 6), and this loop starts nothing while that run has a fetch
+//! out.
 //!
 //! 🚨 **oxidized's node list is never re-read while a fetch is out** ([`may_reload`]). oxidized
 //! 0.37 rebuilds every node object on a reload and does not carry the running mark across
@@ -476,7 +478,7 @@ async fn tick(
             continue;
         }
         let cands = candidates(t.config.login_order.as_deref(), &logins);
-        // A working login is fetched on oxidized's own schedule.
+        // A working login is fetched by the scheduled run (`schedule.rs`).
         if busy || (settled(&t.rotation, &cands) && t.rotation.requested_at.is_none()) {
             continue;
         }

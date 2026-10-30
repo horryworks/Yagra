@@ -470,6 +470,8 @@ export type PushStatusView = components['schemas']['PushStatusView'];
 export type AttemptView = components['schemas']['AttemptView'];
 /** One node in Nodes ▸ Config backups. */
 export type ConfigBackupRow = components['schemas']['ConfigBackupRow'];
+export type ConfigBackupScheduleView = components['schemas']['ConfigBackupScheduleView'];
+export type ConfigBackupScheduleBody = components['schemas']['ConfigBackupScheduleBody'];
 
 /** A credential's secret in plaintext (`POST /api/v1/credentials/{id}/reveal`, ADR-210). Held only
  *  while the dialog that asked for it is open; never stored. */

@@ -41,6 +41,8 @@ import type {
   CredentialSummary,
   RevealedCredential,
   ConfigBackupRow,
+  ConfigBackupScheduleBody,
+  ConfigBackupScheduleView,
   GitAuth,
   PushStatusView,
   RemoteTestResult,
@@ -1273,6 +1275,14 @@ export const api = {
   /** Every node switched on for config backup that the caller can see (Nodes ▸ Config backups and
    *  the tree's marks). */
   listConfigBackups: (): Promise<ConfigBackupRow[]> => apiGet('/api/v1/config-backups'),
+
+  /** When config backups are fetched, and where the latest run stands (ADR-210 stage 6). */
+  getConfigBackupSchedule: (): Promise<ConfigBackupScheduleView> =>
+    apiGet('/api/v1/config-backup-schedule'),
+
+  /** Change the daily start time (UTC) and how many nodes are fetched at once. */
+  putConfigBackupSchedule: (body: ConfigBackupScheduleBody): Promise<ConfigBackupScheduleView> =>
+    apiPut('/api/v1/config-backup-schedule', { body }),
 
   /** Where config backups are pushed (ADR-210 stage 4), for the administrator who sets it. Never
    *  its token or private key. */

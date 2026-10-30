@@ -467,7 +467,7 @@ services:
       # and an upgrade that keeps this image would leave it running the old one; a new value here
       # is what makes compose recreate it. Moves with `oxidized::config::CONFIG_REVISION`, and a
       # test fails until both do (ADR-210 stage 3).
-      YAGRA_OXIDIZED_CONFIG_REVISION: "6"
+      YAGRA_OXIDIZED_CONFIG_REVISION: "7"
     volumes:
       - oxconf:/var/lib/yagra/oxidized:ro
       - oxdata:/home/oxidized/.config/oxidized

@@ -1494,6 +1494,21 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/config-backup-schedule",
+        Global(
+            "the deployment's one config backup schedule; the run's node counts are answered only \
+             to a fleet-wide caller",
+        ),
+        Tool("get_system_health"),
+    ),
+    (
+        "PUT",
+        "/api/v1/config-backup-schedule",
+        Global("the deployment's one config backup schedule; refused to a folder-scoped caller"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/config-backup-remote",
         ADMIN_CFG,
         Exempt(

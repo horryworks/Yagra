@@ -692,6 +692,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-backup-schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_schedule"];
+        put: operations["put_schedule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-backups": {
         parameters: {
             query?: never;
@@ -7141,6 +7157,67 @@ export interface components {
              * @description When the lockout limits next allow a try, as the leader last worked it out.
              */
             try_after?: string | null;
+        };
+        /** @description A new start time and how many nodes are fetched at once. */
+        ConfigBackupScheduleBody: {
+            /**
+             * Format: int32
+             * @description 0–23, UTC.
+             */
+            at_hour: number;
+            /**
+             * Format: int32
+             * @description 0–59.
+             */
+            at_minute: number;
+            /**
+             * Format: int32
+             * @description 1 to `max_concurrency`.
+             */
+            concurrency: number;
+        };
+        /** @description When config backups are fetched, and where the latest run stands (ADR-210 stage 6). */
+        ConfigBackupScheduleView: {
+            /**
+             * Format: int32
+             * @description The start time, UTC.
+             */
+            at_hour: number;
+            /** Format: int32 */
+            at_minute: number;
+            /**
+             * Format: int32
+             * @description How many nodes are fetched at once.
+             */
+            concurrency: number;
+            /**
+             * @description Nodes the latest run has tried, and nodes it covers: the nodes switched on whose login is
+             *     known to work. `null` for a caller who does not see the whole fleet.
+             */
+            done?: number | null;
+            /**
+             * Format: int32
+             * @description The most `concurrency` may be.
+             */
+            max_concurrency: number;
+            /**
+             * Format: date-time
+             * @description When it finished; `null` while it is going.
+             */
+            run_finished_at?: string | null;
+            /**
+             * Format: date-time
+             * @description The latest run; `null` before the first.
+             */
+            run_started_at?: string | null;
+            /** @description A run is going. */
+            running: boolean;
+            total?: number | null;
+            /**
+             * Format: date-time
+             * @description When the next run starts; `null` while one is going.
+             */
+            upcoming_start_at?: string | null;
         };
         /** @description One node's config backup. */
         ConfigBackupView: {
@@ -18352,6 +18429,104 @@ export interface operations {
             };
         };
     };
+    get_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description When config backups are fetched — every day from one UTC time, so many nodes at a time — and where the latest run stands */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigBackupScheduleView"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_schedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigBackupScheduleBody"];
+            };
+        };
+        responses: {
+            /** @description Saved. The new time takes effect the next time it comes round; a run already going is left to finish */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigBackupScheduleView"];
+                };
+            };
+            /** @description An hour, minute or count out of range (`invalid_config_backup_schedule`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Lacks manage-config, or sees only some folders (`scope_unsupported`): the schedule is the whole deployment's */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     list_config_backups: {
         parameters: {
             query?: never;
@@ -26325,7 +26500,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The fetch that was out is cut: its relay connection is closed, a new one is refused until that fetch has reported (five minutes at most), and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer. A node still looking for a login tries the same one again after the interval a silent device gets; a node whose login works is fetched again on oxidized's own daily schedule */
+            /** @description The fetch that was out is cut: its relay connection is closed, a new one is refused until that fetch has reported (five minutes at most), and the attempt is recorded as `cancelled` — not counted as a refused login nor as a device that did not answer. A node still looking for a login tries the same one again after the interval a silent device gets; a node whose login works is fetched again in the next scheduled run */
             204: {
                 headers: {
                     [name: string]: unknown;

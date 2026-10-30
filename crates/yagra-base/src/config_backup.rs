@@ -798,6 +798,161 @@ impl ConfigBackupRepo {
         .await?;
         Ok(done.rows_affected())
     }
+
+    /// When config backups are fetched and where the latest run stands (stage 6). The row is
+    /// inserted by migration 0159; a deployment that lost it reads the defaults.
+    pub async fn schedule(&self) -> anyhow::Result<BackupSchedule> {
+        let row = sqlx::query(
+            "SELECT at_hour, at_minute, concurrency, run_started_at, run_finished_at, updated_at \
+             FROM config_backup_schedule",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(r) = row else {
+            return Ok(BackupSchedule::default());
+        };
+        Ok(BackupSchedule {
+            at_hour: small(&r, "at_hour")?,
+            at_minute: small(&r, "at_minute")?,
+            concurrency: small(&r, "concurrency")?,
+            run_started_at: r.try_get("run_started_at")?,
+            run_finished_at: r.try_get("run_finished_at")?,
+            updated_at: r.try_get("updated_at")?,
+        })
+    }
+
+    /// Change the start time and how many nodes are fetched at once. Moves `updated_at`, so the new
+    /// time takes effect the next time it comes round; a run already going is left to finish.
+    /// The bounds are the table's CHECKs; the caller validates first so a person gets a 400.
+    pub async fn set_schedule(
+        &self,
+        at_hour: u8,
+        at_minute: u8,
+        concurrency: u8,
+    ) -> anyhow::Result<BackupSchedule> {
+        sqlx::query(
+            "INSERT INTO config_backup_schedule (id, at_hour, at_minute, concurrency, updated_at) \
+             VALUES (TRUE, $1, $2, $3, now()) \
+             ON CONFLICT (id) DO UPDATE SET at_hour = EXCLUDED.at_hour, \
+               at_minute = EXCLUDED.at_minute, concurrency = EXCLUDED.concurrency, \
+               updated_at = now()",
+        )
+        .bind(i16::from(at_hour))
+        .bind(i16::from(at_minute))
+        .bind(i16::from(concurrency))
+        .execute(&self.pool)
+        .await?;
+        self.schedule().await
+    }
+
+    /// Start a run at `at`, unless the latest run is not the one `previous` names — another core
+    /// got there first. One statement, so two cores cannot both start one.
+    pub async fn start_run(
+        &self,
+        at: DateTime<Utc>,
+        previous: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<bool> {
+        let done = sqlx::query(
+            "UPDATE config_backup_schedule SET run_started_at = $1, run_finished_at = NULL \
+             WHERE run_started_at IS NOT DISTINCT FROM $2",
+        )
+        .bind(at)
+        .bind(previous)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// Mark the run that started at `started` finished at `at`.
+    pub async fn finish_run(
+        &self,
+        started: DateTime<Utc>,
+        at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE config_backup_schedule SET run_finished_at = $2 \
+             WHERE run_started_at = $1 AND run_finished_at IS NULL",
+        )
+        .bind(started)
+        .bind(at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every node switched on, with when its newest attempt and its newest success were — what a
+    /// run reads to know which nodes it has done and which to fetch first.
+    pub async fn schedule_nodes(&self) -> anyhow::Result<Vec<ScheduleNode>> {
+        let rows = sqlx::query(
+            "SELECT b.node_id, a.at AS last_attempt_at, s.at AS last_success_at \
+             FROM node_config_backup b \
+             LEFT JOIN LATERAL (SELECT at FROM config_backup_attempts WHERE node_id = b.node_id \
+                                ORDER BY at DESC, id DESC LIMIT 1) a ON true \
+             LEFT JOIN LATERAL (SELECT at FROM config_backup_attempts \
+                                WHERE node_id = b.node_id AND outcome = 'success' \
+                                ORDER BY at DESC, id DESC LIMIT 1) s ON true \
+             WHERE b.enabled",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(ScheduleNode {
+                    node_id: r.try_get("node_id")?,
+                    last_attempt_at: r.try_get("last_attempt_at")?,
+                    last_success_at: r.try_get("last_success_at")?,
+                })
+            })
+            .collect()
+    }
+}
+
+/// A `SMALLINT` column the table's CHECK bounds to a `u8`.
+fn small(r: &sqlx::postgres::PgRow, col: &str) -> anyhow::Result<u8> {
+    let v: i16 = r.try_get(col)?;
+    u8::try_from(v).map_err(|_| anyhow::anyhow!("{col} out of range: {v}"))
+}
+
+/// When config backups are fetched (ADR-210 stage 6): every day from one UTC time, so many nodes
+/// at a time, and where the latest run stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackupSchedule {
+    pub at_hour: u8,
+    pub at_minute: u8,
+    /// How many nodes are fetched at once, 1 to [`MAX_CONCURRENCY`].
+    pub concurrency: u8,
+    /// When the latest run started; `None` before the first.
+    pub run_started_at: Option<DateTime<Utc>>,
+    /// When it finished; `None` while it is still going.
+    pub run_finished_at: Option<DateTime<Utc>>,
+    /// When a person last changed the time. A start instant at or before it never starts a run.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// The most nodes fetched at once: the `threads` the bundled oxidized runs with (decision 60).
+pub const MAX_CONCURRENCY: u8 = 8;
+
+impl Default for BackupSchedule {
+    /// Migration 0159's defaults: 02:00 UTC, one at a time. `updated_at` is the epoch, which a
+    /// reader without the row treats as "never changed".
+    fn default() -> Self {
+        Self {
+            at_hour: 2,
+            at_minute: 0,
+            concurrency: 1,
+            run_started_at: None,
+            run_finished_at: None,
+            updated_at: DateTime::<Utc>::UNIX_EPOCH,
+        }
+    }
+}
+
+/// One node switched on, as a run sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScheduleNode {
+    pub node_id: Uuid,
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]

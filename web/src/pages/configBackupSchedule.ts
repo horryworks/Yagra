@@ -1,0 +1,56 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// When config backups are fetched (ADR-210 stage 6): the line above Nodes ▸ Config backups and what
+// its dialog may send. A `.ts` because Vitest never loads a `.tsx` (`testing.md`).
+
+import type { ConfigBackupScheduleView } from '../types/api';
+import { timeValue } from '../lib/format';
+
+/** Where the latest run stands, as the second half of the line. */
+export type ScheduleState =
+  | { key: 'config.schedule.next'; at: string }
+  | { key: 'config.schedule.running'; done: number; total: number }
+  | { key: 'config.schedule.runningBare' };
+
+/** The line: the rule (start time and how many at once) and the state. */
+export interface ScheduleLine {
+  time: string;
+  count: number;
+  state: ScheduleState;
+}
+
+export function scheduleLine(s: ConfigBackupScheduleView): ScheduleLine {
+  const time = timeValue(s.at_hour, s.at_minute);
+  let state: ScheduleState;
+  if (s.running) {
+    // A caller who does not see the whole fleet is not given the counts.
+    state =
+      s.done != null && s.total != null
+        ? { key: 'config.schedule.running', done: s.done, total: s.total }
+        : { key: 'config.schedule.runningBare' };
+  } else if (s.upcoming_start_at) {
+    state = { key: 'config.schedule.next', at: s.upcoming_start_at };
+  } else {
+    state = { key: 'config.schedule.runningBare' };
+  }
+  return { time, count: s.concurrency, state };
+}
+
+/** The body the dialog sends, or the key of why it cannot. */
+export function scheduleBody(
+  time: string,
+  concurrency: number,
+  max: number,
+):
+  | { ok: true; body: { at_hour: number; at_minute: number; concurrency: number } }
+  | { ok: false; key: 'config.schedule.err.time' | 'config.schedule.err.count' } {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(time.trim());
+  const at_hour = m ? Number(m[1]) : NaN;
+  const at_minute = m ? Number(m[2]) : NaN;
+  if (!(at_hour >= 0 && at_hour <= 23 && at_minute >= 0 && at_minute <= 59)) {
+    return { ok: false, key: 'config.schedule.err.time' };
+  }
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > max) {
+    return { ok: false, key: 'config.schedule.err.count' };
+  }
+  return { ok: true, body: { at_hour, at_minute, concurrency } };
+}

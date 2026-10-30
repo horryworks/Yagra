@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+### New Features
+
+- **Config backups run on a schedule you set.** Nodes ▸ Config backups shows when they run — every day from one UTC time, so many devices at a time (one by default, up to eight) — and how far tonight's run has got; **Change** sets both. Devices are fetched oldest backup first, and a run that is interrupted carries on where it was. The default is 02:00 UTC, one at a time.
+- `GET`/`PUT /api/v1/config-backup-schedule`, and a `config_schedule` section in the MCP tool `get_system_health`.
+
+### Improvements
+
+- **Restarting or upgrading no longer fetches every device's configuration again.** The bundled oxidized used to fetch each device a day after its last fetch and forgot those fetches on every restart, so each upgrade backed the whole fleet up at whatever time it happened. It now fetches only what Yagra asks for: the scheduled run, the search for a working login, and **Fetch now**. A device whose login works is next fetched in the next scheduled run.
+
 ## v0.3.64 — The Geo map can colour the land by elevation and the sea by depth, and a CLI login no longer needs a username
 
 ### New Features

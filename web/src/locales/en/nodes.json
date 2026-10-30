@@ -1335,6 +1335,23 @@
     "rescan": "Search logins again",
     "changeOrder": "Change the try order",
     "addLogin": "Add a CLI login",
-    "cancelFetch": "Cancel fetch"
+    "cancelFetch": "Cancel fetch",
+    "schedule": {
+      "title": "Backup schedule",
+      "rule": "Daily from {{time}} UTC, {{count}} at a time",
+      "next": "Next: {{at}}",
+      "running": "Running: {{done}} of {{total}}",
+      "runningBare": "Running",
+      "change": "Change",
+      "start": "Start (UTC)",
+      "atOnce": "At a time",
+      "save": "Save",
+      "saving": "Saving…",
+      "err": {
+        "save": "Could not save the schedule.",
+        "time": "Enter a start time.",
+        "count": "Choose how many at a time."
+      }
+    }
   }
 }
