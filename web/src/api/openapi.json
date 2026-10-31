@@ -28547,7 +28547,7 @@
       },
       "AutoSave": {
         "type": "object",
-        "description": "Whether Yagra saves on its own (decision 8). When it does is the Unsaved configuration alert's\nto say (decision 11): a device is saved after its next fetch while that alert is open, so the\nthreshold rule is the one place \"how long is too long\" is set, folder and node overrides\nincluded.",
+        "description": "Whether Yagra saves on its own (decision 8). When it does, a device found unsaved at a fetch is\nsaved in that same login (decision 13): the backup and the startup configuration agree after\nevery fetch. The Unsaved configuration alert no longer gates it; it tells a person about devices\nYagra does not save.",
         "required": [
           "enabled"
         ],
@@ -44615,7 +44615,7 @@
         "properties": {
           "action": {
             "type": "string",
-            "description": "`save` or `check`."
+            "description": "`save`, `auto` (compare, and save when unsaved) or `check`."
           },
           "commands": {
             "type": "object",
@@ -44737,7 +44737,7 @@
         "properties": {
           "action": {
             "type": "string",
-            "description": "`save` or `check`."
+            "description": "`save`, `auto` or `check`."
           },
           "failure": {
             "type": "string",
@@ -44761,7 +44761,7 @@
           },
           "unsaved_before": {
             "type": "string",
-            "description": "`true` or `false` when the model can compare running with startup; empty otherwise."
+            "description": "`true` or `false` when the model can compare running with startup; empty otherwise. For\n`auto`, `true` means a save was tried in the same login."
           }
         }
       },

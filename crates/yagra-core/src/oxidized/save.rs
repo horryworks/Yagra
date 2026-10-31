@@ -15,20 +15,31 @@ use yagra_common::config_save::commands_for;
 pub(crate) enum Action {
     /// Save, recording the result against this save.
     Save(Uuid),
+    /// Compare running with startup, and save in the same login when they differ (decision 13).
+    /// Nothing is recorded in advance: the report says whether a save was tried.
+    SaveIfUnsaved,
     /// Only compare running with startup and report it (decision 4).
     Check,
 }
 
-/// What to do for a node whose fetch just succeeded, given the save waiting for it, if any.
+/// What to do for a node whose fetch just succeeded, given the save waiting for it, if any, and
+/// whether Yagra may save it on its own now.
 ///
 /// `None` is "nothing": no save asked for, and either no table entry or a model whose unsaved
-/// state Yagra reads over SNMP instead.
+/// state Yagra reads over SNMP instead - an automatic save of one of those is asked for in advance,
+/// and so arrives here as `pending`.
 #[must_use]
-pub(crate) fn decide(model: &str, pending: Option<Uuid>) -> Option<Action> {
+pub(crate) fn decide(model: &str, pending: Option<Uuid>, auto: bool) -> Option<Action> {
     let commands = commands_for(model)?;
     match pending {
         Some(id) => Some(Action::Save(id)),
-        None => commands.compare.map(|_| Action::Check),
+        None => commands.compare.map(|_| {
+            if auto {
+                Action::SaveIfUnsaved
+            } else {
+                Action::Check
+            }
+        }),
     }
 }
 
@@ -39,10 +50,13 @@ mod tests {
     #[test]
     fn a_pending_save_is_run_and_otherwise_only_a_comparable_model_is_checked() {
         let id = Uuid::new_v4();
-        assert_eq!(decide("vrp", Some(id)), Some(Action::Save(id)));
-        assert_eq!(decide("vrp", None), Some(Action::Check));
-        assert_eq!(decide("ios", Some(id)), Some(Action::Save(id)));
-        assert_eq!(decide("ios", None), None);
-        assert_eq!(decide("junos", Some(id)), None);
+        for auto in [false, true] {
+            assert_eq!(decide("vrp", Some(id), auto), Some(Action::Save(id)));
+            assert_eq!(decide("ios", Some(id), auto), Some(Action::Save(id)));
+            assert_eq!(decide("ios", None, auto), None);
+            assert_eq!(decide("junos", Some(id), auto), None);
+        }
+        assert_eq!(decide("vrp", None, false), Some(Action::Check));
+        assert_eq!(decide("vrp", None, true), Some(Action::SaveIfUnsaved));
     }
 }

@@ -1,6 +1,7 @@
 # Written by Yagra (yagra-core oxidized-config). Edits here are replaced on the next start.
 #
-# Saves a device's running configuration, or checks whether it is saved (ADR-222). Run by the
+# Saves a device's running configuration, or checks whether it is saved, or both: with automatic
+# save on, it compares and saves in the same login when the two differ (ADR-222). Run by the
 # `yagra-save` hook after every fetch that succeeded. Core decides everything: this asks what to do
 # for the node just fetched, and for almost every node the answer is nothing and the script ends
 # before oxidized is even loaded. When there is work, core hands back the login the fetch used and
@@ -112,9 +113,14 @@ def unsaved?(input, cmds)
 end
 
 form = base.dup
+# Whether a save command is about to be or has been sent; once it has, an error must not read as a
+# plain check.
+saving = job['action'] == 'save'
 begin
-  form['unsaved_before'] = unsaved?(input, cmds).to_s
-  if job['action'] == 'save'
+  before = unsaved?(input, cmds)
+  form['unsaved_before'] = before.to_s
+  saving ||= job['action'] == 'auto' && before == true
+  if saving
     # The startup configuration about to be replaced, through the model so its secret filter runs.
     form['startup'] = node.model.cmd(cmds['startup']).to_s
     confirms = cmds['confirms'].map { |q, a| [Regexp.new(q), a] }
@@ -139,7 +145,7 @@ begin
   end
 rescue StandardError, Timeout::Error
   # A save whose answer never came back is the one outcome that must not read as saved.
-  form['failure'] = job['action'] == 'save' ? 'no_answer' : 'other'
+  form['failure'] = saving ? 'no_answer' : 'other'
 ensure
   begin
     input.disconnect_cli if input.respond_to?(:disconnect_cli)

@@ -6360,10 +6360,10 @@ export interface components {
             authorize_url: string;
         };
         /**
-         * @description Whether Yagra saves on its own (decision 8). When it does is the Unsaved configuration alert's
-         *     to say (decision 11): a device is saved after its next fetch while that alert is open, so the
-         *     threshold rule is the one place "how long is too long" is set, folder and node overrides
-         *     included.
+         * @description Whether Yagra saves on its own (decision 8). When it does, a device found unsaved at a fetch is
+         *     saved in that same login (decision 13): the backup and the startup configuration agree after
+         *     every fetch. The Unsaved configuration alert no longer gates it; it tells a person about devices
+         *     Yagra does not save.
          */
         AutoSave: {
             /** @description Off by default. */
@@ -14088,7 +14088,7 @@ export interface components {
         SaveFailure: "auth" | "unreachable" | "denied" | "no_answer" | "unsupported" | "not_fetched" | "other";
         /** @description What the save script does for one node, with what it needs to do it. */
         SaveJob: {
-            /** @description `save` or `check`. */
+            /** @description `save`, `auto` (compare, and save when unsaved) or `check`. */
             action: string;
             /** @description The model's row of `config_save::SAVE_COMMANDS`, the only commands the script may send. */
             commands: Record<string, never>;
@@ -14130,7 +14130,7 @@ export interface components {
         };
         /** @description How the save script's run went, as it posts it. */
         SaveReport: {
-            /** @description `save` or `check`. */
+            /** @description `save`, `auto` or `check`. */
             action: string;
             /** @description A `SaveFailure` token; empty when it succeeded. */
             failure?: string;
@@ -14142,7 +14142,10 @@ export interface components {
             startup?: string;
             /** @description The same, read again after a save that succeeded. */
             unsaved_after?: string;
-            /** @description `true` or `false` when the model can compare running with startup; empty otherwise. */
+            /**
+             * @description `true` or `false` when the model can compare running with startup; empty otherwise. For
+             *     `auto`, `true` means a save was tried in the same login.
+             */
             unsaved_before?: string;
         };
         /**

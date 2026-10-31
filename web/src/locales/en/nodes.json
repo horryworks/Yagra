@@ -1389,8 +1389,8 @@
       "title": "Automatic save",
       "on": "On",
       "off": "Off",
-      "warning": "Yagra saves every backed-up device with an open Unsaved configuration alert, after its next fetch.",
-      "lineOn": "Automatic save: on, while Unsaved configuration is alerting",
+      "warning": "Yagra saves a backed-up device in the same login as soon as a fetch finds it unsaved.",
+      "lineOn": "Automatic save: on, at every fetch",
       "lineOff": "Automatic save: off",
       "change": "Change",
       "err": {

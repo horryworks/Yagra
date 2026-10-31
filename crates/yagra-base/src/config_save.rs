@@ -19,7 +19,7 @@ use uuid::Uuid;
 pub enum SaveOrigin {
     /// A person pressed the button (decision 7).
     Person,
-    /// Yagra saved on its own after the grace (decision 8).
+    /// Yagra saved on its own after finding the device unsaved at a fetch (decision 13).
     Auto,
 }
 
@@ -94,10 +94,10 @@ pub struct SaveRecord {
     pub kept_startup: bool,
 }
 
-/// Whether Yagra saves on its own (decision 8). When it does is the Unsaved configuration alert's
-/// to say (decision 11): a device is saved after its next fetch while that alert is open, so the
-/// threshold rule is the one place "how long is too long" is set, folder and node overrides
-/// included.
+/// Whether Yagra saves on its own (decision 8). When it does, a device found unsaved at a fetch is
+/// saved in that same login (decision 13): the backup and the startup configuration agree after
+/// every fetch. The Unsaved configuration alert no longer gates it; it tells a person about devices
+/// Yagra does not save.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutoSave {
     /// Off by default.
@@ -220,6 +220,43 @@ impl ConfigSaveRepo {
         .execute(&self.pool)
         .await?;
         Ok(done.rows_affected() == 1)
+    }
+
+    /// Record an automatic save the script decided on itself, after finding the device unsaved in
+    /// the same login (decision 13). Nothing was asked for in advance, so the row is written
+    /// already finished.
+    pub async fn record_auto(
+        &self,
+        node: Uuid,
+        failure: Option<SaveFailure>,
+        startup_before: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
+        let startup = startup_before.map(|s| cut_to(s, STARTUP_KEPT_BYTES));
+        let id = Uuid::new_v4();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO config_saves (id, node_id, origin, state, failure, startup_before, \
+             finished_at) VALUES ($1, $2, $3, $4, $5, $6, now())",
+        )
+        .bind(id)
+        .bind(node)
+        .bind(SaveOrigin::Auto.as_str())
+        .bind(if failure.is_some() { "failed" } else { "saved" })
+        .bind(failure.map(SaveFailure::as_str))
+        .bind(startup)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM config_saves WHERE node_id = $1 AND state IN ('saved', 'failed') \
+             AND id NOT IN (SELECT id FROM config_saves WHERE node_id = $1 \
+                            ORDER BY requested_at DESC LIMIT $2)",
+        )
+        .bind(node)
+        .bind(SAVES_KEPT)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(id)
     }
 
     /// Give up a save that never got going: the fetch in front of it could not start.
@@ -427,6 +464,26 @@ mod tests {
             Some("startup")
         );
         assert!(!repo.last_failed(node).await.unwrap());
+    }
+
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_automatic_save_is_recorded_finished_and_a_failed_one_stops_the_next(pool: PgPool) {
+        let node = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let repo = ConfigSaveRepo::new(pool);
+        let id = repo.record_auto(node, None, Some("startup")).await.unwrap();
+        let recent = repo.recent(node).await.unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].id, id);
+        assert_eq!(recent[0].origin, SaveOrigin::Auto);
+        assert_eq!(recent[0].state, SaveState::Saved);
+        assert!(!repo.last_failed(node).await.unwrap());
+        // Nothing is left pending for the next fetch to claim.
+        assert_eq!(repo.claim(node).await.unwrap(), None);
+        repo.record_auto(node, Some(SaveFailure::Denied), None)
+            .await
+            .unwrap();
+        assert!(repo.last_failed(node).await.unwrap());
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

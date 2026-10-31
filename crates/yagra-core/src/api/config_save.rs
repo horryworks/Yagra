@@ -205,46 +205,45 @@ async fn put_auto_save(
     Ok(Json(saved))
 }
 
-/// Whether Yagra saves a device on its own now (decision 11): switched on, the device's Unsaved
-/// configuration alert is open, and its last save did not fail - after a failure a person looks
-/// first (decision 9). The threshold (and its folder and node overrides) is the grace, and a rule
-/// switched off for a node never opens the alert.
+/// Whether Yagra may save a device on its own at this fetch (decision 13): switched on, the device
+/// is not in maintenance or an upgrade pause, and its last save did not fail - after a failure a
+/// person looks first (decision 9).
 ///
-/// Two gates stay here although the alert usually implies them, because this is a write to a
-/// device and the alert is only a signal:
-/// - **Not in maintenance or an upgrade pause.** A window closes the alert only through its dwell,
-///   and an upgrade pause keeps alerts exactly as they were, so the alert can still be open there.
-/// - **Yagra itself reads the device as unsaved** (`unsaved_secs > 0`). Threshold rules are
-///   `ManageConfig`, an Operator's; a rule lowered to 0 would open the alert on every saved device,
-///   and without this check an Operator could make Yagra write to devices, which is Admin's.
-fn auto_save_due(
-    setting: AutoSave,
-    alert_open: bool,
-    unsaved_secs: Option<f64>,
-    in_maintenance: bool,
-    last_failed: bool,
-) -> bool {
-    setting.enabled
-        && alert_open
-        && unsaved_secs.is_some_and(|s| s > 0.0)
-        && !in_maintenance
-        && !last_failed
+/// It saves only what Yagra itself reads as unsaved, never on the Unsaved configuration alert:
+/// threshold rules are `ManageConfig`, an Operator's, and a write to a device is Admin's. A model
+/// that can compare does so in the same login before saving; one read over SNMP needs
+/// `unsaved_secs > 0` here.
+fn auto_save_allowed(setting: AutoSave, in_maintenance: bool, last_failed: bool) -> bool {
+    setting.enabled && !in_maintenance && !last_failed
 }
 
-/// Ask for an automatic save of `node` when one is due. Recorded in the audit log under Yagra's
-/// own name, because no request carried it.
-async fn request_auto_save(st: &ApiState, admin: &Admin, node: Uuid) -> anyhow::Result<()> {
+/// Whether a model read over SNMP is due an automatic save: allowed, and read as unsaved.
+fn snmp_save_due(allowed: bool, unsaved_secs: Option<f64>) -> bool {
+    allowed && unsaved_secs.is_some_and(|s| s > 0.0)
+}
+
+/// Whether Yagra may save `node` on its own at this fetch. For a model that cannot compare in the
+/// CLI, an allowed save is asked for here, against the SNMP reading, and recorded in the audit log
+/// under Yagra's own name, because no request carried it.
+async fn auto_save(
+    st: &ApiState,
+    admin: &Admin,
+    node: Uuid,
+    can_compare: bool,
+) -> anyhow::Result<bool> {
     let saves = &admin.config_saves;
     let setting = saves.auto_save().await?;
     if !setting.enabled {
-        return Ok(());
+        return Ok(false);
     }
-    let check = yagra_alert::rules::check_id(node.into(), yagra_common::config_unsaved::METRIC);
-    let alert_open = st
+    let in_maintenance = st
         .alerts
-        .alerts_for(node.into())
-        .iter()
-        .any(|a| a.check == check);
+        .in_maintenance(node.into(), Utc::now().timestamp_millis());
+    let last_failed = saves.last_failed(node).await?;
+    let allowed = auto_save_allowed(setting, in_maintenance, last_failed);
+    if !allowed || can_compare {
+        return Ok(allowed);
+    }
     let unsaved = st
         .store
         .latest(&yagra_common::SeriesKey::node(
@@ -252,21 +251,21 @@ async fn request_auto_save(st: &ApiState, admin: &Admin, node: Uuid) -> anyhow::
             yagra_common::config_unsaved::METRIC,
         ))
         .await;
-    let in_maintenance = st
-        .alerts
-        .in_maintenance(node.into(), Utc::now().timestamp_millis());
-    let last_failed = saves.last_failed(node).await?;
-    if auto_save_due(setting, alert_open, unsaved, in_maintenance, last_failed) {
+    if snmp_save_due(allowed, unsaved) {
         let id = saves.request(node, SaveOrigin::Auto, None).await?;
-        super::util::audit_record(
-            &admin.audit,
-            "(yagra)",
-            &format!("config.auto_save node={node} save={id}"),
-            202,
-        )
-        .await;
+        audit_auto_save(admin, node, id, 202).await;
     }
-    Ok(())
+    Ok(allowed)
+}
+
+async fn audit_auto_save(admin: &Admin, node: Uuid, id: Uuid, status: u16) {
+    super::util::audit_record(
+        &admin.audit,
+        "(yagra)",
+        &format!("config.auto_save node={node} save={id}"),
+        status,
+    )
+    .await;
 }
 
 /// The node the save script asks about.
@@ -279,7 +278,7 @@ pub(super) struct SaveJobQuery {
 /// What the save script does for one node, with what it needs to do it.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct SaveJob {
-    /// `save` or `check`.
+    /// `save`, `auto` (compare, and save when unsaved) or `check`.
     action: &'static str,
     /// The save this run reports against; absent for a check.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -335,11 +334,15 @@ async fn save_job(
     ) else {
         return nothing();
     };
-    if commands_for(&model).is_some() {
-        if let Err(e) = request_auto_save(&st, &admin, q.node).await {
-            tracing::warn!(node = %q.node, error = %e, "config save: automatic save not asked");
-        }
-    }
+    let auto = match commands_for(&model) {
+        Some(commands) => auto_save(&st, &admin, q.node, commands.compare.is_some())
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(node = %q.node, error = %e, "config save: automatic save not asked");
+                false
+            }),
+        None => false,
+    };
     let pending = admin
         .config_saves
         .claim(q.node)
@@ -355,7 +358,7 @@ async fn save_job(
             }
         }
     };
-    let Some(action) = oxidized::save::decide(&model, pending) else {
+    let Some(action) = oxidized::save::decide(&model, pending, auto) else {
         give_up(SaveFailure::Unsupported).await;
         return nothing();
     };
@@ -386,11 +389,13 @@ async fn save_job(
     };
     metrics::counter!("yagra_config_save_jobs_total", "action" => match action {
         Action::Save(_) => "save",
+        Action::SaveIfUnsaved => "auto",
         Action::Check => "check",
     })
     .increment(1);
     let (action, save) = match action {
         Action::Save(id) => ("save", Some(id)),
+        Action::SaveIfUnsaved => ("auto", None),
         Action::Check => ("check", None),
     };
     let job = SaveJob {
@@ -419,7 +424,7 @@ async fn save_job(
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub(super) struct SaveReport {
     node: Uuid,
-    /// `save` or `check`.
+    /// `save`, `auto` or `check`.
     action: String,
     /// The save reported on; empty for a check.
     #[serde(default)]
@@ -427,7 +432,8 @@ pub(super) struct SaveReport {
     /// A `SaveFailure` token; empty when it succeeded.
     #[serde(default)]
     failure: String,
-    /// `true` or `false` when the model can compare running with startup; empty otherwise.
+    /// `true` or `false` when the model can compare running with startup; empty otherwise. For
+    /// `auto`, `true` means a save was tried in the same login.
     #[serde(default)]
     unsaved_before: String,
     /// The same, read again after a save that succeeded.
@@ -480,6 +486,23 @@ async fn save_report(
             .record_unsaved(r.node, unsaved)
             .await
             .map_err(|e| failed(&e, "config unsaved record"))?;
+    }
+    if r.action == "auto" && flag(&r.unsaved_before) == Some(true) {
+        let startup = Some(r.startup.as_str()).filter(|s| !s.is_empty());
+        let id = saves
+            .record_auto(r.node, failure, startup)
+            .await
+            .map_err(|e| failed(&e, "config auto save record"))?;
+        let outcome = failure.map_or("saved", SaveFailure::as_str);
+        metrics::counter!("yagra_config_saves_total", "outcome" => outcome).increment(1);
+        audit_auto_save(
+            &admin,
+            r.node,
+            id,
+            if failure.is_none() { 204 } else { 502 },
+        )
+        .await;
+        tracing::info!(node = %r.node, save = %id, outcome, "config auto save finished");
     }
     if r.action == "save" {
         if let Ok(id) = r.save.parse::<Uuid>() {
@@ -591,6 +614,29 @@ mod tests {
             StatusCode::NO_CONTENT
         );
         assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_some());
+
+        // An automatic run that found the device saved records no save; one that found it unsaved
+        // and saved it records a finished automatic save with the startup it replaced.
+        let quiet = format!("node={node}&action=auto&unsaved_before=false");
+        assert_eq!(
+            post_report(&st, &ox_token, &quiet).await,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(saves.recent(node).await.expect("recent").len(), 1);
+        assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_none());
+        let auto = format!(
+            "node={node}&action=auto&failure=&unsaved_before=true&unsaved_after=false&startup=hostname+sw-01"
+        );
+        assert_eq!(
+            post_report(&st, &ox_token, &auto).await,
+            StatusCode::NO_CONTENT
+        );
+        let recent = saves.recent(node).await.expect("recent");
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].origin, SaveOrigin::Auto);
+        assert_eq!(recent[0].state, yagra_base::config_save::SaveState::Saved);
+        assert!(recent[0].kept_startup);
+        assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_none());
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -650,30 +696,24 @@ mod tests {
     }
 
     #[test]
-    fn an_automatic_save_waits_for_the_switch_an_open_alert_and_a_clean_record() {
+    fn an_automatic_save_waits_for_the_switch_a_quiet_window_and_a_clean_record() {
         let on = AutoSave { enabled: true };
-        let unsaved = Some(14_400.0);
-        assert!(auto_save_due(on, true, unsaved, false, false));
-        assert!(!auto_save_due(on, false, unsaved, false, false));
-        assert!(!auto_save_due(on, true, unsaved, false, true));
-        assert!(!auto_save_due(
-            AutoSave::default(),
-            true,
-            unsaved,
-            false,
-            false
-        ));
+        assert!(auto_save_allowed(on, false, false));
+        assert!(!auto_save_allowed(AutoSave::default(), false, false));
+        // A maintenance window or an upgrade pause (`in_maintenance` answers both).
+        assert!(!auto_save_allowed(on, true, false));
+        // After a failed save a person looks first.
+        assert!(!auto_save_allowed(on, false, true));
     }
 
-    /// The two gates that hold even when the alert is open: a maintenance window or an upgrade
-    /// pause (`in_maintenance` answers both), and a device Yagra reads as saved - a threshold an
-    /// Operator lowered to 0 opens the alert on saved devices, and must not make Yagra write.
+    /// A model read over SNMP is saved only while Yagra reads it as unsaved: a device already
+    /// saved is never written to, whatever any alert rule says.
     #[test]
-    fn an_open_alert_alone_never_writes_to_a_device_in_a_window_or_already_saved() {
-        let on = AutoSave { enabled: true };
-        assert!(!auto_save_due(on, true, Some(14_400.0), true, false));
-        assert!(!auto_save_due(on, true, Some(0.0), false, false));
-        assert!(!auto_save_due(on, true, None, false, false));
+    fn an_snmp_read_model_is_saved_only_while_read_as_unsaved() {
+        assert!(snmp_save_due(true, Some(60.0)));
+        assert!(!snmp_save_due(true, Some(0.0)));
+        assert!(!snmp_save_due(true, None));
+        assert!(!snmp_save_due(false, Some(60.0)));
     }
 
     #[test]

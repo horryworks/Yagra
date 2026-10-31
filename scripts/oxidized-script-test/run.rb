@@ -24,14 +24,15 @@ DEVICE_PORT = 2323
 CORE_PORT = 8099
 PROMPT = '<sw-01>'
 
-# A device that speaks like VRP. `mode` decides how it answers a save.
+# A device that speaks like VRP. `mode` decides how it answers a save, and `:already_saved` starts
+# it with nothing to save.
 class FakeDevice
   attr_reader :heard
 
   def initialize(mode)
     @mode = mode
     @heard = []
-    @saved = false
+    @saved = mode == :already_saved
   end
 
   def serve(client)
@@ -213,6 +214,23 @@ check.call('a refused login sends no save', !heard.include?('save'), heard)
 r, heard = run(home, 'check', :ok, action: 'check')
 check.call('a check reports what it saw', r['action'] == 'check' && r['unsaved_before'] == 'true', r)
 check.call('a check sends no save', !heard.include?('save'), heard)
+
+r, heard = run(home, 'auto, unsaved', :ok, action: 'auto')
+check.call('automatic save of an unsaved device saves in the same login',
+           r['action'] == 'auto' && r['failure'] == '' && r['unsaved_before'] == 'true' &&
+             r['unsaved_after'] == 'false', r)
+check.call('automatic save compares before it saves',
+           heard.index('compare configuration') && heard.index('save') &&
+             heard.index('compare configuration') < heard.index('save'), heard)
+check.call('automatic save keeps the startup it replaced', r['startup'].to_s.include?('sysname sw-01'), r)
+
+r, heard = run(home, 'auto, saved', :already_saved, action: 'auto')
+check.call('automatic save of a saved device reports it saved',
+           r['action'] == 'auto' && r['unsaved_before'] == 'false' && r['failure'].to_s.empty?, r)
+check.call('automatic save never writes to a saved device', !heard.include?('save'), heard)
+
+r, = run(home, 'auto, silent', :silent, action: 'auto')
+check.call('an automatic save the device never confirms is not reported as saved', r['failure'] == 'no_answer', r)
 
 puts failures.empty? ? 'ALL PASS' : "#{failures.size} FAILED"
 exit(failures.empty? ? 0 : 1)

@@ -1379,8 +1379,8 @@
       "title": "自動保存",
       "on": "オン",
       "off": "オフ",
-      "warning": "Unsaved configuration のアラートが出ている機器を、次の取得の後に Yagra が保存します。",
-      "lineOn": "自動保存: オン（未保存アラート中）",
+      "warning": "取得で未保存が見つかった機器を、Yagra がその場で保存します。",
+      "lineOn": "自動保存: オン（取得のたび）",
       "lineOff": "自動保存: オフ",
       "change": "変更",
       "err": {
