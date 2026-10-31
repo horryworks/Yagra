@@ -207,11 +207,28 @@ async fn put_auto_save(
 
 /// Whether Yagra saves a device on its own now (decision 11): switched on, the device's Unsaved
 /// configuration alert is open, and its last save did not fail - after a failure a person looks
-/// first (decision 9). The alert carries everything else: the threshold (and its folder and node
-/// overrides) is the grace, a maintenance window closes it, and a rule switched off for a node
-/// never opens it.
-fn auto_save_due(setting: AutoSave, alert_open: bool, last_failed: bool) -> bool {
-    setting.enabled && alert_open && !last_failed
+/// first (decision 9). The threshold (and its folder and node overrides) is the grace, and a rule
+/// switched off for a node never opens the alert.
+///
+/// Two gates stay here although the alert usually implies them, because this is a write to a
+/// device and the alert is only a signal:
+/// - **Not in maintenance or an upgrade pause.** A window closes the alert only through its dwell,
+///   and an upgrade pause keeps alerts exactly as they were, so the alert can still be open there.
+/// - **Yagra itself reads the device as unsaved** (`unsaved_secs > 0`). Threshold rules are
+///   `ManageConfig`, an Operator's; a rule lowered to 0 would open the alert on every saved device,
+///   and without this check an Operator could make Yagra write to devices, which is Admin's.
+fn auto_save_due(
+    setting: AutoSave,
+    alert_open: bool,
+    unsaved_secs: Option<f64>,
+    in_maintenance: bool,
+    last_failed: bool,
+) -> bool {
+    setting.enabled
+        && alert_open
+        && unsaved_secs.is_some_and(|s| s > 0.0)
+        && !in_maintenance
+        && !last_failed
 }
 
 /// Ask for an automatic save of `node` when one is due. Recorded in the audit log under Yagra's
@@ -228,8 +245,18 @@ async fn request_auto_save(st: &ApiState, admin: &Admin, node: Uuid) -> anyhow::
         .alerts_for(node.into())
         .iter()
         .any(|a| a.check == check);
+    let unsaved = st
+        .store
+        .latest(&yagra_common::SeriesKey::node(
+            node.into(),
+            yagra_common::config_unsaved::METRIC,
+        ))
+        .await;
+    let in_maintenance = st
+        .alerts
+        .in_maintenance(node.into(), Utc::now().timestamp_millis());
     let last_failed = saves.last_failed(node).await?;
-    if auto_save_due(setting, alert_open, last_failed) {
+    if auto_save_due(setting, alert_open, unsaved, in_maintenance, last_failed) {
         let id = saves.request(node, SaveOrigin::Auto, None).await?;
         super::util::audit_record(
             &admin.audit,
@@ -625,10 +652,28 @@ mod tests {
     #[test]
     fn an_automatic_save_waits_for_the_switch_an_open_alert_and_a_clean_record() {
         let on = AutoSave { enabled: true };
-        assert!(auto_save_due(on, true, false));
-        assert!(!auto_save_due(on, false, false));
-        assert!(!auto_save_due(on, true, true));
-        assert!(!auto_save_due(AutoSave::default(), true, false));
+        let unsaved = Some(14_400.0);
+        assert!(auto_save_due(on, true, unsaved, false, false));
+        assert!(!auto_save_due(on, false, unsaved, false, false));
+        assert!(!auto_save_due(on, true, unsaved, false, true));
+        assert!(!auto_save_due(
+            AutoSave::default(),
+            true,
+            unsaved,
+            false,
+            false
+        ));
+    }
+
+    /// The two gates that hold even when the alert is open: a maintenance window or an upgrade
+    /// pause (`in_maintenance` answers both), and a device Yagra reads as saved - a threshold an
+    /// Operator lowered to 0 opens the alert on saved devices, and must not make Yagra write.
+    #[test]
+    fn an_open_alert_alone_never_writes_to_a_device_in_a_window_or_already_saved() {
+        let on = AutoSave { enabled: true };
+        assert!(!auto_save_due(on, true, Some(14_400.0), true, false));
+        assert!(!auto_save_due(on, true, Some(0.0), false, false));
+        assert!(!auto_save_due(on, true, None, false, false));
     }
 
     #[test]
