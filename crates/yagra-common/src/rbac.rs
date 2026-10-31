@@ -56,6 +56,8 @@ pub enum Permission {
     ManageCredentials,
     /// Read a stored monitoring credential's secret back in plaintext.
     RevealCredentials,
+    /// Save a device's running configuration to its startup configuration (ADR-222).
+    SaveDeviceConfig,
     /// Change the deployment itself, and anything that leaves the box (ADR-057).
     ManageSystem,
     /// Manage users and role assignments.
@@ -287,22 +289,24 @@ impl Role {
             | Permission::ManageConfig
             | Permission::ManageCredentials
             | Permission::RevealCredentials => self >= Role::Operator,
-            Permission::ManageSystem | Permission::ManageUsers | Permission::ViewAudit => {
-                self == Role::Admin
-            }
+            Permission::ManageSystem
+            | Permission::ManageUsers
+            | Permission::ViewAudit
+            | Permission::SaveDeviceConfig => self == Role::Admin,
         }
     }
 }
 
 impl Permission {
     /// Every permission, in display order (for the role/privilege matrix).
-    pub const ALL: [Permission; 9] = [
+    pub const ALL: [Permission; 10] = [
         Permission::View,
         Permission::AckAlerts,
         Permission::ManageMaintenance,
         Permission::ManageConfig,
         Permission::ManageCredentials,
         Permission::RevealCredentials,
+        Permission::SaveDeviceConfig,
         Permission::ManageSystem,
         Permission::ManageUsers,
         Permission::ViewAudit,
@@ -318,6 +322,7 @@ impl Permission {
             Permission::ManageConfig => "manage_config",
             Permission::ManageCredentials => "manage_credentials",
             Permission::RevealCredentials => "reveal_credentials",
+            Permission::SaveDeviceConfig => "save_device_config",
             Permission::ManageSystem => "manage_system",
             Permission::ManageUsers => "manage_users",
             Permission::ViewAudit => "view_audit",
@@ -334,6 +339,7 @@ impl Permission {
             Permission::ManageConfig => "Manage monitoring",
             Permission::ManageCredentials => "Manage credentials",
             Permission::RevealCredentials => "Reveal credentials",
+            Permission::SaveDeviceConfig => "Save device configuration",
             Permission::ManageSystem => "Manage the deployment",
             Permission::ManageUsers => "Manage users",
             Permission::ViewAudit => "View audit log",
@@ -366,6 +372,12 @@ impl Permission {
             Permission::RevealCredentials => {
                 "Show a stored device credential's secret, for signing in to the device. \
                  Every view is recorded in the audit log."
+            }
+            // The one write Yagra makes to a network device (ADR-222 decision 5), so Admin only and
+            // never an API token: the save replaces what the device would boot back into.
+            Permission::SaveDeviceConfig => {
+                "Save a device's running configuration as its startup configuration. Every save \
+                 is recorded in the audit log."
             }
             // Named for the boundary rather than for a list: everything here either changes the
             // deployment itself or sends its data somewhere else. Keep it in step with every
@@ -490,6 +502,8 @@ mod tests {
         // who sign in to the device — and never a viewer's.
         assert!(Role::Operator.grants(Permission::RevealCredentials));
         assert!(!Role::Viewer.grants(Permission::RevealCredentials));
+        assert!(Role::Admin.grants(Permission::SaveDeviceConfig));
+        assert!(!Role::Operator.grants(Permission::SaveDeviceConfig));
         // …but not the deployment itself. This is the assertion that keeps the split meaningful:
         // drop it and `ManageSystem` quietly becomes a synonym for `ManageConfig`.
         assert!(!Role::Operator.grants(Permission::ManageSystem));

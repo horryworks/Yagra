@@ -47,6 +47,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_base::config_backup::{Attempt, AttemptOutcome, BackupInput, NodeConfigBackup, ScanMode};
+use yagra_base::config_save::SaveRecord;
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{
@@ -166,6 +167,8 @@ pub(crate) struct ConfigBackupSummary {
     login_confirmed: bool,
     /// How the newest login attempt ended; `null` ⇒ none yet.
     last_outcome: Option<AttemptOutcome>,
+    /// The newest save Yagra made or was asked to make (ADR-222); `null` ⇒ none.
+    last_save: Option<SaveRecord>,
 }
 
 impl ConfigBackupSummary {
@@ -178,6 +181,15 @@ impl ConfigBackupSummary {
             last_end: Some(DateTime::<Utc>::UNIX_EPOCH),
             login_confirmed: true,
             last_outcome: Some(AttemptOutcome::Success),
+            last_save: Some(SaveRecord {
+                id: Uuid::nil(),
+                origin: yagra_base::config_save::SaveOrigin::Person,
+                state: yagra_base::config_save::SaveState::Saved,
+                failure: None,
+                requested_at: DateTime::<Utc>::UNIX_EPOCH,
+                finished_at: Some(DateTime::<Utc>::UNIX_EPOCH),
+                kept_startup: true,
+            }),
         }
     }
 }
@@ -211,12 +223,14 @@ pub(crate) async fn summary_of(
     let readiness = readiness_of(admin, node, cfg.as_ref()).await.ok()?;
     let status = admin.config_backup.status(node).await.ok()?;
     let last = admin.config_backup.attempts_of(node, 1).await.ok()?;
+    let saves = admin.config_saves.recent(node).await.ok()?;
     Some(ConfigBackupSummary {
         readiness,
         last_status: status.as_ref().map(|s| s.status.clone()),
         last_end: status.and_then(|s| s.last_end),
         login_confirmed: row.is_some_and(|(_, r)| r.login_confirmed),
         last_outcome: last.first().map(|a| a.outcome),
+        last_save: saves.into_iter().next(),
     })
 }
 
@@ -281,6 +295,11 @@ pub(crate) struct ConfigBackupView {
     models: Vec<String>,
     /// Whether this deployment has an oxidized at all.
     available: bool,
+    /// Whether Yagra can save this node's model (ADR-222): the model it is fetched with has a
+    /// save command in Yagra's table.
+    save_supported: bool,
+    /// The newest saves, newest first.
+    saves: Vec<SaveRecord>,
 }
 
 #[utoipa::path(
@@ -309,6 +328,11 @@ async fn get_config_backup(
         .await
         .map_err(|e| read_failed(&e))?;
     let status = repo.status(node_id).await.map_err(|e| read_failed(&e))?;
+    let saves = admin
+        .config_saves
+        .recent(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
     let attempts = repo
         .attempts_of(node_id, VIEW_ATTEMPTS)
         .await
@@ -327,6 +351,7 @@ async fn get_config_backup(
         yagra_base::config_backup::Rotation::default(),
     ));
     let candidates = rotation::candidates(cfg.login_order.as_deref(), &logins);
+    let cfg_model_override = cfg.model_override.clone();
     let readiness = readiness_of(&admin, node_id, Some(&cfg))
         .await
         .map_err(|e| read_failed(&e))?;
@@ -367,6 +392,12 @@ async fn get_config_backup(
             .map(|m| (*m).to_owned())
             .collect(),
         available: admin.oxidized.is_some(),
+        save_supported: oxidized::source::model_of(
+            cfg_model_override.as_deref(),
+            profile.as_deref(),
+        )
+        .is_some_and(|m| yagra_common::config_save::commands_for(&m).is_some()),
+        saves,
     }))
 }
 
@@ -755,7 +786,15 @@ async fn fetch_now(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let ox = oxidized_of(&admin)?;
+    start_fetch(&admin, node_id).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+/// Ask oxidized to fetch one node now, with its next login and without waiting for the lockout
+/// limits. Shared by **Fetch now** and the save button, whose save runs after this fetch succeeds
+/// (ADR-222 decision 7). The errors are the ones `fetch_now` documents.
+pub(super) async fn start_fetch(admin: &Admin, node_id: Uuid) -> ApiResult<()> {
+    let ox = oxidized_of(admin)?;
     let repo = &admin.config_backup;
     let now = Utc::now();
     let rot = repo
@@ -832,7 +871,7 @@ async fn fetch_now(
                 repo.clear_request(node_id).await.ok();
                 return Err(oxidized_failed(&e));
             }
-            Ok(StatusCode::ACCEPTED)
+            Ok(())
         }
         None => Err(not_ready()),
     }
@@ -1183,6 +1222,9 @@ pub(crate) struct ConfigBackupScheduleView {
     /// known to work. `null` for a caller who does not see the whole fleet.
     done: Option<usize>,
     total: Option<usize>,
+    /// Whether Yagra saves an unsaved device on its own after a fetch, and after how long (ADR-222
+    /// decision 8). Changed with `PUT /api/v1/config-save-settings`.
+    auto_save: yagra_base::config_save::AutoSave,
 }
 
 fn schedule_failed(e: &anyhow::Error) -> ApiError {
@@ -1205,6 +1247,11 @@ pub(crate) async fn schedule_view(
             .await
             .map_err(|e| schedule_failed(&e))?;
     let running = oxidized::schedule::running(&s);
+    let auto_save = admin
+        .config_saves
+        .auto_save()
+        .await
+        .map_err(|e| schedule_failed(&e))?;
     // The counts are the whole fleet's: a scoped caller would read them as its own.
     let progress = s
         .run_started_at
@@ -1223,6 +1270,7 @@ pub(crate) async fn schedule_view(
         upcoming_start_at: (!running).then(|| oxidized::schedule::next_run_at(&s, now)),
         done: progress.map(|p| p.done),
         total: progress.map(|p| p.total),
+        auto_save,
     })
 }
 

@@ -8,6 +8,7 @@ import type {
   BackupInput,
   ConfigBackupView,
   ConfigVersion,
+  SaveRecord,
   ScanMode,
 } from '../../types/api';
 import { BACKUP_INPUTS, SCAN_MODES } from '../../types/api';
@@ -129,6 +130,35 @@ export function attemptLine(a: AttemptView): Line {
   };
 }
 
+/** A save still waiting for its fetch, or running. */
+export const saveOpen = (s: SaveRecord): boolean => s.state === 'pending' || s.state === 'running';
+
+/** The sentence one save is shown as (ADR-222). A failure names why. */
+export function saveLine(s: SaveRecord): Line {
+  switch (s.state) {
+    case 'saved':
+      return { key: 'config.saves.state.saved', tone: 'ok' };
+    case 'failed':
+      return { key: `config.saves.failure.${s.failure ?? 'other'}`, tone: 'bad' };
+    case 'pending':
+    case 'running':
+      return { key: `config.saves.state.${s.state}`, tone: 'busy' };
+  }
+}
+
+/** Whether the save button is offered: the node is backed up with a login that works, its model
+ *  can be saved, and no save is already waiting or running. */
+export function canOfferSave(view: ConfigBackupView): boolean {
+  return (
+    view.available &&
+    view.enabled &&
+    view.save_supported &&
+    view.login_confirmed &&
+    view.readiness === 'ready' &&
+    !view.saves.some(saveOpen)
+  );
+}
+
 /** Where the backup stands, as the one line under the buttons. */
 export function stateLine(view: ConfigBackupView): Line {
   if (!view.enabled) return { key: 'config.readiness.off', tone: 'none' };
@@ -166,7 +196,7 @@ export function orderShown(view: ConfigBackupView, opened: boolean): boolean {
  *  being looked for (the leader moves the rotation on every minute), not at all once settled. */
 export function refreshMs(view: ConfigBackupView | null): number | undefined {
   if (!view?.enabled) return undefined;
-  if (view.pending) return 3_000;
+  if (view.pending || view.saves.some(saveOpen)) return 3_000;
   if (!view.login_confirmed && !view.exhausted) return 30_000;
   return undefined;
 }

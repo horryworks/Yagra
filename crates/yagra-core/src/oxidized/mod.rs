@@ -18,6 +18,10 @@
 //! - [`relay`] carries oxidized's login sessions to the poller assigned to each device (stage 5):
 //!   oxidized connects to core, never to a device.
 //!
+//! - [`save`] is the one exception to "nothing here speaks to a device" (ADR-222): the fixed
+//!   table of save commands the save script inside oxidized may send, and the choice of what it
+//!   does after a fetch.
+//!
 //! - [`push`] is the leader loop that opens and closes the alert saying config backups are not
 //!   reaching their Git destination (stage 4). The pushes are the push script's, inside oxidized.
 //!
@@ -29,6 +33,7 @@ pub(crate) mod config;
 pub(crate) mod push;
 pub(crate) mod relay;
 pub(crate) mod rotation;
+pub(crate) mod save;
 pub(crate) mod schedule;
 pub(crate) mod source;
 pub(crate) mod status;

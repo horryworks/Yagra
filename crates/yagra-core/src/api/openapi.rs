@@ -127,6 +127,7 @@ fn fragments() -> Vec<(&'static str, utoipa::openapi::OpenApi)> {
         ("reclassify", super::reclassify::Doc::openapi()),
         ("rediscover", super::rediscover::Doc::openapi()),
         ("config_backup", super::config_backup::Doc::openapi()),
+        ("config_save", super::config_save::Doc::openapi()),
         ("config_remote", super::config_remote::Doc::openapi()),
         ("discovery", super::discovery::Doc::openapi()),
         ("notifications", super::notifications::Doc::openapi()),

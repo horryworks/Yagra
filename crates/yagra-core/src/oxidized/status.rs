@@ -91,13 +91,23 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, skipped: u32) ->
 }
 
 /// Runs until cancelled.
-pub(crate) async fn run_status_loop(client: Arc<OxidizedClient>, repo: Arc<ConfigBackupRepo>) {
+///
+/// Each tick also gives up saves that waited or ran past their deadline (ADR-222), so a save
+/// whose fetch never succeeded reads as failed rather than pending for ever.
+pub(crate) async fn run_status_loop(
+    client: Arc<OxidizedClient>,
+    repo: Arc<ConfigBackupRepo>,
+    saves: Arc<yagra_base::config_save::ConfigSaveRepo>,
+) {
     let mut every = tokio::time::interval(TICK);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut skipped = 0;
     loop {
         every.tick().await;
         skipped = tick(&client, &repo, skipped).await;
+        if let Err(e) = saves.expire().await {
+            tracing::warn!(error = %e, "config save: overdue saves could not be given up");
+        }
     }
 }
 

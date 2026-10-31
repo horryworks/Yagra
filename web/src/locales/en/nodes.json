@@ -1352,6 +1352,53 @@
         "time": "Enter a start time.",
         "count": "Choose how many at a time."
       }
+    },
+    "saves": {
+      "button": "Save to startup",
+      "confirmTitle": "Save the running configuration?",
+      "confirm": "Restarting {{node}} will no longer bring back its current startup configuration. Yagra keeps a copy.",
+      "confirmLabel": "Save",
+      "cols": {
+        "at": "Time",
+        "origin": "Asked by",
+        "result": "Result",
+        "actions": "Actions"
+      },
+      "origin": {
+        "person": "A person",
+        "auto": "Yagra"
+      },
+      "state": {
+        "pending": "Waiting for the fetch",
+        "running": "Saving",
+        "saved": "Saved"
+      },
+      "failure": {
+        "auth": "Login refused",
+        "unreachable": "Device unreachable",
+        "denied": "Refused by the device",
+        "no_answer": "No confirmation from the device",
+        "unsupported": "No save command for this model",
+        "not_fetched": "Fetch before it failed",
+        "other": "Failed"
+      },
+      "viewStartup": "Replaced startup",
+      "err": "Could not ask for the save"
+    },
+    "autoSave": {
+      "title": "Automatic save",
+      "on": "On",
+      "off": "Off",
+      "after": "Unsaved for",
+      "hours": "h",
+      "warning": "Yagra saves every backed-up device left unsaved this long, after its next fetch.",
+      "lineOn": "Automatic save: after {{hours}} h unsaved",
+      "lineOff": "Automatic save: off",
+      "change": "Change",
+      "err": {
+        "hours": "Enter a whole number of hours from 1 to 720.",
+        "save": "Could not save the automatic-save setting"
+      }
     }
   }
 }

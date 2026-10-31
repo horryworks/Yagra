@@ -1244,6 +1244,7 @@ mod tests {
             Permission::ManageConfig => "RequireManageConfig",
             Permission::ManageCredentials => "RequireManageCredentials",
             Permission::RevealCredentials => "RequireRevealCredentials",
+            Permission::SaveDeviceConfig => "RequireSaveDeviceConfig",
             Permission::ManageSystem => "RequireManageSystem",
             Permission::ManageUsers => "RequireManageUsers",
             Permission::ViewAudit => "RequireViewAudit",

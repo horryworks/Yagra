@@ -84,6 +84,9 @@ const schemaEnumPins: {
   BackupReadiness: AssertEqual<BackupReadiness, components['schemas']['Readiness']>;
   AttemptOutcome: AssertEqual<AttemptOutcome, components['schemas']['AttemptOutcome']>;
   ScanMode: AssertEqual<ScanMode, Exclude<components['schemas']['ScanMode'], 'unknown'>>;
+  SaveState: AssertEqual<SaveState, components['schemas']['SaveState']>;
+  SaveFailure: AssertEqual<SaveFailure, components['schemas']['SaveFailure']>;
+  SaveOrigin: AssertEqual<SaveOrigin, components['schemas']['SaveOrigin']>;
   GitAuth: AssertEqual<GitAuth, Exclude<components['schemas']['GitAuth'], 'unknown'>>;
   PushFailure: AssertEqual<PushFailure, components['schemas']['PushFailure']>;
   RemoteTestResult: AssertEqual<RemoteTestResult, components['schemas']['RemoteTestResult']>;
@@ -160,6 +163,9 @@ const schemaEnumPins: {
   BackupReadiness: true,
   AttemptOutcome: true,
   ScanMode: true,
+  SaveState: true,
+  SaveFailure: true,
+  SaveOrigin: true,
   GitAuth: true,
   PushFailure: true,
   RemoteTestResult: true,
@@ -419,6 +425,26 @@ export type BackupReadiness = (typeof BACKUP_READINESS)[number];
  *  minus `unknown`. */
 export const SCAN_MODES = ['rapid', 'normal', 'slow'] as const;
 export type ScanMode = (typeof SCAN_MODES)[number];
+
+/** One save Yagra made or was asked to make (ADR-222). */
+export type SaveRecord = components['schemas']['SaveRecord'];
+/** Where a save stands. Pinned to `schemas.SaveState`. */
+export const SAVE_STATES = ['pending', 'running', 'saved', 'failed'] as const;
+export type SaveState = (typeof SAVE_STATES)[number];
+/** Why a save failed. Pinned to `schemas.SaveFailure`. */
+export const SAVE_FAILURES = [
+  'auth',
+  'unreachable',
+  'denied',
+  'no_answer',
+  'unsupported',
+  'not_fetched',
+  'other',
+] as const;
+export type SaveFailure = (typeof SAVE_FAILURES)[number];
+/** Who asked for a save. Pinned to `schemas.SaveOrigin`. */
+export const SAVE_ORIGINS = ['person', 'auto'] as const;
+export type SaveOrigin = (typeof SAVE_ORIGINS)[number];
 
 /** How one config-backup login attempt ended (ADR-210 stage 3). Pinned to
  *  `schemas.AttemptOutcome`. */

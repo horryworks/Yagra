@@ -1264,6 +1264,17 @@ export const api = {
   fetchConfigNow: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/fetch', { path: { node_id: id } }),
 
+  /** Fetch a node now and save its running configuration as its startup configuration right
+   *  after the fetch succeeds (ADR-222). */
+  saveConfigNow: (id: string): Promise<{ id: string }> =>
+    apiPost('/api/v1/nodes/{node_id}/config-backup/save', { path: { node_id: id } }),
+
+  /** The startup configuration one save replaced. */
+  getConfigSaveStartup: (id: string, save: string): Promise<{ text: string }> =>
+    apiGet('/api/v1/nodes/{node_id}/config-backup/saves/{save_id}/startup', {
+      path: { node_id: id, save_id: save },
+    }),
+
   /** Cut the fetch that is out for a node; it is recorded as unreachable (ADR-210 stage 5). */
   cancelConfigFetch: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/cancel', { path: { node_id: id } }),
@@ -1279,6 +1290,10 @@ export const api = {
   /** When config backups are fetched, and where the latest run stands (ADR-210 stage 6). */
   getConfigBackupSchedule: (): Promise<ConfigBackupScheduleView> =>
     apiGet('/api/v1/config-backup-schedule'),
+
+  /** Switch automatic save on or off, and set after how many hours unsaved (ADR-222). */
+  putConfigAutoSave: (body: { enabled: boolean; after_hours: number }) =>
+    apiPut('/api/v1/config-save-settings', { body }),
 
   /** Change the daily start time (UTC) and how many nodes are fetched at once. */
   putConfigBackupSchedule: (body: ConfigBackupScheduleBody): Promise<ConfigBackupScheduleView> =>

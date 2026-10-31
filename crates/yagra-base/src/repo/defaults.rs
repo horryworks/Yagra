@@ -73,6 +73,14 @@ const CISCO_WLAN_CONTROLLERS: &[&str] = &["Cisco wireless controller"];
 
 const FORTINET: &[&str] = &["Fortinet FortiGate"];
 
+// The Huawei profiles fetched with oxidized's `vrp` model, whose running and startup configurations
+// the save script compares (ADR-222). The wireless controller is not one: it has no model.
+const HUAWEI_VRP: &[&str] = &[
+    "Huawei NE/AR router",
+    "Huawei CloudEngine switch",
+    "Huawei USG firewall",
+];
+
 const PANOS: &[&str] = &["Palo Alto PAN-OS firewall"];
 
 const NETSNMP: &[&str] = &["Linux server (Net-SNMP)"];
@@ -110,7 +118,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 36] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 37] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -510,6 +518,18 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 36] = [
         None,
         2,
     ),
+    // ADR-222 decision 4: the same rule where the save script compares running with startup after
+    // each fetch. The reading is from the last comparison and counts from when the two were first
+    // seen to differ, so it changes once per fetch rather than per poll; the hour is the same.
+    (
+        36,
+        HUAWEI_VRP,
+        yagra_common::config_unsaved::METRIC,
+        "above",
+        Some(3600.0),
+        None,
+        2,
+    ),
 ];
 
 /// The row-name pattern each seeded default carries, by offset (ADR-143). Absent means every row.
@@ -555,6 +575,15 @@ mod tests {
             // and the answer has to be computed at the profile rather than the template level —
             // `ucd_load_per_core` divides a UCD-SNMP-MIB reading by a HOST-RESOURCES-MIB row count,
             // so no single template carries it and a template-level fold would find nothing.
+            // `config_unsaved_seconds` has two sources (ADR-222 decision 4), one row each: the
+            // CISCO-CONFIG-MAN-MIB pair, or the save script's comparison for a model that has one.
+            // A row is the second kind when its profiles are fetched with such a model.
+            let compares = |profile: &str| {
+                yagra_common::oxidized_model::model_for_profile(profile)
+                    .is_some_and(yagra_common::config_save::compares)
+            };
+            let by_cli = metric == yagra_common::config_unsaved::METRIC
+                && targets.iter().any(|t| compares(t));
             let needs: Vec<&str> = match yagra_common::derived_metric::derived_node_metric(metric) {
                 Some(d) => {
                     let [a, b] = d.formula.inputs();
@@ -580,7 +609,13 @@ mod tests {
             };
             let want: BTreeSet<&str> = profiles
                 .iter()
-                .filter(|p| needs.iter().all(|m| publishes(p, m)))
+                .filter(|p| {
+                    if by_cli {
+                        compares(p.name)
+                    } else {
+                        needs.iter().all(|m| publishes(p, m))
+                    }
+                })
                 .map(|p| p.name)
                 .collect();
             assert!(
@@ -602,7 +637,7 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         // Load-bearing: without it, a loop that stopped matching would skip every assertion above
         // and report success about nothing.
-        assert_eq!(checked, 31, "thirty-one of the defaults are profile-scoped");
+        assert_eq!(checked, 32, "thirty-two of the defaults are profile-scoped");
     }
 
     /// Exactly four seeded defaults are fleet-wide, and they are the four that really are.

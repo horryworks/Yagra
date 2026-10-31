@@ -1,0 +1,29 @@
+[
+  {
+    "model": "ios",
+    "startup": "show startup-config",
+    "save": "write memory",
+    "confirms": [],
+    "success": "\\[OK\\]",
+    "denied": "(?i)(% ?invalid input|% ?authorization failed|access denied|not authorized)"
+  },
+  {
+    "model": "vrp",
+    "startup": "display saved-configuration",
+    "compare": "compare configuration",
+    "same": "(?i)the current configuration is the same as the next startup configuration",
+    "save": "save",
+    "confirms": [
+      [
+        "\\[Y/N\\]:?\\s*$",
+        "y"
+      ],
+      [
+        "(?i)file name.*\\]:?\\s*$",
+        ""
+      ]
+    ],
+    "success": "(?i)successfully",
+    "denied": "(?i)(error: unrecognized command|permission|insufficient|authority)"
+  }
+]

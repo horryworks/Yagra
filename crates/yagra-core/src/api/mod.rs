@@ -42,6 +42,7 @@ pub(crate) mod collection;
 pub(crate) mod config_backup;
 mod config_bundle;
 pub(crate) mod config_remote;
+pub(crate) mod config_save;
 pub(crate) mod credentials;
 mod dashboard;
 pub(crate) mod discovery;
@@ -156,6 +157,9 @@ use yagra_base::secrets::CredentialStore;
 pub struct AdminState {
     /// Config backup (ADR-210 stage 2): which nodes oxidized fetches, and what it last reported.
     pub config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
+    /// Saves Yagra made or was asked to make to a device, and what the save script last saw about
+    /// whether a device is saved (ADR-222).
+    pub config_saves: Arc<yagra_base::config_save::ConfigSaveRepo>,
     /// The bundled oxidized; `None` on a deployment without one, where its routes answer 503.
     pub oxidized: Option<Arc<config_backup::OxidizedHandle>>,
     /// Where config backups are pushed (ADR-210 stage 4).
@@ -508,6 +512,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(rediscover::routes())
         // Config backup through the bundled oxidized (ADR-210 stage 2), and oxidized's source.
         .merge(config_backup::routes())
+        .merge(config_save::routes())
         .merge(config_remote::routes())
         // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
         .merge(openapi::routes())
@@ -1622,7 +1627,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
-        assert_eq!(json["permissions"].as_array().unwrap().len(), 9);
+        assert_eq!(json["permissions"].as_array().unwrap().len(), 10);
         let roles = json["roles"].as_array().unwrap();
         assert_eq!(roles.len(), 3);
         let admin = roles.iter().find(|r| r["key"] == "admin").unwrap();

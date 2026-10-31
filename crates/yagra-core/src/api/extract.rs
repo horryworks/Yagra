@@ -171,14 +171,23 @@ impl FromRequestParts<ApiState> for Actor {
 /// copyable, so one that could reveal would let whoever holds it walk off with every device login
 /// in a loop, and the audit log would name only the token's owner. A person reads a secret, one
 /// at a time, while signed in.
-const TOKEN_DENIED_PERMISSIONS: [Permission; 2] =
-    [Permission::ManageUsers, Permission::RevealCredentials];
+///
+/// Saving a device's configuration (ADR-222 decision 5) for the same reason: it is the one write
+/// Yagra makes to a device, and a person makes it, one device at a time.
+const TOKEN_DENIED_PERMISSIONS: [Permission; 3] = [
+    Permission::ManageUsers,
+    Permission::RevealCredentials,
+    Permission::SaveDeviceConfig,
+];
 
 /// What a token is told when [`TOKEN_DENIED_PERMISSIONS`] refuses it.
 fn token_denied_message(perm: Permission) -> &'static str {
     match perm {
         Permission::RevealCredentials => {
             "an API token cannot read a credential back — sign in to do this"
+        }
+        Permission::SaveDeviceConfig => {
+            "an API token cannot save a device's configuration — sign in to do this"
         }
         _ => "an API token cannot administer users — sign in to do this",
     }
@@ -263,6 +272,13 @@ impl RequiredPermission for RevealCredentialsPerm {
     const PERMISSION: Permission = Permission::RevealCredentials;
 }
 
+/// Save a device's running configuration as its startup configuration (ADR-222). Admin only, and
+/// never an API token ([`TOKEN_DENIED_PERMISSIONS`]).
+pub struct SaveDeviceConfigPerm;
+impl RequiredPermission for SaveDeviceConfigPerm {
+    const PERMISSION: Permission = Permission::SaveDeviceConfig;
+}
+
 /// Read the audit log — who did what, across the whole system, including actions taken in domains
 /// the caller cannot otherwise see. Its own permission rather than `ManageConfig` for that reason.
 pub struct ViewAuditPerm;
@@ -292,6 +308,8 @@ pub type RequireManageCredentials = Require<ManageCredentialsPerm>;
 pub type RequireRevealCredentials = Require<RevealCredentialsPerm>;
 /// Gated on reading the audit log.
 pub type RequireViewAudit = Require<ViewAuditPerm>;
+/// Gated on saving a device's configuration.
+pub type RequireSaveDeviceConfig = Require<SaveDeviceConfigPerm>;
 
 #[async_trait]
 impl<P: RequiredPermission> FromRequestParts<ApiState> for Require<P> {

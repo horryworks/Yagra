@@ -577,6 +577,7 @@ pub(crate) async fn consume_results<S>(
     meraki_inflight: Arc<yagra_meraki::MerakiInflight>,
     coordinator: Arc<Coordinator>,
     ap_fanout: Arc<ApFanout>,
+    unsaved: Arc<crate::tsdb::config_unsaved::UnsavedCache>,
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
@@ -592,6 +593,7 @@ pub(crate) async fn consume_results<S>(
         // How long the running configuration has gone unsaved (ADR-222), computed from three
         // readings of this same poll so a threshold rule judges it like any collected metric.
         crate::tsdb::config_unsaved::add_to(&mut result);
+        unsaved.add_to(&mut result, chrono::Utc::now());
         let aps = fanned.aps;
         // Each AP this inventory spoke about has just been reported, by this controller (ADR-064
         // Inc.G). Noted before the AP's result is judged, so the engine reads it as current when it
@@ -1942,6 +1944,7 @@ mod tests {
             inflight,
             coordinator,
             ap_fanout,
+            Arc::new(crate::tsdb::config_unsaved::UnsavedCache::default()),
         )
         .await;
         drop(history_tx);

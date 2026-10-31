@@ -28,6 +28,7 @@ pub mod change_feed;
 pub mod config_backup;
 pub mod config_gen;
 pub mod config_remote;
+pub mod config_save;
 pub mod groups;
 /// The outbound HTTP client core and its integrations build (ADR-184). Apart from
 /// `yagra-transport`, whose clients talk to monitored devices under the operator's TLS policy.

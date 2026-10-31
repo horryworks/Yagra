@@ -85,3 +85,9 @@ docker run --rm --network "$NET" \
     cargo test --workspace --profile $PROFILE
     cargo test --workspace --all-targets --profile $PROFILE -- --include-ignored
   "
+
+# The config save script (ADR-222), run in the oxidized image the composition pins against a fake
+# device. It leans on oxidized internals, and nothing in the Rust suite executes Ruby, so this is
+# the only gate between an oxidized bump and a save script that no longer logs in. It reads the
+# commit's own copy of the script, not the working tree.
+bash "$SRC/scripts/oxidized-script-test.sh"

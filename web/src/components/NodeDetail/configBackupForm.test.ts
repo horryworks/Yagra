@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import type { AttemptView, ConfigBackupView } from '../../types/api';
+import type { AttemptView, ConfigBackupView, SaveRecord } from '../../types/api';
 import {
   attemptLine,
   bodyOf,
+  canOfferSave,
   formOf,
   isDirty,
   isQuietFetchRefusal,
@@ -12,6 +13,7 @@ import {
   pickedLogins,
   previousOf,
   refreshMs,
+  saveLine,
   shortOid,
   stateLine,
 } from './configBackupForm';
@@ -34,7 +36,49 @@ const view = (over: Partial<ConfigBackupView> = {}): ConfigBackupView => ({
   readiness: 'off',
   status: null,
   models: ['ios', 'nxos'],
+  save_supported: true,
+  saves: [],
   ...over,
+});
+
+const save = (over: Partial<SaveRecord>): SaveRecord => ({
+  id: 's1',
+  origin: 'person',
+  state: 'saved',
+  requested_at: '2026-10-31T10:00:00Z',
+  kept_startup: true,
+  ...over,
+});
+
+describe('config save (ADR-222)', () => {
+  const ready = view({ enabled: true, login_confirmed: true, readiness: 'ready', credential_id: 'b' });
+
+  it('offers the button only for a backed-up node with a working login and a savable model', () => {
+    expect(canOfferSave(ready)).toBe(true);
+    expect(canOfferSave({ ...ready, save_supported: false })).toBe(false);
+    expect(canOfferSave({ ...ready, login_confirmed: false })).toBe(false);
+    expect(canOfferSave({ ...ready, enabled: false })).toBe(false);
+    expect(canOfferSave({ ...ready, readiness: 'no_poller' })).toBe(false);
+    expect(canOfferSave({ ...ready, available: false })).toBe(false);
+  });
+
+  it('hides the button while a save is waiting or running, and reads again fast meanwhile', () => {
+    for (const state of ['pending', 'running'] as const) {
+      const v = { ...ready, saves: [save({ state })] };
+      expect(canOfferSave(v)).toBe(false);
+      expect(refreshMs(v)).toBe(3_000);
+    }
+    expect(refreshMs({ ...ready, saves: [save({ state: 'saved' })] })).toBeUndefined();
+  });
+
+  it('names a failure by its kind and a missing kind as other', () => {
+    expect(saveLine(save({ state: 'saved' }))).toEqual({ key: 'config.saves.state.saved', tone: 'ok' });
+    expect(saveLine(save({ state: 'failed', failure: 'denied' })).key).toBe(
+      'config.saves.failure.denied',
+    );
+    expect(saveLine(save({ state: 'failed' })).key).toBe('config.saves.failure.other');
+    expect(saveLine(save({ state: 'running' })).tone).toBe('busy');
+  });
 });
 
 const attempt = (over: Partial<AttemptView>): AttemptView => ({

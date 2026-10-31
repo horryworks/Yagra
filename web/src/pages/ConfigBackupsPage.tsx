@@ -28,6 +28,7 @@ import { formatTimestamp } from '../lib/format';
 import { Button } from '../components/ui/Button';
 import { scheduleLine } from './configBackupSchedule';
 import { ConfigBackupScheduleModal } from './ConfigBackupScheduleModal';
+import { ConfigAutoSaveModal } from './ConfigAutoSaveModal';
 import './ConfigBackupsPage.css';
 
 export function ConfigBackupsPage() {
@@ -49,6 +50,8 @@ export function ConfigBackupsPage() {
   const line = push.data?.configured ? pushLine(push.data) : null;
   // When the backups are fetched (ADR-210 stage 6): the daily start and how far a run has got.
   const canConfig = useCan('manage_config');
+  const canSave = useCan('save_device_config');
+  const [autoSaveOpen, setAutoSaveOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const schedule = useLoad(() => api.getConfigBackupSchedule(), [], {
     initial: null,
@@ -141,6 +144,28 @@ export function ConfigBackupsPage() {
             </Button>
           )}
         </p>
+      )}
+      {schedule.data && (
+        <p className="cfgbl-sched">
+          <span>
+            {schedule.data.auto_save.enabled
+              ? t('config.autoSave.lineOn', { hours: schedule.data.auto_save.after_hours })
+              : t('config.autoSave.lineOff')}
+          </span>
+          {canSave && (
+            <Button onClick={() => setAutoSaveOpen(true)}>{t('config.autoSave.change')}</Button>
+          )}
+        </p>
+      )}
+      {autoSaveOpen && schedule.data && (
+        <ConfigAutoSaveModal
+          schedule={schedule.data}
+          onClose={() => setAutoSaveOpen(false)}
+          onSaved={() => {
+            setAutoSaveOpen(false);
+            schedule.reload();
+          }}
+        />
       )}
       {editing && schedule.data && (
         <ConfigBackupScheduleModal

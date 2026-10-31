@@ -724,6 +724,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-save-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_auto_save"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/bundle": {
         parameters: {
             query?: never;
@@ -2837,6 +2853,38 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["rescan_logins"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/config-backup/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["save_now"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/config-backup/saves/{save_id}/startup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_startup"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5635,6 +5683,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/oxidized/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["save_job"];
+        put?: never;
+        post: operations["save_report"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -6294,6 +6358,16 @@ export interface components {
         /** @description Where to send the browser to start the SSO handshake. */
         AuthorizeUrl: {
             authorize_url: string;
+        };
+        /** @description Whether Yagra saves on its own, and after how long unsaved (decision 8). */
+        AutoSave: {
+            /**
+             * Format: int32
+             * @description How long a device stays unsaved before Yagra saves it, 1 to [`AUTO_SAVE_MAX_HOURS`].
+             */
+            after_hours: number;
+            /** @description Off by default. */
+            enabled: boolean;
         };
         /** @description One release the sidecar found, with the digests it resolved. */
         AvailableRelease: {
@@ -7200,6 +7274,11 @@ export interface components {
             /** Format: int32 */
             at_minute: number;
             /**
+             * @description Whether Yagra saves an unsaved device on its own after a fetch, and after how long (ADR-222
+             *     decision 8). Changed with `PUT /api/v1/config-save-settings`.
+             */
+            auto_save: components["schemas"]["AutoSave"];
+            /**
              * Format: int32
              * @description How many nodes are fetched at once.
              */
@@ -7272,6 +7351,13 @@ export interface components {
             profile_model?: string | null;
             /** @description Whether it is fetched, or the one thing to fix. */
             readiness: components["schemas"]["Readiness"];
+            /**
+             * @description Whether Yagra can save this node's model (ADR-222): the model it is fetched with has a
+             *     save command in Yagra's table.
+             */
+            save_supported: boolean;
+            /** @description The newest saves, newest first. */
+            saves: components["schemas"]["SaveRecord"][];
             /** @description How fast it tries its logins: one set of lockout limits each (stage 3 decision 27). */
             scan_mode: components["schemas"]["ScanMode"];
             status?: null | components["schemas"]["BackupStatusView"];
@@ -12271,7 +12357,7 @@ export interface components {
          * @description A discrete capability checked at the API edge.
          * @enum {string}
          */
-        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "reveal_credentials" | "manage_system" | "manage_users" | "view_audit";
+        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "reveal_credentials" | "save_device_config" | "manage_system" | "manage_users" | "view_audit";
         /** @description One permission in the role/privilege matrix. */
         PermissionInfo: {
             description: string;
@@ -13987,6 +14073,83 @@ export interface components {
             id: string;
             name: string;
         };
+        /** @description The save the button asked for. */
+        SaveAccepted: {
+            /**
+             * Format: uuid
+             * @description The save's id; it appears in the node's config backup with how it ended.
+             */
+            id: string;
+        };
+        /**
+         * @description Why a save failed. The script reports one of these, never what the device printed.
+         * @enum {string}
+         */
+        SaveFailure: "auth" | "unreachable" | "denied" | "no_answer" | "unsupported" | "not_fetched" | "other";
+        /** @description What the save script does for one node, with what it needs to do it. */
+        SaveJob: {
+            /** @description `save` or `check`. */
+            action: string;
+            /** @description The model's row of `config_save::SAVE_COMMANDS`, the only commands the script may send. */
+            commands: Record<string, never>;
+            enable?: string | null;
+            group: string;
+            input: string;
+            ip: string;
+            model: string;
+            password: string;
+            /**
+             * Format: uuid
+             * @description The save this run reports against; absent for a check.
+             */
+            save?: string | null;
+            /** Format: int32 */
+            ssh_port?: number | null;
+            /** Format: int32 */
+            telnet_port?: number | null;
+            username: string;
+        };
+        /**
+         * @description Who asked for a save.
+         * @enum {string}
+         */
+        SaveOrigin: "person" | "auto";
+        /** @description One save, as a screen lists it. */
+        SaveRecord: {
+            failure?: null | components["schemas"]["SaveFailure"];
+            /** Format: date-time */
+            finished_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** @description Whether the startup configuration the save replaced was kept. */
+            kept_startup: boolean;
+            origin: components["schemas"]["SaveOrigin"];
+            /** Format: date-time */
+            requested_at: string;
+            state: components["schemas"]["SaveState"];
+        };
+        /** @description How the save script's run went, as it posts it. */
+        SaveReport: {
+            /** @description `save` or `check`. */
+            action: string;
+            /** @description A `SaveFailure` token; empty when it succeeded. */
+            failure?: string;
+            /** Format: uuid */
+            node: string;
+            /** @description The save reported on; empty for a check. */
+            save?: string;
+            /** @description The startup configuration read just before a save. */
+            startup?: string;
+            /** @description The same, read again after a save that succeeded. */
+            unsaved_after?: string;
+            /** @description `true` or `false` when the model can compare running with startup; empty otherwise. */
+            unsaved_before?: string;
+        };
+        /**
+         * @description Where a save stands.
+         * @enum {string}
+         */
+        SaveState: "pending" | "running" | "saved" | "failed";
         /** @description One finding as the cross-run search returns it: the finding, plus the run it came from. */
         SavedFinding: {
             /**
@@ -14500,6 +14663,10 @@ export interface components {
         StartedScan: {
             /** Format: uuid */
             scan_id: string;
+        };
+        /** @description The startup configuration a save replaced. */
+        StartupText: {
+            text: string;
         };
         /** @description A stored collection item with its id and scope, for the API (the scheduler ignores id). */
         StoredCollectionItem: components["schemas"]["CollectionItem"] & {
@@ -18584,6 +18751,57 @@ export interface operations {
             };
             /** @description This deployment has no write side (skeleton mode) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_auto_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoSave"];
+            };
+        };
+        responses: {
+            /** @description Saved. When on, a device whose running configuration has gone unsaved for `after_hours` is saved right after its next successful fetch, unless it is in a maintenance window or its last save failed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoSave"];
+                };
+            };
+            /** @description `after_hours` is outside 1 to 720 (`invalid_after_hours`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26777,6 +26995,135 @@ export interface operations {
                 };
             };
             /** @description No such node the caller can see, or it has no config backup */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    save_now: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Asked: the node is fetched now, and right after that fetch succeeds its running configuration is saved as its startup configuration. The startup configuration it replaces is kept first. A save already waiting or running for the node is answered with its id rather than a second one */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveAccepted"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Yagra cannot save this node: config backup is off or not ready, or its model has no save command (`config_save_unsupported`); or the fetch in front of it could not start (`config_backup_not_ready`, `config_backup_busy`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The bundled oxidized did not answer (`oxidized_unreachable`) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_startup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+                /** @description Save id */
+                save_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The startup configuration the device held just before this save replaced it, with oxidized's secret filter applied */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartupText"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see, no such save, or none was kept (`config_save_not_found`) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -37405,6 +37752,94 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
+            };
+            /** @description No token, or the wrong one (`oxidized_token`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    save_job: {
+        parameters: {
+            query: {
+                /** @description oxidized's name for the node: its id. */
+                node: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What to do for the node just fetched, with its login in plaintext and its model's commands. For the save script inside the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token` */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveJob"];
+                };
+            };
+            /** @description Nothing to do for this node */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No token, or the wrong one (`oxidized_token`) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no config backup (`config_backup_unavailable`) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    save_report: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["SaveReport"];
+            };
+        };
+        responses: {
+            /** @description Recorded. For the save script inside the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token` */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description No token, or the wrong one (`oxidized_token`) */
             401: {

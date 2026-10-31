@@ -10,6 +10,10 @@
 // text. Switching the backup on hands the logins to the device, so Start and Save also need
 // `reveal_credentials`; logins are named only for a caller who may list credentials. The judgement
 // — the form, the state line, how often to read again — is `configBackupForm.ts`.
+//
+// "Save to startup" (ADR-222) is the one control here that writes to the device: it takes
+// `save_device_config` (Admin), confirms, and the save runs right after a fetch. The saves list
+// below the attempts shows how each ended, and the startup configuration it replaced.
 
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -25,6 +29,7 @@ import { DataTable, type Column } from '../ui/DataTable';
 import { EmptyState } from '../ui/EmptyState';
 import { ScreenLink } from '../ui/ScreenLink';
 import { CredentialPicker } from '../ui/CredentialPicker';
+import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 import { TimeCell } from '../ui/tableCells';
 import { formatExactTime } from '../../lib/format';
 import { isCliCredentialKind } from '../../lib/credentialKinds';
@@ -37,11 +42,13 @@ import {
   type ConfigDiff,
   type ConfigVersion,
   type NodeDetail,
+  type SaveRecord,
   type ScanMode,
 } from '../../types/api';
 import {
   attemptLine,
   bodyOf,
+  canOfferSave,
   formOf,
   isDirty,
   isQuietFetchRefusal,
@@ -50,20 +57,27 @@ import {
   pickedLogins,
   previousOf,
   refreshMs,
+  saveLine,
   shortOid,
   stateLine,
   type ConfigBackupForm,
 } from './configBackupForm';
 import './ConfigBackupTab.css';
 
-/** What the viewer pane shows: one version's text, or a version beside the one before it. */
-type Shown = { kind: 'text'; oid: string } | { kind: 'diff'; from: string; to: string };
+/** What the viewer pane shows: one version's text, a version beside the one before it, or the
+ *  startup configuration a save replaced. */
+type Shown =
+  | { kind: 'text'; oid: string }
+  | { kind: 'diff'; from: string; to: string }
+  | { kind: 'startup'; save: string };
 
 export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const canConfig = useCan('manage_config');
   const canCreds = useCan('manage_credentials');
   const canReveal = useCan('reveal_credentials');
+  const canSave = useCan('save_device_config');
+  const [confirmSave, setConfirmSave] = useState(false);
   const [poll, setPoll] = useState<number | undefined>(undefined);
   const view = useLoad(() => api.getConfigBackup(node.id), [node.id], {
     initial: null as ConfigBackupView | null,
@@ -176,6 +190,45 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
     [t, loginText],
   );
 
+  const saveColumns = useMemo<Column<SaveRecord>[]>(
+    () => [
+      {
+        key: 'at',
+        header: t('config.saves.cols.at'),
+        width: '200px',
+        render: (r) => <TimeCell iso={r.requested_at} />,
+      },
+      {
+        key: 'origin',
+        header: t('config.saves.cols.origin'),
+        width: '120px',
+        render: (r) => t(`config.saves.origin.${r.origin}`),
+      },
+      {
+        key: 'result',
+        header: t('config.saves.cols.result'),
+        width: '1fr',
+        render: (r) => {
+          const line = saveLine(r);
+          return <span className={`cfgb-tone-${line.tone}`}>{t(line.key)}</span>;
+        },
+      },
+      {
+        key: 'actions',
+        header: t('config.saves.cols.actions'),
+        width: '200px',
+        align: 'right',
+        render: (r) =>
+          canConfig && r.kept_startup ? (
+            <Button variant="outline" onClick={() => setShown({ kind: 'startup', save: r.id })}>
+              {t('config.saves.viewStartup')}
+            </Button>
+          ) : null,
+      },
+    ],
+    [t, canConfig],
+  );
+
   const columns = useMemo<Column<ConfigVersion>[]>(
     () => [
       {
@@ -276,6 +329,11 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                 <Button onClick={fetchNow} disabled={busy}>
                   {t('config.fetchNow')}
                 </Button>
+                {canSave && canOfferSave(v) && (
+                  <Button variant="outline" onClick={() => setConfirmSave(true)} disabled={busy}>
+                    {t('config.saves.button')}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -403,6 +461,14 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               rowKey={(a) => `${a.at}:${a.outcome}`}
             />
           )}
+          {v.saves.length > 0 && (
+            <DataTable
+              tableId="node.configSaves"
+              rows={v.saves}
+              columns={saveColumns}
+              rowKey={(r) => r.id}
+            />
+          )}
           {v.available && (
             <DataTable
               tableId="node.configVersions"
@@ -415,6 +481,21 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
           )}
           {shown && canConfig && (
             <ConfigViewer nodeId={node.id} shown={shown} onClose={() => setShown(null)} />
+          )}
+          {confirmSave && (
+            <ConfirmDeleteModal
+              title={t('config.saves.confirmTitle')}
+              confirmLabel={t('config.saves.confirmLabel')}
+              errorFallback={t('config.saves.err')}
+              onConfirm={() => api.saveConfigNow(node.id)}
+              onClose={() => setConfirmSave(false)}
+              onDone={() => {
+                setConfirmSave(false);
+                view.reload();
+              }}
+            >
+              {t('config.saves.confirm', { node: node.name })}
+            </ConfirmDeleteModal>
           )}
         </div>
       )}
@@ -433,12 +514,19 @@ function ConfigViewer({
   onClose: () => void;
 }) {
   const { t } = useTranslation('nodes');
-  const key = shown.kind === 'text' ? shown.oid : `${shown.from}:${shown.to}`;
+  const key =
+    shown.kind === 'text'
+      ? shown.oid
+      : shown.kind === 'startup'
+        ? `startup:${shown.save}`
+        : `${shown.from}:${shown.to}`;
   const loaded = useLoad<string | ConfigDiff | null>(
     () =>
       shown.kind === 'text'
         ? api.getConfigVersion(nodeId, shown.oid).then((r) => r.text)
-        : api.diffConfigVersions(nodeId, shown.from, shown.to),
+        : shown.kind === 'startup'
+          ? api.getConfigSaveStartup(nodeId, shown.save).then((r) => r.text)
+          : api.diffConfigVersions(nodeId, shown.from, shown.to),
     [nodeId, key],
     { initial: null, errorFallback: t('config.err.text') },
   );
@@ -449,7 +537,9 @@ function ConfigViewer({
         <span className="mono">
           {shown.kind === 'text'
             ? shortOid(shown.oid)
-            : `${shortOid(shown.from)} → ${shortOid(shown.to)}`}
+            : shown.kind === 'startup'
+              ? t('config.saves.viewStartup')
+              : `${shortOid(shown.from)} → ${shortOid(shown.to)}`}
         </span>
         <Button variant="outline" onClick={onClose}>
           {t('common:actions.close')}

@@ -169,6 +169,10 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: cargo test --workspace --all-targets -- --include-ignored
+      # The config save script (ADR-222) inside the oxidized image the composition pins, against a
+      # fake device: nothing above runs Ruby, and the script leans on oxidized internals.
+      - name: Save script (oxidized)
+        run: bash scripts/oxidized-script-test.sh
 
   frontend:
     name: frontend (web)

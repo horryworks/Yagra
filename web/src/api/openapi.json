@@ -3405,6 +3405,66 @@
         }
       }
     },
+    "/api/v1/config-save-settings": {
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "put_auto_save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved. When on, a device whose running configuration has gone unsaved for `after_hours` is saved right after its next successful fetch, unless it is in a maintenance window or its last save failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoSave"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`after_hours` is outside 1 to 720 (`invalid_after_hours`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config/bundle": {
       "get": {
         "tags": [
@@ -13725,6 +13785,170 @@
           },
           "404": {
             "description": "No such node the caller can see, or it has no config backup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/config-backup/save": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "save_now",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Asked: the node is fetched now, and right after that fetch succeeds its running configuration is saved as its startup configuration. The startup configuration it replaces is kept first. A save already waiting or running for the node is answered with its id rather than a second one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Yagra cannot save this node: config backup is off or not ready, or its model has no save command (`config_save_unsupported`); or the fetch in front of it could not start (`config_backup_not_ready`, `config_backup_busy`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The bundled oxidized did not answer (`oxidized_unreachable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/config-backup/saves/{save_id}/startup": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_startup",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "save_id",
+            "in": "path",
+            "description": "Save id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The startup configuration the device held just before this save replaced it, with oxidized's secret filter applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartupText"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see, no such save, or none was kept (`config_save_not_found`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -26808,6 +27032,102 @@
         }
       }
     },
+    "/internal/oxidized/save": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "save_job",
+        "parameters": [
+          {
+            "name": "node",
+            "in": "query",
+            "description": "oxidized's name for the node: its id.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What to do for the node just fetched, with its login in plaintext and its model's commands. For the save script inside the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaveJob"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "Nothing to do for this node"
+          },
+          "401": {
+            "description": "No token, or the wrong one (`oxidized_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "save_report",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded. For the save script inside the bundled oxidized alone: it demands the source token in `x-yagra-oxidized-token`"
+          },
+          "401": {
+            "description": "No token, or the wrong one (`oxidized_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no config backup (`config_backup_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/readyz": {
       "get": {
         "tags": [
@@ -28232,6 +28552,26 @@
         "properties": {
           "authorize_url": {
             "type": "string"
+          }
+        }
+      },
+      "AutoSave": {
+        "type": "object",
+        "description": "Whether Yagra saves on its own, and after how long unsaved (decision 8).",
+        "required": [
+          "enabled",
+          "after_hours"
+        ],
+        "properties": {
+          "after_hours": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long a device stays unsaved before Yagra saves it, 1 to [`AUTO_SAVE_MAX_HOURS`].",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Off by default."
           }
         }
       },
@@ -29992,7 +30332,8 @@
           "at_minute",
           "concurrency",
           "max_concurrency",
-          "running"
+          "running",
+          "auto_save"
         ],
         "properties": {
           "at_hour": {
@@ -30005,6 +30346,10 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "auto_save": {
+            "$ref": "#/components/schemas/AutoSave",
+            "description": "Whether Yagra saves an unsaved device on its own after a fetch, and after how long (ADR-222\ndecision 8). Changed with `PUT /api/v1/config-save-settings`."
           },
           "concurrency": {
             "type": "integer",
@@ -30084,7 +30429,9 @@
           "scan_mode",
           "readiness",
           "models",
-          "available"
+          "available",
+          "save_supported",
+          "saves"
         ],
         "properties": {
           "attempts": {
@@ -30167,6 +30514,17 @@
           "readiness": {
             "$ref": "#/components/schemas/Readiness",
             "description": "Whether it is fetched, or the one thing to fix."
+          },
+          "save_supported": {
+            "type": "boolean",
+            "description": "Whether Yagra can save this node's model (ADR-222): the model it is fetched with has a\nsave command in Yagra's table."
+          },
+          "saves": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaveRecord"
+            },
+            "description": "The newest saves, newest first."
           },
           "scan_mode": {
             "$ref": "#/components/schemas/ScanMode",
@@ -40466,6 +40824,7 @@
           "manage_config",
           "manage_credentials",
           "reveal_credentials",
+          "save_device_config",
           "manage_system",
           "manage_users",
           "view_audit"
@@ -44230,6 +44589,209 @@
           }
         }
       },
+      "SaveAccepted": {
+        "type": "object",
+        "description": "The save the button asked for.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The save's id; it appears in the node's config backup with how it ended."
+          }
+        }
+      },
+      "SaveFailure": {
+        "type": "string",
+        "description": "Why a save failed. The script reports one of these, never what the device printed.",
+        "enum": [
+          "auth",
+          "unreachable",
+          "denied",
+          "no_answer",
+          "unsupported",
+          "not_fetched",
+          "other"
+        ]
+      },
+      "SaveJob": {
+        "type": "object",
+        "description": "What the save script does for one node, with what it needs to do it.",
+        "required": [
+          "action",
+          "ip",
+          "model",
+          "input",
+          "group",
+          "username",
+          "password",
+          "commands"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`save` or `check`."
+          },
+          "commands": {
+            "type": "object",
+            "description": "The model's row of `config_save::SAVE_COMMANDS`, the only commands the script may send."
+          },
+          "enable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "type": "string"
+          },
+          "input": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "save": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The save this run reports against; absent for a check."
+          },
+          "ssh_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "telnet_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "SaveOrigin": {
+        "type": "string",
+        "description": "Who asked for a save.",
+        "enum": [
+          "person",
+          "auto"
+        ]
+      },
+      "SaveRecord": {
+        "type": "object",
+        "description": "One save, as a screen lists it.",
+        "required": [
+          "id",
+          "origin",
+          "state",
+          "requested_at",
+          "kept_startup"
+        ],
+        "properties": {
+          "failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SaveFailure"
+              }
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kept_startup": {
+            "type": "boolean",
+            "description": "Whether the startup configuration the save replaced was kept."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/SaveOrigin"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SaveState"
+          }
+        }
+      },
+      "SaveReport": {
+        "type": "object",
+        "description": "How the save script's run went, as it posts it.",
+        "required": [
+          "node",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`save` or `check`."
+          },
+          "failure": {
+            "type": "string",
+            "description": "A `SaveFailure` token; empty when it succeeded."
+          },
+          "node": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "save": {
+            "type": "string",
+            "description": "The save reported on; empty for a check."
+          },
+          "startup": {
+            "type": "string",
+            "description": "The startup configuration read just before a save."
+          },
+          "unsaved_after": {
+            "type": "string",
+            "description": "The same, read again after a save that succeeded."
+          },
+          "unsaved_before": {
+            "type": "string",
+            "description": "`true` or `false` when the model can compare running with startup; empty otherwise."
+          }
+        }
+      },
+      "SaveState": {
+        "type": "string",
+        "description": "Where a save stands.",
+        "enum": [
+          "pending",
+          "running",
+          "saved",
+          "failed"
+        ]
+      },
       "SavedFinding": {
         "type": "object",
         "description": "One finding as the cross-run search returns it: the finding, plus the run it came from.",
@@ -45208,6 +45770,18 @@
           "scan_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "StartupText": {
+        "type": "object",
+        "description": "The startup configuration a save replaced.",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
           }
         }
       },

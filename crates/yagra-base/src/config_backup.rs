@@ -315,6 +315,16 @@ impl ConfigBackupRepo {
 
     /// Every node switched on, with its address, profile name and rotation.
     pub async fn targets(&self) -> anyhow::Result<Vec<BackupTarget>> {
+        self.targets_where(None).await
+    }
+
+    /// One node's target, read on its own: the save script asks about one node after each fetch,
+    /// and reading the whole list for that would cost the fleet per fetch (ADR-222).
+    pub async fn target(&self, node: Uuid) -> anyhow::Result<Option<BackupTarget>> {
+        Ok(self.targets_where(Some(node)).await?.into_iter().next())
+    }
+
+    async fn targets_where(&self, node: Option<Uuid>) -> anyhow::Result<Vec<BackupTarget>> {
         let rows = sqlx::query(&format!(
             "SELECT b.node_id, host(n.address) AS address, p.name AS profile_name, \
                     b.enabled, b.login_order, b.input, b.model_override, b.scan_mode, {ROTATION_COLUMNS}, \
@@ -322,8 +332,9 @@ impl ConfigBackupRepo {
              FROM node_config_backup b \
              JOIN nodes n ON n.id = b.node_id \
              LEFT JOIN profiles p ON p.id = n.profile_id \
-             WHERE b.enabled ORDER BY b.node_id"
+             WHERE b.enabled AND ($1::uuid IS NULL OR b.node_id = $1) ORDER BY b.node_id"
         ))
+        .bind(node)
         .fetch_all(&self.pool)
         .await?;
         rows.iter()

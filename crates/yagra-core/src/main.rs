@@ -290,6 +290,7 @@ fn run_oxidized_config() -> anyhow::Result<()> {
         oxidized::config::SOURCE_URL,
         oxidized::config::EVENTS_URL,
         oxidized::config::PUSH_URL,
+        oxidized::config::SAVE_URL,
     )?;
     tracing::info!(
         %home,
@@ -818,6 +819,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let config_backup = Arc::new(yagra_base::config_backup::ConfigBackupRepo::new(
         repo.pool(),
     ));
+    let config_saves = Arc::new(yagra_base::config_save::ConfigSaveRepo::new(repo.pool()));
     let oxidized_settings = oxidized::Settings::from_env();
     let oxidized_client = oxidized_settings
         .as_ref()
@@ -830,6 +832,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .as_ref()
             .and_then(|s| oxidized::relay::host_of(&s.url)),
         config_backup: config_backup.clone(),
+        config_saves: config_saves.clone(),
         oxidized: oxidized_client.clone(),
         llm: llm_repo.clone(),
         audit: audit_repo.clone(),
@@ -904,6 +907,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     let admin = Some(Arc::new(AdminState {
         config_backup,
+        config_saves: config_saves.clone(),
         oxidized: oxidized_settings
             .zip(oxidized_client)
             .map(|(settings, client)| {
@@ -1212,6 +1216,7 @@ struct LeaderTasks {
     deliveries: Arc<alerts::notification_log::DeliveryLogRepo>,
     /// Config backup (ADR-210 stage 2): where the status loop records what oxidized reported.
     config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
+    config_saves: Arc<yagra_base::config_save::ConfigSaveRepo>,
     /// The bundled oxidized; `None` when this deployment has none, and the loop does not start.
     oxidized: Option<Arc<oxidized::client::OxidizedClient>>,
     /// The config-backup relay (ADR-210 stage 5), and the host oxidized's connections come from.
@@ -1286,7 +1291,11 @@ impl LeaderTasks {
         if let Some(client) = self.oxidized.clone() {
             spawn_cancellable(
                 &self.shutdown,
-                oxidized::status::run_status_loop(client.clone(), self.config_backup.clone()),
+                oxidized::status::run_status_loop(
+                    client.clone(),
+                    self.config_backup.clone(),
+                    self.config_saves.clone(),
+                ),
             );
             spawn_cancellable(
                 &self.shutdown,
@@ -1374,6 +1383,13 @@ impl LeaderTasks {
         // recorded, not an empty map that would let it take the AP down. A failed read starts empty
         // and the upkeep loop retries it — the cost is APs publishing nothing until it succeeds.
         let ap_fanout = Arc::new(topology::wireless_fanout::ApFanout::new());
+        // What the save script last saw about each device it can compare (ADR-222 decision 4),
+        // re-read on a timer and added to that device's results as `config_unsaved_seconds`.
+        let unsaved = Arc::new(tsdb::config_unsaved::UnsavedCache::default());
+        spawn_cancellable(
+            &self.shutdown,
+            tsdb::config_unsaved::run_refresh(unsaved.clone(), self.config_saves.clone()),
+        );
         match self.wireless.ap_bindings().await {
             Ok(bindings) => {
                 ap_fanout.install(&bindings);
@@ -1435,6 +1451,7 @@ impl LeaderTasks {
                     self.meraki_inflight.clone(),
                     self.coordinator.clone(),
                     ap_fanout.clone(),
+                    unsaved.clone(),
                 ),
             );
         }

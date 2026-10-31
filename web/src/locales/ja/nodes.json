@@ -1342,6 +1342,53 @@
         "time": "開始時刻を入力してください。",
         "count": "同時に取る台数を選んでください。"
       }
+    },
+    "saves": {
+      "button": "startup に保存",
+      "confirmTitle": "running-config を保存しますか？",
+      "confirm": "{{node}} を再起動しても、今の startup-config には戻らなくなります。控えは Yagra に残ります。",
+      "confirmLabel": "保存",
+      "cols": {
+        "at": "日時",
+        "origin": "依頼",
+        "result": "結果",
+        "actions": "操作"
+      },
+      "origin": {
+        "person": "人",
+        "auto": "Yagra"
+      },
+      "state": {
+        "pending": "取得待ち",
+        "running": "保存中",
+        "saved": "保存済み"
+      },
+      "failure": {
+        "auth": "ログイン拒否",
+        "unreachable": "機器に届かない",
+        "denied": "機器が拒否",
+        "no_answer": "機器から確認なし",
+        "unsupported": "この機種は保存できない",
+        "not_fetched": "前の取得が失敗",
+        "other": "失敗"
+      },
+      "viewStartup": "置き換えた startup",
+      "err": "保存を依頼できませんでした"
+    },
+    "autoSave": {
+      "title": "自動保存",
+      "on": "オン",
+      "off": "オフ",
+      "after": "未保存の時間",
+      "hours": "時間",
+      "warning": "この時間より長く未保存の機器を、次の取得の後に Yagra が保存します。",
+      "lineOn": "自動保存: 未保存 {{hours}} 時間で保存",
+      "lineOff": "自動保存: オフ",
+      "change": "変更",
+      "err": {
+        "hours": "1 から 720 までの整数で入力してください。",
+        "save": "自動保存の設定を保存できませんでした"
+      }
     }
   }
 }

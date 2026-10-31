@@ -1487,6 +1487,31 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/nodes/:node_id/config-backup/save",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
+        "/api/v1/config-save-settings",
+        Global(
+            "the deployment's one automatic-save setting, refused to a caller restricted to \
+             folders",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/config-backup/saves/:save_id/startup",
+        NodeScoped,
+        Exempt(
+            "device configuration text kept before a save, off MCP for the reason a version's \
+             text is (ADR-210 decision 16); that a save happened and how it ended are in \
+             get_node_status",
+        ),
+    ),
+    (
         "GET",
         "/api/v1/config-backups",
         GroupFiltered,
@@ -2424,6 +2449,27 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/internal/oxidized/save",
+        Global(
+            "the bundled oxidized's save script asking what to do after a fetch, for oxidized \
+             alone, behind the source token rather than a person's session (ADR-222)",
+        ),
+        Exempt(
+            "a device login in plaintext for the bundled oxidized; ADR-018 keeps secret material \
+             out of every tool result",
+        ),
+    ),
+    (
+        "POST",
+        "/internal/oxidized/save",
+        Global(
+            "the bundled oxidized's save script reporting how a save or check went, for oxidized \
+             alone, behind the source token (ADR-222)",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/internal/oxidized/nodes",
         Global(
             "the bundled oxidized's node list: every node it fetches, for oxidized alone, behind the              source token rather than a person's session (ADR-210)",
@@ -2911,6 +2957,18 @@ mod tests {
             "/internal/oxidized/push",
             "the bundled oxidized's push script (ADR-210 stage 4) - it reports with the source \
              token, never a browser",
+        ),
+        (
+            "GET",
+            "/internal/oxidized/save",
+            "the bundled oxidized's save script (ADR-222) - it asks with the source token, never \
+             a browser",
+        ),
+        (
+            "POST",
+            "/internal/oxidized/save",
+            "the bundled oxidized's save script (ADR-222) - it reports with the source token, \
+             never a browser",
         ),
         (
             "GET",

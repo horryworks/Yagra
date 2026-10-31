@@ -422,6 +422,7 @@ async fn live_state_with(
         config_backup: Arc::new(yagra_base::config_backup::ConfigBackupRepo::new(
             pool.clone(),
         )),
+        config_saves: Arc::new(yagra_base::config_save::ConfigSaveRepo::new(pool.clone())),
         // No oxidized unless the test hands one in (`live_state_with_oxidized`): its routes answer
         // 503 otherwise.
         oxidized,

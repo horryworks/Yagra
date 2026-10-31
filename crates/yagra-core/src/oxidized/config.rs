@@ -27,12 +27,18 @@ pub(crate) const SOURCE_URL: &str = "http://core:8090/internal/oxidized/nodes";
 pub(crate) const EVENTS_URL: &str = "http://core:8090/internal/oxidized/events";
 /// Where the push script asks whether to push and reports how the push went (ADR-210 stage 4).
 pub(crate) const PUSH_URL: &str = "http://core:8090/internal/oxidized/push";
+/// Where the save script asks what to do after a fetch and reports what it did (ADR-222).
+pub(crate) const SAVE_URL: &str = "http://core:8090/internal/oxidized/save";
 
 /// The push script's file name in the shared directory, and the script itself (stage 4 decision 28).
 /// Written beside the configuration file, so the same one-shot owns both and an upgrade replaces
 /// both.
 pub(crate) const PUSH_SCRIPT_FILE: &str = "yagra-push.rb";
 const PUSH_SCRIPT: &str = include_str!("yagra-push.rb");
+/// The save script (ADR-222): the one script that sends a device anything but a fetch, and only
+/// what core hands it from `save::SAVE_COMMANDS`.
+pub(crate) const SAVE_SCRIPT_FILE: &str = "yagra-save.rb";
+pub(crate) const SAVE_SCRIPT: &str = include_str!("yagra-save.rb");
 /// Where oxidized sees the shared directory (`docker-compose.deploy.yml` mounts it there).
 const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 
@@ -44,7 +50,7 @@ const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 7;
+pub(crate) const CONFIG_REVISION: u32 = 8;
 
 const TOKEN_LEN: usize = 40;
 
@@ -115,11 +121,20 @@ pub(crate) fn read_token(home: &Path) -> std::io::Result<String> {
 ///   script asks core at [`PUSH_URL`] whether the repository's head needs pushing, so the hook
 ///   costs one local request when there is no destination. Its limit is longer than the script's
 ///   own (two and a half minutes waiting for another push, two for its own).
+/// - The `yagra-save` hook runs the save script after every fetch that succeeded (ADR-222): it
+///   asks core at the save URL what to do, which for almost every node is nothing, and exits
+///   before loading oxidized when it is. Its limit covers a save and two comparisons.
 /// - The pid file and crash reports stay in oxidized's own home (its data volume), not in the shared
 ///   directory: the image's start script removes a stale pid file only at that path, so one left
 ///   anywhere else by a crash would stop the next start.
 #[must_use]
-pub(crate) fn render(token: &str, source_url: &str, events_url: &str, push_url: &str) -> String {
+pub(crate) fn render(
+    token: &str,
+    source_url: &str,
+    events_url: &str,
+    push_url: &str,
+    save_url: &str,
+) -> String {
     format!(
         "---
 # Written by Yagra (yagra-core oxidized-config). Edits here are replaced on the next start.
@@ -189,6 +204,12 @@ hooks:
     async: true
     timeout: 300
     cmd: 'YAGRA_TOKEN=\"{token}\" YAGRA_PUSH_URL=\"{push_url}\" /usr/bin/ruby {SHARED_DIR_IN_OXIDIZED}/{PUSH_SCRIPT_FILE}'
+  yagra-save:
+    type: exec
+    events: [node_success]
+    async: true
+    timeout: 300
+    cmd: 'YAGRA_TOKEN=\"{token}\" YAGRA_SAVE_URL=\"{save_url}\" /usr/bin/ruby {SHARED_DIR_IN_OXIDIZED}/{SAVE_SCRIPT_FILE}'
 "
     )
 }
@@ -199,13 +220,19 @@ pub(crate) fn write(
     source_url: &str,
     events_url: &str,
     push_url: &str,
+    save_url: &str,
 ) -> anyhow::Result<()> {
     let token = ensure_token(home)?;
-    let script = home.join(PUSH_SCRIPT_FILE);
-    if std::fs::read_to_string(&script).ok().as_deref() != Some(PUSH_SCRIPT) {
-        yagra_base::atomic_file::write_atomically(&script, PUSH_SCRIPT.as_bytes(), 0o640)?;
+    for (file, text) in [
+        (PUSH_SCRIPT_FILE, PUSH_SCRIPT),
+        (SAVE_SCRIPT_FILE, SAVE_SCRIPT),
+    ] {
+        let script = home.join(file);
+        if std::fs::read_to_string(&script).ok().as_deref() != Some(text) {
+            yagra_base::atomic_file::write_atomically(&script, text.as_bytes(), 0o640)?;
+        }
     }
-    let body = render(&token, source_url, events_url, push_url);
+    let body = render(&token, source_url, events_url, push_url, save_url);
     let path = home.join(CONFIG_FILE);
     if std::fs::read_to_string(&path).ok().as_deref() == Some(body.as_str()) {
         return Ok(());
@@ -221,7 +248,7 @@ mod tests {
 
     #[test]
     fn the_configuration_strips_secrets_and_carries_the_token_and_source() {
-        let body = render("Abc123", SOURCE_URL, EVENTS_URL, PUSH_URL);
+        let body = render("Abc123", SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL);
         assert!(body.contains("remove_secret: true"));
         assert!(body.contains("x-yagra-oxidized-token: \"Abc123\""));
         assert!(body.contains("url: http://core:8090/internal/oxidized/nodes"));
@@ -239,6 +266,11 @@ mod tests {
         assert!(body.contains(
             "cmd: 'YAGRA_TOKEN=\"Abc123\" YAGRA_PUSH_URL=\"http://core:8090/internal/oxidized/push\" \
              /usr/bin/ruby /var/lib/yagra/oxidized/yagra-push.rb'"
+        ));
+        // The save hook runs after a successful fetch only (ADR-222 decision 7).
+        assert!(body.contains(
+            "cmd: 'YAGRA_TOKEN=\"Abc123\" YAGRA_SAVE_URL=\"http://core:8090/internal/oxidized/save\" \
+             /usr/bin/ruby /var/lib/yagra/oxidized/yagra-save.rb'"
         ));
     }
 
@@ -272,7 +304,7 @@ mod tests {
         // the folder Yagra's nodes are filed in. Either one out of step makes every push an empty
         // tree, which deletes every device's file at the destination.
         assert!(PUSH_SCRIPT.contains(&format!("GROUP = '{}'", super::super::GROUP)));
-        let repo = render("T", "S", "E", "P")
+        let repo = render("T", "S", "E", "P", "V")
             .lines()
             .find_map(|l| l.trim().strip_prefix("repo: "))
             .expect("the configuration names a repository")
@@ -290,11 +322,13 @@ mod tests {
         // are: they are what oxidized dials, and moving them to the internal listener (ADR-217) was
         // a change to the running configuration this digest could not see while it rendered
         // placeholders in their place.
-        let digest = sha2::Sha256::digest(render("T", SOURCE_URL, EVENTS_URL, PUSH_URL).as_bytes());
+        let digest = sha2::Sha256::digest(
+            render("T", SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL).as_bytes(),
+        );
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "b9691a6c6ef4720b3010189fd41c626dde8d54754182a550d3d76c905ebfb2a9",
+            "12d10e679c704f4723492e691ffdb787b5c2b6931641a1155d03232c892d41f2",
         )];
         assert_eq!(
             pinned,
@@ -326,11 +360,13 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("dir");
         let first = ensure_token(&dir).expect("create");
         assert_eq!(ensure_token(&dir).expect("reread"), first);
-        write(&dir, SOURCE_URL, EVENTS_URL, PUSH_URL).expect("write");
+        write(&dir, SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL).expect("write");
         let cfg = std::fs::read_to_string(dir.join(CONFIG_FILE)).expect("config");
         assert!(cfg.contains(&first));
         let script = std::fs::read_to_string(dir.join(PUSH_SCRIPT_FILE)).expect("script");
         assert_eq!(script, PUSH_SCRIPT);
+        let save = std::fs::read_to_string(dir.join(SAVE_SCRIPT_FILE)).expect("save script");
+        assert_eq!(save, SAVE_SCRIPT);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -75,6 +75,9 @@ import {
   BACKUP_READINESS,
   ATTEMPT_OUTCOMES,
   SCAN_MODES,
+  SAVE_FAILURES,
+  SAVE_ORIGINS,
+  SAVE_STATES,
   PUSH_FAILURES,
   REMOTE_TEST_RESULTS,
 } from './types/api';
@@ -367,6 +370,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('config backup mark', locales, 'tree.backupMark.', BACKUP_MARKS);
     expectKeys('config backup list state', locales, 'config.list.mark.', BACKUP_MARKS);
     expectKeys('config backup scan mode', locales, 'config.scanModes.', SCAN_MODES);
+    expectKeys('config save failure', locales, 'config.saves.failure.', SAVE_FAILURES);
+    expectKeys('config save origin', locales, 'config.saves.origin.', SAVE_ORIGINS);
+    // `saved` is a sentence of its own; the two open states share the same key prefix. A failed
+    // save is named by its failure, so `failed` has no key here.
+    expectKeys(
+      'config save state',
+      locales,
+      'config.saves.state.',
+      SAVE_STATES.filter((s) => s !== 'failed'),
+    );
     expectKeys(
       'config backup push failure',
       { en: enSystem, ja: jaSystem },

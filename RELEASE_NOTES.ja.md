@@ -19,6 +19,10 @@
 - **config バックアップを、決めた時刻から取るようになった。** Nodes ▸ Config backups に、毎日いつから何台ずつ（既定 1 台、最大 8 台）取るかと、その日の回がどこまで進んだかを出す。**変更** で両方を決める。前回のバックアップが古い機器から順に取り、途中で止まった回は続きから取る。既定は 02:00 UTC から 1 台ずつ。
 - `GET`/`PUT /api/v1/config-backup-schedule`。MCP の `get_system_health` に `config_schedule` の欄。
 - **Cisco IOS・IOS-XE の機器で、running-config を保存しないまま 1 時間たつと警告を出すようになった。** running-config が最後に変わった時刻と、startup-config を最後に書き込んだ時刻（CISCO-CONFIG-MAN-MIB）を読み、その差を新しいメトリクス `config_unsaved_seconds` に残す。保存済みなら 0。組み込みのルール **Unsaved configuration** が 3,600 秒以上で 2 回続いたら警告する。ほかのルールと同じく変更や上書きができる。再起動した直後の機器は未保存に数えない。
+- **機器の running-config を Yagra から保存できるようになった。** ノードの Config タブに、Admin だけが使える **startup に保存** がある。Yagra は機器を取得し、置き換える startup-config の控えを残してから、機種の保存コマンド（Cisco IOS は `write memory`、Huawei VRP は `save`）を送り、結果を一覧に出す。Yagra が config の読み取り以外で機器に送るコマンドはこれだけで、API トークンでは使えない。新しい権限 **Save device configuration** は Admin だけが持つ。
+- **自動保存。** Nodes ▸ Config backups で、決めた時間（既定 24 時間）より長く未保存の機器を、次の取得の後に保存させられる。既定はオフ。メンテナンス窓の中の機器は保存せず、前回の保存に失敗した機器は人が見るまで止まる。
+- **Huawei VRP でも未保存が分かるようになった。** 取得のたびに `compare configuration` を打ち、結果を `config_unsaved_seconds` に残す。Cisco と同じく、組み込みのルール **Unsaved configuration** が 1 時間で警告する。
+- `POST /api/v1/nodes/{id}/config-backup/save`、`GET /api/v1/nodes/{id}/config-backup/saves/{save_id}/startup`、`PUT /api/v1/config-save-settings`。`GET /api/v1/nodes/{id}/config-backup` に `saves` と `save_supported`、`GET /api/v1/config-backup-schedule` に `auto_save`、MCP の `get_node_status` に `last_save`。
 
 ### 改善
 
