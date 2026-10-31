@@ -7274,8 +7274,8 @@ export interface components {
             /** Format: int32 */
             at_minute: number;
             /**
-             * @description Whether Yagra saves an unsaved device on its own after a fetch, and after how long (ADR-222
-             *     decision 8). Changed with `PUT /api/v1/config-save-settings`.
+             * @description Whether Yagra saves on its own a device a fetch finds unsaved (ADR-222 decisions 8 and 13).
+             *     Changed with `PUT /api/v1/config-save-settings`.
              */
             auto_save: components["schemas"]["AutoSave"];
             /**
@@ -18776,7 +18776,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Saved. When on, a device with an open Unsaved configuration alert is saved right after its next successful fetch, unless its last save failed. How long a device may stay unsaved is that alert rule's threshold */
+            /** @description Saved. When on, a device that a successful fetch finds unsaved is saved right after that fetch, unless its last save failed or it is in a maintenance window. The Unsaved configuration alert does not gate it */
             200: {
                 headers: {
                     [name: string]: unknown;

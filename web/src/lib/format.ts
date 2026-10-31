@@ -826,6 +826,8 @@ export function localInputToUnix(v: string): number | null {
   if (!m) return null;
   const [y, mo, d, h, mi] = m.slice(1).map(Number);
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
+  // A day the month does not have (31 February) is refused, not rolled into the next month.
+  if (new Date(Date.UTC(y, mo - 1, d)).getUTCDate() !== d) return null;
   return Math.floor(zonedWallToMs(y, mo, d, h, mi) / 1000);
 }
 

@@ -113,18 +113,18 @@ def unsaved?(input, cmds)
 end
 
 form = base.dup
-# Whether a save command is about to be or has been sent; once it has, an error must not read as a
-# plain check.
-saving = job['action'] == 'save'
+# Whether the save command has been sent. Once it has, an error must not read as a plain check or
+# as a failure before anything was written: its answer is unknown.
+sent = false
 begin
   before = unsaved?(input, cmds)
   form['unsaved_before'] = before.to_s
-  saving ||= job['action'] == 'auto' && before == true
-  if saving
+  if job['action'] == 'save' || (job['action'] == 'auto' && before == true)
     # The startup configuration about to be replaced, through the model so its secret filter runs.
     form['startup'] = node.model.cmd(cmds['startup']).to_s
     confirms = cmds['confirms'].map { |q, a| [Regexp.new(q), a] }
     expect = Regexp.union(prompt, *confirms.map(&:first))
+    sent = true
     out = input.cmd(cmds['save'], expect).to_s
     seen = out.dup
     MAX_QUESTIONS.times do
@@ -144,8 +144,9 @@ begin
     form['unsaved_after'] = unsaved?(input, cmds).to_s if form['failure'].empty?
   end
 rescue StandardError, Timeout::Error
-  # A save whose answer never came back is the one outcome that must not read as saved.
-  form['failure'] = saving ? 'no_answer' : 'other'
+  # A save whose answer never came back is the one outcome that must not read as saved; an error
+  # before it was sent wrote nothing.
+  form['failure'] = sent ? 'no_answer' : 'other'
 ensure
   begin
     input.disconnect_cli if input.respond_to?(:disconnect_cli)

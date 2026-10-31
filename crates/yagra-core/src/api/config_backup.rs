@@ -1222,8 +1222,8 @@ pub(crate) struct ConfigBackupScheduleView {
     /// known to work. `null` for a caller who does not see the whole fleet.
     done: Option<usize>,
     total: Option<usize>,
-    /// Whether Yagra saves an unsaved device on its own after a fetch, and after how long (ADR-222
-    /// decision 8). Changed with `PUT /api/v1/config-save-settings`.
+    /// Whether Yagra saves on its own a device a fetch finds unsaved (ADR-222 decisions 8 and 13).
+    /// Changed with `PUT /api/v1/config-save-settings`.
     auto_save: yagra_base::config_save::AutoSave,
 }
 

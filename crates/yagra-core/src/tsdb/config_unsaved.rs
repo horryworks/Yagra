@@ -9,8 +9,9 @@
 //!   sample is a gap, never a "saved" reading, so an open alert is not closed by a poll that did
 //!   not ask.
 //! - **The command line** ([`UnsavedCache`]): for a model the save script compares (VRP), what it
-//!   last saw is in `config_unsaved`, read on a timer and added to every result of that node. A
-//!   node the script never checked gains nothing, for the same reason.
+//!   last saw is in `config_unsaved`, read on a timer and added to that node's SNMP scalar result
+//!   (the one carrying `sysUpTime`), once per interval. A node the script never checked gains
+//!   nothing, for the same reason.
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -41,11 +42,20 @@ impl UnsavedCache {
 
     /// Append `config_unsaved_seconds` to a result of a node the script has checked. A result
     /// that already carries one (SNMP answered) keeps its own.
+    ///
+    /// Only the result carrying the node's `sysUpTime` gains it — the SNMP scalar poll, one per
+    /// interval, the same result the SNMP source rides. The rule's dwell counts observations per
+    /// check, so a reading added to every result of the node (ICMP, walks, …) would satisfy a
+    /// dwell of two inside a single interval.
     pub(crate) fn add_to(&self, result: &mut PollResult, now: DateTime<Utc>) {
         if result
             .samples
             .iter()
             .any(|s| s.metric == config_unsaved::METRIC)
+            || !result
+                .samples
+                .iter()
+                .any(|s| s.ifindex.is_none() && s.metric == UPTIME)
         {
             return;
         }
@@ -148,20 +158,43 @@ mod tests {
             (checked, Some(now - chrono::Duration::seconds(90))),
             (saved, None),
         ]));
-        let mut r = result_of(checked, vec![]);
+        let scalar = || vec![Sample::gauge(UPTIME, 1.0)];
+        let mut r = result_of(checked, scalar());
+        cache.add_to(&mut r, now);
+        assert_eq!(r.samples.len(), 2);
+        assert_eq!(r.samples[1].value, 90.0);
+        let mut r = result_of(saved, scalar());
+        cache.add_to(&mut r, now);
+        assert_eq!(r.samples[1].value, 0.0);
+        let mut r = result_of(Uuid::new_v4(), scalar());
         cache.add_to(&mut r, now);
         assert_eq!(r.samples.len(), 1);
-        assert_eq!(r.samples[0].value, 90.0);
-        let mut r = result_of(saved, vec![]);
-        cache.add_to(&mut r, now);
-        assert_eq!(r.samples[0].value, 0.0);
-        let mut r = result_of(Uuid::new_v4(), vec![]);
-        cache.add_to(&mut r, now);
-        assert!(r.samples.is_empty());
         // SNMP already answered: its reading stands.
-        let mut r = result_of(checked, vec![Sample::gauge(config_unsaved::METRIC, 5.0)]);
+        let mut r = result_of(
+            checked,
+            vec![
+                Sample::gauge(UPTIME, 1.0),
+                Sample::gauge(config_unsaved::METRIC, 5.0),
+            ],
+        );
         cache.add_to(&mut r, now);
-        assert_eq!(r.samples.len(), 1);
+        assert_eq!(r.samples.len(), 2);
+    }
+
+    /// The node's other results (ICMP, a walk) gain nothing: the rule's dwell counts one reading
+    /// per interval, not one per result.
+    #[test]
+    fn the_cache_adds_a_reading_only_to_the_result_carrying_sys_uptime() {
+        let checked = Uuid::new_v4();
+        let cache = UnsavedCache::default();
+        let now = Utc::now();
+        cache.replace(HashMap::from([(checked, Some(now))]));
+        let mut icmp = result_of(checked, vec![]);
+        cache.add_to(&mut icmp, now);
+        assert!(icmp.samples.is_empty());
+        let mut walk = result_of(checked, vec![Sample::gauge("if_hc_in_octets", 1.0)]);
+        cache.add_to(&mut walk, now);
+        assert_eq!(walk.samples.len(), 1);
     }
 
     #[test]

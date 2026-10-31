@@ -8,10 +8,10 @@
 //!   `audit_mw` like every write.
 //! - `GET …/config-backup/saves/{save_id}/startup` — the startup configuration a save replaced.
 //!   `ManageConfig`, and off MCP, for the reason a version's text is (ADR-210 decision 16).
-//! - `PUT /api/v1/config-save-settings` — automatic save on or off (decision 8). When is the
-//!   Unsaved configuration alert's to say (decision 11). `SaveDeviceConfig` and a fleet-wide
-//!   caller: it lets Yagra save every
-//!   device on its own. Read back in `GET /api/v1/config-backup-schedule`.
+//! - `PUT /api/v1/config-save-settings` — automatic save on or off (decision 8): when on, a device
+//!   a fetch finds unsaved is saved right after that fetch (decision 13). `SaveDeviceConfig` and a
+//!   fleet-wide caller: it lets Yagra save every device on its own. Read back in
+//!   `GET /api/v1/config-backup-schedule`.
 //!
 //! And two routes for the save script inside the bundled oxidized, outside `/api/v1`, behind the
 //! source token, on the internal listener only (ADR-217):
@@ -121,7 +121,7 @@ async fn save_now(
     if commands_for(&model).is_none() || !target.rotation.login_confirmed {
         return Err(unsupported());
     }
-    let id = admin
+    let (id, created) = admin
         .config_saves
         .request(node_id, SaveOrigin::Person, Some(caller.user_id))
         .await
@@ -131,11 +131,14 @@ async fn save_now(
         // A fetch already out serves: the save runs after it succeeds.
         Err(e) if e.code() == "config_backup_pending" => {}
         Err(e) => {
-            admin
-                .config_saves
-                .abandon(id)
-                .await
-                .map_err(|e| failed(&e, "config save abandon"))?;
+            // Only a save this press created is given up; one already waiting is someone else's.
+            if created {
+                admin
+                    .config_saves
+                    .abandon(id)
+                    .await
+                    .map_err(|e| failed(&e, "config save abandon"))?;
+            }
             return Err(e);
         }
     }
@@ -182,7 +185,7 @@ async fn get_startup(
     put, path = "/api/v1/config-save-settings", tag = "nodes",
     request_body = AutoSave,
     responses(
-        (status = 200, description = "Saved. When on, a device with an open Unsaved configuration alert is saved right after its next successful fetch, unless its last save failed. How long a device may stay unsaved is that alert rule's threshold", body = AutoSave),
+        (status = 200, description = "Saved. When on, a device that a successful fetch finds unsaved is saved right after that fetch, unless its last save failed or it is in a maintenance window. The Unsaved configuration alert does not gate it", body = AutoSave),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
     ),
@@ -252,8 +255,11 @@ async fn auto_save(
         ))
         .await;
     if snmp_save_due(allowed, unsaved) {
-        let id = saves.request(node, SaveOrigin::Auto, None).await?;
-        audit_auto_save(admin, node, id, 202).await;
+        // A save already waiting (a person's press) is run as it is and stays theirs in the log.
+        let (id, created) = saves.request(node, SaveOrigin::Auto, None).await?;
+        if created {
+            audit_auto_save(admin, node, id, 202).await;
+        }
     }
     Ok(allowed)
 }
@@ -334,14 +340,33 @@ async fn save_job(
     ) else {
         return nothing();
     };
-    let auto = match commands_for(&model) {
-        Some(commands) => auto_save(&st, &admin, q.node, commands.compare.is_some())
+    // The login exactly as the source hands it to oxidized: through the node's relay port, and
+    // only while it may be handed over at all. Read before an automatic save is asked for, so a
+    // login that cannot be handed over never leaves Yagra a failed save of its own — which would
+    // stop every later automatic save of the node (decision 9) without the device being touched.
+    let ports = admin
+        .config_backup
+        .relay_ports(&[q.node])
+        .await
+        .map_err(|e| failed(&e, "config save relay port"))?;
+    let relay_ip = match oxidized::relay::host_of(&ox.settings.url) {
+        Some(host) => oxidized::relay::relay_address(&host).await,
+        None => None,
+    };
+    let login =
+        oxidized::source::source_nodes(vec![target], &admin.creds, Utc::now(), &ports, relay_ip)
+            .await
+            .into_iter()
+            .next()
+            .filter(|n| n.ip != oxidized::source::PARKED_IP);
+    let auto = match (&login, commands_for(&model)) {
+        (Some(_), Some(commands)) => auto_save(&st, &admin, q.node, commands.compare.is_some())
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!(node = %q.node, error = %e, "config save: automatic save not asked");
                 false
             }),
-        None => false,
+        _ => false,
     };
     let pending = admin
         .config_saves
@@ -358,33 +383,16 @@ async fn save_job(
             }
         }
     };
+    let Some(login) = login else {
+        give_up(SaveFailure::NotFetched).await;
+        return nothing();
+    };
     let Some(action) = oxidized::save::decide(&model, pending, auto) else {
         give_up(SaveFailure::Unsupported).await;
         return nothing();
     };
     let Some(commands) = commands_for(&model) else {
         give_up(SaveFailure::Unsupported).await;
-        return nothing();
-    };
-    // The login exactly as the source hands it to oxidized: through the node's relay port, and
-    // only while it may be handed over at all.
-    let ports = admin
-        .config_backup
-        .relay_ports(&[q.node])
-        .await
-        .map_err(|e| failed(&e, "config save relay port"))?;
-    let relay_ip = match oxidized::relay::host_of(&ox.settings.url) {
-        Some(host) => oxidized::relay::relay_address(&host).await,
-        None => None,
-    };
-    let login =
-        oxidized::source::source_nodes(vec![target], &admin.creds, Utc::now(), &ports, relay_ip)
-            .await
-            .into_iter()
-            .next()
-            .filter(|n| n.ip != oxidized::source::PARKED_IP);
-    let Some(login) = login else {
-        give_up(SaveFailure::NotFetched).await;
         return nothing();
     };
     metrics::counter!("yagra_config_save_jobs_total", "action" => match action {
@@ -580,7 +588,7 @@ mod tests {
         let st = with_oxidized(pool.clone(), &home).await;
         let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
         let saves = yagra_base::config_save::ConfigSaveRepo::new(pool.clone());
-        let id = saves
+        let (id, _) = saves
             .request(node, SaveOrigin::Person, None)
             .await
             .expect("request");

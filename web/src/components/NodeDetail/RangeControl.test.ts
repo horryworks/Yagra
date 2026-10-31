@@ -50,6 +50,10 @@ describe('datetime-local conversion', () => {
   it('returns null for empty or unparseable input', () => {
     expect(localInputToUnix('')).toBeNull();
     expect(localInputToUnix('not-a-date')).toBeNull();
+    // A day the month does not have is refused rather than rolled into the next month.
+    expect(localInputToUnix('2026-02-31T10:00')).toBeNull();
+    expect(localInputToUnix('2026-04-31T10:00')).toBeNull();
+    expect(localInputToUnix('2024-02-29T10:00')).not.toBeNull();
   });
 });
 

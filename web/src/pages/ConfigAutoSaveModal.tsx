@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Automatic save (ADR-222 decisions 8 and 11): on or off. When a device is saved is the Unsaved
-// configuration alert's to say — Yagra saves a device while that alert is open, after its next
-// fetch — so the dialog holds no time of its own. Admin only (`save_device_config`).
+// Automatic save (ADR-222 decisions 8 and 13): on or off. When on, Yagra saves a device right
+// after a fetch that finds it unsaved, unless its last save failed — so the dialog holds no time of
+// its own. Admin only (`save_device_config`).
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

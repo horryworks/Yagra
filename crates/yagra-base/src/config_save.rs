@@ -127,13 +127,14 @@ impl ConfigSaveRepo {
     }
 
     /// Ask for a save. A node already holding one that is pending or running gets that one back
-    /// rather than a second: two saves in a row save the same thing.
+    /// rather than a second: two saves in a row save the same thing. The flag says whether this
+    /// call created it, so a caller never records someone else's save as its own.
     pub async fn request(
         &self,
         node: Uuid,
         origin: SaveOrigin,
         by: Option<Uuid>,
-    ) -> anyhow::Result<Uuid> {
+    ) -> anyhow::Result<(Uuid, bool)> {
         let mut tx = self.pool.begin().await?;
         // Serialise requests for one node so two presses cannot both insert.
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 222))")
@@ -150,7 +151,7 @@ impl ConfigSaveRepo {
         .await?
         {
             tx.commit().await?;
-            return Ok(r.try_get("id")?);
+            return Ok((r.try_get("id")?, false));
         }
         let id = Uuid::new_v4();
         sqlx::query(
@@ -173,7 +174,7 @@ impl ConfigSaveRepo {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(id)
+        Ok((id, true))
     }
 
     /// Claim the node's pending save for the script that is about to run it. `None` when there is
@@ -440,10 +441,11 @@ mod tests {
     async fn a_save_is_claimed_once_and_finished_once(pool: PgPool) {
         let node = crate::pgtest::node(&pool, "sw-01", 1, None).await;
         let repo = ConfigSaveRepo::new(pool);
-        let id = repo.request(node, SaveOrigin::Person, None).await.unwrap();
+        let (id, created) = repo.request(node, SaveOrigin::Person, None).await.unwrap();
+        assert!(created);
         assert_eq!(
-            repo.request(node, SaveOrigin::Person, None).await.unwrap(),
-            id
+            repo.request(node, SaveOrigin::Auto, None).await.unwrap(),
+            (id, false)
         );
         assert_eq!(
             repo.claim(node).await.unwrap(),
