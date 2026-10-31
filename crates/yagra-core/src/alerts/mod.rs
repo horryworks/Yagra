@@ -59,6 +59,7 @@
 //! refresh — but it did not remove that path, and its decision 6 says why not.
 
 pub(crate) mod ack;
+pub(crate) mod availability;
 pub(crate) mod config;
 pub(crate) mod deleted;
 pub(crate) mod history;

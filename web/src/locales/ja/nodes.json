@@ -391,6 +391,26 @@
     "noRttHistory": "RTT の履歴はまだありません…",
     "unreachableDash": "—（到達不能）",
     "urlMonitor": "URL 監視",
+    "availabilityGraph": {
+      "title": "稼働状況",
+      "period": "期間",
+      "bars": "期間ごとの稼働",
+      "summaryClean": "停止なし",
+      "summaryDown_one": "停止 {{count}} 回 · 合計 {{duration}}",
+      "summaryDown_other": "停止 {{count}} 回 · 合計 {{duration}}",
+      "barUp": "停止なし",
+      "barDown_one": "停止 {{duration}}（{{count}} 回）",
+      "barDown_other": "停止 {{duration}}（{{count}} 回）",
+      "barMaintenance": "メンテナンス {{duration}}",
+      "barNoRecord": "記録なし",
+      "loadFailed": "稼働状況を読み込めませんでした。",
+      "legend": {
+        "up": "稼働",
+        "down": "停止",
+        "maintenance": "メンテナンス",
+        "noRecord": "記録なし"
+      }
+    },
     "availability": "可用性",
     "up": "アップ",
     "down": "ダウン",

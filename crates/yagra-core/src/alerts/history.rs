@@ -611,6 +611,53 @@ impl AlertHistoryStore {
             .collect()
     }
 
+    /// One node's liveness rows for the availability graph (ADR-223): the last one recorded before
+    /// `from_ms` — which says whether the node entered the period already down — then every one
+    /// recorded since, oldest first, a fire before a resolve recorded in the same flush.
+    ///
+    /// `check` is `rules::check_id(node, LIVENESS)`, which is unique to the node, so the
+    /// `(check_id, …)` index narrows to a handful of rows before `recorded_at` is looked at.
+    /// `limit` bounds the rows inside the period; a node that flapped past it loses the newest, and
+    /// [`crate::alerts::availability`] then reads the last fire as still open — which is why the
+    /// caller sets it far above what [`crate::alerts::availability::SPANS_MAX`] can show.
+    pub async fn liveness_rows(
+        &self,
+        check: Uuid,
+        from_ms: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<crate::alerts::availability::LivenessRow>> {
+        let rows = sqlx::query(
+            "(SELECT at_unix_ms, (extract(epoch FROM recorded_at) * 1000)::bigint AS rec_ms, \
+                     resolved, 0 AS part \
+              FROM alert_history \
+              WHERE check_id = $1 AND subject_kind = 'node' \
+                AND recorded_at < to_timestamp($2::double precision / 1000.0) \
+              ORDER BY recorded_at DESC, resolved DESC LIMIT 1) \
+             UNION ALL \
+             (SELECT at_unix_ms, (extract(epoch FROM recorded_at) * 1000)::bigint AS rec_ms, \
+                     resolved, 1 AS part \
+              FROM alert_history \
+              WHERE check_id = $1 AND subject_kind = 'node' \
+                AND recorded_at >= to_timestamp($2::double precision / 1000.0) \
+              ORDER BY recorded_at, resolved LIMIT $3) \
+             ORDER BY part, rec_ms, resolved",
+        )
+        .bind(check)
+        .bind(from_ms)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(crate::alerts::availability::LivenessRow {
+                    at_unix_ms: row.try_get("at_unix_ms")?,
+                    recorded_at_ms: row.try_get("rec_ms")?,
+                    resolved: row.try_get("resolved")?,
+                })
+            })
+            .collect()
+    }
+
     /// Delete history rows older than `older_than_secs` (retention), keeping every alert that is
     /// still open (see [`prune_sql`]). Returns rows removed.
     pub async fn prune_old(&self, older_than_secs: i64) -> anyhow::Result<u64> {
@@ -1316,6 +1363,65 @@ mod tests {
             row: None,
             row_name: None,
         }
+    }
+
+    /// The availability graph's read (ADR-223): one node's liveness rows only, the last one before
+    /// the window and every one inside it, oldest first — a fire ahead of the clear recorded in the
+    /// same flush.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn liveness_rows_are_the_last_before_the_window_then_the_window(pool: sqlx::PgPool) {
+        let node = yagra_base::pgtest::node(&pool, "n1", 1, None).await;
+        let other = yagra_base::pgtest::node(&pool, "n2", 2, None).await;
+        let store = AlertHistoryStore::new(pool.clone());
+        let check = yagra_alert::rules::check_id(NodeId::from(node), yagra_alert::rules::LIVENESS);
+        let liveness = |at: i64| Alert {
+            check,
+            metric: yagra_alert::rules::LIVENESS.to_owned(),
+            ..fire(node, Severity::Critical, at)
+        };
+        const H: i64 = 3_600_000;
+        let base = 1_700_000_000_000i64;
+        store
+            .record_batch(&[
+                (liveness(base), false),          // an outage long before the window
+                (liveness(base), true),           // ... cleared an hour later (still before)
+                (liveness(base + 10 * H), false), // open when the window starts
+                (liveness(base + 10 * H), true),  // ... cleared inside it
+                (liveness(base + 20 * H), false), // open still
+                (fire(other, Severity::Critical, base + 21 * H), false), // another check
+            ])
+            .await
+            .expect("record");
+        // The writer stamps `now()`; give each row the instant the engine would have.
+        sqlx::query(
+            "UPDATE alert_history SET recorded_at = to_timestamp(\
+             (at_unix_ms + CASE WHEN resolved THEN 3600000 ELSE 0 END) / 1000.0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("stamp");
+
+        let from = base + 10 * H + 30 * 60_000;
+        let rows = store
+            .liveness_rows(check.as_uuid(), from, 100)
+            .await
+            .expect("read");
+        let shape: Vec<(i64, bool)> = rows.iter().map(|r| (r.at_unix_ms, r.resolved)).collect();
+        assert_eq!(
+            shape,
+            vec![
+                (base + 10 * H, false),
+                (base + 10 * H, true),
+                (base + 20 * H, false)
+            ],
+            "the open fire before the window, then the window's rows, and no other check's"
+        );
+        assert_eq!(
+            rows[1].recorded_at_ms,
+            base + 11 * H,
+            "the clear's own recorded time"
+        );
     }
 
     /// **A fire is `resolved = false`, at or after the window's start.**

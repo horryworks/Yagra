@@ -1,0 +1,112 @@
+/* The node Overview's availability graph (ADR-223). One bar per period slice; each stacks its
+   shares bottom-up — up, maintenance, down, not recorded. Up has no height of its own: it fills
+   what the others leave, so a short outage given its minimum height never pushes the bar past
+   its box. */
+
+.nd-av-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+.nd-av-pct {
+  font-size: var(--font-2xl);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.nd-av-line {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.nd-av-bars {
+  display: flex;
+  gap: 2px;
+  height: 44px;
+  margin-top: var(--space-2);
+  cursor: pointer;
+  touch-action: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.nd-av-bars:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.nd-av-bar {
+  flex: 1 1 0;
+  min-width: 1px;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  border: 1px solid transparent;
+}
+
+.nd-av-bar.on {
+  border-color: var(--text-primary);
+}
+
+.nd-av-bar > i {
+  display: block;
+  flex: none;
+}
+
+.nd-av-bar > i.nd-av-up {
+  flex: 1 1 auto;
+}
+
+/* A minute down in a 24-hour bar is 0.07% of it — still a mark someone has to see. */
+.nd-av-bar > i.nd-av-down {
+  min-height: 3px;
+}
+
+.nd-av-up {
+  background: var(--status-ok);
+}
+
+.nd-av-down {
+  background: var(--status-critical);
+}
+
+.nd-av-maint {
+  background: var(--status-maintenance);
+}
+
+.nd-av-none {
+  background: var(--status-unknown);
+}
+
+.nd-av-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.nd-av-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nd-av-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+html[data-viewport='mobile'] .nd-av-bars {
+  gap: 1px;
+}

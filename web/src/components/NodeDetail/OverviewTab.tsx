@@ -106,6 +106,7 @@ import { availabilityColorVar, certTone, httpToneVar } from './healthTone';
 import { extractMetricKey, formatExtractedValue, metricsFromKey } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
+import { AvailabilitySection } from './AvailabilitySection';
 import { CheckConfigActions } from './CheckConfigActions';
 import { useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
@@ -138,6 +139,9 @@ export function OverviewTab({
   const fault = collectionFaultNotice(status);
   return (
     <div className="nd-overview">
+      {/* First, because "has this node been up" is the question the page is opened with (ADR-223).
+          Every kind has a liveness alert, so every kind gets the graph. */}
+      <AvailabilitySection nodeId={node.id} />
       {/* Only an ordinary device is pinged at all — see `overviewShowsIcmp`. For the monitor kinds
           the equivalent chart lives in their own health card below, over their own metric. */}
       {overviewShowsIcmp(node.kind) && (

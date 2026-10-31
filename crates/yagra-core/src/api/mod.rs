@@ -34,6 +34,7 @@ pub(crate) mod alerts;
 pub(crate) mod analysis;
 mod api_tokens;
 pub(crate) mod audit;
+pub(crate) mod availability;
 mod bus;
 mod changes;
 pub(crate) mod checks;
@@ -438,6 +439,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(subnet_overlaps::routes())
         // Nodes ▸ Missing IP prefixes (ADR-170 Inc.2): every site's subnets its IP prefixes miss.
         .merge(prefix_gaps::routes())
+        // One node's availability graph (ADR-223): when it was down, in maintenance, not recorded.
+        .merge(availability::routes())
         // Which pool the node effectively belongs to, and which poller currently holds it. Stays
         // with the Pollers view below, whose resolution helpers it shares.
         // URL/HTTP and DNS monitoring (ADR-033) — one node is one kind, see `api/checks.rs`.

@@ -2743,6 +2743,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["node_availability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/bindings": {
         parameters: {
             query?: never;
@@ -6368,6 +6384,19 @@ export interface components {
         AutoSave: {
             /** @description Off by default. */
             enabled: boolean;
+        };
+        /**
+         * @description How far back the graph looks. The tokens are the query parameter's values.
+         * @enum {string}
+         */
+        AvailabilityPeriod: "24h" | "7d" | "30d" | "90d";
+        /** @description One stretch of time of one kind, clipped to the period. */
+        AvailabilitySpan: {
+            /** Format: int64 */
+            from_unix_ms: number;
+            kind: components["schemas"]["SpanKind"];
+            /** Format: int64 */
+            to_unix_ms: number;
         };
         /** @description One release the sidecar found, with the digests it resolved. */
         AvailableRelease: {
@@ -11569,6 +11598,46 @@ export interface components {
             pool_source_group_id?: string | null;
         };
         /**
+         * @description One node's availability over one period. Totals cover the whole period even when `spans` was
+         *     cut.
+         */
+        NodeAvailability: {
+            /**
+             * Format: double
+             * @description Up ÷ (up + down) × 100. Maintenance and not-recorded time are left out of both sides, the
+             *     rule `reports::render::availability_from_snapshots` uses. `None` with neither.
+             */
+            availability_pct?: number | null;
+            /** Format: int64 */
+            down_secs: number;
+            /** Format: int64 */
+            from_unix_ms: number;
+            /** Format: int64 */
+            maintenance_secs: number;
+            /** Format: int64 */
+            no_record_secs: number;
+            /** Format: uuid */
+            node_id: string;
+            /**
+             * Format: int32
+             * @description How many times the liveness alert opened, or was already open, inside the period.
+             */
+            outages: number;
+            period: components["schemas"]["AvailabilityPeriod"];
+            /** @description Every down, maintenance and not-recorded stretch, oldest first. Time no span covers was up. */
+            spans: components["schemas"]["AvailabilitySpan"][];
+            /** Format: int64 */
+            to_unix_ms: number;
+            /**
+             * Format: int64
+             * @description Set when more than [`SPANS_MAX`] spans existed: the oldest were dropped, and before this
+             *     instant `spans` is incomplete (read it as not recorded, never as up).
+             */
+            truncated_before_unix_ms?: number | null;
+            /** Format: int64 */
+            up_secs: number;
+        };
+        /**
          * @description One "Edit node" save: the node's own name and note, its profile + bound credential and
          *     descriptive maker/model, and optionally a move to a different poll-pool.
          *
@@ -14615,6 +14684,11 @@ export interface components {
             telnet_port?: number | null;
             username: string;
         };
+        /**
+         * @description What a span of time was. Up is not a kind: it is whatever no span covers.
+         * @enum {string}
+         */
+        SpanKind: "down" | "maintenance" | "no_record";
         /**
          * @description How the operator authenticates to the target host.
          * @enum {string}
@@ -26395,6 +26469,77 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode: no inventory to resolve the node against */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    node_availability: {
+        parameters: {
+            query?: {
+                /** @description `24h`, `7d`, `30d` or `90d`. Defaults to `30d`. */
+                period?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeAvailability"];
+                };
+            };
+            /** @description Unknown `period` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Missing View, or the node is outside the caller's scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode: no database */
             503: {
                 headers: {
                     [name: string]: unknown;

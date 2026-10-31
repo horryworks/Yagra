@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **A node's Overview opens with its availability.** One bar per half hour (24h), four hours (7d) or day (30d, the default, and 90d), each stacked by how much of it the node was up, down, in maintenance or not recorded, with the share of the period it was up and how many outages there were. Down means the node's liveness alert was open, so a blip shorter than the rule's dwell is not counted. Press a bar, or move along with the arrow keys, to see what it was. Days start at midnight in the time zone picked on the top-bar clock. Time before the node was added, older than the alert-history retention, or while a poller of its pool could not reach core reads as not recorded, never as up.
+- `GET /api/v1/nodes/{node_id}/availability?period=24h|7d|30d|90d` (default `30d`; an unknown value is `400 invalid_period`), and the MCP tool `get_node_availability`.
+
 ## v0.3.65 — Save a device's running configuration from Yagra, fetch config backups on a daily schedule, and pick the time zone from the clock in the top bar
 
 ### New Features

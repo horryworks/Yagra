@@ -192,6 +192,10 @@ impl YagraMcp {
             "fleet_state_history" => self.state_history_in(p!(StateHistoryParams), scope).await,
             "get_report_runs" => self.report_runs_in(p!(ReportRunsParams), scope).await,
             "get_dns_chain" => self.dns_chain_in(p!(DnsChainParams), scope).await,
+            "get_node_availability" => {
+                self.node_availability_in(p!(NodeAvailabilityParams), scope)
+                    .await
+            }
             // The three reads ADR-113 declared undispatchable and ADR-113 Inc.2 decided about.
             // Having an arm is not the same as being offered: the RCA agent takes
             // `list_node_metrics` and deliberately not the other two (see `rca::agent::AGENT_TOOLS`).
@@ -498,6 +502,7 @@ mod tests {
             ("get_notification_deliveries", String::new()),
             ("get_dns_chain", "current".to_owned()),
             ("get_dns_chain", "history".to_owned()),
+            ("get_node_availability", String::new()),
             ("get_report_runs", "list".to_owned()),
             ("get_report_runs", "detail".to_owned()),
         ];

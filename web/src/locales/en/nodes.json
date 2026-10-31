@@ -392,6 +392,26 @@
     "noRttHistory": "No RTT history yet…",
     "unreachableDash": "— (unreachable)",
     "urlMonitor": "URL monitor",
+    "availabilityGraph": {
+      "title": "Availability",
+      "period": "Period",
+      "bars": "Availability per period",
+      "summaryClean": "No outages",
+      "summaryDown_one": "{{count}} outage · {{duration}} down",
+      "summaryDown_other": "{{count}} outages · {{duration}} down",
+      "barUp": "No outage",
+      "barDown_one": "Down {{duration}} ({{count}} outage)",
+      "barDown_other": "Down {{duration}} ({{count}} outages)",
+      "barMaintenance": "Maintenance {{duration}}",
+      "barNoRecord": "Not recorded",
+      "loadFailed": "Could not load availability.",
+      "legend": {
+        "up": "Up",
+        "down": "Down",
+        "maintenance": "Maintenance",
+        "noRecord": "Not recorded"
+      }
+    },
     "availability": "Availability",
     "up": "Up",
     "down": "Down",

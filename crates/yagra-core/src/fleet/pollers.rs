@@ -485,6 +485,39 @@ impl PollerRepo {
         Ok(res.rows_affected())
     }
 
+    /// The gaps of one pool's pollers that overlap `[from_ms, to_ms)`, as `(start, end)` Unix
+    /// milliseconds — the "not recorded" stretches of a node's availability graph (ADR-223).
+    ///
+    /// ⚠️ A gap is one poller's, and a pool with several pollers may have kept watching a node
+    /// while one of them was away. Nothing records which poller held the node at the time, so every
+    /// gap counts: the graph then says "not recorded" where it might have known, which is the safe
+    /// direction — it never claims up or down that nobody saw.
+    pub async fn gaps_for_pool(
+        &self,
+        pool: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> anyhow::Result<Vec<(i64, i64)>> {
+        let rows = sqlx::query(
+            "SELECT started_at_unix_ms, ended_at_unix_ms FROM monitoring_gaps \
+             WHERE pool = $1 AND ended_at_unix_ms > $2 AND started_at_unix_ms < $3 \
+             ORDER BY started_at_unix_ms LIMIT 5000",
+        )
+        .bind(pool)
+        .bind(from_ms)
+        .bind(to_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("started_at_unix_ms")?,
+                    row.try_get("ended_at_unix_ms")?,
+                ))
+            })
+            .collect()
+    }
+
     /// The most recent monitoring gaps, newest first (capped). Powers the Pollers page's "Recent
     /// monitoring gaps" section.
     pub async fn list_monitoring_gaps(&self, limit: i64) -> anyhow::Result<Vec<MonitoringGapRow>> {

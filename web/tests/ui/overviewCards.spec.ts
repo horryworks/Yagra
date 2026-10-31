@@ -210,7 +210,13 @@ test.describe('node Overview metric cards', () => {
     expect(spans().length).toBeGreaterThan(0);
     expect(spans()).not.toContain(SEVEN_DAYS);
 
-    await page.getByRole('button', { name: '7d', exact: true }).first().click();
+    // Inside the range control: the availability graph above it (ADR-223) has a `7d` of its own,
+    // which asks for a different thing.
+    await page
+      .getByRole('group', { name: 'Time range' })
+      .first()
+      .getByRole('button', { name: '7d', exact: true })
+      .click();
 
     await expect.poll(() => spans().filter((s) => s === SEVEN_DAYS).length).toBeGreaterThan(0);
   });
@@ -223,7 +229,8 @@ test.describe('node Overview metric cards', () => {
   // so that node's Overview carried no range control at all.
   test('the ICMP section carries a range control of its own', async ({ page }) => {
     await openOverview(page);
-    const icmp = page.locator('.nd-overview > section').first();
+    // The first section after the availability graph (ADR-223), which sits above everything.
+    const icmp = page.locator('.nd-overview > section:not(.nd-av)').first();
     // One card: the RTT. The loss card is offered only when the inventory has `icmp_loss_pct`,
     // and this fixture deliberately does not (ADR-046 Inc.8).
     await expect(icmp.locator('.nd-health-metric')).toHaveCount(1);

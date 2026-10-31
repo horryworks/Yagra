@@ -97,6 +97,14 @@ pub(super) struct DnsChainParams {
     before_id: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(super) struct NodeAvailabilityParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// How far back: `24h`, `7d`, `30d` (default) or `90d`.
+    period: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ListNodesParams {
     /// Case-insensitive substring matched against node name or address.
@@ -914,6 +922,61 @@ impl YagraMcp {
         // The refusal lives inside the seam, so it cannot be forgotten here.
         match crate::api::fleet::state_history(admin, scope, p.from, p.to).await {
             Ok(h) => ok_json(TOOL, &h),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
+        description = "When one node was down over the last `period` (24h, 7d, 30d by default, \
+                       or 90d), and the share of the period it was up. Down means the node's \
+                       liveness alert was open, so a blip shorter than its dwell is not counted. \
+                       `spans` lists every down, maintenance and no_record stretch (Unix ms, \
+                       oldest first); time no span covers was up. no_record is before the node \
+                       was added, older than the alert-history retention, or while a poller of \
+                       its pool could not reach core - never read it as up or as down. \
+                       `availability_pct` is up / (up + down) and leaves maintenance and \
+                       no_record out; `outages` counts how often the alert opened. If \
+                       `truncated_before_unix_ms` is set, spans before it were dropped (totals \
+                       still cover the whole period). Use get_alert_history for what fired."
+    )]
+    async fn get_node_availability(
+        &self,
+        Parameters(p): Parameters<NodeAvailabilityParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_node_availability";
+        match self.admit(identity_of(&ctx), TOOL, "").await {
+            Ok(scope) => self.node_availability_in(p, &scope).await,
+            Err(refusal) => refusal,
+        }
+    }
+
+    pub(super) async fn node_availability_in(
+        &self,
+        p: NodeAvailabilityParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_node_availability";
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
+            return deny;
+        }
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "availability requires live mode");
+        };
+        let period = match crate::api::availability::parse_period(p.period.as_deref()) {
+            Ok(period) => period,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
+        match crate::api::availability::availability_of(
+            &self.state,
+            admin,
+            p.node_id,
+            period,
+            chrono::Utc::now(),
+        )
+        .await
+        {
+            Ok(a) => ok_json(TOOL, &a),
             Err(e) => tool_api_error(TOOL, &e),
         }
     }

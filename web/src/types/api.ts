@@ -1500,6 +1500,8 @@ export type PolledBy = components['schemas']['PolledBy'];
 /** `GET /api/v1/nodes/:id/assignment` — effective pool (the node's own, else the nearest ancestor
  *  folder's, else `default`), its provenance, and the current poller. */
 export type NodeAssignment = components['schemas']['NodeAssignment'];
+export type NodeAvailability = components['schemas']['NodeAvailability'];
+export type AvailabilitySpan = components['schemas']['AvailabilitySpan'];
 
 /** One node in the poller drill-down. */
 export type PollerNodeRef = components['schemas']['PollerNodeRef'];

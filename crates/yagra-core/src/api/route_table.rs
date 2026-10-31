@@ -1233,6 +1233,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         Tool("get_system_health"),
     ),
+    // One node's availability graph (ADR-223). Its own tool rather than a field on
+    // `get_node_status`: the period is a parameter, and the answer is a timeline, not a fact.
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/availability",
+        NodeScoped,
+        Tool("get_node_availability"),
+    ),
     (
         "PUT",
         "/api/v1/nodes/:node_id/bindings",

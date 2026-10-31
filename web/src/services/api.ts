@@ -118,6 +118,7 @@ import type {
   NodeStatus,
   MonitoringGap,
   NodeAssignment,
+  NodeAvailability,
   NotificationChannel,
   PollerHealth,
   PollerNodesResponse,
@@ -1426,6 +1427,13 @@ export const api = {
    *  polls it. Separate from `getNode` because it reads the live coordinator, not the inventory. */
   getNodeAssignment: (id: string): Promise<NodeAssignment> =>
     apiGet('/api/v1/nodes/{node_id}/assignment', { path: { node_id: id } }),
+
+  /** When a node was down, in maintenance or not recorded over `period` (ADR-223). */
+  getNodeAvailability: (id: string, period: string): Promise<NodeAvailability> =>
+    apiGet('/api/v1/nodes/{node_id}/availability', {
+      path: { node_id: id },
+      query: { period },
+    }),
 
   /** The pools that exist, for the assignment picker. View-gated; names only.
    *  Separate from `listPollers` (which scans the whole node table to build its per-pool counts). */

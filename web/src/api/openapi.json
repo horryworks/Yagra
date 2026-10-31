@@ -13060,6 +13060,100 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/availability": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "node_availability",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "description": "`24h`, `7d`, `30d` or `90d`. Defaults to `30d`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeAvailability"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown `period`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing View, or the node is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode: no database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/bindings": {
       "put": {
         "tags": [
@@ -28558,6 +28652,38 @@
           }
         }
       },
+      "AvailabilityPeriod": {
+        "type": "string",
+        "description": "How far back the graph looks. The tokens are the query parameter's values.",
+        "enum": [
+          "24h",
+          "7d",
+          "30d",
+          "90d"
+        ]
+      },
+      "AvailabilitySpan": {
+        "type": "object",
+        "description": "One stretch of time of one kind, clipped to the period.",
+        "required": [
+          "kind",
+          "from_unix_ms",
+          "to_unix_ms"
+        ],
+        "properties": {
+          "from_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SpanKind"
+          },
+          "to_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "AvailableRelease": {
         "type": "object",
         "description": "One release the sidecar found, with the digests it resolved.",
@@ -39291,6 +39417,84 @@
           }
         }
       },
+      "NodeAvailability": {
+        "type": "object",
+        "description": "One node's availability over one period. Totals cover the whole period even when `spans` was\ncut.",
+        "required": [
+          "node_id",
+          "period",
+          "from_unix_ms",
+          "to_unix_ms",
+          "spans",
+          "up_secs",
+          "down_secs",
+          "maintenance_secs",
+          "no_record_secs",
+          "outages"
+        ],
+        "properties": {
+          "availability_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Up ÷ (up + down) × 100. Maintenance and not-recorded time are left out of both sides, the\nrule `reports::render::availability_from_snapshots` uses. `None` with neither."
+          },
+          "down_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "from_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maintenance_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "no_record_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "outages": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times the liveness alert opened, or was already open, inside the period.",
+            "minimum": 0
+          },
+          "period": {
+            "$ref": "#/components/schemas/AvailabilityPeriod"
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AvailabilitySpan"
+            },
+            "description": "Every down, maintenance and not-recorded stretch, oldest first. Time no span covers was up."
+          },
+          "to_unix_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "truncated_before_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Set when more than [`SPANS_MAX`] spans existed: the oldest were dropped, and before this\ninstant `spans` is incomplete (read it as not recorded, never as up)."
+          },
+          "up_secs": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "NodeBindings": {
         "type": "object",
         "description": "One \"Edit node\" save: the node's own name and note, its profile + bound credential and\ndescriptive maker/model, and optionally a move to a different poll-pool.\n\n🚨 **Two different readings of \"absent\" live in this one body, and the split is deliberate.**\n`profile_id`/`credential_id`/`vendor`/`model` are **replaced**: the node-edit UI loads the\ncurrent values and resends them, so omitting one CLEARS it. `pool`/`name`/`notes` are\n**three-state**: omitting one LEAVES IT ALONE.\n\nThe asymmetry is not history, it is what the columns can survive. A blanked `vendor`/`model` is\nrefilled from the next poll's `sysDescr` (`fill_node_identity_batch`). **Nothing refills a name\nor a note** — so an older client that has never heard of those fields must not be able to\ndestroy them by saving a form (ADR-135 decision 4; the trap `026e1ef8` paid for).",
@@ -45641,6 +45845,15 @@
             "type": "string"
           }
         }
+      },
+      "SpanKind": {
+        "type": "string",
+        "description": "What a span of time was. Up is not a kind: it is whatever no span covers.",
+        "enum": [
+          "down",
+          "maintenance",
+          "no_record"
+        ]
       },
       "SshAuthKind": {
         "type": "string",

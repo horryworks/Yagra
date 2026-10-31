@@ -93,6 +93,7 @@ fn fragments() -> Vec<(&'static str, utoipa::openapi::OpenApi)> {
         ("duplicates", super::duplicates::Doc::openapi()),
         ("subnet_overlaps", super::subnet_overlaps::Doc::openapi()),
         ("prefix_gaps", super::prefix_gaps::Doc::openapi()),
+        ("availability", super::availability::Doc::openapi()),
         ("pools", super::pools::Doc::openapi()),
         ("checks", super::checks::Doc::openapi()),
         ("metrics", super::metrics::Doc::openapi()),

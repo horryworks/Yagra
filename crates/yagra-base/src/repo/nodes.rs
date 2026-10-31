@@ -235,6 +235,18 @@ impl NodeRepo {
         row.as_ref().map(node_from_row).transpose()
     }
 
+    /// When a node was added to the inventory, in Unix milliseconds — before that its availability
+    /// graph has nothing to say (ADR-223). `None` if the node is gone.
+    pub async fn created_at_ms(&self, id: Uuid) -> anyhow::Result<Option<i64>> {
+        let row = sqlx::query(
+            "SELECT (extract(epoch FROM created_at) * 1000)::bigint AS ms FROM nodes WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| r.try_get("ms").map_err(Into::into)).transpose()
+    }
+
     /// MANY nodes by id, narrowed to the caller's scope (ADR-124 Inc.11/12).
     ///
     /// The batch reader behind a bulk action that has to *do* something per node rather than write

@@ -266,6 +266,29 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // the walk would arrive saying "the Meraki API is not answering — this state is the last one
   // collected", and every Meraki organization would arrive with a collect failing. A walk where
   // everything is marked says nothing; `collectionFault.spec.ts` brings the ones that are.
+  // The availability graph (ADR-223) draws only an answer for the period it asked for, and the
+  // generator cannot know that the `period` echoed back must be the one in the query, or that the
+  // window has to end now — its answer would leave the strip empty and the walk would call that a
+  // pass. One outage two hours ago, so the bars carry red as well as green.
+  '/api/v1/nodes/{node_id}/availability': (url: URL) => {
+    const lengths: Record<string, number> = { '24h': 1, '7d': 7, '30d': 30, '90d': 90 };
+    const period = url.searchParams.get('period') ?? '30d';
+    const now = Date.now();
+    const from = now - (lengths[period] ?? 30) * 86_400_000;
+    return {
+      node_id: url.pathname.split('/')[4],
+      period,
+      from_unix_ms: from,
+      to_unix_ms: now,
+      spans: [{ kind: 'down', from_unix_ms: now - 2 * 3_600_000, to_unix_ms: now - 3_300_000 }],
+      up_secs: Math.round((now - from) / 1000) - 3_900,
+      down_secs: 3_900,
+      maintenance_secs: 0,
+      no_record_secs: 0,
+      outages: 1,
+      availability_pct: 99.5,
+    };
+  },
   '/api/v1/nodes/{node_id}/status': (() => {
     const body = defaultBodyFor('/api/v1/nodes/{node_id}/status') as {
       collection_fault: unknown;
