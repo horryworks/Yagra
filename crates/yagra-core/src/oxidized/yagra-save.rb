@@ -73,7 +73,8 @@ end
 begin
   require 'oxidized'
   Oxidized::Config.load({})
-  Oxidized::Logger.setup
+  # No `Oxidized::Logger.setup`: it creates `logs/` under OXIDIZED_HOME, which is mounted
+  # read-only in oxidized's container, and nothing here needs oxidized's log.
   Oxidized.mgr = Oxidized::Manager.new
   Oxidized.hooks = Oxidized::HookManager.new
   vars = { 'enable' => job['enable'], 'ssh_port' => job['ssh_port'], 'telnet_port' => job['telnet_port'] }.compact
