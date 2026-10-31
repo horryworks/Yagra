@@ -478,7 +478,9 @@ async fn save_report(
     check_source_token(ox, &headers)?;
     let saves = &admin.config_saves;
     let failure = if r.failure.is_empty() {
-        None
+        // A save the device answered as a success, after which running and startup still differ,
+        // did not save: success counts only when the re-read shows no difference (decision 6).
+        (flag(&r.unsaved_after) == Some(true)).then_some(SaveFailure::NoAnswer)
     } else {
         Some(SaveFailure::from_token(&r.failure).unwrap_or(SaveFailure::Other))
     };
@@ -645,6 +647,21 @@ mod tests {
         assert_eq!(recent[0].state, yagra_base::config_save::SaveState::Saved);
         assert!(recent[0].kept_startup);
         assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_none());
+
+        // The device answered the save as a success, but running and startup still differ when
+        // read again: that is not a save (decision 6), and the device stays unsaved.
+        let unconfirmed = format!(
+            "node={node}&action=auto&failure=&unsaved_before=true&unsaved_after=true&startup=hostname+sw-01"
+        );
+        assert_eq!(
+            post_report(&st, &ox_token, &unconfirmed).await,
+            StatusCode::NO_CONTENT
+        );
+        let recent = saves.recent(node).await.expect("recent");
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].state, yagra_base::config_save::SaveState::Failed);
+        assert_eq!(recent[0].failure, Some(SaveFailure::NoAnswer));
+        assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_some());
         std::fs::remove_dir_all(&home).ok();
     }
 

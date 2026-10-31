@@ -515,6 +515,19 @@ impl CredentialStore {
 
     /// Credential metadata (no secret values), in the try order (ADR-205 Inc.2) — the order
     /// Discovery starts from and every credential picker lists.
+    /// The ids of every credential of one kind, in the try order [`Self::list`] uses. For a
+    /// caller that needs only which logins exist: `list` also counts each credential's users,
+    /// which scans `nodes` once per credential.
+    pub async fn ids_of_kind(&self, kind: &str) -> anyhow::Result<Vec<Uuid>> {
+        let rows = sqlx::query(
+            "SELECT id FROM credentials WHERE kind = $1 ORDER BY try_order, created_at, id",
+        )
+        .bind(kind)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(|r| Ok(r.try_get("id")?)).collect()
+    }
+
     pub async fn list(&self) -> anyhow::Result<Vec<CredentialSummary>> {
         // One scalar subquery per referencing table rather than three LEFT JOINs under one GROUP
         // BY: joined together they multiply (3 nodes × 2 organizations counts 6 of each).
@@ -1016,6 +1029,36 @@ mod tests {
             (1, 0),
             "the row is still counted; only the opening fails"
         );
+    }
+
+    /// The ids of one kind are the ones `list` would give for that kind, in the same order, and
+    /// nothing of another kind (the config backup schedule reads its logins this way, ADR-222).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn ids_of_kind_match_the_list_for_that_kind(pool: PgPool) {
+        let kek: Kek = Arc::new(StaticKeyProvider::single([5u8; 32]));
+        let store = CredentialStore::new(pool, kek);
+        store.create("v2c", "snmp_v2c", b"public").await.unwrap();
+        let a = store
+            .create("cli-a", KIND_CLI_LOGIN, b"secret")
+            .await
+            .unwrap();
+        let b = store
+            .create("cli-b", KIND_CLI_LOGIN, b"secret")
+            .await
+            .unwrap();
+        let listed: Vec<Uuid> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.kind == KIND_CLI_LOGIN)
+            .map(|c| c.id)
+            .collect();
+        let ids = store.ids_of_kind(KIND_CLI_LOGIN).await.unwrap();
+        assert_eq!(ids, listed);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&a) && ids.contains(&b));
     }
 
     /// A stored nonce of the wrong length — a damaged restore, a hand edit — is reported as a row

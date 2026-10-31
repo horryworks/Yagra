@@ -77,3 +77,17 @@ describe('cadenceLabel', () => {
     expect(weekdayName(t, 99)).toBe('Saturday');
   });
 });
+
+describe('cadenceLabel in a schedule zone (ADR-221)', () => {
+  it("names the schedule's own zone, and UTC for one saved without a zone", () => {
+    const base = {
+      frequency: 'daily' as const,
+      day_of_week: null,
+      day_of_month: null,
+      at_hour: 7,
+      at_minute: 0,
+    };
+    expect(cadenceLabel(t, { ...base, time_zone: 'Asia/Tokyo' })).toBe('Daily · 07:00 GMT+9');
+    expect(cadenceLabel(t, { ...base, time_zone: null })).toBe('Daily · 07:00 UTC');
+  });
+});

@@ -16,13 +16,25 @@
 
 let chosen: string | null = null;
 
+// The browser's zone, read once rather than on every formatted time (it builds a formatter), and
+// read again when the tab comes back into view: a laptop that travelled reports its new zone then.
+let browserZone: string | null = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    browserZone = null;
+  });
+}
+
 /** The browser's IANA zone, or `UTC` when the runtime cannot say. */
 export function browserTimeZone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
+  if (browserZone == null) {
+    try {
+      browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      browserZone = 'UTC';
+    }
   }
+  return browserZone;
 }
 
 /** Whether this runtime knows `name` as a zone. */
@@ -156,12 +168,16 @@ export function zonedWallToMs(
 /** The short name of `tz` at `ms` — `JST`, `EDT`, `UTC`, or `GMT+5:30` where no abbreviation is
  *  in common use. In English on purpose: it is a code, not a word, and an operator compares it
  *  with what their devices print. */
+const abbreviationCache = new Map<string, Intl.DateTimeFormat>();
+
 export function zoneAbbreviation(tz: string = displayTimeZone(), ms: number = Date.now()): string {
   try {
-    const part = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      timeZoneName: 'short',
-    })
+    let f = abbreviationCache.get(tz);
+    if (!f) {
+      f = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' });
+      abbreviationCache.set(tz, f);
+    }
+    const part = f
       .formatToParts(new Date(ms))
       .find((p) => p.type === 'timeZoneName')?.value;
     return part ?? tz;

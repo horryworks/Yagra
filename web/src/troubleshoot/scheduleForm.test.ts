@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setDisplayTimeZone } from '../lib/timeZone';
 import {
   blankSchedule,
   formFromSchedule,
@@ -152,5 +153,16 @@ describe('timeLabel', () => {
   it('zero-pads', () => {
     expect(timeLabel(3, 0)).toBe('03:00');
     expect(timeLabel(23, 59)).toBe('23:59');
+  });
+});
+
+describe('the schedule zone (ADR-221)', () => {
+  afterEach(() => setDisplayTimeZone(null));
+
+  it('starts a new schedule in the display zone and sends it', () => {
+    setDisplayTimeZone('Asia/Tokyo');
+    const f = blankSchedule(ALL);
+    expect(f.timeZone).toBe('Asia/Tokyo');
+    expect(scheduleBody(f, '7 days').time_zone).toBe('Asia/Tokyo');
   });
 });

@@ -29,6 +29,10 @@
 - While an HA pair is being upgraded and the older core still leads, a schedule saved with a zone fires at its hour read as UTC; it is back on its own zone once the new core leads.
 - **Restarting or upgrading no longer fetches every device's configuration again.** The bundled oxidized used to fetch each device a day after its last fetch and forgot those fetches on every restart, so each upgrade backed the whole fleet up at whatever time it happened. It now fetches only what Yagra asks for: the scheduled run, the search for a working login, and **Fetch now**. A device whose login works is next fetched in the next scheduled run.
 
+### Security
+
+- **`minimatch` in the WebUI's build tools has a moderate advisory (GHSA-g3hv-75wg-m249) that does not reach Yagra.** Only ESLint and the OpenAPI type generator use it, at build time, on patterns written in this repository; nothing of it is in the WebUI that ships. The fixed release (11.0.1) is younger than the seven days new dependency versions wait, so it is bumped in a later release.
+
 ## v0.3.64 — The Geo map can colour the land by elevation and the sea by depth, and a CLI login no longer needs a username
 
 ### New Features

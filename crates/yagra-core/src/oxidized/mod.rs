@@ -12,8 +12,9 @@
 //!   last reported into `config_backup_status`.
 //! - [`rotation`] tries each node's CLI logins in turn and remembers the one that works, within
 //!   the lockout limits (stage 3): the pure choice, and the leader loop that acts on it.
-//! - [`schedule`] decides when the nodes whose login works are fetched: every day from one UTC
-//!   time, so many at a time (stage 6). oxidized fetches nothing on its own.
+//! - [`schedule`] decides when the nodes whose login works are fetched: every day from one wall
+//!   time in the schedule's zone (ADR-221), so many at a time (stage 6). oxidized fetches nothing
+//!   on its own.
 //!
 //! - [`relay`] carries oxidized's login sessions to the poller assigned to each device (stage 5):
 //!   oxidized connects to core, never to a device.

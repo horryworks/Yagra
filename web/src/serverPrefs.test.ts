@@ -44,6 +44,7 @@ import {
   setGeoMapDayNight,
   setGeoMapRelief,
   setGeoMapPlace,
+  setTimeZone,
 } from './serverPrefs';
 import { MAX_STORED_COLLAPSED } from './lib/nodeTree';
 import { COLUMN_MAX_PX, MAX_STORED_COLUMNS, MAX_STORED_TABLES } from './lib/columnWidths';
@@ -538,5 +539,28 @@ describe('where the Geo map is looking (ADR-218)', () => {
     setInterfaceDockHeight(360);
     vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
     expect(putPreferences).toHaveBeenCalledWith({ interfaceDockHeight: 360 });
+  });
+});
+
+describe('the display zone (ADR-221)', () => {
+  it("adopts the account's zone, drops one this browser does not know, and keeps 'follow the browser'", async () => {
+    getPreferences.mockResolvedValue({ timeZone: 'Asia/Tokyo' });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().timeZone).toBe('Asia/Tokyo');
+    getPreferences.mockResolvedValue({ timeZone: 'Mars/Olympus_Mons' });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().timeZone).toBe('Asia/Tokyo');
+    getPreferences.mockResolvedValue({ timeZone: '' });
+    await loadServerPrefs();
+    expect(usePrefsStore.getState().timeZone).toBe('');
+  });
+
+  it("saves a chosen zone, and 'follow the browser' too, so it undoes another machine's pick", () => {
+    setTimeZone('Asia/Tokyo');
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ timeZone: 'Asia/Tokyo' }));
+    setTimeZone('');
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS);
+    expect(putPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ timeZone: '' }));
   });
 });

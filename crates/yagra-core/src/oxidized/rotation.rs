@@ -329,13 +329,7 @@ pub(crate) fn classify(event: &str, err_type: &str) -> Option<AttemptOutcome> {
 
 /// The CLI logins, in the try order of Credentials & secrets.
 pub(crate) async fn cli_logins(creds: &CredentialStore) -> anyhow::Result<Vec<Uuid>> {
-    Ok(creds
-        .list()
-        .await?
-        .into_iter()
-        .filter(|c| c.kind == KIND_CLI_LOGIN)
-        .map(|c| c.id)
-        .collect())
+    creds.ids_of_kind(KIND_CLI_LOGIN).await
 }
 
 /// Whether a node has a login that works and is still one of its candidates, so oxidized's own

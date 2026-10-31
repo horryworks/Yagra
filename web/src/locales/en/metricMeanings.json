@@ -25,7 +25,7 @@
   "cisco_ra_sessions": "Remote-access VPN sessions currently connected (AnyConnect / SSL VPN).",
   "cisco_ra_users": "Distinct users currently connected over remote-access VPN. Lower than the session count when one user has several sessions.",
   "cisco_temp_c": "Chassis temperature in degrees Celsius, from the Cisco sensor table. Only the sensors that reach no port — per-port optical readings are reported as light level instead (ADR-070).",
-  "config_unsaved_seconds": "How long the running configuration has gone unsaved, in seconds since its last change; 0 when the startup configuration holds it. Computed by Yagra from the device's own record of when each was last changed — a reload now would lose the change.",
+  "config_unsaved_seconds": "How long the running configuration has gone unsaved, in seconds; 0 when the startup configuration holds it. On a device that records when each was last changed (Cisco IOS) it counts from the last change; on one Yagra compares after each fetch (Huawei VRP) it counts from when Yagra first found the two different — a reload now would lose the change.",
   "dns_answer_count": "How many answers the final response carried.",
   "dns_chain_length": "How many hops the resolution chain took (CNAME → … → A/AAAA).",
   "dns_resolve_ms": "How long the resolution took, in milliseconds.",

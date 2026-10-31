@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { ConfigBackupScheduleView } from '../types/api';
-import { scheduleBody, scheduleLine } from './configBackupSchedule';
+import { scheduleBody, scheduleDraftTime, scheduleLine } from './configBackupSchedule';
 
 const base: ConfigBackupScheduleView = {
   at_hour: 2,
@@ -60,3 +60,23 @@ describe('scheduleBody', () => {
   });
 });
 
+
+describe('scheduleDraftTime', () => {
+  const now = Date.UTC(2026, 9, 31, 12, 0);
+
+  it('shows a schedule with no zone in the offered zone, so saving it unchanged keeps the run', () => {
+    // 02:00 UTC is 11:00 in Tokyo; the dialog saves in Tokyo, so it must open at 11:00.
+    expect(
+      scheduleDraftTime({ at_hour: 2, at_minute: 0, time_zone: null }, 'Asia/Tokyo', now),
+    ).toBe('11:00');
+    expect(scheduleDraftTime({ at_hour: 2, at_minute: 30, time_zone: null }, 'UTC', now)).toBe(
+      '02:30',
+    );
+  });
+
+  it('shows a schedule with a saved zone as stored', () => {
+    expect(
+      scheduleDraftTime({ at_hour: 2, at_minute: 0, time_zone: 'Asia/Tokyo' }, 'Asia/Tokyo', now),
+    ).toBe('02:00');
+  });
+});

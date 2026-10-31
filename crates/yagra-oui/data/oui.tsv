@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-29
-# counts: MA-L=40312 MA-L-repeats-dropped=3 MA-M=6581 MA-S=7219 withheld=3
+# fetched: 2026-10-31
+# counts: MA-L=40315 MA-L-repeats-dropped=3 MA-M=6585 MA-S=7222 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -26008,6 +26008,7 @@
 603ECA	Cambridge Medical Robotics Ltd
 603FC5	COX CO., LTD
 603FFB	Telink Micro LLC
+60415A	Google, Inc.
 60427F	SHENZHEN CHUANGWEI-RGB ELECTRONICS CO.,LTD
 60447A	Water-i.d. GmbH
 6044F5	Easy Digital Ltd.
@@ -36157,6 +36158,7 @@
 8C1F64118	Automata GmbH & Co. KG
 8C1F64119	Foxconn Technology Co., Ltd.
 8C1F6411B	Power Electronics Espana, S.L.
+8C1F6411C	WITCON Co., Ltd.
 8C1F6411E	Infosoft Digital Design and Services P L
 8C1F6411F	NodeUDesign
 8C1F64121	Hefei EverACQ Technology Co., LTD
@@ -36398,6 +36400,7 @@
 8C1F6427F	Whizz Systems Inc.
 8C1F64280	HEITEC AG
 8C1F64281	NVP TECO LTD
+8C1F64282	LIVTC Portugal, Lda
 8C1F64285	Smart Tech Inc
 8C1F64286	i2s
 8C1F64288	Vision Systems Safety Tech
@@ -38273,6 +38276,7 @@
 8C1F64C99	Vinfast Trading and Production JSC
 8C1F64C9A	Infosoft Digital Design and Services P L
 8C1F64C9B	J.M. Voith SE & Co. KG
+8C1F64C9C	IDNEO TECHNOLOGIES,S.A.U.
 8C1F64C9D	Creating Cloud Technology Co.,Ltd.,CT-CLOUD
 8C1F64C9E	CytoTronics
 8C1F64C9F	PeachCreek
@@ -40464,6 +40468,7 @@
 94FBB2	SHENZHEN GONGJIN ELECTRONICS CO.,LT
 94FC04	Dongguan Amsamotion Automation Technology Co.,Ltd.
 94FC87	Hirschmann Automation and Control GmbH
+94FC9A	Google, Inc.
 94FD1D	WhereWhen Corp
 94FD2E	Shanghai Uniscope Technologies Co.,Ltd
 94FE22	HUAWEI TECHNOLOGIES CO.,LTD
@@ -45057,12 +45062,16 @@ B8F255	Universal Electronics, Inc.
 B8F317	iSun Smasher Communications Private Limited
 B8F44F	u-blox AG
 B8F453	IEEE Registration Authority
+B8F4530	ELS Instruments
 B8F4531	GANZHOU DEHUIDA TECHNOLOGY CO., LTD
 B8F4532	Hamamatsu Photonics K.K.
 B8F4534	Ontic Engineering & Manufacturing
+B8F4537	Valthor, s.r.o.
 B8F4538	ViewSonic Corp
+B8F4539	PA Technology Solutions Ltd
 B8F453A	Skeleton Technologies OÜ
 B8F453B	SDMT Limited
+B8F453D	Withusnet Co., Ltd
 B8F4A4	Google, Inc.
 B8F4D0	Herrmann Ultraschalltechnik GmbH & Co. Kg
 B8F5E7	WayTools, LLC
@@ -48480,6 +48489,7 @@ D4024A	Delphian Systems LLC
 D404CD	Commscope
 D404E6	Broadcom Limited
 D404FF	Juniper Networks
+D40511	TCL King Electrical Appliances(Huizhou)Co.,Ltd
 D40592	Espressif Inc.
 D40598	Commscope
 D405DE	eero inc.

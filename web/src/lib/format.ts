@@ -97,17 +97,61 @@ export const SEVERITY_TONE: Record<Severity, Tone> = {
   info: 'info',
 };
 
+// One formatter per (shape, locale, zone): a time column renders one cell per row, and building an
+// `Intl.DateTimeFormat` costs tens of microseconds where `.format()` on a built one costs about one.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatterFor(
+  shape: string,
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat {
+  const zone = displayTimeZone();
+  const key = `${shape}|${locale ?? ''}|${zone}`;
+  let f = formatters.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(locale, { ...options, timeZone: zone });
+    formatters.set(key, f);
+  }
+  return f;
+}
+
+// The fields `Date.toLocaleString` / `toLocaleDateString` use when given none, so a cached
+// formatter prints exactly what those calls printed.
+const DATE_TIME: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+};
+const DATE_ONLY: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'numeric', day: 'numeric' };
+
+/** `d` through the cached formatter. An invalid date reads `Invalid Date`, as the
+ *  `toLocaleString` these replaced did: `Intl.DateTimeFormat.format` throws a RangeError on one
+ *  instead, and a row with a bad timestamp must not blank its whole screen. */
+function formatWith(
+  shape: string,
+  locale: string | undefined,
+  options: Intl.DateTimeFormatOptions,
+  d: Date,
+): string {
+  if (Number.isNaN(d.getTime())) return String(d);
+  return formatterFor(shape, locale, options).format(d);
+}
+
 /** Format a Unix-ms timestamp as a date-time string in the active interface language's locale
  *  (pass `locale` to override), in the display zone (ADR-221). */
 export function formatTimestamp(unixMs: number, locale: string = intlLocale(i18n.language)): string {
-  return new Date(unixMs).toLocaleString(locale, { timeZone: displayTimeZone() });
+  return formatWith('timestamp', locale, DATE_TIME, new Date(unixMs));
 }
 
 /** Exact timestamp as a stable, locale-independent `YYYY-MM-DD HH:MM:SS` in the display zone
  *  (sv-SE renders ISO-like regardless of the user's locale). For forensic screens (audit) where
  *  the precise instant is the primary value. */
 export function formatExactTime(iso: string): string {
-  return new Date(iso).toLocaleString('sv-SE', { timeZone: displayTimeZone() }).replace('T', ' ');
+  return formatWith('exact', 'sv-SE', DATE_TIME, new Date(iso)).replace('T', ' ');
 }
 
 /** A scheduled boundary — a maintenance window's start/end, a mute's expiry — in the browser's
@@ -118,19 +162,17 @@ export function formatExactTime(iso: string): string {
  *  render the same instants and had two byte-identical local copies between them; a third would
  *  have been the point where they started to disagree (`extensibility.md` §3). */
 export function formatScheduleTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    timeZone: displayTimeZone(),
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatWith(
+    'schedule',
+    undefined,
+    { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' },
+    new Date(iso),
+  );
 }
 
 /** Date-only `YYYY-MM-DD` in the display zone (en-CA renders ISO-like). */
 export function dateOnly(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-CA', { timeZone: displayTimeZone() });
+  return formatWith('date', 'en-CA', DATE_ONLY, new Date(iso));
 }
 
 /** `HH:MM` of an instant in the display zone — a chart axis tick, a widget's "as of". */

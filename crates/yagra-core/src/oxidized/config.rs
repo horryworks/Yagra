@@ -36,7 +36,7 @@ pub(crate) const SAVE_URL: &str = "http://core:8090/internal/oxidized/save";
 pub(crate) const PUSH_SCRIPT_FILE: &str = "yagra-push.rb";
 const PUSH_SCRIPT: &str = include_str!("yagra-push.rb");
 /// The save script (ADR-222): the one script that sends a device anything but a fetch, and only
-/// what core hands it from `save::SAVE_COMMANDS`.
+/// what core hands it from `yagra_common::config_save::SAVE_COMMANDS`.
 pub(crate) const SAVE_SCRIPT_FILE: &str = "yagra-save.rb";
 pub(crate) const SAVE_SCRIPT: &str = include_str!("yagra-save.rb");
 /// Where oxidized sees the shared directory (`docker-compose.deploy.yml` mounts it there).

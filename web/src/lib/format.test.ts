@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { setDisplayTimeZone } from './timeZone';
 import i18n from '../i18n';
 import { readSources } from '../testSupport/sources';
 import metricUnits from '../api/metricUnits.json';
 import {
   agoSec,
+  formatTimestamp,
+  formatScheduleTime,
+  dateOnly,
+  formatClockTime,
+  formatExactTime,
   alertRowPart,
   alertPortPart,
   alertWhat,
@@ -849,5 +855,32 @@ describe('no screen buckets a relative time or a duration by hand', () => {
     const own = files.find(([p]) => p === 'lib/format.ts')?.[1] ?? '';
     expect(NEEDLES.every((n) => own.includes(n))).toBe(true);
     expect(files.filter(([, src]) => src.includes('relativeTimeMs(')).length).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('times in the display zone (ADR-221)', () => {
+  afterEach(() => setDisplayTimeZone(null));
+  const iso = '2026-10-31T15:30:45Z';
+
+  it('shows an instant as a clock in the chosen zone reads it', () => {
+    setDisplayTimeZone('Asia/Tokyo');
+    expect(formatExactTime(iso)).toBe('2026-11-01 00:30:45');
+    expect(dateOnly(iso)).toBe('2026-11-01');
+    expect(formatClockTime(Date.parse(iso))).toBe('00:30');
+  });
+
+  it('answers an invalid date the way toLocaleString did, rather than throwing', () => {
+    expect(formatExactTime('not a date')).toBe('Invalid Date');
+    expect(dateOnly('')).toBe('Invalid Date');
+    expect(formatScheduleTime('x')).toBe('Invalid Date');
+    expect(formatTimestamp(Number.NaN)).toBe('Invalid Date');
+  });
+
+  it('follows a change of zone rather than keeping the formatter it built first', () => {
+    setDisplayTimeZone('Asia/Tokyo');
+    expect(formatExactTime(iso)).toBe('2026-11-01 00:30:45');
+    setDisplayTimeZone('UTC');
+    expect(formatExactTime(iso)).toBe('2026-10-31 15:30:45');
+    expect(dateOnly(iso)).toBe('2026-10-31');
   });
 });

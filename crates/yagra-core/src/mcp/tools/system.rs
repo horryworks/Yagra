@@ -527,7 +527,7 @@ impl YagraMcp {
                        the lockout limits next allow a login, and the last attempt), config_push \
                        (whether config backups are reaching their Git destination: its host, the \
                        last push that arrived and the last failure), config_schedule (when \
-                       config backups are fetched: the daily UTC start, how many nodes at once, \
+                       config backups are fetched: the daily start time and its zone, how many nodes at once, \
                        and how far the latest run has got). \
                        Sections require different permissions: most need view, \
                        forwarding and upgrade need manage-system, credentials needs \

@@ -8,9 +8,10 @@
 //! list of its own; the seeded alert rules read [`compares`] to know which models report
 //! `config_unsaved_seconds` over the command line.
 //!
-//! ⚠️ The VRP strings are taken from Huawei's documentation, not from a device yet; the IOS ones
-//! from the IOS command reference. Each is to be confirmed on a real device before it is trusted
-//! (ADR-222's remaining work), and a model is added here only with the same care.
+//! The VRP strings were confirmed on a real device (2026-10-31: `compare configuration`, and `save`
+//! with its `[Y/N]` answer). ⚠️ The IOS ones are still taken from the IOS command reference and are
+//! to be confirmed on a real device before they are trusted (ADR-222's remaining work); a model is
+//! added here only with the same care.
 
 use serde::Serialize;
 

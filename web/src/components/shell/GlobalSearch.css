@@ -13,6 +13,14 @@
   width: 200px;
 }
 
+/* Below 1180px the top bar also carries the clock (ZoneClock.css), which drops its zone name there;
+   the search box gives up the rest so the bar still fits at 1000px (ADR-221). */
+@media (max-width: 1180px) {
+  .topbar .gsearch-box {
+    width: 140px;
+  }
+}
+
 .gsearch-pop {
   position: absolute;
   top: calc(100% + 6px);

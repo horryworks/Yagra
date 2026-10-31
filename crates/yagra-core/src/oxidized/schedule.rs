@@ -78,7 +78,8 @@ pub(crate) struct Progress {
 }
 
 /// The start instants on the dates around `t` in the schedule's zone (ADR-221), earliest first.
-/// Three dates, because "today" in a zone far from UTC can sit on either side of `t`'s UTC date;
+/// Four dates, yesterday to the day after tomorrow: "today" in a zone far from UTC can sit on
+/// either side of `t`'s UTC date, and `next_start` needs one beyond it;
 /// a daylight-saving gap or overlap resolves the way `yagra_base::wall_clock::resolve` says.
 fn starts_around(s: &BackupSchedule, t: DateTime<Utc>) -> [DateTime<Utc>; 4] {
     let today = wall_clock::local_date(s.time_zone, t);
@@ -252,6 +253,16 @@ async fn tick(
     relay: &Relay,
 ) -> bool {
     let now = Utc::now();
+    // Most of the day no run is going and none is due: that is decided from the one schedule row,
+    // so every node is read only when a run starts or is going.
+    match repo.schedule().await {
+        Ok(s) if !running(&s) && latest_start(&s, now) <= gate(&s) => return false,
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!(error = %e, "config backup: the schedule could not read its state");
+            return false;
+        }
+    }
     let (schedule, cands, targets) = match read(repo, creds, relay, now).await {
         Ok(read) => read,
         Err(e) => {

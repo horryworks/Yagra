@@ -4,7 +4,7 @@
 
 import type { ConfigBackupScheduleView } from '../types/api';
 import { timeValue } from '../lib/format';
-import { zoneAbbreviation } from '../lib/timeZone';
+import { wallClock, zoneAbbreviation } from '../lib/timeZone';
 
 /** Where the latest run stands, as the second half of the line. */
 export type ScheduleState =
@@ -36,6 +36,27 @@ export function scheduleLine(s: ConfigBackupScheduleView): ScheduleLine {
     state = { key: 'config.schedule.runningBare' };
   }
   return { time, zone: zoneAbbreviation(s.time_zone || 'UTC'), count: s.concurrency, state };
+}
+
+/** The start time the dialog opens with, as a wall time in `zone` — the zone it will save in. A
+ *  schedule that never saved a zone is UTC (ADR-221) but is offered in the display zone, so its
+ *  stored hour is turned into that zone first: saving only a new count must not move the run. */
+export function scheduleDraftTime(
+  s: Pick<ConfigBackupScheduleView, 'at_hour' | 'at_minute' | 'time_zone'>,
+  zone: string,
+  now: number = Date.now(),
+): string {
+  if (s.time_zone) return timeValue(s.at_hour, s.at_minute);
+  const today = new Date(now);
+  const instant = Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate(),
+    s.at_hour,
+    s.at_minute,
+  );
+  const w = wallClock(instant, zone);
+  return timeValue(w.hour, w.minute);
 }
 
 /** The body the dialog sends, or the key of why it cannot. */

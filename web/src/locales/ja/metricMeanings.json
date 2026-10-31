@@ -25,7 +25,7 @@
   "cisco_ra_sessions": "現在接続しているリモートアクセス VPN のセッション数（AnyConnect / SSL VPN）。",
   "cisco_ra_users": "リモートアクセス VPN に現在接続している実ユーザー数。1 人が複数セッションを張るとセッション数より小さくなります。",
   "cisco_temp_c": "Cisco のセンサー表から取った筐体温度（℃）。ポートに結び付かないセンサーだけで、ポートごとの光の値は光レベルとして別に出ます（ADR-070）。",
-  "config_unsaved_seconds": "running-config が保存されていない時間（最後に変わってからの秒数）。startup-config に保存済みなら 0 です。機器自身が記録した、それぞれが最後に変わった時刻から Yagra が計算します。今再起動すると、その変更は失われます。",
+  "config_unsaved_seconds": "running-config が保存されていない時間（秒）。startup-config に保存済みなら 0 です。それぞれが最後に変わった時刻を機器が記録している場合（Cisco IOS）は最後の変更から、取得のたびに Yagra が比べる機器（Huawei VRP）では Yagra が 2 つの違いを最初に見つけた時から数えます。今再起動すると、その変更は失われます。",
   "dns_answer_count": "最終応答に含まれていた回答の数。",
   "dns_chain_length": "解決チェーンのホップ数（CNAME → … → A/AAAA）。",
   "dns_resolve_ms": "名前解決にかかった時間（ミリ秒）。",

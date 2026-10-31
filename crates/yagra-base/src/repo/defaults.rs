@@ -520,8 +520,8 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 37] = [
         2,
     ),
     // ADR-222 decision 4: the same rule where the save script compares running with startup after
-    // each fetch. The reading is from the last comparison and counts from when the two were first
-    // seen to differ, so it changes once per fetch rather than per poll; the four hours are the same.
+    // each fetch. The reading counts from when the two were first seen to differ, so a change is
+    // noticed only at the next fetch; it is then added to each SNMP poll. The four hours are the same.
     (
         36,
         HUAWEI_VRP,

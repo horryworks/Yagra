@@ -777,6 +777,14 @@ fn changes_monitoring_config(path: &str) -> bool {
         // connection, neither of which a rebuild reads. `…/rescan` forgets a login in the same
         // table and is left dirty, as `PUT …/config-backup` is.
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/cancel"))
+        // Asking for a save (ADR-222), switching automatic save, and the config backup schedule
+        // (ADR-210 stage 6): they write `config_saves`, `config_save_settings` and
+        // `config_backup_schedule`, which no rebuild reads - the save script, the schedule loop and
+        // their screens read them afresh each time. Same blind spot as the previews: they demand
+        // SaveDeviceConfig or ManageConfig.
+        || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/save"))
+        || path == "/api/v1/config-save-settings"
+        || path == "/api/v1/config-backup-schedule"
         // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the
@@ -1987,6 +1995,13 @@ mod tests {
         assert!(changes_monitoring_config(
             "/api/v1/nodes/00000000-0000-4000-8000-000000000001/config-backup"
         ));
+        // ADR-222 and ADR-210 stage 6: a save, automatic save and the schedule are read by no
+        // rebuild.
+        assert!(!changes_monitoring_config(
+            "/api/v1/nodes/00000000-0000-4000-8000-000000000001/config-backup/save"
+        ));
+        assert!(!changes_monitoring_config("/api/v1/config-save-settings"));
+        assert!(!changes_monitoring_config("/api/v1/config-backup-schedule"));
         // ADR-210 stage 4: testing the Git destination writes nothing; saving it stays dirty.
         assert!(!changes_monitoring_config(
             "/api/v1/config-backup-remote/test"

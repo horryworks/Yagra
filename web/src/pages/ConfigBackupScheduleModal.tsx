@@ -10,9 +10,8 @@ import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
-import { timeValue } from '../lib/format';
 import type { ConfigBackupScheduleView } from '../types/api';
-import { scheduleBody } from './configBackupSchedule';
+import { scheduleBody, scheduleDraftTime } from './configBackupSchedule';
 import { scheduleZone, zoneAbbreviation } from '../lib/timeZone';
 
 interface Props {
@@ -23,11 +22,11 @@ interface Props {
 
 export function ConfigBackupScheduleModal({ schedule, onClose, onSaved }: Props) {
   const { t } = useTranslation('nodes');
-  const [time, setTime] = useState(timeValue(schedule.at_hour, schedule.at_minute));
-  const [count, setCount] = useState(schedule.concurrency);
   // There is always one schedule, so it is never "new": a saved zone stays, and one that never
   // saved a zone is offered in the display zone, which saving then records.
   const zone = scheduleZone(schedule.time_zone, schedule.time_zone == null);
+  const [time, setTime] = useState(() => scheduleDraftTime(schedule, zone));
+  const [count, setCount] = useState(schedule.concurrency);
   const form = useSubmit({ errorFallback: t('config.schedule.err.save'), onDone: onSaved });
   const counts = Array.from({ length: schedule.max_concurrency }, (_, i) => i + 1);
 

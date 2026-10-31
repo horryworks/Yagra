@@ -139,7 +139,7 @@ export function ConfigBackupsPage() {
             {sched.state.key === 'config.schedule.runningBare' && t(sched.state.key)}
           </span>
           {canConfig && (
-            <Button onClick={() => setEditing(true)}>
+            <Button onClick={() => setEditing(true)} aria-label={t('config.schedule.title')}>
               {t('config.schedule.change')}
             </Button>
           )}
@@ -153,7 +153,9 @@ export function ConfigBackupsPage() {
               : t('config.autoSave.lineOff')}
           </span>
           {canSave && (
-            <Button onClick={() => setAutoSaveOpen(true)}>{t('config.autoSave.change')}</Button>
+            <Button onClick={() => setAutoSaveOpen(true)} aria-label={t('config.autoSave.title')}>
+              {t('config.autoSave.change')}
+            </Button>
           )}
         </p>
       )}
