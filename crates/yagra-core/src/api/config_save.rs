@@ -599,7 +599,7 @@ mod tests {
         let admin = token(&st, yagra_common::Role::Admin);
         let (status, body) = send(&st, "POST", &path, &admin, None).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
-        assert_eq!(body["code"], "config_save_unsupported");
+        assert_eq!(body["error"]["code"], "config_save_unsupported");
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -646,7 +646,7 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body["code"], "invalid_after_hours");
+        assert_eq!(body["error"]["code"], "invalid_after_hours");
         std::fs::remove_dir_all(&home).ok();
     }
 
