@@ -185,25 +185,3 @@ export function scheduleZone(stored: string | null | undefined, isNew: boolean):
   if (isNew) return displayTimeZone();
   return stored || 'UTC';
 }
-
-/** The zones the picker lists before anything is typed. */
-export const COMMON_TIME_ZONES = [
-  'UTC',
-  'Asia/Tokyo',
-  'Asia/Singapore',
-  'Europe/London',
-  'America/New_York',
-  'America/Los_Angeles',
-] as const;
-
-/** The picker's matches for what was typed: case-insensitive, a space matching the `_` in names
- *  like `New_York`. Empty input lists the common zones. Capped so a one-letter query stays short. */
-export function matchTimeZones(
-  query: string,
-  all: string[] = knownTimeZones(),
-  cap = 40,
-): string[] {
-  const q = query.trim().toLowerCase().replace(/\s+/g, '_');
-  if (!q) return [...COMMON_TIME_ZONES];
-  return all.filter((z) => z.toLowerCase().includes(q)).slice(0, cap);
-}

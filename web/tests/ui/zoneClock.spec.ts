@@ -59,3 +59,19 @@ test('picking a zone redraws the clock and the times on the page, and following 
   await expect(dot).toHaveCount(0);
   await expect(firstTime).toHaveText(before ?? '');
 });
+
+test('a point on the world map chooses its zone, and the night side is drawn', async ({ page }) => {
+  await page.goto('/settings/audit');
+  const clock = page.getByRole('button', { name: 'Time zone', exact: true });
+  await expect(clock).toContainText('GMT+9');
+
+  await clock.click();
+  const picker = page.getByRole('dialog', { name: 'Time zone' });
+  // The coastline arrives from its own chunk; wait for it so the test is about a drawn map.
+  await expect(picker.locator('.zmap-land').first()).toBeAttached();
+  await expect(picker.locator('.zmap-night').first()).toBeAttached();
+  await expect(picker.locator('.zmap-point')).toHaveCount(50);
+
+  await picker.locator('circle[data-zone="America/New_York"]').click();
+  await expect(clock).toContainText(/E[SD]T/);
+});

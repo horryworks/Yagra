@@ -820,4 +820,24 @@ mod tests {
             "only {callers} api files use the shared sentences"
         );
     }
+
+    /// The top-bar clock's world map (ADR-221 Inc.2) offers the zones in
+    /// `web/src/lib/zoneMapPoints.json`. One that core cannot parse would be picked on the map,
+    /// saved as the display zone, and then refused with `invalid_time_zone` by every schedule
+    /// form that saves in it.
+    #[test]
+    fn every_map_zone_is_one_core_accepts() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/src/lib/zoneMapPoints.json");
+        let text = std::fs::read_to_string(&path).expect("the clock's zone table");
+        let points: Vec<serde_json::Value> = serde_json::from_str(&text).expect("a JSON array");
+        assert!(points.len() >= 50, "read {} map points", points.len());
+        for p in &points {
+            let zone = p["zone"].as_str().expect("every point names its zone");
+            assert!(
+                matches!(parse_time_zone(Some(zone)), Ok(Some(_))),
+                "core refuses the map's zone {zone}"
+            );
+        }
+    }
 }

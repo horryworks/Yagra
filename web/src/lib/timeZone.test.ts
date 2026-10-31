@@ -6,7 +6,6 @@ import {
   displayTimeZone,
   isKnownTimeZone,
   isZoneChosen,
-  matchTimeZones,
   setDisplayTimeZone,
   wallClock,
   zonedWallToMs,
@@ -68,16 +67,6 @@ describe('a wall clock in a zone', () => {
     expect(zoneAbbreviation('UTC', at('2026-10-30T00:00:00Z'))).toBe('UTC');
     expect(zoneAbbreviation('America/New_York', at('2026-07-01T00:00:00Z'))).toBe('EDT');
     expect(zoneAbbreviation('America/New_York', at('2026-12-01T00:00:00Z'))).toBe('EST');
-  });
-});
-
-describe('the picker', () => {
-  it('lists the common zones before anything is typed, and matches a space as an underscore', () => {
-    expect(matchTimeZones('')).toContain('Asia/Tokyo');
-    expect(matchTimeZones('new york', ['America/New_York', 'Asia/Tokyo'])).toEqual([
-      'America/New_York',
-    ]);
-    expect(matchTimeZones('TOKYO', ['America/New_York', 'Asia/Tokyo'])).toEqual(['Asia/Tokyo']);
   });
 });
 

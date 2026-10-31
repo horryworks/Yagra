@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { MAP_HEIGHT, MAP_WIDTH, project } from '../../pages/geoProjection';
-import { MIN_BOX_H, MIN_BOX_W, geoWidgetBox, loadOutline, pinRadius } from './geoWidgetBox';
+import { MIN_BOX_H, MIN_BOX_W, geoWidgetBox, pinRadius } from './geoWidgetBox';
 
 const inside = (box: ReturnType<typeof geoWidgetBox>, lat: number, lon: number) => {
   const p = project(lat, lon);
@@ -56,14 +56,5 @@ describe('geoWidgetBox', () => {
     expect(pinRadius({ x: 0, y: 0, w: 600, h: 300 })).toBeCloseTo(
       10 * pinRadius({ x: 0, y: 0, w: 60, h: 30 }),
     );
-  });
-});
-
-describe('loadOutline', () => {
-  it('hands over the generated coastline, and the same one on every call', async () => {
-    const first = await loadOutline();
-    expect(first.land.length).toBeGreaterThan(100);
-    expect(first.lakes.length).toBeGreaterThan(0);
-    expect(await loadOutline()).toBe(first);
   });
 });

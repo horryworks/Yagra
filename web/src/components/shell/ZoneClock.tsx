@@ -2,7 +2,8 @@
 // The top-bar clock (ADR-221 decision 3): the time now in the display zone, and the one place that
 // zone is chosen. The first row follows the browser; any other row pins a zone for this account.
 // A chosen zone puts a dot on the clock, so a screen read in a zone other than the browser's says
-// so without a sentence.
+// so without a sentence. Above the list sits a world map to choose from (Inc.2); a phone has no
+// room for it and lists the common zones instead.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,18 +14,16 @@ import { SearchField } from '../ui/SearchField';
 import { TEST_IDS } from '../../testIds';
 // The screen's refresh cadence: a minute display redrawn at it is never more than that late.
 import { POLL_INTERVAL_MS } from '../../lib/sharedPoll';
-import {
-  browserTimeZone,
-  clockText,
-  displayTimeZone,
-  matchTimeZones,
-  zoneAbbreviation,
-} from '../../lib/timeZone';
+import { browserTimeZone, clockText, displayTimeZone, zoneAbbreviation } from '../../lib/timeZone';
+import { useIsMobileViewport } from '../../lib/viewport';
+import { initialZoneRows, matchTimeZones, zoneCountry } from '../../lib/zoneMap';
+import { ZoneMap } from './ZoneMap';
 import './ZoneClock.css';
 
-
 export function ZoneClock() {
-  const { t } = useTranslation('nav');
+  const { t, i18n } = useTranslation('nav');
+  const lang = i18n.language;
+  const phone = useIsMobileViewport();
   // Read so a change redraws this component; the value itself is applied by `App.tsx`.
   const chosen = usePrefsStore((s) => s.timeZone);
   const [now, setNow] = useState(() => Date.now());
@@ -48,7 +47,7 @@ export function ZoneClock() {
   const zone = displayTimeZone();
   const pinned = Boolean(chosen);
   const browser = browserTimeZone();
-  const matches = matchTimeZones(query);
+  const matches = initialZoneRows(matchTimeZones(query, lang), query, phone, pinned ? zone : null);
 
   const pick = (z: string) => {
     setTimeZone(z);
@@ -75,7 +74,7 @@ export function ZoneClock() {
         role="dialog"
         label={t('shell.timeZone')}
         align="end"
-        className="zclock-pop"
+        className={phone ? 'zclock-pop' : 'zclock-pop has-map'}
         onDismiss={() => {
           setOpen(false);
           setQuery('');
@@ -92,6 +91,7 @@ export function ZoneClock() {
           placeholder={t('shell.timeZoneSearch')}
           aria-label={t('shell.timeZone')}
         />
+        {!phone && <ZoneMap zone={zone} now={now} query={query} lang={lang} onPick={pick} />}
         <ul className="zclock-list">
           <li>
             <button
@@ -102,19 +102,26 @@ export function ZoneClock() {
               <span className="zclock-abbr">{zoneAbbreviation(browser, now)}</span>
             </button>
           </li>
-          <li className="zclock-sep" aria-hidden />
+          {matches.length > 0 && <li className="zclock-sep" aria-hidden />}
           {matches.map((z) => (
             <li key={z}>
               <button
                 className={pinned && z === zone ? 'zclock-item is-current' : 'zclock-item'}
                 onClick={() => pick(z)}
               >
-                <span>{z}</span>
+                <span>
+                  {z}
+                  {zoneCountry(z, lang) && (
+                    <span className="zclock-country">{zoneCountry(z, lang)}</span>
+                  )}
+                </span>
                 <span className="zclock-abbr">{zoneAbbreviation(z, now)}</span>
               </button>
             </li>
           ))}
-          {matches.length === 0 && <li className="zclock-empty">{t('shell.noTimeZone')}</li>}
+          {matches.length === 0 && query.trim() !== '' && (
+            <li className="zclock-empty">{t('shell.noTimeZone')}</li>
+          )}
         </ul>
       </AnchoredPopover>
     </div>

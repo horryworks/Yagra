@@ -49,26 +49,3 @@ export function geoWidgetBox(items: Placed[]): GeoBox {
 export function pinRadius(box: GeoBox): number {
   return Math.max(box.w, box.h) * 0.012;
 }
-
-/** The coastline as the widget draws it. */
-export interface Outline {
-  land: readonly string[];
-  lakes: readonly string[];
-}
-
-let outlineLoad: Promise<Outline> | null = null;
-
-/** The coastline, fetched the first time a Geo map widget mounts and shared after that. It is
- *  ~240 KB compressed, so a dashboard without the widget never asks for it (the Geo map page
- *  imports the same module, so the two share one chunk). A failed fetch is not cached, so the next
- *  mount asks again. */
-export function loadOutline(): Promise<Outline> {
-  outlineLoad ??= import('../../pages/worldOutline').then(
-    (m) => ({ land: m.WORLD_OUTLINE, lakes: m.WORLD_LAKES }),
-    (e: unknown) => {
-      outlineLoad = null;
-      throw e;
-    },
-  );
-  return outlineLoad;
-}

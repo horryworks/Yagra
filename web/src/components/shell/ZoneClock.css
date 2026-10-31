@@ -121,3 +121,78 @@
     width: 140px;
   }
 }
+
+/* With the world map above the list (ADR-221 Inc.2): wide enough for the map to tell Europe's
+   points apart, and never wider than the screen. */
+.zclock-pop.has-map {
+  width: min(600px, calc(100vw - 32px));
+}
+
+.zclock-country {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.zmap {
+  position: relative;
+  margin-bottom: 6px;
+}
+
+.zmap-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+/* The same land, water and night as Topology ▸ Geo map. */
+.zmap-land {
+  fill: var(--bg-tertiary);
+  stroke: var(--border-color);
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.zmap-lake {
+  fill: var(--bg-secondary);
+}
+
+.zmap-night {
+  fill: var(--geo-night);
+  fill-opacity: var(--geo-night-step);
+  pointer-events: none;
+}
+
+.zmap-point {
+  fill: var(--text-tertiary);
+}
+
+.zmap-point.is-same {
+  fill: var(--text-primary);
+}
+
+.zmap-point.is-current {
+  fill: var(--accent-color);
+  stroke: var(--bg-primary);
+  stroke-width: 1.5;
+}
+
+.zmap-point.is-dim {
+  opacity: 0.2;
+}
+
+.zmap-tip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 8px));
+  padding: 3px 8px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+  pointer-events: none;
+}

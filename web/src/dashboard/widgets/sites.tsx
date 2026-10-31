@@ -24,7 +24,8 @@ import {
   topLevelRollupFromCounts,
   worstStateFromCounts,
 } from './util';
-import { geoWidgetBox, loadOutline, pinRadius, type Outline } from './geoWidgetBox';
+import { geoWidgetBox, pinRadius } from './geoWidgetBox';
+import { loadOutline, type Outline } from '../../lib/worldOutlineLoad';
 
 export function SiteHealthMatrixWidget() {
   const { t } = useTranslation('dashboard');
