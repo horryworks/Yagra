@@ -1291,8 +1291,8 @@ export const api = {
   getConfigBackupSchedule: (): Promise<ConfigBackupScheduleView> =>
     apiGet('/api/v1/config-backup-schedule'),
 
-  /** Switch automatic save on or off, and set after how many hours unsaved (ADR-222). */
-  putConfigAutoSave: (body: { enabled: boolean; after_hours: number }) =>
+  /** Switch automatic save on or off (ADR-222). When is the Unsaved configuration alert's. */
+  putConfigAutoSave: (body: { enabled: boolean }) =>
     apiPut('/api/v1/config-save-settings', { body }),
 
   /** Change the daily start time (UTC) and how many nodes are fetched at once. */

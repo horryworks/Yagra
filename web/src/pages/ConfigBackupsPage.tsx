@@ -149,7 +149,7 @@ export function ConfigBackupsPage() {
         <p className="cfgbl-sched">
           <span>
             {schedule.data.auto_save.enabled
-              ? t('config.autoSave.lineOn', { hours: schedule.data.auto_save.after_hours })
+              ? t('config.autoSave.lineOn')
               : t('config.autoSave.lineOff')}
           </span>
           {canSave && (

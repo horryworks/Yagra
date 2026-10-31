@@ -6359,13 +6359,13 @@ export interface components {
         AuthorizeUrl: {
             authorize_url: string;
         };
-        /** @description Whether Yagra saves on its own, and after how long unsaved (decision 8). */
+        /**
+         * @description Whether Yagra saves on its own (decision 8). When it does is the Unsaved configuration alert's
+         *     to say (decision 11): a device is saved after its next fetch while that alert is open, so the
+         *     threshold rule is the one place "how long is too long" is set, folder and node overrides
+         *     included.
+         */
         AutoSave: {
-            /**
-             * Format: int32
-             * @description How long a device stays unsaved before Yagra saves it, 1 to [`AUTO_SAVE_MAX_HOURS`].
-             */
-            after_hours: number;
             /** @description Off by default. */
             enabled: boolean;
         };
@@ -18773,22 +18773,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Saved. When on, a device whose running configuration has gone unsaved for `after_hours` is saved right after its next successful fetch, unless it is in a maintenance window or its last save failed */
+            /** @description Saved. When on, a device with an open Unsaved configuration alert is saved right after its next successful fetch, unless its last save failed. How long a device may stay unsaved is that alert rule's threshold */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["AutoSave"];
-                };
-            };
-            /** @description `after_hours` is outside 1 to 720 (`invalid_after_hours`) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */

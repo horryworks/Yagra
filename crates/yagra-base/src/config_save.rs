@@ -94,26 +94,15 @@ pub struct SaveRecord {
     pub kept_startup: bool,
 }
 
-/// Whether Yagra saves on its own, and after how long unsaved (decision 8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+/// Whether Yagra saves on its own (decision 8). When it does is the Unsaved configuration alert's
+/// to say (decision 11): a device is saved after its next fetch while that alert is open, so the
+/// threshold rule is the one place "how long is too long" is set, folder and node overrides
+/// included.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutoSave {
     /// Off by default.
     pub enabled: bool,
-    /// How long a device stays unsaved before Yagra saves it, 1 to [`AUTO_SAVE_MAX_HOURS`].
-    pub after_hours: u16,
 }
-
-impl Default for AutoSave {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            after_hours: 24,
-        }
-    }
-}
-
-/// The longest grace a person may set: thirty days.
-pub const AUTO_SAVE_MAX_HOURS: u16 = 720;
 
 /// How many saves a node keeps. A newer one pushes the oldest finished one out.
 pub const SAVES_KEPT: i64 = 10;
@@ -330,30 +319,29 @@ impl ConfigSaveRepo {
     }
 
     /// The deployment's automatic-save setting.
+    ///
+    /// `config_save_settings.after_hours` is no longer read or written (decision 11). It stays
+    /// until a later migration drops it, so a core from before decision 11 can still read the row.
     pub async fn auto_save(&self) -> anyhow::Result<AutoSave> {
-        let row = sqlx::query("SELECT auto_save, after_hours FROM config_save_settings")
+        let row = sqlx::query("SELECT auto_save FROM config_save_settings")
             .fetch_optional(&self.pool)
             .await?;
         let Some(r) = row else {
             return Ok(AutoSave::default());
         };
-        let hours: i16 = r.try_get("after_hours")?;
         Ok(AutoSave {
             enabled: r.try_get("auto_save")?,
-            after_hours: u16::try_from(hours).unwrap_or(24),
         })
     }
 
-    /// Change it. The caller has checked the range.
+    /// Change it.
     pub async fn set_auto_save(&self, s: AutoSave) -> anyhow::Result<AutoSave> {
         sqlx::query(
-            "INSERT INTO config_save_settings (id, auto_save, after_hours, updated_at) \
-             VALUES (TRUE, $1, $2, now()) \
-             ON CONFLICT (id) DO UPDATE SET auto_save = EXCLUDED.auto_save, \
-               after_hours = EXCLUDED.after_hours, updated_at = now()",
+            "INSERT INTO config_save_settings (id, auto_save, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET auto_save = EXCLUDED.auto_save, updated_at = now()",
         )
         .bind(s.enabled)
-        .bind(i16::try_from(s.after_hours).unwrap_or(24))
         .execute(&self.pool)
         .await?;
         self.auto_save().await

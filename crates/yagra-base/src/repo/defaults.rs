@@ -505,28 +505,29 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 37] = [
         None,
         3,
     ),
-    // ADR-222 decision 3: a running configuration left unsaved for an hour since its last change.
-    // The hour IS the grace — the value counts seconds, and `above` is inclusive, so a saved
-    // device (0) never fires. Dwell 2 so one odd reading after a reload does not page. Only the
-    // IOS profiles collect the two CISCO-CONFIG-MAN-MIB inputs.
+    // ADR-222 decisions 3 and 12: a running configuration left unsaved for four hours since its
+    // last change. The bound IS the grace — the value counts seconds, and `above` is inclusive, so a
+    // saved device (0) never fires. Since decision 11 it is also automatic save's grace: Yagra saves
+    // a device only while this alert is open. Dwell 2 so one odd reading after a reload does not
+    // page. Only the IOS profiles collect the two CISCO-CONFIG-MAN-MIB inputs.
     (
         35,
         CISCO_IOS,
         yagra_common::config_unsaved::METRIC,
         "above",
-        Some(3600.0),
+        Some(14400.0),
         None,
         2,
     ),
     // ADR-222 decision 4: the same rule where the save script compares running with startup after
     // each fetch. The reading is from the last comparison and counts from when the two were first
-    // seen to differ, so it changes once per fetch rather than per poll; the hour is the same.
+    // seen to differ, so it changes once per fetch rather than per poll; the four hours are the same.
     (
         36,
         HUAWEI_VRP,
         yagra_common::config_unsaved::METRIC,
         "above",
-        Some(3600.0),
+        Some(14400.0),
         None,
         2,
     ),

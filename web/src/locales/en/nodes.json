@@ -1389,14 +1389,11 @@
       "title": "Automatic save",
       "on": "On",
       "off": "Off",
-      "after": "Unsaved for",
-      "hours": "h",
-      "warning": "Yagra saves every backed-up device left unsaved this long, after its next fetch.",
-      "lineOn": "Automatic save: after {{hours}} h unsaved",
+      "warning": "Yagra saves every backed-up device with an open Unsaved configuration alert, after its next fetch.",
+      "lineOn": "Automatic save: on, while Unsaved configuration is alerting",
       "lineOff": "Automatic save: off",
       "change": "Change",
       "err": {
-        "hours": "Enter a whole number of hours from 1 to 720.",
         "save": "Could not save the automatic-save setting"
       }
     }

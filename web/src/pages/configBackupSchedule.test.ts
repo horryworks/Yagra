@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { ConfigBackupScheduleView } from '../types/api';
-import { autoSaveBody, scheduleBody, scheduleLine } from './configBackupSchedule';
+import { scheduleBody, scheduleLine } from './configBackupSchedule';
 
 const base: ConfigBackupScheduleView = {
   at_hour: 2,
@@ -14,7 +14,7 @@ const base: ConfigBackupScheduleView = {
   upcoming_start_at: '2026-10-31T02:00:00Z',
   done: null,
   total: null,
-  auto_save: { enabled: false, after_hours: 24 },
+  auto_save: { enabled: false },
 };
 
 describe('scheduleLine', () => {
@@ -60,15 +60,3 @@ describe('scheduleBody', () => {
   });
 });
 
-describe('automatic save (ADR-222)', () => {
-  it('sends a whole number of hours from 1 to 720 and refuses anything else', () => {
-    expect(autoSaveBody(true, ' 24 ')).toEqual({ ok: true, body: { enabled: true, after_hours: 24 } });
-    expect(autoSaveBody(false, '720')).toEqual({
-      ok: true,
-      body: { enabled: false, after_hours: 720 },
-    });
-    for (const bad of ['0', '721', '1.5', '', 'a', '-3']) {
-      expect(autoSaveBody(true, bad)).toEqual({ ok: false, key: 'config.autoSave.err.hours' });
-    }
-  });
-});

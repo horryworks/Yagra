@@ -8,8 +8,9 @@
 //!   `audit_mw` like every write.
 //! - `GET …/config-backup/saves/{save_id}/startup` — the startup configuration a save replaced.
 //!   `ManageConfig`, and off MCP, for the reason a version's text is (ADR-210 decision 16).
-//! - `PUT /api/v1/config-save-settings` — automatic save on or off, and after how many hours
-//!   unsaved (decision 8). `SaveDeviceConfig` and a fleet-wide caller: it lets Yagra save every
+//! - `PUT /api/v1/config-save-settings` — automatic save on or off (decision 8). When is the
+//!   Unsaved configuration alert's to say (decision 11). `SaveDeviceConfig` and a fleet-wide
+//!   caller: it lets Yagra save every
 //!   device on its own. Read back in `GET /api/v1/config-backup-schedule`.
 //!
 //! And two routes for the save script inside the bundled oxidized, outside `/api/v1`, behind the
@@ -31,7 +32,7 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_save::{AutoSave, SaveFailure, SaveOrigin, AUTO_SAVE_MAX_HOURS};
+use yagra_base::config_save::{AutoSave, SaveFailure, SaveOrigin};
 use yagra_common::config_save::{commands_for, SaveCommands};
 
 use super::config_backup::{check_source_token, oxidized_of, start_fetch};
@@ -181,8 +182,7 @@ async fn get_startup(
     put, path = "/api/v1/config-save-settings", tag = "nodes",
     request_body = AutoSave,
     responses(
-        (status = 200, description = "Saved. When on, a device whose running configuration has gone unsaved for `after_hours` is saved right after its next successful fetch, unless it is in a maintenance window or its last save failed", body = AutoSave),
-        (status = 400, description = "`after_hours` is outside 1 to 720 (`invalid_after_hours`)", body = super::error::ErrorBody),
+        (status = 200, description = "Saved. When on, a device with an open Unsaved configuration alert is saved right after its next successful fetch, unless its last save failed. How long a device may stay unsaved is that alert rule's threshold", body = AutoSave),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
     ),
@@ -197,12 +197,6 @@ async fn put_auto_save(
         &scope,
         "automatic save acts on every device, so an account restricted to folders cannot set it",
     )?;
-    if !(1..=AUTO_SAVE_MAX_HOURS).contains(&body.after_hours) {
-        return Err(ApiError::bad_request(
-            "invalid_after_hours",
-            "after_hours must be from 1 to 720",
-        ));
-    }
     let saved = admin
         .config_saves
         .set_auto_save(body)
@@ -211,20 +205,13 @@ async fn put_auto_save(
     Ok(Json(saved))
 }
 
-/// Whether Yagra saves a device on its own now (decision 8): switched on, unsaved for at least the
-/// grace, not in a maintenance window, and its last save did not fail - after a failure a person
-/// looks first (decision 9). `unsaved_secs` is the latest `config_unsaved_seconds`; none means the
-/// device never said, which is never a reason to write to it.
-fn auto_save_due(
-    setting: AutoSave,
-    unsaved_secs: Option<f64>,
-    in_maintenance: bool,
-    last_failed: bool,
-) -> bool {
-    setting.enabled
-        && !in_maintenance
-        && !last_failed
-        && unsaved_secs.is_some_and(|s| s >= f64::from(setting.after_hours) * 3600.0)
+/// Whether Yagra saves a device on its own now (decision 11): switched on, the device's Unsaved
+/// configuration alert is open, and its last save did not fail - after a failure a person looks
+/// first (decision 9). The alert carries everything else: the threshold (and its folder and node
+/// overrides) is the grace, a maintenance window closes it, and a rule switched off for a node
+/// never opens it.
+fn auto_save_due(setting: AutoSave, alert_open: bool, last_failed: bool) -> bool {
+    setting.enabled && alert_open && !last_failed
 }
 
 /// Ask for an automatic save of `node` when one is due. Recorded in the audit log under Yagra's
@@ -235,18 +222,14 @@ async fn request_auto_save(st: &ApiState, admin: &Admin, node: Uuid) -> anyhow::
     if !setting.enabled {
         return Ok(());
     }
-    let unsaved = st
-        .store
-        .latest(&yagra_common::SeriesKey::node(
-            node.into(),
-            yagra_common::config_unsaved::METRIC,
-        ))
-        .await;
-    let in_maintenance = st
+    let check = yagra_alert::rules::check_id(node.into(), yagra_common::config_unsaved::METRIC);
+    let alert_open = st
         .alerts
-        .in_maintenance(node.into(), Utc::now().timestamp_millis());
+        .alerts_for(node.into())
+        .iter()
+        .any(|a| a.check == check);
     let last_failed = saves.last_failed(node).await?;
-    if auto_save_due(setting, unsaved, in_maintenance, last_failed) {
+    if auto_save_due(setting, alert_open, last_failed) {
         let id = saves.request(node, SaveOrigin::Auto, None).await?;
         super::util::audit_record(
             &admin.audit,
@@ -603,8 +586,7 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
-    /// Automatic save is switched on by an Admin, read back with the schedule, and an
-    /// out-of-range grace is refused.
+    /// Automatic save is switched on by an Admin and read back with the schedule.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn automatic_save_is_set_and_read_back(pool: sqlx::PgPool) {
@@ -612,6 +594,7 @@ mod tests {
         let st = with_oxidized(pool.clone(), &home).await;
         let admin = token(&st, yagra_common::Role::Admin);
         let operator = token(&st, yagra_common::Role::Operator);
+        // A client from before decision 11 still sends `after_hours`; it is ignored, not refused.
         let body = serde_json::json!({ "enabled": true, "after_hours": 12 });
         let (status, _) = send(
             &st,
@@ -631,43 +614,21 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{saved}");
-        assert_eq!(saved["after_hours"], 12);
+        assert_eq!(saved, serde_json::json!({ "enabled": true }));
         let (status, schedule) =
             send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
         assert_eq!(status, StatusCode::OK, "{schedule}");
         assert_eq!(schedule["auto_save"]["enabled"], true);
-        let bad = serde_json::json!({ "enabled": true, "after_hours": 0 });
-        let (status, body) = send(
-            &st,
-            "PUT",
-            "/api/v1/config-save-settings",
-            &admin,
-            Some(bad),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(body["error"]["code"], "invalid_after_hours");
         std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]
-    fn an_automatic_save_waits_for_the_switch_the_grace_the_window_and_a_clean_record() {
-        let on = AutoSave {
-            enabled: true,
-            after_hours: 24,
-        };
-        let day = 24.0 * 3600.0;
-        assert!(auto_save_due(on, Some(day), false, false));
-        assert!(!auto_save_due(on, Some(day - 1.0), false, false));
-        assert!(!auto_save_due(on, None, false, false));
-        assert!(!auto_save_due(on, Some(day), true, false));
-        assert!(!auto_save_due(on, Some(day), false, true));
-        assert!(!auto_save_due(
-            AutoSave::default(),
-            Some(day * 10.0),
-            false,
-            false
-        ));
+    fn an_automatic_save_waits_for_the_switch_an_open_alert_and_a_clean_record() {
+        let on = AutoSave { enabled: true };
+        assert!(auto_save_due(on, true, false));
+        assert!(!auto_save_due(on, false, false));
+        assert!(!auto_save_due(on, true, true));
+        assert!(!auto_save_due(AutoSave::default(), true, false));
     }
 
     #[test]

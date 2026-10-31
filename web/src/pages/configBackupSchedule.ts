@@ -61,20 +61,3 @@ export function scheduleBody(
   }
   return { ok: true, body: { at_hour, at_minute, concurrency, time_zone: timeZone } };
 }
-
-/** The longest grace automatic save takes, in hours; the server refuses anything past it. */
-export const AUTO_SAVE_MAX_HOURS = 720;
-
-/** The body the automatic-save dialog sends (ADR-222 decision 8), or the key of why it cannot. */
-export function autoSaveBody(
-  enabled: boolean,
-  hours: string,
-):
-  | { ok: true; body: { enabled: boolean; after_hours: number } }
-  | { ok: false; key: 'config.autoSave.err.hours' } {
-  const after_hours = Number(hours.trim());
-  if (!Number.isInteger(after_hours) || after_hours < 1 || after_hours > AUTO_SAVE_MAX_HOURS) {
-    return { ok: false, key: 'config.autoSave.err.hours' };
-  }
-  return { ok: true, body: { enabled, after_hours } };
-}

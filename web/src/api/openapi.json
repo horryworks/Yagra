@@ -3423,21 +3423,11 @@
         },
         "responses": {
           "200": {
-            "description": "Saved. When on, a device whose running configuration has gone unsaved for `after_hours` is saved right after its next successful fetch, unless it is in a maintenance window or its last save failed",
+            "description": "Saved. When on, a device with an open Unsaved configuration alert is saved right after its next successful fetch, unless its last save failed. How long a device may stay unsaved is that alert rule's threshold",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AutoSave"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "`after_hours` is outside 1 to 720 (`invalid_after_hours`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -28557,18 +28547,11 @@
       },
       "AutoSave": {
         "type": "object",
-        "description": "Whether Yagra saves on its own, and after how long unsaved (decision 8).",
+        "description": "Whether Yagra saves on its own (decision 8). When it does is the Unsaved configuration alert's\nto say (decision 11): a device is saved after its next fetch while that alert is open, so the\nthreshold rule is the one place \"how long is too long\" is set, folder and node overrides\nincluded.",
         "required": [
-          "enabled",
-          "after_hours"
+          "enabled"
         ],
         "properties": {
-          "after_hours": {
-            "type": "integer",
-            "format": "int32",
-            "description": "How long a device stays unsaved before Yagra saves it, 1 to [`AUTO_SAVE_MAX_HOURS`].",
-            "minimum": 0
-          },
           "enabled": {
             "type": "boolean",
             "description": "Off by default."
