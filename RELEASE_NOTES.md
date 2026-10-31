@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.65 — Save a device's running configuration from Yagra, fetch config backups on a daily schedule, and pick the time zone from the clock in the top bar
+
 ### New Features
 
 - **Pick the time zone every screen shows times in, from the clock in the top bar.** The clock shows the time now and the zone's short name; press it to choose a zone, or **Follow browser** to go back to your browser's (the default). The choice is saved to your account and applies to every time on screen, the charts' time axis, and the time and date pickers. A dot on the clock says a zone was chosen. PDF reports, e-mail and chat notifications, and notification templates stay in UTC.
