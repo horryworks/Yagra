@@ -54,6 +54,12 @@ exit 0 unless answer.code == '200'
 job = JSON.parse(answer.body)
 cmds = job['commands']
 base = { 'node' => NODE, 'action' => job['action'].to_s, 'save' => job['save'].to_s }
+# oxidized starts a hook with an empty environment; the hook command names the home. Without it
+# oxidized would load its defaults, write them to a home of its own and log in as nobody.
+unless ENV['OXIDIZED_HOME']
+  report(base.merge('failure' => 'other'))
+  exit 0
+end
 
 # What a connection failure is, by oxidized's and the transport's error class.
 def failure_of(error)

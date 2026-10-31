@@ -176,7 +176,9 @@ def run(home, name, mode, action: 'save', password: 'right')
     'OXIDIZED_HOME' => home, 'OX_NODE_NAME' => NODE, 'YAGRA_TOKEN' => TOKEN,
     'YAGRA_SAVE_URL' => "http://127.0.0.1:#{CORE_PORT}/internal/oxidized/save"
   }
-  pid = Process.spawn(env, 'ruby', SCRIPT, out: File::NULL, err: File::NULL)
+  # The environment the hook gives, and nothing else: oxidized spawns hooks with
+  # `unsetenv_others`, and a script that leaned on an inherited variable passed here before.
+  pid = Process.spawn(env, 'ruby', SCRIPT, out: File::NULL, err: File::NULL, unsetenv_others: true)
   waited = 0
   waited += 1 while Process.waitpid(pid, Process::WNOHANG).nil? && sleep(1) && waited < 60
   Process.kill('KILL', pid) if waited >= 60

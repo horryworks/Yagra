@@ -50,7 +50,7 @@ const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 8;
+pub(crate) const CONFIG_REVISION: u32 = 9;
 
 const TOKEN_LEN: usize = 40;
 
@@ -124,6 +124,9 @@ pub(crate) fn read_token(home: &Path) -> std::io::Result<String> {
 /// - The `yagra-save` hook runs the save script after every fetch that succeeded (ADR-222): it
 ///   asks core at the save URL what to do, which for almost every node is nothing, and exits
 ///   before loading oxidized when it is. Its limit covers a save and two comparisons.
+///   🚨 `OXIDIZED_HOME` is set on the command line because oxidized starts a hook with
+///   `unsetenv_others`: without it the script loads oxidized's defaults instead of this file, and
+///   every save fails (measured on a lab deployment, 2026-10-31).
 /// - The pid file and crash reports stay in oxidized's own home (its data volume), not in the shared
 ///   directory: the image's start script removes a stale pid file only at that path, so one left
 ///   anywhere else by a crash would stop the next start.
@@ -209,7 +212,7 @@ hooks:
     events: [node_success]
     async: true
     timeout: 300
-    cmd: 'YAGRA_TOKEN=\"{token}\" YAGRA_SAVE_URL=\"{save_url}\" /usr/bin/ruby {SHARED_DIR_IN_OXIDIZED}/{SAVE_SCRIPT_FILE}'
+    cmd: 'OXIDIZED_HOME=\"{SHARED_DIR_IN_OXIDIZED}\" YAGRA_TOKEN=\"{token}\" YAGRA_SAVE_URL=\"{save_url}\" /usr/bin/ruby {SHARED_DIR_IN_OXIDIZED}/{SAVE_SCRIPT_FILE}'
 "
     )
 }
@@ -269,7 +272,8 @@ mod tests {
         ));
         // The save hook runs after a successful fetch only (ADR-222 decision 7).
         assert!(body.contains(
-            "cmd: 'YAGRA_TOKEN=\"Abc123\" YAGRA_SAVE_URL=\"http://core:8090/internal/oxidized/save\" \
+            "cmd: 'OXIDIZED_HOME=\"/var/lib/yagra/oxidized\" YAGRA_TOKEN=\"Abc123\" \
+             YAGRA_SAVE_URL=\"http://core:8090/internal/oxidized/save\" \
              /usr/bin/ruby /var/lib/yagra/oxidized/yagra-save.rb'"
         ));
     }
@@ -328,7 +332,7 @@ mod tests {
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "12d10e679c704f4723492e691ffdb787b5c2b6931641a1155d03232c892d41f2",
+            "fcbb7783d72add6210d0b5c6bbbffcfffa7178728828f2c1b40bd7c4df4a83f4",
         )];
         assert_eq!(
             pinned,

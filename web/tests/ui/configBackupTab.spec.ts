@@ -37,6 +37,8 @@ const off = {
   readiness: 'off',
   status: null,
   models: ['ios', 'nxos'],
+  save_supported: true,
+  saves: [],
 } satisfies Schemas['ConfigBackupView'];
 
 const refused = {
@@ -60,6 +62,21 @@ const working = {
   ],
 } satisfies Schemas['ConfigBackupView'];
 const fetching = { ...working, pending: true } satisfies Schemas['ConfigBackupView'];
+const saved = {
+  ...working,
+  readiness: 'ready',
+  enabled: true,
+  saves: [
+    {
+      id: '00000000-0000-4000-8000-0000000000d1',
+      origin: 'person',
+      state: 'saved',
+      requested_at: '2026-10-31T10:00:00Z',
+      finished_at: '2026-10-31T10:01:00Z',
+      kept_startup: true,
+    },
+  ],
+} satisfies Schemas['ConfigBackupView'];
 
 const credentials = (() => {
   const [first] = defaultBodyFor('/api/v1/credentials') as unknown as Schemas['CredentialSummary'][];
@@ -204,5 +221,23 @@ test.describe('a node with a fetch out', () => {
     );
     await page.getByRole('button', { name: 'Cancel fetch' }).click();
     await cancel;
+  });
+});
+
+test.describe('a node Yagra can save (ADR-222)', () => {
+  test.use({ mockConfig: { overrides: overrides(saved) } });
+
+  test('lists the save and asks for another only after the confirmation', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await expect(page.locator('.cfgb')).toContainText('Saved');
+    await expect(page.getByRole('button', { name: 'Replaced startup' })).toHaveCount(1);
+    const posted = page.waitForRequest(
+      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/save'),
+    );
+    await page.getByRole('button', { name: 'Save to startup' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Yagra keeps a copy');
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await posted;
   });
 });
