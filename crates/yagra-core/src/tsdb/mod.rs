@@ -3,6 +3,7 @@
 //! and what each metric means (ADR-012/025/105).
 
 pub(crate) mod batch_writer;
+pub(crate) mod config_unsaved;
 pub(crate) mod derived;
 pub(crate) mod host_collector;
 pub(crate) mod interface_util;

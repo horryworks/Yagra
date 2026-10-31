@@ -23,6 +23,20 @@
   {
     "family": "Cisco IOS/IOS-XE health",
     "metric_kind": "gauge",
+    "metric_name": "cisco_ccm_running_changed_ticks",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Cisco IOS/IOS-XE health",
+    "metric_kind": "gauge",
+    "metric_name": "cisco_ccm_startup_changed_ticks",
+    "per_interface": false,
+    "source": "collected"
+  },
+  {
+    "family": "Cisco IOS/IOS-XE health",
+    "metric_kind": "gauge",
     "metric_name": "cisco_cemp_mem_free",
     "per_interface": false,
     "source": "collected"

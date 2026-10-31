@@ -18,6 +18,7 @@
 - `time_zone` (an IANA name, optional; absent or null = UTC) on the bodies and rows of `/api/v1/reports/schedules`, `/api/v1/analysis/schedules` and `/api/v1/config-backup-schedule`, and in the configuration bundle. An unknown name is refused with `400 invalid_time_zone`.
 - **Config backups run on a schedule you set.** Nodes ▸ Config backups shows when they run — every day from one time, so many devices at a time (one by default, up to eight) — and how far tonight's run has got; **Change** sets both. Devices are fetched oldest backup first, and a run that is interrupted carries on where it was. The default is 02:00 UTC, one at a time.
 - `GET`/`PUT /api/v1/config-backup-schedule`, and a `config_schedule` section in the MCP tool `get_system_health`.
+- **A Cisco IOS or IOS-XE device whose running configuration has gone unsaved for an hour raises a warning.** Yagra reads when the running configuration last changed and when the startup configuration was last written (CISCO-CONFIG-MAN-MIB), and keeps the gap as the new metric `config_unsaved_seconds` — 0 while the change is saved. A built-in rule, **Unsaved configuration**, warns at 3,600 seconds after two polls in a row; change or override it like any other rule. A device that has just restarted is not counted as unsaved.
 
 ### Improvements
 

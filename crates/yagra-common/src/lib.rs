@@ -15,6 +15,7 @@ pub mod clock;
 pub mod collection;
 #[cfg(test)]
 mod comment_language;
+pub mod config_unsaved;
 pub mod derived_metric;
 pub mod dns_check;
 pub mod env;

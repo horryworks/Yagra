@@ -110,7 +110,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 36] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -497,6 +497,19 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 35] = [
         None,
         3,
     ),
+    // ADR-222 decision 3: a running configuration left unsaved for an hour since its last change.
+    // The hour IS the grace — the value counts seconds, and `above` is inclusive, so a saved
+    // device (0) never fires. Dwell 2 so one odd reading after a reload does not page. Only the
+    // IOS profiles collect the two CISCO-CONFIG-MAN-MIB inputs.
+    (
+        35,
+        CISCO_IOS,
+        yagra_common::config_unsaved::METRIC,
+        "above",
+        Some(3600.0),
+        None,
+        2,
+    ),
 ];
 
 /// The row-name pattern each seeded default carries, by offset (ADR-143). Absent means every row.
@@ -551,6 +564,12 @@ mod tests {
                         vec![a, b]
                     }
                 }
+                // Computed at ingest from two vendor scalars and `sysUpTime` (ADR-222); the
+                // vendor pair is what narrows it to a profile.
+                None if metric == yagra_common::config_unsaved::METRIC => vec![
+                    yagra_common::config_unsaved::RUNNING_CHANGED,
+                    yagra_common::config_unsaved::STARTUP_CHANGED,
+                ],
                 None => vec![metric],
             };
             let publishes = |profile: &yagra_common::BuiltinProfile, want: &str| {
@@ -583,7 +602,7 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         // Load-bearing: without it, a loop that stopped matching would skip every assertion above
         // and report success about nothing.
-        assert_eq!(checked, 30, "thirty of the defaults are profile-scoped");
+        assert_eq!(checked, 31, "thirty-one of the defaults are profile-scoped");
     }
 
     /// Exactly four seeded defaults are fleet-wide, and they are the four that really are.

@@ -5,6 +5,7 @@
     "cisco_ipsec_active_tunnels": "tunnels",
     "cisco_ra_sessions": "sessions",
     "cisco_ra_users": "users",
+    "config_unsaved_seconds": "seconds",
     "dns_answer_count": "answers",
     "dns_chain_length": "hops",
     "fortinet_sessions": "sessions",

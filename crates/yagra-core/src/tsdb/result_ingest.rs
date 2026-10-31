@@ -589,6 +589,9 @@ pub(crate) async fn consume_results<S>(
         // it is stored and judged, so a rule on it sees the same view the AP nodes were given.
         let fanned = ap_fanout.fan_out(&result, Replay::Live);
         result.samples.extend(fanned.controller);
+        // How long the running configuration has gone unsaved (ADR-222), computed from three
+        // readings of this same poll so a threshold rule judges it like any collected metric.
+        crate::tsdb::config_unsaved::add_to(&mut result);
         let aps = fanned.aps;
         // Each AP this inventory spoke about has just been reported, by this controller (ADR-064
         // Inc.G). Noted before the AP's result is judged, so the engine reads it as current when it
@@ -660,8 +663,11 @@ pub(crate) async fn consume_results_backfill<S>(
 ) where
     S: Stream<Item = PollResult> + Unpin,
 {
-    while let Some(result) = results.next().await {
+    while let Some(mut result) = results.next().await {
         metrics::counter!("yagra_core_backfill_results_total").increment(1);
+        // Stored at its own time like the live path's, so the series has no hole where a site
+        // was cut off (ADR-222). Only stored: this path judges nothing.
+        crate::tsdb::config_unsaved::add_to(&mut result);
         // A replayed inventory's APs are stored at their own time too — judged against who serves
         // each AP now, and never moving it (ADR-064 B2).
         let aps = ap_fanout.results_for(&result, Replay::Backfill);

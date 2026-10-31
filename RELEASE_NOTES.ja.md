@@ -18,6 +18,7 @@
 - `/api/v1/reports/schedules`・`/api/v1/analysis/schedules`・`/api/v1/config-backup-schedule` の本文と行、および設定バンドルに `time_zone`（IANA のゾーン名。省略か null は UTC）。知らない名前は `400 invalid_time_zone`。
 - **config バックアップを、決めた時刻から取るようになった。** Nodes ▸ Config backups に、毎日いつから何台ずつ（既定 1 台、最大 8 台）取るかと、その日の回がどこまで進んだかを出す。**変更** で両方を決める。前回のバックアップが古い機器から順に取り、途中で止まった回は続きから取る。既定は 02:00 UTC から 1 台ずつ。
 - `GET`/`PUT /api/v1/config-backup-schedule`。MCP の `get_system_health` に `config_schedule` の欄。
+- **Cisco IOS・IOS-XE の機器で、running-config を保存しないまま 1 時間たつと警告を出すようになった。** running-config が最後に変わった時刻と、startup-config を最後に書き込んだ時刻（CISCO-CONFIG-MAN-MIB）を読み、その差を新しいメトリクス `config_unsaved_seconds` に残す。保存済みなら 0。組み込みのルール **Unsaved configuration** が 3,600 秒以上で 2 回続いたら警告する。ほかのルールと同じく変更や上書きができる。再起動した直後の機器は未保存に数えない。
 
 ### 改善
 

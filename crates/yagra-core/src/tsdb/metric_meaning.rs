@@ -346,11 +346,13 @@ pub fn alert_title_of(metric: &str) -> Option<String> {
 /// already pins this table to the collection catalogue in **both** directions, so a new metric now
 /// fails to compile until someone decides its unit. That guarantee is bought, not built — there is
 /// no separate check for units and there should not be one.
-pub const METRIC_MEANINGS: [(&str, &str, MetricUnit, AlertName); 154] = [
+pub const METRIC_MEANINGS: [(&str, &str, MetricUnit, AlertName); 157] = [
     ("__liveness__", "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.", MetricUnit::None, AlertName::Flag("Node not responding")),
     ("asa_current_connections", "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).", MetricUnit::Counted("connections"), AlertName::Value("Firewall connections")),
     ("bgp_peer_admin_status", "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.", MetricUnit::None, AlertName::Value("BGP session admin state")),
     ("bgp_peer_state", "BGP session state. 1 = idle, 2 = connect, 3 = active, 4 = opensent, 5 = openconfirm, 6 = established. Only 6 is a working session, so the usual rule is below 6.", MetricUnit::None, AlertName::Value("BGP session state")),
+    ("cisco_ccm_running_changed_ticks", "When the running configuration last changed, as the SNMP agent uptime at that moment in hundredths of a second (ccmHistoryRunningLastChanged). Read with the startup value to tell whether a change is unsaved.", MetricUnit::None, AlertName::Value("Running config last changed")),
+    ("cisco_ccm_startup_changed_ticks", "When the startup configuration was last written, as the SNMP agent uptime at that moment in hundredths of a second (ccmHistoryStartupLastChanged). 0 means not written since the device started.", MetricUnit::None, AlertName::Value("Startup config last written")),
     ("cisco_cemp_mem_free", "Free bytes in an enhanced memory pool (cempMemPoolFree). Newer IOS-XE and IOS-XR answer here rather than on the older pool table.", MetricUnit::Scaled("bytes"), AlertName::Value("Memory pool free (enhanced)")),
     ("cisco_cemp_mem_used", "Used bytes in an enhanced memory pool (cempMemPoolUsed). Pair it with the free value to read a percentage.", MetricUnit::Scaled("bytes"), AlertName::Value("Memory pool used (enhanced)")),
     ("cisco_cemp_mem_used_pct", "Percentage of an enhanced memory pool in use. Computed from cempMemPoolUsed and cempMemPoolFree — Cisco reports the two halves and no total, so this figure exists in no series and cannot be charted. One value per pool, and each pool alerts on its own.", MetricUnit::Symbol("%"), AlertName::Value("Memory pool usage (enhanced)")),
@@ -371,6 +373,7 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit, AlertName); 154] = [
     ("cisco_ra_sessions", "Remote-access VPN sessions currently connected (AnyConnect / SSL VPN).", MetricUnit::Counted("sessions"), AlertName::Value("Remote-access VPN sessions")),
     ("cisco_ra_users", "Distinct users currently connected over remote-access VPN. Lower than the session count when one user has several sessions.", MetricUnit::Counted("users"), AlertName::Value("Remote-access VPN users")),
     ("cisco_temp_c", "Chassis temperature in degrees Celsius, from the Cisco sensor table. Only the sensors that reach no port — per-port optical readings are reported as light level instead (ADR-070).", MetricUnit::Symbol("°C"), AlertName::Value("Chassis temperature")),
+    ("config_unsaved_seconds", "How long the running configuration has gone unsaved, in seconds since its last change; 0 when the startup configuration holds it. Computed by Yagra from the device's own record of when each was last changed — a reload now would lose the change.", MetricUnit::Counted("seconds"), AlertName::Value("Unsaved configuration")),
     ("dns_answer_count", "How many answers the final response carried.", MetricUnit::Counted("answers"), AlertName::Value("DNS answers")),
     ("dns_chain_length", "How many hops the resolution chain took (CNAME → … → A/AAAA).", MetricUnit::Counted("hops"), AlertName::Value("DNS resolution hops")),
     ("dns_resolve_ms", "How long the resolution took, in milliseconds.", MetricUnit::Symbol("ms"), AlertName::Value("DNS resolution time")),
@@ -639,6 +642,8 @@ mod tests {
             })
             .collect();
         expected.extend(CHECK_METRICS);
+        // Computed at ingest and stored like a collected reading (ADR-222).
+        expected.insert(yagra_common::config_unsaved::METRIC);
         expected.extend(yagra_common::derived_metric::DERIVED_INTERFACE_METRICS);
         expected.extend(
             yagra_common::derived_metric::DERIVED_NODE_METRICS

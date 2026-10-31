@@ -781,6 +781,16 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                 vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
                 vendor_table("cisco_cemp_mem_free", "1.3.6.1.4.1.9.9.221.1.1.1.1.20"),
                 vendor_table("cisco_env_temp", "1.3.6.1.4.1.9.9.13.1.3.1.3"),
+                // When running last changed and when startup was last written (ADR-222). Core
+                // turns the pair into `config_unsaved_seconds` at ingest; see `config_unsaved`.
+                vendor_scalar(
+                    crate::config_unsaved::RUNNING_CHANGED,
+                    crate::config_unsaved::RUNNING_CHANGED_OID,
+                ),
+                vendor_scalar(
+                    crate::config_unsaved::STARTUP_CHANGED,
+                    crate::config_unsaved::STARTUP_CHANGED_OID,
+                ),
             ],
         },
         BuiltinTemplate {
