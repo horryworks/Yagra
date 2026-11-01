@@ -13591,7 +13591,7 @@
         },
         "responses": {
           "204": {
-            "description": "Saved; the bundled oxidized is asked to re-read its node list. Switching it on, or changing the order, starts the logins afresh"
+            "description": "Saved; the bundled oxidized is asked to re-read its node list. Changing the order starts the logins afresh, and so does switching it on unless a login had been found that works, which is kept"
           },
           "400": {
             "description": "An unknown input or model, a login that is not a CLI login, a repeated one, or both `login_order` and `credential_id` (`invalid_config_backup`)",

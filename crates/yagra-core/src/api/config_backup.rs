@@ -438,7 +438,7 @@ const MAX_ORDER: usize = 200;
     params(("node_id" = Uuid, Path, description = "Node id")),
     request_body = ConfigBackupBody,
     responses(
-        (status = 204, description = "Saved; the bundled oxidized is asked to re-read its node list. Switching it on, or changing the order, starts the logins afresh"),
+        (status = 204, description = "Saved; the bundled oxidized is asked to re-read its node list. Changing the order starts the logins afresh, and so does switching it on unless a login had been found that works, which is kept"),
         (status = 400, description = "An unknown input or model, a login that is not a CLI login, a repeated one, or both `login_order` and `credential_id` (`invalid_config_backup`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
@@ -508,7 +508,7 @@ async fn put_config_backup(
     }
     let before = admin
         .config_backup
-        .get(node_id)
+        .get_with_rotation(node_id)
         .await
         .map_err(|e| read_failed(&e))?;
     let cfg = NodeConfigBackup {
@@ -518,10 +518,10 @@ async fn put_config_backup(
         model_override,
         scan_mode: body.scan_mode,
     };
-    // A node switched on, or one whose candidates changed, starts its logins afresh.
-    let restart = before
-        .as_ref()
-        .is_none_or(|b| (!b.enabled && cfg.enabled) || b.login_order != cfg.login_order);
+    let restart = before.as_ref().is_none_or(|(b, rot)| {
+        restarts_logins(b.enabled, rot.login_confirmed, cfg.enabled)
+            || b.login_order != cfg.login_order
+    });
     let saved = admin
         .config_backup
         .put(node_id, &cfg, restart)
@@ -541,6 +541,15 @@ async fn put_config_backup(
     }
     reload_quietly(&admin).await;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether switching a node on starts its logins afresh (ADR-224 decision 8). A node switched back
+/// on keeps the login that worked before it was switched off: searching again from the top of the
+/// order would send every login ahead of it to the device and spend the lockout limits doing so.
+/// One with no working login starts its pass again, as it always has. A changed order restarts
+/// either way — that is decided beside this, by the caller.
+fn restarts_logins(was_enabled: bool, login_confirmed: bool, enabled: bool) -> bool {
+    !was_enabled && enabled && !login_confirmed
 }
 
 /// A CLI login is shared by every folder, like every credential (`credentials_are_deployment_wide`).
@@ -1520,6 +1529,20 @@ async fn put_schedule(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_node_switched_back_on_keeps_a_login_that_worked() {
+        assert!(
+            !restarts_logins(false, true, true),
+            "back on with a working login"
+        );
+        assert!(
+            restarts_logins(false, false, true),
+            "back on with none: a fresh pass"
+        );
+        assert!(!restarts_logins(true, false, true), "already on");
+        assert!(!restarts_logins(true, true, false), "switched off");
+    }
 
     #[test]
     fn a_diff_marks_each_line_by_which_version_holds_it() {

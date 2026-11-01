@@ -26940,7 +26940,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Saved; the bundled oxidized is asked to re-read its node list. Switching it on, or changing the order, starts the logins afresh */
+            /** @description Saved; the bundled oxidized is asked to re-read its node list. Changing the order starts the logins afresh, and so does switching it on unless a login had been found that works, which is kept */
             204: {
                 headers: {
                     [name: string]: unknown;

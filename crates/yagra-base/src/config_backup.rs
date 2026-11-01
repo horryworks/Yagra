@@ -768,7 +768,8 @@ impl ConfigBackupRepo {
 
     /// Switch many nodes on or off at once, in one transaction (ADR-224 decision 4). Only nodes
     /// `groups` lets the caller see are touched. A node with settings keeps them and changes only
-    /// whether it is fetched; switching one on starts its logins afresh, as a PUT does. A node with
+    /// whether it is fetched; switching one on keeps a login that worked and otherwise starts its
+    /// logins afresh, as a PUT does (decision 8). A node with
     /// none is given `input`, every CLI login and the normal pace — and when `input` is `None` and
     /// such a node is named, nothing is written and the outcome lists them in `needs_input`. A node
     /// whose model is not known is never switched on.
@@ -862,11 +863,16 @@ impl ConfigBackupRepo {
         modelled: &[&str],
         mut out: SwitchOutcome,
     ) -> anyhow::Result<SwitchOutcome> {
-        // The columns a PUT that switches a node on resets (`put` with `restart`).
+        // A node with a login that worked keeps it (ADR-224 decision 8); one without starts its
+        // pass again — the columns a PUT that switches a node on resets (`put` with `restart`).
         out.switched = sqlx::query_scalar(&format!(
             "UPDATE node_config_backup b SET enabled = true, updated_at = now(), \
-               bound_address = n.address, credential_id = NULL, login_confirmed = false, \
-               round_started_at = now(), requested_at = NULL, next_try_at = NULL \
+               bound_address = n.address, \
+               credential_id = CASE WHEN b.login_confirmed THEN b.credential_id END, \
+               round_started_at = CASE WHEN b.login_confirmed THEN b.round_started_at \
+                                  ELSE now() END, \
+               requested_at = CASE WHEN b.login_confirmed THEN b.requested_at END, \
+               next_try_at = CASE WHEN b.login_confirmed THEN b.next_try_at END \
              FROM nodes n LEFT JOIN profiles p ON p.id = n.profile_id \
              WHERE b.node_id = n.id AND n.id = ANY($1) AND {} AND NOT b.enabled \
                AND (b.model_override IS NOT NULL OR p.name = ANY($3)) \
@@ -1303,6 +1309,17 @@ mod tests {
         let mut off = on(BackupInput::Telnet, Some("vrp"));
         off.enabled = false;
         assert!(repo.put(stopped, &off, false).await.expect("put"));
+        // It had found a login that works before it was switched off.
+        let login = crate::pgtest::credential(&pool, "ops", "cli_login").await;
+        sqlx::query(
+            "UPDATE node_config_backup SET credential_id = $2, login_confirmed = true \
+             WHERE node_id = $1",
+        )
+        .bind(stopped)
+        .bind(login)
+        .execute(&pool)
+        .await
+        .expect("confirm");
 
         let ids =
             |rows: Vec<BackupOverview>| rows.into_iter().map(|r| r.node_id).collect::<Vec<_>>();
@@ -1333,6 +1350,23 @@ mod tests {
         both.sort_unstable();
         assert_eq!(done.switched, both);
         assert_eq!(done.no_model, [unknown]);
+        let (_, rot) = repo
+            .get_with_rotation(stopped)
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(
+            rot.credential_id,
+            Some(login),
+            "the login that worked is kept"
+        );
+        assert!(rot.login_confirmed);
+        let (_, rot) = repo
+            .get_with_rotation(fresh)
+            .await
+            .expect("get")
+            .expect("row");
+        assert!(!rot.login_confirmed);
         let kept = repo.get(stopped).await.expect("get").expect("row");
         assert_eq!(kept.input, BackupInput::Telnet, "its own settings are kept");
         assert_eq!(kept.model_override.as_deref(), Some("vrp"));
