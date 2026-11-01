@@ -81,12 +81,15 @@ export function ConfigBackupsPage() {
   const canReveal = useCan('reveal_credentials');
   const canOff = canConfig;
   const canOn = canConfig && canReveal;
-  const [filter, setFilter] = useState<ListFilter>('on');
+  // `null` until a person picks one: then the list opens on what is backed up, or on everything
+  // while nothing is yet — an empty first view would hide the nodes there are to switch on.
+  const [picking, setFilter] = useState<ListFilter | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [asking, setAsking] = useState<{ ids: string[]; skipped: string[] } | null>(null);
   const counts = useMemo(() => countsOf(list.data), [list.data]);
+  const filter: ListFilter = picking ?? (counts.on > 0 || counts.all === 0 ? 'on' : 'all');
   const shown = useMemo(() => rowsIn(list.data, filter), [list.data, filter]);
   // Only rows still on screen count as picked: a filter change or a reload drops the rest.
   const picked = useMemo(() => shown.filter((r) => selected.has(r.node_id)), [shown, selected]);
