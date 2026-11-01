@@ -1682,7 +1682,8 @@ mod tests {
         assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
         assert_eq!(body[0]["node_id"], node.to_string());
         assert_eq!(body[0]["enabled"], true);
-        assert_eq!(body[0]["model"], "ios");
+        // The last PUT dropped the picked model and the node has no profile, so none is known.
+        assert!(body[0]["model"].is_null(), "{body}");
     }
 
     /// Many nodes are switched off and on at once and the list answers each state; a Viewer cannot
