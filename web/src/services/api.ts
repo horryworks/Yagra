@@ -40,7 +40,9 @@ import type {
   ConfigBundle,
   CredentialSummary,
   RevealedCredential,
+  ConfigBackupListState,
   ConfigBackupRow,
+  ConfigBackupSwitchResult,
   ConfigBackupScheduleBody,
   ConfigBackupScheduleView,
   GitAuth,
@@ -1284,9 +1286,18 @@ export const api = {
   rescanConfigLogins: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/rescan', { path: { node_id: id } }),
 
-  /** Every node switched on for config backup that the caller can see (Nodes ▸ Config backups and
-   *  the tree's marks). */
-  listConfigBackups: (): Promise<ConfigBackupRow[]> => apiGet('/api/v1/config-backups'),
+  /** The nodes in `state` the caller can see: `on` (the default) is every node switched on for
+   *  config backup — the tree's marks; Nodes ▸ Config backups asks for `all` (ADR-224). */
+  listConfigBackups: (state?: ConfigBackupListState): Promise<ConfigBackupRow[]> =>
+    apiGet('/api/v1/config-backups', { query: { state } }),
+
+  /** Switch many nodes on or off at once (ADR-224). `input` is how a node with no settings yet is
+   *  reached; a node with settings keeps its own. */
+  switchConfigBackups: (body: {
+    node_ids: string[];
+    enabled: boolean;
+    input?: BackupInput;
+  }): Promise<ConfigBackupSwitchResult> => apiPost('/api/v1/config-backups/switch', { body }),
 
   /** When config backups are fetched, and where the latest run stands (ADR-210 stage 6). */
   getConfigBackupSchedule: (): Promise<ConfigBackupScheduleView> =>

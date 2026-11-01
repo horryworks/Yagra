@@ -5,6 +5,8 @@ import { markOf, marksOf, stateKeyOf } from './configBackupMarks';
 
 const row = (over: Partial<ConfigBackupRow>): ConfigBackupRow => ({
   node_id: 'n1',
+  enabled: true,
+  configured: true,
   credential_id: 'c1',
   login_confirmed: false,
   pending: false,

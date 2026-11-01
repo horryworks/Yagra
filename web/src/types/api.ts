@@ -496,6 +496,8 @@ export type PushStatusView = components['schemas']['PushStatusView'];
 export type AttemptView = components['schemas']['AttemptView'];
 /** One node in Nodes ▸ Config backups. */
 export type ConfigBackupRow = components['schemas']['ConfigBackupRow'];
+export type ConfigBackupListState = components['schemas']['ListState'];
+export type ConfigBackupSwitchResult = components['schemas']['SwitchResult'];
 export type ConfigBackupScheduleView = components['schemas']['ConfigBackupScheduleView'];
 export type ConfigBackupScheduleBody = components['schemas']['ConfigBackupScheduleBody'];
 

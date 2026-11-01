@@ -724,6 +724,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-backups/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["switch_config_backups"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-save-settings": {
         parameters: {
             query?: never;
@@ -7249,11 +7265,16 @@ export interface components {
         };
         /** @description One node in the fleet-wide list. */
         ConfigBackupRow: {
+            /** @description Whether it has settings; `false` for a node that was never switched on. */
+            configured: boolean;
             /**
              * Format: uuid
              * @description The login being tried or that works.
              */
             credential_id?: string | null;
+            /** @description Whether it is fetched. */
+            enabled: boolean;
+            input?: null | components["schemas"]["BackupInput"];
             last?: null | components["schemas"]["AttemptView"];
             /**
              * Format: date-time
@@ -7261,6 +7282,11 @@ export interface components {
              */
             last_success_at?: string | null;
             login_confirmed: boolean;
+            /**
+             * @description The model it is fetched with: the one picked, else its profile's; `null` when neither names
+             *     one, and then it cannot be switched on from the list.
+             */
+            model?: string | null;
             /** Format: uuid */
             node_id: string;
             /** @description A fetch is out and not yet answered. */
@@ -10118,6 +10144,11 @@ export interface components {
          * @enum {string}
          */
         LinkSource: "manual" | "lldp" | "cdp" | "ospf" | "route" | "bgp" | "l3_subnet";
+        /**
+         * @description Which nodes the list answers (ADR-224 decision 3).
+         * @enum {string}
+         */
+        ListState: "on" | "off" | "never" | "all";
         /** @description The `PUT /api/v1/llm/config` body. */
         LlmConfigInput: {
             /**
@@ -14926,6 +14957,24 @@ export interface components {
              */
             group_id?: string | null;
         };
+        /** @description Many nodes switched on or off at once (ADR-224 decision 4). */
+        SwitchBody: {
+            enabled: boolean;
+            input?: null | components["schemas"]["BackupInput"];
+            node_ids: string[];
+        };
+        /** @description What a switch did. */
+        SwitchResult: {
+            /** @description Not switched on: no model is picked and the profile names none. */
+            no_model: string[];
+            /** @description Switched by this call. */
+            switched: string[];
+            /**
+             * @description Named but not switched for another reason: already in that state, or not a node the caller
+             *     can see.
+             */
+            unchanged: number;
+        };
         /** @description Yagra's own health: the reachability of its backing services. */
         SystemHealth: {
             /** @description NATS — **inferred** from a recent scheduler sweep, not a direct ping. */
@@ -18801,14 +18850,17 @@ export interface operations {
     };
     list_config_backups: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description `on` (the default), `off`, `never` or `all`. */
+                state?: components["schemas"]["ListState"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Every node switched on for config backup that the caller can see, with its login and its last attempt */
+            /** @description The nodes in `state` the caller can see, with their login and their last attempt. `on` (the default) is every node switched on for config backup */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -18817,8 +18869,77 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigBackupRow"][];
                 };
             };
+            /** @description An unknown `state` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description No valid bearer token */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    switch_config_backups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchBody"];
+            };
+        };
+        responses: {
+            /** @description Switched in one transaction. A node with settings keeps them; one with none gets `input`, every CLI login and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SwitchResult"];
+                };
+            };
+            /** @description No node, more than 5,000, an unknown input, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

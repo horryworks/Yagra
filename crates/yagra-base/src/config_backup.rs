@@ -188,10 +188,39 @@ pub struct Attempt {
     pub at: DateTime<Utc>,
 }
 
+/// What one [`ConfigBackupRepo::switch`] did, each list sorted.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SwitchOutcome {
+    /// Switched on or off by this call.
+    pub switched: Vec<Uuid>,
+    /// Not switched on: no model is picked and the profile names none.
+    pub no_model: Vec<Uuid>,
+    /// Not switched on, and nothing was written: they have no settings and no input was given.
+    pub needs_input: Vec<Uuid>,
+}
+
+/// Which nodes the fleet-wide list answers (ADR-224 decision 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverviewState {
+    /// Switched on: the list as it was before ADR-224.
+    On,
+    /// Switched off, with their settings kept.
+    Off,
+    /// No settings yet, on a profile that names the model they would be fetched with
+    /// (ADR-224 decision 2) — a node whose model a person has to pick is not listed.
+    Never,
+    /// The three together.
+    All,
+}
+
 /// One row of the fleet-wide list (`GET /api/v1/config-backups`).
 #[derive(Debug, Clone)]
 pub struct BackupOverview {
     pub node_id: Uuid,
+    /// The node's settings; `None` when it has none yet.
+    pub config: Option<NodeConfigBackup>,
+    /// The node's profile, which names its model when no override does.
+    pub profile_name: Option<String>,
     pub rotation: Rotation,
     pub last: Option<Attempt>,
     pub last_success_at: Option<DateTime<Utc>>,
@@ -661,30 +690,55 @@ impl ConfigBackupRepo {
         Ok(rows.iter().map(attempt_of).collect::<Result<_, _>>()?)
     }
 
-    /// Every node switched on that `groups` lets the caller see (`None`: every one), with its
-    /// rotation, its newest attempt and its newest success.
-    pub async fn overview(&self, groups: Option<&[Uuid]>) -> anyhow::Result<Vec<BackupOverview>> {
+    /// Every node in `state` that `groups` lets the caller see (`None`: every one), with its
+    /// settings, its rotation, its newest attempt and its newest success.
+    pub async fn overview(
+        &self,
+        groups: Option<&[Uuid]>,
+        state: OverviewState,
+    ) -> anyhow::Result<Vec<BackupOverview>> {
+        use OverviewState::{All, Never, Off, On};
+        // The profiles that name a model: a node with no settings is listed only on one of them.
+        let modelled: Vec<&str> = yagra_common::oxidized_model::PROFILE_MODELS
+            .iter()
+            .map(|(profile, _)| *profile)
+            .collect();
+        // A node with no settings has no rotation, so its columns read as a fresh one's.
         let rows = sqlx::query(&format!(
-            "SELECT b.node_id, {ROTATION_COLUMNS}, \
+            "SELECT n.id AS node_id, p.name AS profile_name, (b.node_id IS NOT NULL) AS configured, \
+                    COALESCE(b.enabled, false) AS enabled, b.login_order, \
+                    COALESCE(b.input, 'ssh') AS input, b.model_override, \
+                    COALESCE(b.scan_mode, 'normal') AS scan_mode, \
+                    b.credential_id, COALESCE(b.login_confirmed, false) AS login_confirmed, \
+                    b.round_started_at, b.requested_at, b.next_try_at, b.last_version_oid, \
                     a.credential_id AS a_credential_id, a.outcome AS a_outcome, \
                     a.new_version AS a_new_version, a.at AS a_at, s.at AS last_success_at \
-             FROM node_config_backup b \
-             JOIN nodes n ON n.id = b.node_id \
+             FROM nodes n \
+             LEFT JOIN node_config_backup b ON b.node_id = n.id \
+             LEFT JOIN profiles p ON p.id = n.profile_id \
              LEFT JOIN LATERAL (SELECT credential_id, outcome, new_version, at \
-                                FROM config_backup_attempts WHERE node_id = b.node_id \
+                                FROM config_backup_attempts WHERE node_id = n.id \
                                 ORDER BY at DESC, id DESC LIMIT 1) a ON true \
              LEFT JOIN LATERAL (SELECT at FROM config_backup_attempts \
-                                WHERE node_id = b.node_id AND outcome = 'success' \
+                                WHERE node_id = n.id AND outcome = 'success' \
                                 ORDER BY at DESC, id DESC LIMIT 1) s ON true \
-             WHERE b.enabled AND {} ORDER BY n.name, b.node_id",
+             WHERE {} AND (($2 AND b.enabled) \
+                           OR ($3 AND b.node_id IS NOT NULL AND NOT b.enabled) \
+                           OR ($4 AND b.node_id IS NULL AND p.name = ANY($5))) \
+             ORDER BY n.name, n.id",
             crate::repo::scope_predicate(1, "n.group_id")
         ))
         .bind(groups)
+        .bind(matches!(state, On | All))
+        .bind(matches!(state, Off | All))
+        .bind(matches!(state, Never | All))
+        .bind(&modelled)
         .fetch_all(&self.pool)
         .await?;
         rows.iter()
             .map(|r| {
                 let node_id: Uuid = r.try_get("node_id")?;
+                let configured: bool = r.try_get("configured")?;
                 let at: Option<DateTime<Utc>> = r.try_get("a_at")?;
                 let last = match at {
                     Some(at) => Some(Attempt {
@@ -698,12 +752,134 @@ impl ConfigBackupRepo {
                 };
                 Ok(BackupOverview {
                     node_id,
+                    config: if configured {
+                        Some(config_of(r)?)
+                    } else {
+                        None
+                    },
+                    profile_name: r.try_get("profile_name")?,
                     rotation: rotation_of(r)?,
                     last,
                     last_success_at: r.try_get("last_success_at")?,
                 })
             })
             .collect()
+    }
+
+    /// Switch many nodes on or off at once, in one transaction (ADR-224 decision 4). Only nodes
+    /// `groups` lets the caller see are touched. A node with settings keeps them and changes only
+    /// whether it is fetched; switching one on starts its logins afresh, as a PUT does. A node with
+    /// none is given `input`, every CLI login and the normal pace — and when `input` is `None` and
+    /// such a node is named, nothing is written and the outcome lists them in `needs_input`. A node
+    /// whose model is not known is never switched on.
+    pub async fn switch(
+        &self,
+        nodes: &[Uuid],
+        groups: Option<&[Uuid]>,
+        enabled: bool,
+        input: Option<BackupInput>,
+    ) -> anyhow::Result<SwitchOutcome> {
+        let scope = crate::repo::scope_predicate(2, "n.group_id");
+        let mut tx = self.pool.begin().await?;
+        let mut out = SwitchOutcome::default();
+        if !enabled {
+            out.switched = sqlx::query_scalar(&format!(
+                "UPDATE node_config_backup b SET enabled = false, updated_at = now() \
+                 FROM nodes n WHERE b.node_id = n.id AND n.id = ANY($1) AND {scope} AND b.enabled \
+                 RETURNING b.node_id"
+            ))
+            .bind(nodes)
+            .bind(groups)
+            .fetch_all(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(out);
+        }
+        let modelled: Vec<&str> = yagra_common::oxidized_model::PROFILE_MODELS
+            .iter()
+            .map(|(profile, _)| *profile)
+            .collect();
+        out.no_model = sqlx::query_scalar(&format!(
+            "SELECT n.id FROM nodes n \
+             LEFT JOIN node_config_backup b ON b.node_id = n.id \
+             LEFT JOIN profiles p ON p.id = n.profile_id \
+             WHERE n.id = ANY($1) AND {scope} AND NOT COALESCE(b.enabled, false) \
+               AND b.model_override IS NULL AND (p.name IS NULL OR NOT p.name = ANY($3)) \
+             ORDER BY n.id"
+        ))
+        .bind(nodes)
+        .bind(groups)
+        .bind(&modelled)
+        .fetch_all(&mut *tx)
+        .await?;
+        let fresh: Vec<Uuid> = sqlx::query_scalar(&format!(
+            "SELECT n.id FROM nodes n JOIN profiles p ON p.id = n.profile_id \
+             WHERE n.id = ANY($1) AND {scope} AND p.name = ANY($3) \
+               AND NOT EXISTS (SELECT 1 FROM node_config_backup b WHERE b.node_id = n.id) \
+             ORDER BY n.id"
+        ))
+        .bind(nodes)
+        .bind(groups)
+        .bind(&modelled)
+        .fetch_all(&mut *tx)
+        .await?;
+        if fresh.is_empty() {
+            return self
+                .switch_on_configured(tx, nodes, groups, &modelled, out)
+                .await;
+        }
+        let Some(input) = input else {
+            // Dropping the transaction writes nothing.
+            out.needs_input = fresh;
+            return Ok(out);
+        };
+        let mut added: Vec<Uuid> = sqlx::query_scalar(
+            "INSERT INTO node_config_backup \
+               (node_id, enabled, login_order, input, model_override, bound_address, \
+                round_started_at, scan_mode) \
+             SELECT id, true, NULL, $2, NULL, address, now(), $3 FROM nodes WHERE id = ANY($1) \
+             ON CONFLICT (node_id) DO NOTHING RETURNING node_id",
+        )
+        .bind(&fresh)
+        .bind(input.as_str())
+        .bind(ScanMode::Normal.as_str())
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut out = self
+            .switch_on_configured(tx, nodes, groups, &modelled, out)
+            .await?;
+        out.switched.append(&mut added);
+        out.switched.sort_unstable();
+        Ok(out)
+    }
+
+    /// The half of [`Self::switch`] that turns on nodes which already have settings, then commits.
+    async fn switch_on_configured(
+        &self,
+        mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+        nodes: &[Uuid],
+        groups: Option<&[Uuid]>,
+        modelled: &[&str],
+        mut out: SwitchOutcome,
+    ) -> anyhow::Result<SwitchOutcome> {
+        // The columns a PUT that switches a node on resets (`put` with `restart`).
+        out.switched = sqlx::query_scalar(&format!(
+            "UPDATE node_config_backup b SET enabled = true, updated_at = now(), \
+               bound_address = n.address, credential_id = NULL, login_confirmed = false, \
+               round_started_at = now(), requested_at = NULL, next_try_at = NULL \
+             FROM nodes n LEFT JOIN profiles p ON p.id = n.profile_id \
+             WHERE b.node_id = n.id AND n.id = ANY($1) AND {} AND NOT b.enabled \
+               AND (b.model_override IS NOT NULL OR p.name = ANY($3)) \
+             RETURNING b.node_id",
+            crate::repo::scope_predicate(2, "n.group_id")
+        ))
+        .bind(nodes)
+        .bind(groups)
+        .bind(modelled)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(out)
     }
 
     /// Remember the name of every node that has a backup configuration (ADR-210 stage 4 decision 39),
@@ -1089,6 +1265,92 @@ mod tests {
         assert_eq!(gone.name, "sw-01");
     }
 
+    /// The node's profile set to one that names a model (seeded or not).
+    async fn on_modelled_profile(pool: &PgPool, node: Uuid) {
+        let name = yagra_common::oxidized_model::PROFILE_MODELS[0].0;
+        let found: Option<Uuid> = sqlx::query_scalar("SELECT id FROM profiles WHERE name = $1")
+            .bind(name)
+            .fetch_optional(pool)
+            .await
+            .expect("profile");
+        let id = match found {
+            Some(id) => id,
+            None => crate::pgtest::profile(pool, name).await,
+        };
+        sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
+            .bind(node)
+            .bind(id)
+            .execute(pool)
+            .await
+            .expect("set profile");
+    }
+
+    /// The list answers each state, and many nodes switch at once: a node with settings keeps them,
+    /// one with none needs an input, and one with no model is never switched on (ADR-224).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn nodes_are_listed_by_state_and_switched_together(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let running = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let stopped = crate::pgtest::node(&pool, "sw-02", 2, None).await;
+        let fresh = crate::pgtest::node(&pool, "sw-03", 3, None).await;
+        let unknown = crate::pgtest::node(&pool, "srv-01", 4, None).await;
+        on_modelled_profile(&pool, fresh).await;
+        assert!(repo
+            .put(running, &on(BackupInput::Ssh, Some("ios")), true)
+            .await
+            .expect("put"));
+        let mut off = on(BackupInput::Telnet, Some("vrp"));
+        off.enabled = false;
+        assert!(repo.put(stopped, &off, false).await.expect("put"));
+
+        let ids =
+            |rows: Vec<BackupOverview>| rows.into_iter().map(|r| r.node_id).collect::<Vec<_>>();
+        let list = |state| repo.overview(None, state);
+        assert_eq!(ids(list(OverviewState::On).await.expect("on")), [running]);
+        assert_eq!(ids(list(OverviewState::Off).await.expect("off")), [stopped]);
+        let never = list(OverviewState::Never).await.expect("never");
+        assert_eq!(
+            ids(never.clone()),
+            [fresh],
+            "a node with no model is not listed"
+        );
+        assert!(never[0].config.is_none());
+        assert_eq!(list(OverviewState::All).await.expect("all").len(), 3);
+
+        // Without an input, a node with no settings stops the whole call.
+        let all = [running, stopped, fresh, unknown];
+        let held = repo.switch(&all, None, true, None).await.expect("switch");
+        assert_eq!(held.needs_input, [fresh]);
+        assert!(held.switched.is_empty());
+        assert_eq!(ids(list(OverviewState::Off).await.expect("off")), [stopped]);
+
+        let done = repo
+            .switch(&all, None, true, Some(BackupInput::Ssh))
+            .await
+            .expect("switch");
+        let mut both = vec![stopped, fresh];
+        both.sort_unstable();
+        assert_eq!(done.switched, both);
+        assert_eq!(done.no_model, [unknown]);
+        let kept = repo.get(stopped).await.expect("get").expect("row");
+        assert_eq!(kept.input, BackupInput::Telnet, "its own settings are kept");
+        assert_eq!(kept.model_override.as_deref(), Some("vrp"));
+        let made = repo.get(fresh).await.expect("get").expect("row");
+        assert_eq!(made.input, BackupInput::Ssh);
+        assert_eq!(made.model_override, None);
+
+        // A folder the nodes are not in switches nothing.
+        let other = repo
+            .switch(&all, Some(&[Uuid::new_v4()]), false, None)
+            .await
+            .expect("switch");
+        assert!(other.switched.is_empty());
+        let stop = repo.switch(&all, None, false, None).await.expect("switch");
+        assert_eq!(stop.switched.len(), 3);
+        assert!(list(OverviewState::On).await.expect("on").is_empty());
+    }
+
     /// A node keeps its relay port, two nodes never share one, and a deleted node's port is not
     /// the next one handed out (ADR-210 stage 5 decision 44).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -1232,7 +1494,10 @@ mod tests {
         let all = repo.attempts_of(node, 10).await.expect("attempts");
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].outcome, AttemptOutcome::AuthFailed);
-        let overview = repo.overview(None).await.expect("overview");
+        let overview = repo
+            .overview(None, OverviewState::On)
+            .await
+            .expect("overview");
         assert_eq!(overview.len(), 1);
         assert_eq!(
             overview[0].last.as_ref().map(|a| a.outcome),
@@ -1241,7 +1506,7 @@ mod tests {
         assert_eq!(overview[0].last_success_at, Some(same.at));
         // A folder the node is not in sees nothing.
         assert!(repo
-            .overview(Some(&[Uuid::new_v4()]))
+            .overview(Some(&[Uuid::new_v4()]), OverviewState::All)
             .await
             .expect("overview")
             .is_empty());

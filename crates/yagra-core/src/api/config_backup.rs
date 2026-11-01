@@ -20,7 +20,9 @@
 //!   press does not wait for the lockout limits (stage 3 decision 25, the user's). `ManageConfig`.
 //!
 //! Fleet-wide, `GET /api/v1/config-backups`: every node switched on that the caller can see, with
-//! its rotation and its last attempt — the Nodes ▸ Config backups list and the tree's marks.
+//! its rotation and its last attempt — the Nodes ▸ Config backups list and the tree's marks. With
+//! `state`, also the nodes switched off and those that could be (ADR-224).
+//! `POST /api/v1/config-backups/switch` switches many at once, under the PUT's permissions.
 //!
 //! And two routes for oxidized itself, outside `/api/v1`, both behind the source token the
 //! one-shot `oxidized-config` wrote (compared in constant time). nginx forwards only `/api/` and
@@ -46,7 +48,9 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_backup::{Attempt, AttemptOutcome, BackupInput, NodeConfigBackup, ScanMode};
+use yagra_base::config_backup::{
+    Attempt, AttemptOutcome, BackupInput, NodeConfigBackup, OverviewState, ScanMode,
+};
 use yagra_base::config_save::SaveRecord;
 
 use super::error::{ApiError, ApiResult};
@@ -63,21 +67,25 @@ use crate::oxidized::{
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(
-    get_config_backup,
-    put_config_backup,
-    list_versions,
-    get_version,
-    get_diff,
-    fetch_now,
-    cancel_fetch,
-    rescan_logins,
-    list_config_backups,
-    get_schedule,
-    put_schedule,
-    oxidized_source,
-    oxidized_event
-))]
+#[openapi(
+    paths(
+        get_config_backup,
+        put_config_backup,
+        list_versions,
+        get_version,
+        get_diff,
+        fetch_now,
+        cancel_fetch,
+        rescan_logins,
+        list_config_backups,
+        switch_config_backups,
+        get_schedule,
+        put_schedule,
+        oxidized_source,
+        oxidized_event
+    ),
+    components(schemas(ListState))
+)]
 pub(super) struct Doc;
 
 /// The config-backup routes, merged by [`super::router`].
@@ -109,6 +117,7 @@ pub(super) fn routes() -> Router<ApiState> {
             post(rescan_logins),
         )
         .route("/api/v1/config-backups", get(list_config_backups))
+        .route("/api/v1/config-backups/switch", post(switch_config_backups))
         .route(
             "/api/v1/config-backup-schedule",
             get(get_schedule).put(put_schedule),
@@ -530,20 +539,7 @@ async fn put_config_backup(
             format!("no node {node_id}"),
         ));
     }
-    // Best effort, off the request: the status loop reloads within five minutes anyway. Never
-    // while a fetch is out, which a reload would start a second time (`rotation::may_reload`).
-    if let Some(ox) = admin.oxidized.clone() {
-        if rotation::may_reload(&admin.config_backup, Utc::now())
-            .await
-            .unwrap_or(false)
-        {
-            tokio::spawn(async move {
-                if let Err(e) = ox.client.reload().await {
-                    tracing::warn!(error = %e, "config backup: oxidized did not reload after a change");
-                }
-            });
-        }
-    }
+    reload_quietly(&admin).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -954,6 +950,15 @@ async fn rescan_logins(
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ConfigBackupRow {
     node_id: Uuid,
+    /// Whether it is fetched.
+    enabled: bool,
+    /// Whether it has settings; `false` for a node that was never switched on.
+    configured: bool,
+    /// The model it is fetched with: the one picked, else its profile's; `null` when neither names
+    /// one, and then it cannot be switched on from the list.
+    model: Option<String>,
+    /// How it is reached; `null` until it has settings.
+    input: Option<BackupInput>,
     /// The login being tried or that works.
     credential_id: Option<Uuid>,
     login_confirmed: bool,
@@ -994,21 +999,29 @@ impl From<&oxidized::relay::Route> for PollerReach {
     }
 }
 
-/// Every node switched on that the caller can see. Shared by REST and MCP.
+/// Every node in `state` that the caller can see. Shared by REST and MCP (which asks for `On`).
 pub(crate) async fn config_backup_rows(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
+    state: OverviewState,
 ) -> Result<Vec<ConfigBackupRow>, ApiError> {
     let now = Utc::now();
     let rows = admin
         .config_backup
-        .overview(scope.group_filter())
+        .overview(scope.group_filter(), state)
         .await
         .map_err(|e| read_failed(&e))?;
     Ok(rows
         .into_iter()
         .map(|r| ConfigBackupRow {
             node_id: r.node_id,
+            enabled: r.config.as_ref().is_some_and(|c| c.enabled),
+            configured: r.config.is_some(),
+            model: oxidized::source::model_of(
+                r.config.as_ref().and_then(|c| c.model_override.as_deref()),
+                r.profile_name.as_deref(),
+            ),
+            input: r.config.as_ref().map(|c| c.input),
             credential_id: r.rotation.credential_id,
             login_confirmed: r.rotation.login_confirmed,
             pending: rotation::in_flight(r.rotation.requested_at, now),
@@ -1020,10 +1033,45 @@ pub(crate) async fn config_backup_rows(
         .collect())
 }
 
+/// Which nodes the list answers (ADR-224 decision 3).
+#[derive(Debug, Clone, Copy, Default, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ListState {
+    /// Switched on: the answer from before `state` existed.
+    #[default]
+    On,
+    /// Switched off, settings kept.
+    Off,
+    /// Never switched on, on a profile that names its model.
+    Never,
+    /// The three together.
+    All,
+}
+
+impl From<ListState> for OverviewState {
+    fn from(s: ListState) -> Self {
+        match s {
+            ListState::On => Self::On,
+            ListState::Off => Self::Off,
+            ListState::Never => Self::Never,
+            ListState::All => Self::All,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub(super) struct ListQuery {
+    /// `on` (the default), `off`, `never` or `all`.
+    #[serde(default)]
+    state: ListState,
+}
+
 #[utoipa::path(
     get, path = "/api/v1/config-backups", tag = "nodes",
+    params(ListQuery),
     responses(
-        (status = 200, description = "Every node switched on for config backup that the caller can see, with its login and its last attempt", body = Vec<ConfigBackupRow>),
+        (status = 200, description = "The nodes in `state` the caller can see, with their login and their last attempt. `on` (the default) is every node switched on for config backup", body = Vec<ConfigBackupRow>),
+        (status = 400, description = "An unknown `state`", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -1032,8 +1080,127 @@ async fn list_config_backups(
     _perm: RequireView,
     Scoped(scope): Scoped,
     admin: Admin,
+    Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<ConfigBackupRow>>> {
-    Ok(Json(config_backup_rows(&admin, &scope).await?))
+    Ok(Json(
+        config_backup_rows(&admin, &scope, q.state.into()).await?,
+    ))
+}
+
+/// The most nodes one switch may name.
+const MAX_SWITCH: usize = 5_000;
+
+/// Many nodes switched on or off at once (ADR-224 decision 4).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct SwitchBody {
+    node_ids: Vec<Uuid>,
+    enabled: bool,
+    /// How a node that has no settings yet is reached. Needed only when one is named and
+    /// `enabled` is true; a node with settings keeps its own.
+    #[serde(default)]
+    input: Option<BackupInput>,
+}
+
+/// What a switch did.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct SwitchResult {
+    /// Switched by this call.
+    switched: Vec<Uuid>,
+    /// Not switched on: no model is picked and the profile names none.
+    no_model: Vec<Uuid>,
+    /// Named but not switched for another reason: already in that state, or not a node the caller
+    /// can see.
+    unchanged: usize,
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/config-backups/switch", tag = "nodes",
+    request_body = SwitchBody,
+    responses(
+        (status = 200, description = "Switched in one transaction. A node with settings keeps them; one with none gets `input`, every CLI login and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list", body = SwitchResult),
+        (status = 400, description = "No node, more than 5,000, an unknown input, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn switch_config_backups(
+    _perm: RequireManageConfig,
+    // Optional: needed only to switch on, as for the PUT.
+    reveal: Option<RequireRevealCredentials>,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<SwitchBody>,
+) -> ApiResult<Json<SwitchResult>> {
+    let bad = |m: &str| ApiError::bad_request("invalid_config_backup", m.to_owned());
+    if body.node_ids.is_empty() {
+        return Err(bad("name at least one node"));
+    }
+    if body.node_ids.len() > MAX_SWITCH {
+        return Err(bad("too many nodes in one switch"));
+    }
+    if body.input == Some(BackupInput::Unknown) {
+        return Err(bad("input must be ssh, telnet or ssh_then_telnet"));
+    }
+    if body.enabled {
+        refuse_scoped_login(&scope)?;
+        if reveal.is_none() {
+            return Err(ApiError::forbidden_code(
+                "login_not_permitted",
+                "switching config backup on hands CLI logins to the device and needs the Reveal \
+                 credentials permission, which an API token never holds",
+            ));
+        }
+    }
+    let mut ids = body.node_ids;
+    ids.sort_unstable();
+    ids.dedup();
+    let out = admin
+        .config_backup
+        .switch(&ids, scope.group_filter(), body.enabled, body.input)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "switch config backups",
+                "failed to switch config backups",
+            )
+        })?;
+    if !out.needs_input.is_empty() {
+        return Err(ApiError::bad_request(
+            "input_required",
+            format!(
+                "{} of these nodes have no settings yet; send input to say how they are reached",
+                out.needs_input.len()
+            ),
+        ));
+    }
+    if !out.switched.is_empty() {
+        reload_quietly(&admin).await;
+    }
+    Ok(Json(SwitchResult {
+        unchanged: ids.len() - out.switched.len() - out.no_model.len(),
+        switched: out.switched,
+        no_model: out.no_model,
+    }))
+}
+
+/// Ask oxidized to re-read its node list, off the request and never while a fetch is out, which a
+/// reload would start a second time (`rotation::may_reload`). Best effort: the status loop reloads
+/// within five minutes anyway.
+async fn reload_quietly(admin: &super::AdminState) {
+    if let Some(ox) = admin.oxidized.clone() {
+        if rotation::may_reload(&admin.config_backup, Utc::now())
+            .await
+            .unwrap_or(false)
+        {
+            tokio::spawn(async move {
+                if let Err(e) = ox.client.reload().await {
+                    tracing::warn!(error = %e, "config backup: oxidized did not reload after a change");
+                }
+            });
+        }
+    }
 }
 
 /// The source token, checked in constant time. Read on every call rather than at start-up: the
@@ -1514,6 +1681,67 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
         assert_eq!(body[0]["node_id"], node.to_string());
+        assert_eq!(body[0]["enabled"], true);
+        assert_eq!(body[0]["model"], "ios");
+    }
+
+    /// Many nodes are switched off and on at once and the list answers each state; a Viewer cannot
+    /// switch, and a node with no settings needs an input (ADR-224).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn nodes_are_switched_together_from_the_list(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let a = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        let b = yagra_base::pgtest::node(&pool, "sw-02", 2, None).await;
+        let operator = token(&st, yagra_common::Role::Operator);
+        for node in [a, b] {
+            let on = serde_json::json!({"enabled": true, "input": "ssh", "model_override": "ios"});
+            let path = format!("/api/v1/nodes/{node}/config-backup");
+            let (status, body) = send(&st, "PUT", &path, &operator, Some(on)).await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        }
+        let path = "/api/v1/config-backups/switch";
+        let off = serde_json::json!({"node_ids": [a, b, a], "enabled": false});
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let (status, _) = send(&st, "POST", path, &viewer, Some(off.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, body) = send(&st, "POST", path, &operator, Some(off)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["switched"].as_array().map(Vec::len), Some(2), "{body}");
+        assert_eq!(body["unchanged"], 0);
+        let (_, body) = send(&st, "GET", "/api/v1/config-backups", &operator, None).await;
+        assert_eq!(body.as_array().map(Vec::len), Some(0), "{body}");
+        let list = "/api/v1/config-backups?state=off";
+        let (status, body) = send(&st, "GET", list, &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body.as_array().map(Vec::len), Some(2), "{body}");
+        assert_eq!(body[0]["enabled"], false);
+        assert_eq!(body[0]["configured"], true);
+
+        let on = serde_json::json!({"node_ids": [a, b], "enabled": true});
+        let (status, body) = send(&st, "POST", path, &operator, Some(on)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["switched"].as_array().map(Vec::len), Some(2), "{body}");
+
+        for bad in [
+            serde_json::json!({"node_ids": [], "enabled": false}),
+            serde_json::json!({"node_ids": [a], "enabled": true, "input": "unknown"}),
+        ] {
+            let (status, body) = send(&st, "POST", path, &operator, Some(bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        }
+        let (status, _) = send(
+            &st,
+            "GET",
+            "/api/v1/config-backups?state=x",
+            &operator,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     /// A CLI login is never handed to an SNMP sweep as a community (ADR-210).

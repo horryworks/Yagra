@@ -1526,6 +1526,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_system_health"),
     ),
     (
+        "POST",
+        "/api/v1/config-backups/switch",
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/config-backup-schedule",
         Global(

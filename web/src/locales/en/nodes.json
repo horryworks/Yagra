@@ -1320,11 +1320,42 @@
         "success": "Last success",
         "next": "Next try"
       },
-      "empty": "No device is backed up yet.",
       "mark": {
         "ok": "Backed up",
         "busy": "In progress",
         "trouble": "Needs attention"
+      },
+      "filter": "Show",
+      "state": {
+        "on": "Backed up",
+        "off": "Stopped",
+        "never": "Not set up",
+        "all": "All"
+      },
+      "emptyOf": {
+        "on": "No device is backed up yet.",
+        "off": "None stopped.",
+        "never": "Nothing to set up.",
+        "all": "Nothing to back up."
+      },
+      "pickAll": "Select all shown",
+      "pick": "Select {{name}}",
+      "picked_one": "{{count}} selected",
+      "picked_other": "{{count}} selected",
+      "unpick": "Clear selection",
+      "switchOne": "Back up {{name}}",
+      "switchOnN_one": "Turn on {{count}}",
+      "switchOnN_other": "Turn on {{count}}",
+      "switchOffN_one": "Turn off {{count}}",
+      "switchOffN_other": "Turn off {{count}}",
+      "pickModel": "Pick a model",
+      "switchOn": {
+        "title_one": "Back up {{count}} node",
+        "title_other": "Back up {{count}} nodes",
+        "submit_one": "Turn on {{count}}",
+        "submit_other": "Turn on {{count}}",
+        "skipped_one": "Left out, no model: {{names}}",
+        "skipped_other": "Left out, no model ({{count}}): {{names}}"
       }
     },
     "unavailable": "This deployment has no config backup service.",

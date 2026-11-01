@@ -673,7 +673,13 @@ impl YagraMcp {
                 }
             }
             HealthSection::ConfigBackups => match admin {
-                Some(a) => match crate::api::config_backup::config_backup_rows(a, scope).await {
+                Some(a) => match crate::api::config_backup::config_backup_rows(
+                    a,
+                    scope,
+                    yagra_base::config_backup::OverviewState::On,
+                )
+                .await
+                {
                     Ok(rows) => ok_json(TOOL, &rows),
                     Err(e) => tool_api_error(TOOL, &e),
                 },

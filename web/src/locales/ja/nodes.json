@@ -1310,11 +1310,42 @@
         "success": "最後の成功",
         "next": "次の試行"
       },
-      "empty": "まだバックアップしている機器はありません。",
       "mark": {
         "ok": "取得できている",
         "busy": "進行中",
         "trouble": "要対応"
+      },
+      "filter": "表示",
+      "state": {
+        "on": "バックアップ中",
+        "off": "止めている",
+        "never": "未設定",
+        "all": "すべて"
+      },
+      "emptyOf": {
+        "on": "まだバックアップしている機器はありません。",
+        "off": "止めている機器はありません。",
+        "never": "未設定の機器はありません。",
+        "all": "対象の機器はありません。"
+      },
+      "pickAll": "表示中をすべて選ぶ",
+      "pick": "{{name}} を選ぶ",
+      "picked_one": "{{count}} 台を選択",
+      "picked_other": "{{count}} 台を選択",
+      "unpick": "選択を外す",
+      "switchOne": "{{name}} のバックアップ",
+      "switchOnN_one": "{{count}} 台をオンにする",
+      "switchOnN_other": "{{count}} 台をオンにする",
+      "switchOffN_one": "{{count}} 台をオフにする",
+      "switchOffN_other": "{{count}} 台をオフにする",
+      "pickModel": "機種を選ぶ",
+      "switchOn": {
+        "title_one": "{{count}} 台のバックアップをオンにする",
+        "title_other": "{{count}} 台のバックアップをオンにする",
+        "submit_one": "{{count}} 台をオンにする",
+        "submit_other": "{{count}} 台をオンにする",
+        "skipped_one": "機種が無いので外す: {{names}}",
+        "skipped_other": "機種が無い {{count}} 台を外す: {{names}}"
       }
     },
     "unavailable": "この環境には config バックアップがありません。",
