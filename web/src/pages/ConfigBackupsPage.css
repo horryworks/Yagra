@@ -107,3 +107,10 @@
 .cfgbl-sw input:disabled + .cfgbl-sw-track {
   opacity: 0.5;
 }
+
+/* The filter's labels carry a count, so they keep to one line and size to their text. */
+.cfgbl-tools .ts-seg button {
+  flex: none;
+  padding: 0 var(--space-3);
+  white-space: nowrap;
+}

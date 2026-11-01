@@ -150,7 +150,7 @@ export function ConfigBackupsPage() {
                   }
                 />
               ),
-              width: '36px',
+              width: '56px',
               render: (r: ConfigBackupRow) => (
                 <input
                   type="checkbox"
