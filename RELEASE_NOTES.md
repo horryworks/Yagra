@@ -20,7 +20,7 @@
 
 ### Improvements
 
-- **A device that comes back no longer re-fires its SNMP and ping-loss alerts.** While a node is down, its other alerts are part of that outage and page nobody. When it answered again they were re-fired as new standalone alerts at that moment, so every ordinary recovery sent one notification and wrote a "fired" row in History minutes before the alert closed by itself. They now stay part of the outage after the node is back and close quietly when the check answers. They fire on their own only after the check has stayed bad for its rule's dwell once the node is back, so an SNMP agent that stays dead on a device that pings still pages, a little later than before.
+- **A device that comes back no longer re-fires its SNMP and ping-loss alerts.** While a node is down, its other alerts are part of that outage and page nobody. When it answered again they were re-fired as new standalone alerts at that moment, so every ordinary recovery sent one notification and wrote a "fired" row in History minutes before the alert closed by itself. They now stay part of the outage after the node is back and close quietly when the check answers. They fire on their own only after the check has stayed bad for its rule's dwell once the node is back, so an SNMP agent that stays dead on a device that pings still pages, a little later than before. An event-rule alert (syslog, trap) that was open when the node went down becomes its own alert again when the node is back, without a notification.
 
 ## v0.3.65 — Save a device's running configuration from Yagra, fetch config backups on a daily schedule, and pick the time zone from the clock in the top bar
 

@@ -68,20 +68,6 @@ pub enum SpanKind {
     NoRecord,
 }
 
-impl SpanKind {
-    /// Which kind wins where two overlap, highest first. Not recorded beats down: during a
-    /// monitoring gap an open alert stays open because nothing closes on absence, so "down" there
-    /// would be a guess. Down beats maintenance: the alert really was open while a window's dwell
-    /// was still closing it.
-    fn rank(self) -> u8 {
-        match self {
-            Self::NoRecord => 3,
-            Self::Down => 2,
-            Self::Maintenance => 1,
-        }
-    }
-}
-
 /// One stretch of time of one kind, clipped to the period.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct AvailabilitySpan {
@@ -252,19 +238,43 @@ pub fn compute(
 
 /// Lay overlapping tagged intervals onto one timeline: at each instant the highest-ranked kind
 /// wins, and neighbours of one kind are joined.
+///
+/// One sweep over the sorted edges, counting how many intervals of each kind are open: a flapping
+/// node brings thousands of intervals, and testing every interval at every edge was quadratic.
 fn flatten(tagged: &[(SpanKind, i64, i64)]) -> Vec<AvailabilitySpan> {
-    let mut edges: Vec<i64> = tagged.iter().flat_map(|&(_, a, b)| [a, b]).collect();
-    edges.sort_unstable();
-    edges.dedup();
+    // Which kind wins where two overlap, highest first. Not recorded beats down: during a
+    // monitoring gap an open alert stays open because nothing closes on absence, so "down" there
+    // would be a guess. Down beats maintenance: the alert really was open while a window's dwell
+    // was still closing it.
+    const KINDS: [SpanKind; 3] = [SpanKind::NoRecord, SpanKind::Down, SpanKind::Maintenance];
+    let slot = |k: SpanKind| -> usize {
+        match k {
+            SpanKind::NoRecord => 0,
+            SpanKind::Down => 1,
+            SpanKind::Maintenance => 2,
+        }
+    };
+    let mut events: Vec<(i64, usize, i32)> = Vec::with_capacity(tagged.len() * 2);
+    for &(k, a, b) in tagged {
+        if a < b {
+            events.push((a, slot(k), 1));
+            events.push((b, slot(k), -1));
+        }
+    }
+    events.sort_unstable_by_key(|&(at, _, _)| at);
+    let mut open = [0i32; 3];
     let mut out: Vec<AvailabilitySpan> = Vec::new();
-    for pair in edges.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let Some(kind) = tagged
-            .iter()
-            .filter(|&&(_, s, e)| s <= a && b <= e)
-            .map(|&(k, _, _)| k)
-            .max_by_key(|k| k.rank())
-        else {
+    let mut i = 0;
+    while i < events.len() {
+        let a = events[i].0;
+        while i < events.len() && events[i].0 == a {
+            open[events[i].1] += events[i].2;
+            i += 1;
+        }
+        let Some(&(b, _, _)) = events.get(i) else {
+            break;
+        };
+        let Some(kind) = KINDS.into_iter().find(|&k| open[slot(k)] > 0) else {
             continue;
         };
         match out.last_mut() {
@@ -492,6 +502,61 @@ mod tests {
         // Totals still count every outage.
         assert_eq!(a.outages, SPANS_MAX as u32 + 5);
         assert_eq!(a.down_secs, (SPANS_MAX as i64 + 5) * 10);
+    }
+
+    /// The sweep lays out what testing every interval at every edge laid out, over overlapping,
+    /// touching and nested intervals of all three kinds.
+    #[test]
+    fn the_sweep_agrees_with_checking_every_interval_at_every_edge() {
+        let rank = |k: SpanKind| match k {
+            SpanKind::NoRecord => 3,
+            SpanKind::Down => 2,
+            SpanKind::Maintenance => 1,
+        };
+        let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = |m: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % m
+        };
+        let kinds = [SpanKind::NoRecord, SpanKind::Down, SpanKind::Maintenance];
+        let tagged: Vec<(SpanKind, i64, i64)> = (0..300)
+            .map(|_| {
+                let a = next(100_000) as i64;
+                let len = 1 + next(1_000) as i64;
+                (kinds[next(3) as usize], a, a + len)
+            })
+            .collect();
+
+        let mut edges: Vec<i64> = tagged.iter().flat_map(|&(_, a, b)| [a, b]).collect();
+        edges.sort_unstable();
+        edges.dedup();
+        let mut expected: Vec<AvailabilitySpan> = Vec::new();
+        for pair in edges.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let Some(kind) = tagged
+                .iter()
+                .filter(|&&(_, s, e)| s <= a && b <= e)
+                .map(|&(k, _, _)| k)
+                .max_by_key(|&k| rank(k))
+            else {
+                continue;
+            };
+            match expected.last_mut() {
+                Some(last) if last.kind == kind && last.to_unix_ms == a => last.to_unix_ms = b,
+                _ => expected.push(AvailabilitySpan {
+                    kind,
+                    from_unix_ms: a,
+                    to_unix_ms: b,
+                }),
+            }
+        }
+        assert!(
+            expected.len() > 50,
+            "the fixture overlaps enough to mean something"
+        );
+        assert_eq!(flatten(&tagged), expected);
     }
 
     #[test]

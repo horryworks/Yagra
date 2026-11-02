@@ -106,21 +106,36 @@ export function ConfigBackupsPage() {
       const plan = planSwitch(rows, enabled);
       if (plan.ids.length === 0) return;
       if (enabled && plan.needsInput) {
+        setFilter((p) => p ?? filter);
         setAsking({ ids: plan.ids, skipped: plan.skipped.map((r) => nodeName(r.node_id)) });
         return;
       }
+      // Keep the view the operator is working in: the reload changes the counts the unpicked
+      // default is worked out from, and the rows still to switch would vanish from under them.
+      setFilter((p) => p ?? filter);
       setSwitching(true);
       setSwitchError(null);
       api
         .switchConfigBackups({ node_ids: plan.ids, enabled })
-        .then(() => setSelected(new Set()))
+        .then((res) => {
+          setSelected(new Set());
+          // Their model went away after the list was read: the server left them out.
+          if (res.no_model.length > 0) {
+            setSwitchError(
+              t('config.list.switchOn.skipped', {
+                count: res.no_model.length,
+                names: res.no_model.map(nodeName).join(', '),
+              }),
+            );
+          }
+        })
         .catch((e: unknown) => setSwitchError(errMsg(e, t('config.err.save'))))
         .finally(() => {
           setSwitching(false);
           reload();
         });
     },
-    [nodeName, reload, t],
+    [filter, nodeName, reload, t],
   );
 
   const columns = useMemo<Column<ConfigBackupRow>[]>(() => {

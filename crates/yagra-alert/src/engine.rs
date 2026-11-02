@@ -1474,12 +1474,17 @@ impl AlertManager {
             return actions;
         }
 
-        let released = self.advance_release(check, raw, transition.is_some(), dwell);
         let Some(t) = transition else {
+            // Side first, so a release on the same observation carries the new side; the release
+            // then replaces the side change's `Fire` rather than paging the same alert twice.
             let mut actions = self.refresh_breached_side(check, raw, at_unix_ms, eval, dwell);
-            actions.extend(released);
+            if let Some(released) = self.advance_release(check, raw, false, dwell) {
+                actions.retain(|a| !matches!(a, NotifyAction::Fire(al) if al.check == check));
+                actions.push(released);
+            }
             return actions;
         };
+        self.advance_release(check, raw, true, dwell);
         // A committed transition replaces whatever side change was pending on the old alert.
         self.side_pending
             .lock()
@@ -1756,6 +1761,24 @@ impl AlertManager {
             // and wrote a "fired" row minutes before the check closed on its own — measured on the
             // PoC, a device switched off every night re-fired `snmp_up` at 07:45 and closed it at
             // 07:49. [`Self::advance_release`] takes the marker off after the rule's dwell.
+            // An event alert has no check observation that could release it, so it would stay
+            // held as part of an outage that is over. It takes its marker off without paging: its
+            // incident was closed when the outage rolled it up, and it pages again when the rule
+            // raises it at another severity, or anew after its TTL.
+            if alert.metric.starts_with(EVENT_METRIC_PREFIX) && new_rc.is_none() {
+                if alert.root_cause.is_some() {
+                    let updated = {
+                        let mut active = self.active.lock().expect("alerts mutex poisoned");
+                        let Some(cur) = active.get_mut(&alert.check) else {
+                            continue;
+                        };
+                        cur.root_cause = None;
+                        cur.clone()
+                    };
+                    self.broadcast(&updated, false);
+                }
+                continue;
+            }
             if alert.metric != LIVENESS {
                 let mut releasing = self.releasing.lock().expect("releasing mutex poisoned");
                 if new_rc.is_some() {
@@ -5640,6 +5663,110 @@ mod tests {
             "only the new outage pages; snmp_up stays inside it"
         );
         assert_eq!(snmp_root_cause(&mgr), Some(node));
+    }
+
+    /// An event alert the outage rolled up has no check observation to release it, so on the
+    /// return it takes its marker off without paging rather than staying held for good.
+    #[test]
+    fn an_event_alert_rolled_into_an_outage_is_its_own_again_without_a_page() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new(untitled);
+        mgr.set_config(cfg(vec![liveness_rule()], meta_for(node)));
+        let metric = format!("{EVENT_METRIC_PREFIX}link flap");
+        let event = open_alert(node, &metric, NodeState::Critical);
+        let check = event.check;
+        assert!(mgr.raise_event_alert(event).is_some());
+        let root_cause = |mgr: &AlertManager| {
+            mgr.active_alerts()
+                .into_iter()
+                .find(|a| a.check == check)
+                .map(|a| a.root_cause)
+        };
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i));
+        }
+        assert_eq!(root_cause(&mgr), Some(Some(node)), "rolled into the outage");
+
+        let mut fired = Vec::new();
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&result(node, CheckOutcome::Reachable, 100 + i)) {
+                if let NotifyAction::Fire(al) = action {
+                    fired.push(al.metric);
+                }
+            }
+        }
+        assert!(!mgr.down_set().contains(&node));
+        assert!(fired.is_empty(), "the return paged: {fired:?}");
+        assert_eq!(
+            root_cause(&mgr),
+            Some(None),
+            "its own alert again, still open"
+        );
+        assert!(
+            !mgr.releasing.lock().unwrap().contains_key(&check),
+            "nothing is held that nothing could release"
+        );
+    }
+
+    /// A held alert whose release and side change complete on the same observation pages once,
+    /// carrying the new side — the two used to emit a `Fire` each.
+    #[test]
+    fn a_release_that_meets_a_side_change_pages_once() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdBounds, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = AlertManager::new(untitled);
+        let band = StoredThreshold::new(
+            Uuid::nil(),
+            ScopeLevel::Node,
+            vec![node.to_string()],
+            ThresholdRule::new(
+                "if_rx_power_dbm",
+                ThresholdBounds {
+                    warning_below: None,
+                    critical_below: Some(-20.0),
+                    warning_above: None,
+                    critical_above: Some(-3.0),
+                },
+                2,
+            ),
+        );
+        mgr.set_config(cfg(vec![liveness_rule(), band], meta_for(node)));
+        let reading = |value: f64, at: i64| {
+            let mut r = result(node, CheckOutcome::Reachable, at);
+            r.samples = vec![Sample::gauge("if_rx_power_dbm", value)];
+            mgr.observe(&r)
+        };
+        for i in 0..2 {
+            reading(-25.0, i);
+        }
+        assert_eq!(mgr.active_alerts().len(), 1, "dark: the low side fired");
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, 10 + i));
+        }
+        assert!(mgr.down_set().contains(&node));
+
+        // Back, still dark until the observation liveness commits on; overdriven from then on.
+        let back = i64::from(DEFAULT_LIVENESS_DWELL);
+        let mut fires = Vec::new();
+        for i in 0..back + 2 {
+            let value = if i + 1 < back { -25.0 } else { -2.0 };
+            for action in reading(value, 100 + i) {
+                if let NotifyAction::Fire(al) = action {
+                    if al.metric == "if_rx_power_dbm" {
+                        fires.push(al);
+                    }
+                }
+            }
+        }
+        assert_eq!(fires.len(), 1, "paged {} times: {fires:?}", fires.len());
+        assert_eq!(fires[0].root_cause, None, "released, standalone");
+        assert_eq!(
+            fires[0].breach.as_ref().map(|b| b.direction),
+            Some(Direction::Above),
+            "the page names the side the value is on now"
+        );
     }
 
     /// The branch ADR-225 deliberately left alone: a child whose parent recovered is still known to
