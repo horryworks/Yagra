@@ -31,8 +31,7 @@ import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
-import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
-import { FilterBar } from '../components/ui/FilterBar';
+import { FilterHeaderCell } from '../components/ui/HeaderFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -88,7 +87,7 @@ export function ProfilesPage() {
   }, [profilesReload, templatesReload, baselineReload]);
 
   // Three of the four controls sit under their own column headers (ADR-053 Inc.6 decision F). The
-  // fourth — category — has no column: it *is* the group heading, so it goes in a `FilterBar`
+  // fourth — category — has no column: it *is* the group heading, so it opens from the toolbar's funnel
   // beside the table. The one search box this replaces matched the category label too, and dropping
   // that silently would take a capability away.
   const colFilters = useMemo(() => profileColumns(t), [t]);
@@ -126,6 +125,13 @@ export function ProfilesPage() {
     () => ({ ...profileFilterLabels(t), category: t('profiles.cols.category') }),
     [t],
   );
+  const colBind = {
+    columns: colFilters,
+    filters,
+    onChange: setFilters,
+    counts: filterCounts,
+    labels: filterLabels,
+  };
 
   // Group the filtered rows by category, in the canonical display order; trailing "Other"
   // bucket catches any unknown token so nothing is silently hidden.
@@ -158,6 +164,9 @@ export function ProfilesPage() {
         <ListToolbar
           list={serverToolbarFilters(allFilterCols, { filters, setFilters }, undefined, filterCounts)}
           labels={filterLabels}
+          // Category has no column of its own — it is the group heading below — so it opens from
+          // the toolbar; the other columns open from their headers.
+          menu={catCols}
           count={{
             shown: filtered.length,
             total: rows.length,
@@ -170,46 +179,21 @@ export function ProfilesPage() {
             </Button>
           )}
         </ListToolbar>
-        {/* Category has no column of its own — it is the group heading below. */}
-        <FilterBar
-          columns={catCols}
-          labels={filterLabels}
-          filters={filters}
-          onChange={setFilters}
-          counts={filterCounts}
-        />
 
         <div className="ytable profiles-table">
           <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-            <div className="ytable-h">{t('profiles.cols.name')}</div>
-            <div className="ytable-h">{t('profiles.cols.vendor')}</div>
-            <div className="ytable-h">{t('profiles.cols.pollInterval')}</div>
+            <FilterHeaderCell bind={colBind} colKey="name" className="ytable-h">
+              {t('profiles.cols.name')}
+            </FilterHeaderCell>
+            <FilterHeaderCell bind={colBind} colKey="vendor" className="ytable-h">
+              {t('profiles.cols.vendor')}
+            </FilterHeaderCell>
+            <FilterHeaderCell bind={colBind} colKey="interval" className="ytable-h">
+              {t('profiles.cols.pollInterval')}
+            </FilterHeaderCell>
             <div className="ytable-h">{t('profiles.cols.metricSets')}</div>
             <div className="ytable-h right">{t('shared.colActions')}</div>
           </div>
-          {/* ⚠️ The SAME `COLS` const as the header and every row — three grids, one binding, the
-              discipline `DataTable` enforces for its own. This screen keeps its hand-rolled table
-              because the rows are grouped by category and `DataTable` has no group heading; the
-              trade is stated in `monitoringConfigFilters.ts`.
-              The mobile gate used to be a `display: none` on `.ytable-filters` in
-              `styles/table.css`. It moved here so that all seven filter surfaces read the one
-              decision in `MobileFilterSheet.tsx` — the CSS copy was correct and still cost
-              nothing to keep, but it meant "is the row visible" had two answers in two
-              languages, and the four rows that had *neither* were invisible against that.
-              ⚠️ `colFilters`, not `allFilterCols`: each surface answers for the columns it draws.
-              A category filter is narrowing the list through the `FilterBar` above, which shows
-              itself for exactly that reason — forcing *this* row open too would reveal a control
-              that is not the one responsible. */}
-          <ColumnFilterRow
-            columns={colFilters}
-            slots={['name', 'vendor', 'interval', null, null]}
-            filters={filters}
-            onChange={setFilters}
-            counts={filterCounts}
-            labels={filterLabels}
-            className="ytable-filters"
-            style={{ gridTemplateColumns: COLS }}
-          />
 
           {filtered.length === 0 ? (
             <div className="yt-empty">

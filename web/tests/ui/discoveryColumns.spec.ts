@@ -92,29 +92,23 @@ test('every discovered row lays its cells out under the header columns', async (
   expect(errors.uncaught).toEqual([]);
 });
 
-// ADR-053 Inc.12: the Credential column narrows to the devices SNMP answered, and its control sits
-// under the Credential header like the other two.
+// ADR-053 Inc.12: the Credential column narrows to the devices SNMP answered, and its funnel sits
+// in the Credential header like the other two (ADR-228).
 test('the Credential filter keeps the devices SNMP answered', async ({ page, errors }) => {
   await page.goto('/nodes/discovery?candidates.credential=answered');
   const rows = page.locator('.disco-row');
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText('192.0.2.1');
 
-  const cells = page.locator('.disco-filters > *');
-  await expect(cells).toHaveCount(7);
   const heads = page.locator('.disco-head > *');
-  const left = async (l: typeof cells) =>
-    Math.round((await l.boundingBox())?.x ?? Number.NaN);
-  expect(await left(cells.nth(6))).toBe(await left(heads.nth(6)));
-  await expect(cells.nth(6).getByRole('button', { name: 'Filter by Credential' })).toContainText(
-    'SNMP answered',
-  );
+  await expect(heads).toHaveCount(7);
+  await expect(heads.nth(6).getByRole('button', { name: 'Filter by Credential' })).toHaveClass(/(^| )on( |$)/);
+  await expect(page.locator('.filter-chip', { hasText: 'SNMP answered' })).toBeVisible();
   expect(errors.uncaught).toEqual([]);
 });
 
-// Unregistered devices: the same three-grids-one-template shape. Its last track was `auto`, which
-// sizes to its own row's content (empty in the header, the Monitored filter in the filter row,
-// Detect in a data row), so every row resolved the template to different widths and the columns
+// Unregistered devices: the same one-template shape. Its last track was `auto`, which sizes to its
+// own row's content (the header's label and funnel, Detect in a data row), so every row resolved the template to different widths and the columns
 // shifted under their headers even with ordinary data.
 test.describe('Unregistered devices', () => {
   type Row = Schemas['DiscoveredEndpointRow'];
@@ -149,10 +143,10 @@ test.describe('Unregistered devices', () => {
     await page.goto('/nodes/discovery?tab=unregistered');
     await expect(page.locator('.disco-seen-row')).toHaveCount(2);
     const templates = await page
-      .locator('.disco-seen-head, .disco-seen-filters, .disco-seen-row')
+      .locator('.disco-seen-head, .disco-seen-row')
       .evaluateAll((els) => els.map((e) => getComputedStyle(e).gridTemplateColumns));
-    // Head, filter row, two data rows.
-    expect(templates).toHaveLength(4);
+    // Head and two data rows.
+    expect(templates).toHaveLength(3);
     for (const [i, tpl] of templates.entries()) {
       expect(tpl, `grid ${i + 1}`).toBe(templates[0]);
     }

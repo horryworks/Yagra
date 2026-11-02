@@ -34,6 +34,21 @@ async function typeFilter(page: Page, scope: Locator | Page, column: string, ter
   await expect(page.getByRole('dialog')).toHaveCount(0);
 }
 
+/** The same, for a list with no header: its filters open from one funnel in the toolbar, one
+ *  section per column (ADR-228). */
+async function typeMenuFilter(page: Page, column: string, term: string) {
+  await page.locator('.mfilt-menu > .mfilt-btn').click();
+  const section = page
+    .getByRole('dialog')
+    .locator('.mfilt-sec')
+    .filter({ has: page.getByRole('heading', { name: column }) });
+  const box = section.getByRole('searchbox').first();
+  await box.fill(term);
+  await box.press('Enter');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+}
+
 const reload = async (page: Page) => {
   await page.goto(page.url());
 };
@@ -88,7 +103,7 @@ test.describe('a node-detail tab', () => {
     // tree's set: a tab that read it bare would show as filtered before anything was typed.
     await page.goto(`/nodes?kind=device&sel=node:${TREE_SIBLING_IDS[0]}&tab=events`);
     await expect(page.getByRole('tab', { selected: true })).toHaveText(/^Events/);
-    await expect(pane(page).getByRole('group', { name: 'Column filters' })).toBeVisible();
+    await expect(pane(page).getByRole('button', { name: 'Filter by Message' })).toBeVisible();
     await expect(pane(page).getByRole('button', { name: /Clear all filters/ }), 'the tab read the tree’s key').toHaveCount(0);
 
     await typeFilter(page, pane(page), 'Message', NEEDLE);
@@ -134,7 +149,7 @@ test.describe('a node-detail tab', () => {
 test.describe('a one-table screen that kept its filter in component state', () => {
   test('Settings ▸ Users keeps a narrowed list after a reload', async ({ page }) => {
     await page.goto('/settings/users');
-    await typeFilter(page, page, 'Username', NEEDLE);
+    await typeMenuFilter(page, 'Username', NEEDLE);
     await expect(page).toHaveURL(new RegExp(`[?&]q=[^&]*${NEEDLE}`));
     await reload(page);
     await expect(page.getByRole('button', { name: /Clear all filters/ }), 'the reload lost the filter').toHaveCount(1);

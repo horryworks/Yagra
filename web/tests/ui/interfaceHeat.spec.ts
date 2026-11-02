@@ -156,15 +156,14 @@ test('In and Out are two columns, not one cell holding both', async ({ page }) =
   expect(await busy.locator('.nd-if-in').innerText()).not.toContain('/');
 });
 
-test('the filter controls still sit under their own headers with thirteen columns', async ({
+test('the header and the rows still share thirteen columns', async ({
   page,
 }) => {
   await openTab(page);
-  // The header, the filter row and every data row share ONE grid template. Splitting a column is
-  // exactly the edit that desynchronises them, and the symptom is silent: controls slide out from
-  // under their headings. Compare the resolved track lists rather than the declaration.
-  const [head, filters, row] = await Promise.all(
-    ['.nd-if-head', '.nd-if-filters', '.nd-if-row'].map((sel) =>
+  // The header and every data row share ONE grid template. Splitting a column is exactly the edit
+  // that desynchronises them, and the symptom is silent: cells slide out from under their headings. Compare the resolved track lists rather than the declaration.
+  const [head, row] = await Promise.all(
+    ['.nd-if-head', '.nd-if-row'].map((sel) =>
       page
         .locator(sel)
         .first()
@@ -172,7 +171,6 @@ test('the filter controls still sit under their own headers with thirteen column
     ),
   );
   expect(head.split(' ')).toHaveLength(13);
-  expect(filters).toBe(head);
   expect(row).toBe(head);
 });
 

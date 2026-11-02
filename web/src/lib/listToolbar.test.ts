@@ -2,7 +2,13 @@
 import { describe, expect, it } from 'vitest';
 import { codeOnly, readSources } from '../testSupport/sources';
 import type { FilterableColumn, FilterState } from './columnFilter';
-import { columnLabels, labelGaps, resultCount, serverToolbarFilters } from './listToolbar';
+import {
+  columnLabels,
+  filterChips,
+  labelGaps,
+  resultCount,
+  serverToolbarFilters,
+} from './listToolbar';
 
 describe('columnLabels', () => {
   it('names a column by its header when the header is text, by its key otherwise', () => {
@@ -49,6 +55,34 @@ describe('resultCount', () => {
       total: undefined,
       nounCount: 7,
     });
+  });
+});
+
+describe('filterChips', () => {
+  const cols = [
+    {
+      key: 'state',
+      filter: { kind: 'enum', options: [{ value: 'up', label: 'Up' }] },
+    },
+    { key: 'name', filter: { kind: 'text', modes: ['contains'] } },
+    {
+      key: 'when',
+      filter: {
+        kind: 'range',
+        presets: [{ value: '24h', label: '24h' }],
+        defaultPreset: '24h',
+      },
+    },
+  ] as unknown as FilterableColumn<unknown>[];
+
+  it('names only what the operator set, in column order', () => {
+    expect(filterChips(cols, {})).toEqual([]);
+    // A range at its default narrows the list, but nobody set it: no chip whose ✕ does nothing.
+    expect(filterChips(cols, { when: '24h' })).toEqual([]);
+    const chips = filterChips(cols, { name: 'uplink', state: 'up' });
+    expect(chips.map((c) => c.key)).toEqual(['state', 'name']);
+    expect(chips[0].summary).toEqual({ kind: 'one', label: 'Up' });
+    expect(chips[1].not).toBe(false);
   });
 });
 

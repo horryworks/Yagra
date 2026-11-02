@@ -12,7 +12,7 @@
 // **This is the one of the fifteen report bodies whose chips were a plain severity filter, so it is
 // the one Inc.7 converted** (decision J). The other twelve select a tool-specific lens — `soon/mid/far`,
 // `chronic/intermittent`, `inverse` — which is not a row attribute and must not be folded into a
-// generic filter. Being a card list with no header row, this gets a `FilterBar` rather than a filter
+// generic filter. Being a card list with no header row, this filters from the toolbar's funnel rather than a filter
 // row (decision E/K), and `ReportToolbar` keeps only the sort control, so the row count is unchanged.
 
 import { useMemo } from 'react';
@@ -21,7 +21,6 @@ import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
-import { FilterBar } from '../../../components/ui/FilterBar';
 import { ListToolbar } from '../../../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../../../lib/listToolbar';
 import { isAnyFiltered } from '../../../lib/columnFilter';
@@ -114,20 +113,12 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
       <ListToolbar
         list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, counts)}
         labels={labels}
+        menu
         count={{
           shown: list.length,
           total: findings.length,
           noun: () => t('report.auth_probe.noun'),
         }}
-      />
-      {/* A run of `FindingRow`s has no header row to hang a filter row under, so the controls carry
-          their own names (decision E). */}
-      <FilterBar
-        columns={filterCols}
-        labels={labels}
-        filters={filters}
-        onChange={setFilters}
-        counts={counts}
       />
       <ReportToolbar
         id="tsr-auth-probe"

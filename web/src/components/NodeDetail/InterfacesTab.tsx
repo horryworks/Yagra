@@ -25,7 +25,14 @@ import { usePrefsStore, type RateUnit, type ThroughputScale } from '../../prefs'
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
 import { resolveWidths } from '../../lib/columnWidths';
-import { filterSlots, INTERFACE_COLUMNS } from './interfaceColumns';
+import { INTERFACE_COLUMNS } from './interfaceColumns';
+import {
+  DEFAULT_INTERFACE_SORT,
+  INTERFACE_SORT_KEYS,
+  interfaceSortValues,
+} from './interfaceSort';
+import { nextSort, sortRows } from '../../lib/tableSort';
+import { useSortParams } from '../../lib/useSortParams';
 import { ColumnResizeHandles, ColumnWidthReset } from '../ui/ColumnResizeHandles';
 import { useColumnWidths } from '../ui/useColumnWidths';
 import { useRefreshTick } from '../../lib/refreshTick';
@@ -68,7 +75,6 @@ import {
   mediaEmptyReason,
   type LinkBlankReason,
 } from './linkMode';
-import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { FilterControls } from '../ui/ListToolbar';
 import { serverToolbarFilters } from '../../lib/listToolbar';
 import { isAnyFiltered } from '../../lib/columnFilter';
@@ -80,7 +86,7 @@ import { dockBudget, stickyChromeHeight } from './interfaceDockHeight';
 import { operLabel } from './healthTone';
 import { mediaTitle } from './linkMode';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
-import { InfoPress } from '../ui/InfoTip';
+import { FilterHeaderCell, SortHeaderButton } from '../ui/HeaderFilter';
 import { Segmented } from '../ui/Segmented';
 import { focusPopoverTrigger } from '../ui/focusPopoverTrigger';
 import { Capabilities } from './NeighborsTab';
@@ -107,6 +113,9 @@ import {
 } from './interfaceVlan';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
+/** The headers drawn end-aligned, over the columns whose cells are numbers. */
+const RIGHT_HEADERS = new Set(['speed', 'in', 'out']);
+
 const SPARK_WINDOW_SECS = 3600;
 const SPARK_STEP_SECS = 120;
 const SPARK_W = 120;
@@ -241,7 +250,18 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     };
   }, [nodeId, tick]);
   const byPort = useMemo(() => neighborsByPort(neighbors, rows), [neighbors, rows]);
-  const slots = useMemo(() => filterSlots(columns.map((c) => c.key)), [columns]);
+  // Sorted in the browser: one device's ports are all here (ADR-228, `interfaceSort.ts`). In the URL
+  // beside the filters, under the same prefix (ADR-153), so "slowest first" survives a reload and
+  // the walk to the next device.
+  const [sort, setSort] = useSortParams(
+    INTERFACE_SORT_KEYS,
+    DEFAULT_INTERFACE_SORT,
+    nodeTabFilterPrefix('interfaces'),
+  );
+  const sorted = useMemo(
+    () => sortRows(shown, sort, interfaceSortValues((ifindex) => byPort.get(ifindex))),
+    [shown, sort, byPort],
+  );
   const counts = useMemo(
     () =>
       Object.fromEntries(
@@ -271,8 +291,9 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     in: t('interfaces.colIn'),
     out: t('interfaces.colOut'),
   };
+  const filterBind = { columns, filters, onChange: setFilters, counts, labels };
   // The operator's own column widths for this table (ADR-129). `interfaceCols` is the one string
-  // the header, the filter row and every data row resolve from — the TS twin of what
+  // the header and every data row resolve from — the TS twin of what
   // `NodeDetail.css` used to declare alone.
   const colResize = useColumnWidths('node.interfaces');
   const interfaceCols = useMemo(
@@ -471,7 +492,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       {/* 🚨 The template goes in as a CUSTOM PROPERTY, never as an inline
           `grid-template-columns`: an inline declaration beats every media query and this table is
           re-laid-out on a phone (`NodeDetail.css`'s `html[data-viewport='mobile'] .nd-if-row`).
-          It is set here rather than on each grid so the header, the filter row and every data row
+          It is set here rather than on each grid so the header and every data row
           inherit one value — the same "one template, three grids" rule `DataTable` states in TS
           and this table has always stated in CSS. */}
       <div
@@ -483,81 +504,38 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             below are placed at an explicit row and column. An item given only `grid-column` is
             still auto-placed down the rows, so it lands in the first row where that column is free
             — row 2, because the grip holds row 1 — and the whole header renders one band lower.
-            Shipped that way once (ADR-129). The filter row and the data rows still auto-place: they carry
-            no grips. Not rendered on a phone at all — `.nd-if-head` is `display: none` there, so
+            Shipped that way once (ADR-129). The data rows still auto-place: they carry no grips. Not rendered on a phone at all — `.nd-if-head` is `display: none` there, so
             the grips leave the focus order with it. */}
         <div className="nd-if-head">
-          <div className="nd-if-h" style={{ gridColumn: 1, gridRow: 1 }}>
-            {t('interfaces.colInterface')}
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 2, gridRow: 1 }}>
-            {t('interfaces.colOper')}
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 3, gridRow: 1 }}>
-            {t('interfaces.colDescription')}
-          </div>
-          {/* Three headers open their own meaning when pressed (ADR-200 Inc.19): these headers do
-              not sort, so the label itself can be the button. Only where the meaning changes what
-              an operator concludes from a cell; the rest name themselves. */}
-          <div className="nd-if-h" style={{ gridColumn: 4, gridRow: 1 }}>
-            <InfoPress infoKey="nodes:interfaces.addressesCol.info">
-              {t('interfaces.colAddresses')}
-            </InfoPress>
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 5, gridRow: 1 }}>
-            <InfoPress infoKey="nodes:interfaces.neighborsCol.info">
-              {t('interfaces.colNeighbors')}
-            </InfoPress>
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 6, gridRow: 1 }}>
-            {t('interfaces.colMedia')}
-          </div>
-          <div className="nd-if-h right" style={{ gridColumn: 7, gridRow: 1 }}>
-            {t('interfaces.colSpeed')}
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 8, gridRow: 1 }}>
-            <InfoPress infoKey="nodes:interfaces.duplexCol.info">
-              {t('interfaces.colDuplex')}
-            </InfoPress>
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 9, gridRow: 1 }}>
-            {t('interfaces.colMode')}
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 10, gridRow: 1 }}>
-            {t('interfaces.colVlan')}
-          </div>
-          <div className="nd-if-h" style={{ gridColumn: 11, gridRow: 1 }}>
-            {t('interfaces.colThroughput')}
-          </div>
-          <div className="nd-if-h right" style={{ gridColumn: 12, gridRow: 1 }}>
-            {t('interfaces.colIn')}
-          </div>
-          <div className="nd-if-h right" style={{ gridColumn: 13, gridRow: 1 }}>
-            {t('interfaces.colOut')}
-          </div>
+          {INTERFACE_COLUMNS.map((c, i) => {
+            const right = RIGHT_HEADERS.has(c.key);
+            const sortable = (INTERFACE_SORT_KEYS as readonly string[]).includes(c.key);
+            return (
+              <FilterHeaderCell
+                key={c.key}
+                bind={filterBind}
+                colKey={c.key}
+                className={right ? 'nd-if-h right' : 'nd-if-h'}
+                style={{ gridColumn: i + 1, gridRow: 1 }}
+                align={right ? 'right' : undefined}
+              >
+                {sortable ? (
+                  <SortHeaderButton
+                    active={sort.by === c.key ? sort.dir : null}
+                    onClick={() => setSort(nextSort(sort, c.key))}
+                  >
+                    {labels[c.key]}
+                  </SortHeaderButton>
+                ) : (
+                  labels[c.key]
+                )}
+              </FilterHeaderCell>
+            );
+          })}
           <ColumnResizeHandles control={colResize} columns={INTERFACE_COLUMNS} labels={labels} />
           <ColumnWidthReset control={colResize} columnCount={INTERFACE_COLUMNS.length} />
         </div>
-        {/* A real filter row: same grid rule as `.nd-if-head` and `.nd-if-row` (one CSS
-            declaration, three selectors — the same discipline `DataTable`'s shared template
-            const enforces in TS). The two throughput columns are pictures, not values, so they
-            carry an empty cell rather than a control that could not mean anything.
-
-            Not drawn on a phone — `FilterButton` above is its other half, and since Inc.10 that
-            gate is `ColumnFilterRow`'s own rather than a flag read here. It shipped without any
-            gate and was the worst-looking of the four: the row is `position: sticky` at
-            `top: 32px`, the height of the header, and mobile hides the header — so it pinned itself
-            halfway down the scroller and the interface rows ran through the gap above it. */}
-        <ColumnFilterRow
-          columns={columns}
-          slots={slots}
-          filters={filters}
-          onChange={setFilters}
-          counts={counts}
-          labels={labels}
-          className="nd-if-filters"
-        />
-        {shown.map((r) => {
+        {sorted.map((r) => {
           const down = r.oper_status != null && r.oper_status !== 1;
           const portName = r.if_name ?? `if${r.ifindex}`;
           // A <div>, not a <button>, since ADR-145: the Neighbors cell holds a control of its own,

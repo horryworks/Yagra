@@ -53,6 +53,20 @@ describe('the sort in the URL (ADR-153)', () => {
     expect(readSortParams(p, SORTABLE, FALLBACK)).toEqual(FALLBACK);
   });
 
+  it('keeps a second table sort under its own prefix, apart from the bare keys', () => {
+    // The Interfaces tab sorts on /nodes, beside whatever the route's own table uses (ADR-228).
+    const p = new URLSearchParams('sort=created&dir=asc');
+    writeSortParams(p, { by: 'name', dir: 'desc' }, FALLBACK, 'interfaces.');
+    expect(p.get('interfaces.sort')).toBe('name');
+    expect(p.get('sort')).toBe('created');
+    expect(readSortParams(p, SORTABLE, FALLBACK, 'interfaces.')).toEqual({
+      by: 'name',
+      dir: 'desc',
+    });
+    writeSortParams(p, FALLBACK, FALLBACK, 'interfaces.');
+    expect(p.toString()).toBe('sort=created&dir=asc');
+  });
+
   it('reads a column this table does not sort on as the default', () => {
     // A stale bookmark, or a hand-edited URL: the header could not draw an arrow for it.
     expect(readSortParams(new URLSearchParams('sort=bogus&dir=asc'), SORTABLE, FALLBACK)).toEqual(FALLBACK);

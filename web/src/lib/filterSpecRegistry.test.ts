@@ -557,8 +557,8 @@ const NOT_A_SCREEN: readonly string[] = [
   'lib/filterSummary.ts', // renders a spec's value as prose
   'lib/useClientFilters.ts', // the client-side state hook
   'components/ui/ColumnFilterCell.tsx', // the control
-  'components/ui/ColumnFilterRow.tsx', // the row of controls
-  'components/ui/DataTable.tsx', // the table that hosts the row
+  'components/ui/HeaderFilter.tsx', // the funnel beside a header (ADR-228)
+  'components/ui/DataTable.tsx', // the table whose headers carry the funnels
 ];
 
 const SRC = join(process.cwd(), 'src');

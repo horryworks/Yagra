@@ -19,6 +19,11 @@
 - **A quiet alert list says what it is not seeing.** Above Alerts ▸ Active alerts, numbers appear when they are above zero: **Silenced** (rows a mute or an upstream outage is holding back — press it to see only those), **In maintenance** (nodes) and **Not watched** (nodes whose poller pool has no live poller, or that have reported nothing for 10 minutes). When no node you can see is being polled at all, every screen says so at the top, with a link to Settings ▸ Pollers — at once, while the pool's alert still waits its five minutes before it pages.
 - `GET /api/v1/fleet/watch` (View, counted over the nodes the caller may see) returns `no_live_poller`, `no_recent_data`, `pool_polled` and `pollers_known` (`false` on an HA standby, where poller liveness is not known). `get_fleet_summary` takes `kind=watch` for the same counts.
 
+### Improvements
+
+- **Lists filter from their column headers, and the filter row is gone.** Every filterable column has a small funnel beside its name; pressing it opens the same filter the row used to hold. What is set appears above the table as chips (*Oper: Up ✕*), so the table never grows a band of controls and the **Filter** button that opened it is gone. Lists drawn without a header (Alerts ▸ Active alerts, Settings ▸ Users, Troubleshoot ▸ Runs, a node's Flow tab) open all their filters from one funnel in the toolbar. On a phone the **Filter** button and its sheet are unchanged.
+- **A node's Interfaces sort by any column.** Press a header to order the ports by it, press again to reverse; the order is kept in the URL beside the filters. Interface orders by the device's own port numbering, as before. The ⓘ on IP addresses, Neighbors and Duplex and the notes inside the IP addresses and Media filters are gone.
+
 ## v0.3.66 — See each node's availability on its Overview, switch config backups on and off from the list, and stop re-paging a device that comes back
 
 ### New Features

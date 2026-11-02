@@ -108,7 +108,7 @@ import {
 } from './discoveryFilters';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
-import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
+import { FilterHeaderCell } from '../components/ui/HeaderFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -661,6 +661,13 @@ export function DiscoveryPage() {
       .filter((c) => c.filter.kind === 'enum')
       .map((c) => [c.key, facetCounts(candidates, candCols, filters, c.key, Date.now())]),
   );
+  const candBind = {
+    columns: candCols,
+    filters,
+    onChange: setFilters,
+    counts: candCounts,
+    labels: candLabels,
+  };
 
   const patchRow = (addr: string, patch: Partial<RowState>) =>
     setRowState((cur) => ({ ...cur, [addr]: { ...cur[addr], ...patch } }));
@@ -1197,35 +1204,23 @@ export function DiscoveryPage() {
           <div className="disco-table">
             <div className="disco-head">
               <div className="disco-h" />
-              <div className="disco-h">{t('discovery.cols.address')}</div>
-              <div className="disco-h">{t('discovery.cols.identity')}</div>
+              {/* Folder, name and profile carry no funnel: they are the operator's *input* for the
+                  import about to happen, and filtering a field you are typing into would take the
+                  row out from under the cursor. The credential funnel filters on what the scan
+                  matched, not on the picker (Inc.12). */}
+              <FilterHeaderCell bind={candBind} colKey="address" className="disco-h">
+                {t('discovery.cols.address')}
+              </FilterHeaderCell>
+              <FilterHeaderCell bind={candBind} colKey="identity" className="disco-h">
+                {t('discovery.cols.identity')}
+              </FilterHeaderCell>
               <div className="disco-h">{t('discovery.cols.destination')}</div>
               <div className="disco-h">{t('discovery.cols.name')}</div>
               <div className="disco-h">{t('discovery.cols.profile')}</div>
-              <div className="disco-h">{t('discovery.cols.credential')}</div>
+              <FilterHeaderCell bind={candBind} colKey="credential" className="disco-h">
+                {t('discovery.cols.credential')}
+              </FilterHeaderCell>
             </div>
-            {/* Filter row under the header — same CSS grid rule as `.disco-head` and every
-                `.disco-row` (ADR-053 Inc.6 decision F). Four of the seven tracks carry an empty cell:
-                the first is 28px and belongs to the select checkbox, and folder, name and profile
-                are the operator's *input* for the import about to happen — filtering a field you
-                are typing into would take the row out from under the cursor. The credential track
-                filters on what the scan matched, not on the picker (Inc.12).
-                ⚠️ A reachability control was put in that 28px track and shipped unusable, which is
-                what a filter row costs when nothing renders it in a test. It is gone rather than
-                relocated; `discoveryFilters.ts` says why.
-                Not drawn on a phone (`FilterButton` is the other half): mobile re-templates
-                `.disco-head` and `.disco-row` to fixed px + `width: max-content` and scrolls them
-                sideways, and it named two of the three grids — so this row stayed at container
-                width and every control sat somewhere other than under its column. */}
-            <ColumnFilterRow
-              columns={candCols}
-              slots={[null, 'address', 'identity', null, null, null, 'credential']}
-              filters={filters}
-              onChange={setFilters}
-              counts={candCounts}
-              labels={candLabels}
-              className="disco-filters"
-            />
             {shownCandidates.map((c) => {
               const r = rowState[c.address];
               if (!r) return null;
@@ -1466,6 +1461,13 @@ function SeenOnNetworkCard({
       .filter((c) => c.filter.kind === 'enum')
       .map((c) => [c.key, facetCounts(all, epCols, epFilters, c.key, Date.now())]),
   );
+  const epBind = {
+    columns: epCols,
+    filters: epFilters,
+    onChange: setEpFilters,
+    counts: epCounts,
+    labels: epLabels,
+  };
 
   return (
     <Card title={t('discovery.seen.title')}>
@@ -1550,30 +1552,23 @@ function SeenOnNetworkCard({
       {all.length > 0 && (
         <div className="disco-seen-table">
           <div className="disco-seen-head">
-            <div className="disco-h">{t('discovery.seen.cols.address')}</div>
-            <div className="disco-h">{t('discovery.seen.cols.mac')}</div>
-            <div className="disco-h">{t('discovery.seen.cols.seenBy')}</div>
+            <FilterHeaderCell bind={epBind} colKey="ip" className="disco-h">
+              {t('discovery.seen.cols.address')}
+            </FilterHeaderCell>
+            <FilterHeaderCell bind={epBind} colKey="mac" className="disco-h">
+              {t('discovery.seen.cols.mac')}
+            </FilterHeaderCell>
+            <FilterHeaderCell bind={epBind} colKey="via" className="disco-h">
+              {t('discovery.seen.cols.seenBy')}
+            </FilterHeaderCell>
             {/* One header over the last three tracks: the profile and credential inputs only
                 appear once a Detect has answered (ADR-179 Inc.2 decision 7), so naming them over an
                 empty column would label nothing. */}
-            <div className="disco-h disco-seen-setup">{t('discovery.seen.cols.setup')}</div>
+            {/* Its funnel is the "monitored" one: that filter's track is the last of the three. */}
+            <FilterHeaderCell bind={epBind} colKey="monitored" className="disco-h disco-seen-setup">
+              {t('discovery.seen.cols.setup')}
+            </FilterHeaderCell>
           </div>
-          {/* Same CSS grid rule as the header and every row, and the same mobile story as the
-              candidates table above — this one is hidden on a phone for the same reason. The
-              profile and credential columns are the import form's own inputs, and the last is the
-              button.
-              ⚠️ No `baseline` here any more: the narrowing default is the column's
-              `defaultSelection` (ADR-153), which `activeFilterCount` already reads. Without one or
-              the other, the default counts as a filter and since Inc.9 forces this row open forever. */}
-          <ColumnFilterRow
-            columns={epCols}
-            slots={['ip', 'mac', 'via', null, null, 'monitored']}
-            filters={epFilters}
-            onChange={setEpFilters}
-            counts={epCounts}
-            labels={epLabels}
-            className="disco-seen-filters"
-          />
           {endpoints.map((e) => {
             return (
               <div className="disco-seen-row" key={e.id}>

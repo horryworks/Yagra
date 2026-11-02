@@ -150,7 +150,8 @@ test('a VLAN ID narrows to the ports carrying it, members through their aggregat
 }) => {
   await page.goto(`/nodes/${NODE_ID}?tab=interfaces&interfaces.vlan=850`);
   const names = page.locator('.nd-if-row .nd-if-name');
-  await expect(names).toHaveText(['Eth-Trunk0', 'XGE0/0/1', 'XGE2/0/1', 'GE0/0/24'], {
+  // In ifIndex order, the tab's default sort (ADR-228) — core lists them that way too.
+  await expect(names).toHaveText(['GE0/0/24', 'XGE0/0/1', 'XGE2/0/1', 'Eth-Trunk0'], {
     timeout: 15_000,
   });
 
@@ -158,13 +159,13 @@ test('a VLAN ID narrows to the ports carrying it, members through their aggregat
   await expect(names).toHaveText(['GE0/0/7', 'GE0/0/24'], { timeout: 15_000 });
 });
 
-test('header, filter row and data rows still share one template with the two new tracks', async ({
+test('header and data rows still share one template with the two new tracks', async ({
   page,
 }) => {
   await page.goto(`/nodes/${NODE_ID}?tab=interfaces&interfaces.mode=trunk`);
   await expect(page.locator('.nd-if-row')).toHaveCount(2, { timeout: 15_000 });
-  const [head, filters, dataRow] = await Promise.all(
-    ['.nd-if-head', '.nd-if-filters', '.nd-if-row'].map((sel) =>
+  const [head, dataRow] = await Promise.all(
+    ['.nd-if-head', '.nd-if-row'].map((sel) =>
       page
         .locator(sel)
         .first()
@@ -172,6 +173,5 @@ test('header, filter row and data rows still share one template with the two new
     ),
   );
   expect(head.split(' ')).toHaveLength(13);
-  expect(filters).toBe(head);
   expect(dataRow).toBe(head);
 });

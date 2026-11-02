@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11338, 6793], // Monitor's same-device confirmation, three sentences in place of one hint (ADR-139 Inc.5, 2026-10-29)
   nav: [3007, 1415], // + Nodes ▸ Config backups and its one-line description (ADR-210 stage 3, 2026-10-22)
-  nodes: [16827, 9565], // + the save button, its confirm sentence, the save states and the automatic-save setting with its one warning (ADR-222, 2026-10-31)
+  nodes: [16256, 9263], // - the Interfaces tab's three header ⓘ and two filter hints (ADR-228, 2026-11-03)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],
@@ -157,7 +157,8 @@ const PAGE_NOTES: Record<string, PageNote> = {
 /** Every ⓘ and pressable label in the WebUI (ADR-200 G8). Raise only with a reason. */
 // tip 27 (Inc.33): the set-parent dialog said what an upstream does under the field, the same
 // sentence whatever the operator chose.
-const INFO_COUNT = { tip: 27, press: 19 };
+// press 16 (ADR-228): the Interfaces headers sort when pressed, so their three ⓘ went.
+const INFO_COUNT = { tip: 27, press: 16 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked

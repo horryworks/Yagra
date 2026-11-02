@@ -167,10 +167,10 @@ test('the address filter finds a secondary hidden behind +N', async ({ page }) =
   await expect(row(page, 'Vlanif100')).toBeVisible();
 });
 
-test('header, filter row and data rows still share one thirteen-track template', async ({ page }) => {
+test('header and data rows still share one thirteen-track template', async ({ page }) => {
   await openTab(page);
-  const [head, filters, dataRow] = await Promise.all(
-    ['.nd-if-head', '.nd-if-filters', '.nd-if-row'].map((sel) =>
+  const [head, dataRow] = await Promise.all(
+    ['.nd-if-head', '.nd-if-row'].map((sel) =>
       page
         .locator(sel)
         .first()
@@ -178,7 +178,6 @@ test('header, filter row and data rows still share one thirteen-track template',
     ),
   );
   expect(head.split(' ')).toHaveLength(13);
-  expect(filters).toBe(head);
   expect(dataRow).toBe(head);
 });
 

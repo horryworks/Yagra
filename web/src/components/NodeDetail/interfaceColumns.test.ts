@@ -17,12 +17,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TFunction } from 'i18next';
 import { MAX_STORED_COLUMNS } from '../../lib/columnWidths';
-import { filterSlots, INTERFACE_COLUMNS } from './interfaceColumns';
+import { INTERFACE_COLUMNS } from './interfaceColumns';
 import { interfaceColumns } from './tabFilters';
 
 const CSS = readFileSync(join(__dirname, 'NodeDetail.css'), 'utf8');
 
-/** The keys the filter row has a control for — read from the real specs, not restated. */
+/** The keys that have a filter — read from the real specs, not restated. */
 const FILTER_KEYS = interfaceColumns(((k: string) => k) as unknown as TFunction).map((c) => c.key);
 
 /** The fallback track list out of `grid-template-columns: var(--nd-if-cols, …)`. */
@@ -76,30 +76,12 @@ describe('the Interfaces column list', () => {
   });
 });
 
-describe('filterSlots', () => {
-  it('puts each filter control under its own heading, one slot per column', () => {
-    // Pinned by position, because a slot one place off draws a control under the wrong heading and
-    // nothing else notices — NEIGHBORS (ADR-145) is the column that carries none, fourth since
-    // ADDRESSES (ADR-157) went in ahead of it with a control of its own.
-    expect(filterSlots(FILTER_KEYS)).toEqual([
-      'if_name',
-      'oper',
-      'if_alias',
-      'addresses',
-      null,
-      'media',
-      'speed',
-      'duplex',
-      'mode',
-      'vlan',
-      null,
-      null,
-      null,
-    ]);
-  });
-
-  it('places every filter spec, so a renamed key cannot silently lose its control', () => {
-    expect(FILTER_KEYS.length).toBeGreaterThan(0);
-    expect(filterSlots(FILTER_KEYS).filter((s) => s !== null)).toEqual(FILTER_KEYS);
+describe('the header funnels', () => {
+  // A filter whose key names no column has no header to sit on, so its funnel is never drawn and
+  // the filter is unreachable on a desktop (ADR-228).
+  it('every filter names a column of the header', () => {
+    const keys = INTERFACE_COLUMNS.map((c) => c.key);
+    expect(FILTER_KEYS.length).toBeGreaterThan(5);
+    expect(FILTER_KEYS.filter((k) => !keys.includes(k))).toEqual([]);
   });
 });

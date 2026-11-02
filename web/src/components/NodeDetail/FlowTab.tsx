@@ -14,7 +14,6 @@ import { useRangeStore } from '../../store';
 import { formatBytes, formatAsn } from '../../lib/format';
 import { protoName, portLabel } from '../../lib/flowLabels';
 import { useRefreshTick } from '../../lib/refreshTick';
-import { FilterBar } from '../ui/FilterBar';
 import { FilterControls } from '../ui/ListToolbar';
 import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useFilterParams } from '../../lib/useFilterParams';
@@ -257,16 +256,11 @@ export function FlowTab({ node }: { node: NodeDetail }) {
           <FilterControls
             list={serverToolbarFilters(filterCols, { filters, setFilters })}
             labels={labels}
+            menu
           />
         </div>
         <RangeControl value={range} onChange={setRange} />
       </div>
-      <FilterBar
-        columns={filterCols}
-        labels={labels}
-        filters={filters}
-        onChange={setFilters}
-      />
       {error && <p className="nd-flow-error">{error}</p>}
 
       {isEmpty ? (

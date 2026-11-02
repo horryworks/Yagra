@@ -12,16 +12,18 @@ import { readSortParams, writeSortParams, type SortState } from './tableSort';
 export function useSortParams(
   sortable: readonly string[],
   fallback: SortState,
+  /** See `readSortParams`: a second table on the route keeps its keys under its own prefix. */
+  prefix = '',
 ): [SortState, (next: SortState) => void] {
   const [params, setParams] = useSearchParams();
-  const sort = readSortParams(params, sortable, fallback);
+  const sort = readSortParams(params, sortable, fallback, prefix);
   const set = useCallback(
     (next: SortState) => {
       const p = new URLSearchParams(params);
-      writeSortParams(p, next, fallback);
+      writeSortParams(p, next, fallback, prefix);
       setParams(p, { replace: true });
     },
-    [params, setParams, fallback],
+    [params, setParams, fallback, prefix],
   );
   return [sort, set];
 }

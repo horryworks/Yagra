@@ -29,7 +29,6 @@ import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
-import { FilterBar } from '../components/ui/FilterBar';
 
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
@@ -124,6 +123,7 @@ export function UsersPage() {
         <ListToolbar
           list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, facets)}
           labels={filterLabels}
+          menu
           count={{
             shown: list.length,
             total: rows.length,
@@ -136,18 +136,6 @@ export function UsersPage() {
             </Button>
           )}
         </ListToolbar>
-
-        {/* The identity list is a card per account with no header row, so the controls carry
-            their own names rather than sitting under columns that do not exist (ADR-053 Inc.6
-            decision E). Role went from a one-of-three segmented control to a set, which is what
-            makes "operators and admins" — the accounts that can change anything — sayable. */}
-        <FilterBar
-          columns={filterCols}
-          labels={filterLabels}
-          filters={filters}
-          onChange={setFilters}
-          counts={facets}
-        />
 
         {error && <p className="form-error users-error">{error}</p>}
 

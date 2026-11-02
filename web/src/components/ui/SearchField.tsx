@@ -4,8 +4,8 @@
 //
 // **It replaced `SearchInput.tsx` rather than sitting beside it.** That file was the picker box and
 // this is every box, so keeping both would be two names for one thing (`extensibility.md` §5). What
-// the old file said still holds and is worth repeating: **a list is narrowed by `ColumnFilterCell`
-// under its header, or by `FilterBar` when it has none** — a bare text box cannot carry the mode
+// the old file said still holds and is worth repeating: **a list is narrowed by the funnel beside
+// its header, or by the toolbar's funnel when it has none** (ADR-228) — a bare text box cannot carry the mode
 // toggle, NOT, the multi-select or the URL codec (ADR-053 Inc.7). This component is for a set of
 // *choices* (the five pickers), for a surface with **no header row to hang a filter row under** (the
 // node tree, the top bar's global search), and for the free-text cells the filter row itself draws.

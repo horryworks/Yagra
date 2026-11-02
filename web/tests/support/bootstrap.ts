@@ -279,18 +279,23 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // The availability graph (ADR-223) draws only an answer for the period it asked for, and the
   // generator cannot know that the `period` echoed back must be the one in the query, or that the
   // window has to end now — its answer would leave the strip empty and the walk would call that a
-  // pass. One outage two hours ago, so the bars carry red as well as green.
+  // pass. One 65-minute outage ending at the last local noon, so the bars carry red as well as
+  // green — and it lies inside one day's bar whatever time the suite runs. "Two hours ago" crossed
+  // midnight between 00:55 and 02:00 and drew two red bars.
   '/api/v1/nodes/{node_id}/availability': (url: URL) => {
     const lengths: Record<string, number> = { '24h': 1, '7d': 7, '30d': 30, '90d': 90 };
     const period = url.searchParams.get('period') ?? '30d';
     const now = Date.now();
     const from = now - (lengths[period] ?? 30) * 86_400_000;
+    const noon = new Date(now);
+    noon.setHours(12, 0, 0, 0);
+    const lastNoon = noon.getTime() <= now ? noon.getTime() : noon.getTime() - 86_400_000;
     return {
       node_id: url.pathname.split('/')[4],
       period,
       from_unix_ms: from,
       to_unix_ms: now,
-      spans: [{ kind: 'down', from_unix_ms: now - 2 * 3_600_000, to_unix_ms: now - 3_300_000 }],
+      spans: [{ kind: 'down', from_unix_ms: lastNoon - 3_900_000, to_unix_ms: lastNoon }],
       up_secs: Math.round((now - from) / 1000) - 3_900,
       down_secs: 3_900,
       maintenance_secs: 0,

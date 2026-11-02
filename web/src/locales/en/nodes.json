@@ -543,7 +543,6 @@
     "addressesMore": "+{{count}}",
     "addressesOpen": "Show all {{count}} IP addresses on {{port}}",
     "addressesTitle": "IP addresses on {{port}}",
-    "addressesHint": "Matches any address on the port, in the ip/prefix spelling the column shows — so a secondary hidden behind +N still matches. 10.221. finds the ports carrying that range, /30 the point-to-point links.",
     "dockAddresses": "IP",
     "colOper": "Oper",
     "colMedia": "Media",
@@ -576,7 +575,6 @@
       "half": "half",
       "unknown": "Not reported"
     },
-    "mediaHint": "Matching also searches the transceiver part number, so SX finds a module whose medium is not reported.",
     "transceiver": "Transceiver: {{model}}",
     "noMatch": "No interfaces match “{{filter}}”.",
     "dockHint": "Select an interface to dock its charts.",
@@ -663,15 +661,6 @@
       }
     },
     "rulesButton": "Alert rules for this port",
-    "addressesCol": {
-      "info": "Every address on the port, secondaries included, read hourly. +N opens the full list."
-    },
-    "neighborsCol": {
-      "info": "What the port is connected to, from CDP or LLDP. Click a name to see every neighbor on the port."
-    },
-    "duplexCol": {
-      "info": "How the link negotiated. Not reported is normal on fibre and on ports that are down."
-    },
     "blank": {
       "unknown": "not reported",
       "notApplicable": "n/a"

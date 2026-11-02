@@ -13,7 +13,6 @@ import { useTranslation } from 'react-i18next';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
 import { Button } from '../components/ui/Button';
-import { FilterBar } from '../components/ui/FilterBar';
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -185,20 +184,12 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
           <ListToolbar
             list={serverToolbarFilters(columns, { filters, setFilters }, undefined, counts)}
             labels={labels}
+            menu
             count={{
               shown: shown.length,
               total: jobs.length,
               noun: (n) => t('runs.noun', { count: n }),
             }}
-          />
-          {/* A run row is a CSS grid with no header row above it, so the controls carry their own
-              names instead of sitting under columns that do not exist (ADR-053 Inc.6 decision E). */}
-          <FilterBar
-            columns={columns}
-            labels={labels}
-            filters={filters}
-            onChange={setFilters}
-            counts={counts}
           />
         </>
       )}

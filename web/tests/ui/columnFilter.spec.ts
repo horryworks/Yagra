@@ -39,26 +39,30 @@ test.use({ mockConfig: { overrides: { ...BOOTSTRAP_OVERRIDES, [CATALOG]: catalog
 
 const rows = (page: import('@playwright/test').Page) => page.locator('.dt-row');
 
-test('the filter row sits under its own column header', async ({ page }) => {
+test('each filterable column carries its funnel inside its own header, and no row is added', async ({
+  page,
+}) => {
   await page.goto('/nodes/mib');
   await expect(rows(page).first()).toBeVisible();
 
-  const filterRow = page.getByRole('group', { name: 'Column filters' });
-  await expect(filterRow).toBeVisible();
-
-  // ⚠️ The alignment bug `ui-conventions.md` warns about is invisible to any DOM assertion: the
-  // filter row, the header and every data row share ONE grid template, so a stray extra track
-  // slides the controls out from under the headers they belong to and *no test can see it*.
-  // Geometry can. This is the kind of assertion that only exists because a browser is running.
-  const control = filterRow.getByRole('button', { name: /Filter by/ }).first();
-  const header = page.locator('.dt-head > *').first();
-  const [cBox, hBox] = [await control.boundingBox(), await header.boundingBox()];
-  expect(cBox).not.toBeNull();
+  // ADR-228: the controls moved from a row under the header to a funnel beside each label. The
+  // alignment question is the same one the row had — a funnel laid over the next column reads as
+  // that column's — and only geometry can answer it.
+  const funnel = page.locator('.dt-head .hf-trigger').first();
+  await expect(funnel).toBeVisible();
+  const header = funnel.locator('xpath=ancestor::*[contains(@class, "hcell")][1]');
+  const [fBox, hBox] = [await funnel.boundingBox(), await header.boundingBox()];
+  expect(fBox).not.toBeNull();
   expect(hBox).not.toBeNull();
-  if (!cBox || !hBox) return;
-  expect(cBox.x, 'the filter control sits left of its header').toBeGreaterThanOrEqual(hBox.x - 2);
-  expect(cBox.x, 'the filter control has slid past its header').toBeLessThan(hBox.x + hBox.width);
-  expect(cBox.y, 'the filter row is not below the header row').toBeGreaterThan(hBox.y);
+  if (!fBox || !hBox) return;
+  expect(fBox.x, 'the funnel sits left of its header').toBeGreaterThanOrEqual(hBox.x - 2);
+  expect(fBox.x + fBox.width, 'the funnel runs past its header').toBeLessThanOrEqual(
+    hBox.x + hBox.width + 2,
+  );
+  // The whole point: the table is the header and the rows, nothing between them.
+  const head = await page.locator('.dt-head').boundingBox();
+  const first = await rows(page).first().boundingBox();
+  expect(first!.y - (head!.y + head!.height), 'something sits between the header and the rows').toBeLessThan(2);
 });
 
 test('typing a term reaches the server, and clearing it comes back', async ({ page, mock }) => {
@@ -102,12 +106,14 @@ test.describe('the Events filter row', () => {
 
   test('writes its condition to the URL and reads it back', async ({ page, mock }) => {
     await page.goto('/events');
-    await expect(page.getByRole('group', { name: 'Column filters' })).toBeVisible();
+    await expect(page.locator('.dt-head .hf-trigger').first()).toBeVisible();
 
     await page.getByRole('button', { name: /Filter by Message/ }).click();
     await page.getByRole('dialog').getByRole('searchbox').first().fill(NEEDLE);
 
     await expect(page, 'the condition never reached the URL').toHaveURL(new RegExp(NEEDLE));
+    // The set filter is named in the toolbar, where the closed row trigger used to say it.
+    await expect(page.locator('.filter-chip', { hasText: NEEDLE })).toBeVisible();
     // …and reached the server, which for a fleet-scaled list is the only place it can be applied.
     await expect
       .poll(() =>

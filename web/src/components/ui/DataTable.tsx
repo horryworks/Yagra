@@ -12,8 +12,8 @@ import { useTranslation } from 'react-i18next';
 import { useViewportMode } from '../../lib/viewport';
 import { columnLabels } from '../../lib/listToolbar';
 import { nextSort, type SortState } from '../../lib/tableSort';
-import { ColumnFilterRow } from './ColumnFilterRow';
-import { filterableColumns, type ColumnFilterSpec, type FilterState } from '../../lib/columnFilter';
+import { HeaderFilter, SortHeaderButton } from './HeaderFilter';
+import type { ColumnFilterSpec, FilterState } from '../../lib/columnFilter';
 import { minTableWidth } from '../../lib/tableWidth';
 import { resolveWidths } from '../../lib/columnWidths';
 import type { TableId } from '../../lib/tableIds';
@@ -36,7 +36,7 @@ export interface Column<T> {
    *  sorted honestly — see `lib/tableSort.ts`. A column is sortable when the caller can put the
    *  whole list in order, not when the header would look nice with an arrow. */
   sortable?: boolean;
-  /** Put a filter control directly under this column's header (ADR-053, design-system §4.1).
+  /** Put a funnel beside this column's header that opens its filter (ADR-053, ADR-228).
    *
    *  Opt-in per column for the same reason `sortable` is, plus one of its own: a column with an
    *  unbounded value space must not offer a value list at all. `source_ip` is the named example —
@@ -172,8 +172,8 @@ export function DataTable<T>({
   // ⚠️ …and the shared string is **not** enough on its own (ADR-054). Three grids resolve the same
   // template to different track widths once the pane is narrower than the columns need: a `1fr`
   // track then collapses to the item's min-content contribution, which here is only its padding —
-  // 28px in `.dt-h`, 16px in `.dt-f` — so the header and the filter row landed their grid lines
-  // 12px apart and the last columns were drawn past the edge of an `overflow: hidden` box, where
+  // 28px in `.dt-h`, 16px in `.dt-f` — so the header and the filter row (since removed, ADR-228)
+  // landed their grid lines 12px apart and the last columns were drawn past the edge of an `overflow: hidden` box, where
   // nothing could reach them. Handing all three the same `min-width` removes the room to differ and
   // turns the overflow into a scroll. Inert while the pane is wide enough, which is why the tables
   // that already fit are untouched.
@@ -248,19 +248,9 @@ export function DataTable<T>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedKey]);
 
-  // The filter row draws only when the caller asked for it AND some column opted in AND the shared
-  // decision says the row is showing. That last half lives inside `ColumnFilterRow` (Inc.10) rather
-  // than here, so this table and the five hand-rolled rows elsewhere read the *same* decision
-  // instead of six look-alikes (four of which had no decision at all — see `MobileFilterSheet.tsx`).
-  // It carries the desktop open/closed state too, so a second answer here would leave the row drawn
-  // on a screen whose toggle says it is closed.
-  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
-  // ⚠️ One slot per column, in the header's order — including the columns with no filter, which
-  // become empty tracks. Skipping them would slide every later control out from under its header.
-  const filterSlots = useMemo(
-    () => columns.map((c) => (c.filter ? { key: c.key, align: c.align } : null)),
-    [columns],
-  );
+  // Funnels draw only when the caller asked for filtering AND the column opted in (ADR-228). There
+  // is no open/closed state any more: a funnel takes no room, so it has nothing to hide.
+  const filtering = !!filters && !!onFiltersChange;
   // The accessible name has to be a string, and `header` is a ReactNode. Every filterable column's
   // header is a `t()` string today; the key is a readable last resort rather than an empty label.
   // `columnLabels` is the one copy of that rule — the phone's filter sheet names columns with it too.
@@ -283,52 +273,51 @@ export function DataTable<T>({
             // placed at an explicit row AND column; an item given only `grid-column` is still
             // auto-placed down the rows, so it lands in the first row where that column is free —
             // which is row 2, because the grip has row 1. The whole header then renders one band
-            // lower. Shipped that way once (ADR-129); the filter row and the data rows still
-            // auto-place, because they carry no grips.
+            // lower. Shipped that way once (ADR-129); the data rows still auto-place, because
+            // they carry no grips.
             const at = { gridColumn: i + 1, gridRow: 1 };
-            if (!c.sortable || !sort || !onSortChange) {
+            const sortable = !!(c.sortable && sort && onSortChange);
+            const label = sortable ? (
+              <SortHeaderButton
+                active={sort!.by === c.key ? sort!.dir : null}
+                onClick={() => onSortChange!(nextSort(sort!, c.key))}
+              >
+                {c.header}
+              </SortHeaderButton>
+            ) : (
+              c.header
+            );
+            const filter = filtering && c.filter;
+            if (!filter) {
               return (
                 <div key={c.key} className={cls} style={at}>
-                  {c.header}
+                  {label}
                 </div>
               );
             }
-            const active = sort.by === c.key;
+            // A filterable column carries its funnel beside the label (ADR-228). Siblings, never
+            // nested: a button inside the sort button is invalid markup.
             return (
-              <button
-                key={c.key}
-                type="button"
-                style={at}
-                className={active ? `${cls} dt-h-sort active` : `${cls} dt-h-sort`}
-                // The header is a real button, so the sort is keyboard-operable — an operator
-                // driving the table from the keyboard is a stated requirement, and a click handler
-                // on a `div` is not reachable that way.
-                onClick={() => onSortChange(nextSort(sort, c.key))}
-                aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
-              >
-                {c.header}
-                <span className="dt-h-arrow" aria-hidden="true">
-                  {active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+              <div key={c.key} className={`${cls} hcell`} style={at}>
+                {/* The title carries the whole name: the funnel takes room from a narrow label. */}
+                <span className="hcell-label" title={filterLabels[c.key]}>
+                  {label}
                 </span>
-              </button>
+                <HeaderFilter
+                  spec={filter}
+                  value={filters![c.key] ?? ''}
+                  onChange={(next) => onFiltersChange!({ ...filters!, [c.key]: next })}
+                  counts={filterCounts?.[c.key]}
+                  label={filterLabels[c.key] ?? c.key}
+                  align={c.align === 'right' ? 'end' : 'start'}
+                  onOpen={onFilterOpen ? () => onFilterOpen(c.key) : undefined}
+                />
+              </div>
             );
           })}
           <ColumnResizeHandles control={resize} columns={columns} labels={filterLabels} />
           <ColumnWidthReset control={resize} columnCount={columns.length} />
         </div>
-      )}
-      {!!filters && !!onFiltersChange && (
-        <ColumnFilterRow
-          columns={filterCols}
-          slots={filterSlots}
-          filters={filters}
-          onChange={onFiltersChange}
-          counts={filterCounts}
-          onFilterOpen={onFilterOpen}
-          labels={filterLabels}
-          className="dt-filters"
-          style={{ gridTemplateColumns: template, ...widthStyle }}
-        />
       )}
       {/* The scroller carries the same floor as the two grids above it, or the rows would stop
           short of the header the moment the table is scrolled sideways. Not in card mode: cards

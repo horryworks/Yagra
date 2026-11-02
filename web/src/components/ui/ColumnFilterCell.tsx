@@ -1,20 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// One cell of the column filter row: a trigger that says what is filtered, and a popover that
-// changes it (ADR-053, design-system §4.1).
+// The editor of one column's filter (ADR-053, design-system §4.1): what opens from a header's
+// funnel (`HeaderFilter`) and what the mobile sheet and the toolbar funnel stack (`FilterSections`).
 //
-// The trigger's job is the whole point of moving filters out of the toolbar. A toolbar showed every
-// active filter as a control with a visible value; collapse that into a popover and the state goes
-// invisible unless the closed trigger keeps saying it. So the label is `lib/filterSummary.ts`'s
-// descriptor rendered — never the column name.
-//
-// `FilterBody` is exported because the mobile sheet stacks the SAME bodies inline (a card list has
-// no header row to hang a filter row on). Two implementations would drift, and mobile is where
-// nobody would notice for a release or two.
+// Until ADR-228 this file also held the filter row's cell — a trigger that said what was filtered.
+// That job moved to the toolbar's chips; the editor stayed here, one implementation for every
+// surface, because two would drift and mobile is where nobody would notice for a release or two.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AnchoredPopover } from './AnchoredPopover';
-import { focusPopoverTrigger } from './focusPopoverTrigger';
 import { MultiSelectList } from './MultiSelectList';
 import { SearchField } from './SearchField';
 import { TextConditionEditor } from './TextConditionEditor';
@@ -24,7 +17,6 @@ import {
   decodeNumberRange,
   decodeRange,
   decodeSet,
-  defaultValue,
   encodeNumberRange,
   encodeRange,
   normalizeValues,
@@ -35,7 +27,6 @@ import {
   type ValuesFilterSpec,
 } from '../../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../../lib/filterCondition';
-import { summarize, summaryIsActive } from '../../lib/filterSummary';
 import './ColumnFilterCell.css';
 
 interface BodyProps<T> {
@@ -283,148 +274,6 @@ function RangeBody<T>({
           />
         </div>
       )}
-    </div>
-  );
-}
-
-interface Props<T> {
-  spec: ColumnFilterSpec<T>;
-  value: string;
-  onChange: (next: string) => void;
-  counts?: Record<string, number>;
-  /** Plain-text column name, for the trigger's accessible name and the clear button's. */
-  label: string;
-  /** Called when the popover opens. A server-side list fetches its facet counts here and NOT on
-   *  load: ADR-023 puts UI load third behind polling and alert evaluation, and five aggregate
-   *  queries per page load to decorate checkboxes nobody clicked is how the poller starves. */
-  onOpen?: () => void;
-  align?: 'right';
-}
-
-export function ColumnFilterCell<T>({
-  spec,
-  value,
-  onChange,
-  counts,
-  label,
-  onOpen,
-  align,
-}: Props<T>) {
-  const { t } = useTranslation('common');
-  const [open, setOpen] = useState(false);
-  /** Whether `AnchoredPopover` has measured and painted the panel. Focus cannot move into it before
-   *  that — until placed it is `visibility: hidden`, and a hidden element cannot take focus. This is
-   *  the same wiring `ActionMenu` uses; not having it is why the filter needed a second click. */
-  const [placed, setPlaced] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  const dismiss = useCallback((restoreFocus: boolean) => {
-    setOpen(false);
-    if (restoreFocus) focusPopoverTrigger(wrapRef.current, 'dialog');
-  }, []);
-
-  const summary = summarize(spec, value);
-  const active = summaryIsActive(spec, value);
-
-  /** What the closed trigger reads. `none` is the only case that has to ask the spec — the other
-   *  four are fully described by the summary, which is the point of it being a descriptor. */
-  const emptyLabel = () => {
-    if (spec.kind === 'enum') return spec.allLabel;
-    if (spec.kind === 'text') return spec.placeholder ?? t('filter.termPlaceholder');
-    if (spec.kind === 'number') return t('filter.anyValue');
-    if (spec.kind === 'values') return spec.placeholder ?? t('filter.valuesPlaceholder');
-    return t('filter.termPlaceholder');
-  };
-
-  const triggerText = () => {
-    switch (summary.kind) {
-      case 'none':
-        return emptyLabel();
-      case 'one':
-      case 'preset':
-        return summary.label;
-      case 'many':
-        return `${summary.label} ${t('filter.more', { count: summary.more })}`;
-      case 'text':
-        return summary.term;
-      case 'number':
-        // Three readings, because a one-sided interval read as "3 – " looks unfinished rather than
-        // deliberate — and one-sided is the common case ("score 8 or worse").
-        if (summary.min !== null && summary.max !== null)
-          return `${summary.min} – ${summary.max}`;
-        return summary.min !== null
-          ? t('filter.numMin', { value: summary.min })
-          : t('filter.numMax', { value: summary.max });
-    }
-  };
-
-  // Held rather than called twice: it is also the trigger's tooltip. `.dt-f-text` is
-  // `flex: 1; min-width: 0`, so the summary is the first thing a narrow column takes away — and
-  // with the controls collapsed into the popover, this line is the ONLY place the filter state is
-  // visible. Eleven columns across eight screens were showing a cut-off state with no way to read
-  // the rest (ADR-088's first sweep); the tooltip is what makes the truncation lossless.
-  const summaryText = triggerText();
-
-  return (
-    <div className={align === 'right' ? 'dt-f right' : 'dt-f'} ref={wrapRef}>
-      <button
-        type="button"
-        className={active ? 'dt-f-trigger on' : 'dt-f-trigger'}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={t('filter.open', { column: label })}
-        title={summaryText}
-        onClick={() => {
-          const next = !open;
-          setOpen(next);
-          if (next) onOpen?.();
-        }}
-      >
-        {summary.kind === 'text' && summary.not && (
-          <span className="dt-f-mark not" aria-hidden="true">
-            ≠
-          </span>
-        )}
-        {summary.kind === 'text' && summary.mode === 'regex' && (
-          <span className="dt-f-mark" aria-hidden="true">
-            .*
-          </span>
-        )}
-        <span className="dt-f-text">{triggerText()}</span>
-        <span className="dt-f-caret" aria-hidden="true">
-          ▾
-        </span>
-      </button>
-      {/* Outside the trigger, not nested in it: a button inside a button is invalid markup and the
-          inner one's click does not reliably reach its own handler. */}
-      {active && (
-        <button
-          type="button"
-          className="dt-f-clear"
-          aria-label={t('filter.clearAria', { column: label })}
-          onClick={() => onChange(defaultValue(spec))}
-        >
-          ✕
-        </button>
-      )}
-      <AnchoredPopover
-        open={open}
-        anchorRef={wrapRef}
-        role="dialog"
-        label={t('filter.open', { column: label })}
-        align="start"
-        onDismiss={dismiss}
-        onPlacedChange={setPlaced}
-      >
-        <FilterBody
-          spec={spec}
-          value={value}
-          onChange={onChange}
-          counts={counts}
-          label={label}
-          takeFocus={placed}
-        />
-      </AnchoredPopover>
     </div>
   );
 }

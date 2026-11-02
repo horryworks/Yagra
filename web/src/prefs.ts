@@ -91,14 +91,6 @@ interface PrefsStore {
    *  width), and splitting a continuum across two homes is the surprise `rateUnit` documents. If
    *  this is ever promoted, promote both, and add them to `serverPrefs.ts` together. */
   nodesPaneWidth: number | null;
-  /** Whether the column filter row is open on desktop (ADR-053 Inc.9). **Closed by default** — the
-   *  row reached every list in Inc.0–8 and then occupied a band on screens nobody was filtering.
-   *
-   *  One global boolean rather than a per-screen map, and the reason it *can* be one is
-   *  `lib/filterRow.ts`: a list that is actually being narrowed shows its row regardless, so there
-   *  is no "closed but filtering" state anyone has to remember. A screen with several tables
-   *  (Reports has three) therefore opens and closes them together, which is the accepted cost. */
-  filterRowOpen: boolean;
   /** How tall the operator dragged the node-detail Interfaces chart dock, in px (issue #65).
    *  `null` = never resized, so the dock picks a height from the container it is actually in
    *  instead of pinning whatever one window happened to be on the day it was first opened.
@@ -211,8 +203,6 @@ interface PrefsStore {
   /** Record the All-nodes inventory pane width. `null` restores the default (see
    *  [`nodesPaneWidth`]). Call it on gesture *end*, not per pointer event. */
   setNodesPaneWidth: (px: number | null) => void;
-  /** Show or hide the desktop column filter row (global + persisted; see [`filterRowOpen`]). */
-  toggleFilterRow: () => void;
   /** Record the Interfaces dock height locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
    *  syncs it to the account (see [`interfaceDockHeight`]). */
   setInterfaceDockHeight: (px: number | null) => void;
@@ -272,7 +262,6 @@ export const usePrefsStore = create<PrefsStore>()(
       nodesPaneWidth: null,
       // Absent from every `yagra_prefs` written before this shipped. `persist` merges the stored
       // object over the initial state, so a missing key reads as `false` and no migration is owed.
-      filterRowOpen: false,
       // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
       // object over the initial state, so a missing key reads as `null` and no migration is owed.
       interfaceDockHeight: null,
@@ -326,7 +315,6 @@ export const usePrefsStore = create<PrefsStore>()(
       toggleGroupMap: () => set((s) => ({ groupMapCollapsed: !s.groupMapCollapsed })),
       setGroupMapHeight: (groupMapHeight) => set({ groupMapHeight }),
       setNodesPaneWidth: (nodesPaneWidth) => set({ nodesPaneWidth }),
-      toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
       setTableColumnWidths: (tableColumnWidths) => set({ tableColumnWidths }),
       setDiscoveryScan: (discoveryScan) => set({ discoveryScan }),

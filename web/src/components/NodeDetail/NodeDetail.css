@@ -875,7 +875,6 @@ html[data-viewport='mobile'] .nd-extract-row {
    ("not reported", "n/a") instead of an em dash with the reason in a hover, and "not reported"
    is the widest string the column renders. */
 .nd-if-head,
-.nd-if-filters,
 .nd-if-row {
   display: grid;
   /* ADR-129: the operator may drag a column's edge, so the resolved template arrives as an inline
@@ -903,16 +902,6 @@ html[data-viewport='mobile'] .nd-extract-row {
      answers the same question with an inline `minWidth` from `minTableWidth`. */
   min-width: min-content;
   align-items: center;
-}
-
-.nd-if-filters {
-  position: sticky;
-  /* Directly under the sticky header, whose height is `LIST_HEAD_H` in InterfacesTab.tsx. */
-  top: 32px;
-  min-height: 34px;
-  background: var(--bg-secondary);
-  border-bottom: var(--border-width) solid var(--border-color);
-  z-index: 1;
 }
 
 .nd-if-head {
@@ -1760,21 +1749,13 @@ html[data-viewport='mobile'] .nd-extract-row {
   overflow: hidden;
 }
 
-/* ⚠️ ONE declaration, THREE grids — header, filter row (ADR-053 Inc.6) and every data row. See the
-   note on `.nd-if-head` above: a fourth template computed anywhere else puts the filter controls
-   under the wrong columns and nothing catches it. */
+/* ⚠️ ONE declaration for the header and every data row. See the note on `.nd-if-head` above: a
+   template computed anywhere else puts cells under the wrong columns and nothing catches it. */
 .nd-coll-mhead,
-.nd-coll-mfilters,
 .nd-coll-mrow {
   display: grid;
   grid-template-columns: 1.6fr 1fr 1fr 120px;
   align-items: center;
-}
-
-.nd-coll-mfilters {
-  min-height: 34px;
-  background: var(--bg-secondary);
-  border-bottom: var(--border-width) solid var(--border-color);
 }
 
 .nd-coll-mhead {

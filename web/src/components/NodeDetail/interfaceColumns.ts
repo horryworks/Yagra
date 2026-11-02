@@ -27,9 +27,8 @@ export interface InterfaceColumn {
 /**
  * The thirteen columns, in the order the header draws them.
  *
- * ⚠️ The order is load-bearing three times over: it is the grid, it is the order of
- * `ColumnFilterRow`'s slots (derived by `filterSlots` below), and it is the index a resize grip is
- * placed at. Inserting a column in the middle also means the header cells' explicit `gridColumn`
+ * ⚠️ The order is load-bearing twice over: it is the grid, and it is the index a resize grip is
+ * placed at — and the header draws its cells in this order (ADR-228). Inserting a column in the middle also means the header cells' explicit `gridColumn`
  * numbers in `InterfacesTab.tsx` move.
  *
  * The numbers themselves are ADR-126's — measured, not estimated — plus ADR-145's NEIGHBORS and
@@ -54,16 +53,3 @@ export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [
   { key: 'in', width: 'minmax(74px, 0.7fr)' },
   { key: 'out', width: 'minmax(74px, 0.7fr)' },
 ];
-
-/**
- * The filter row's slots, one per column in `INTERFACE_COLUMNS` order: the column's key where a
- * filter spec exists for it, `null` where the column carries no control.
- *
- * Derived rather than written out. It used to be a literal in `InterfacesTab.tsx`, guarded only by a
- * test that restated it — and ADR-145 inserting NEIGHBORS as the third column would have slid every
- * control after it one heading to the left while that test still passed.
- */
-export function filterSlots(filterKeys: readonly string[]): (string | null)[] {
-  const keys = new Set(filterKeys);
-  return INTERFACE_COLUMNS.map((c) => (keys.has(c.key) ? c.key : null));
-}

@@ -14,7 +14,7 @@ test('a Japanese operator sees the shell in Japanese', async ({ page }) => {
     localStorage.setItem(
       'yagra_prefs',
       JSON.stringify({
-        state: { theme: 'dark', language: 'ja', uiMode: 'desktop', filterRowOpen: true },
+        state: { theme: 'dark', language: 'ja', uiMode: 'desktop' },
         version: 0,
       }),
     );

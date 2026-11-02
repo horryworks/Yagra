@@ -25,7 +25,6 @@ import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../type
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
-import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { FilterControls } from '../ui/ListToolbar';
 import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useFilterParams } from '../../lib/useFilterParams';
@@ -36,6 +35,7 @@ import { metricColumns } from './tabFilters';
 import { viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { collectionState, type CollectionState } from './collectionState';
+import { FilterHeaderCell } from '../ui/HeaderFilter';
 import { agoSec } from '../../lib/format';
 
 
@@ -239,6 +239,13 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
     metric: t('collection.colMetric'),
     status: t('collection.colStatus'),
   };
+  const metricBind = {
+    columns,
+    filters,
+    onChange: setFilters,
+    counts: metricCounts,
+    labels: metricLabels,
+  };
 
   return (
     <div className="nd-coll">
@@ -317,27 +324,20 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
           </div>
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">
-              <div className="nd-coll-mh">{t('collection.colMetric')}</div>
+              <FilterHeaderCell bind={metricBind} colKey="metric" className="nd-coll-mh">
+                {t('collection.colMetric')}
+              </FilterHeaderCell>
               <div className="nd-coll-mh">{t('collection.colShape')}</div>
               <div className="nd-coll-mh right">{t('collection.colLastValue')}</div>
-              <div className="nd-coll-mh right">{t('collection.colStatus')}</div>
+              <FilterHeaderCell
+                bind={metricBind}
+                colKey="status"
+                className="nd-coll-mh right"
+                align="right"
+              >
+                {t('collection.colStatus')}
+              </FilterHeaderCell>
             </div>
-            {/* Filter row under the header — same CSS grid rule as the header and every row, so
-                the three cannot drift (ADR-053 Inc.6 decision F). Shape and Last value carry empty
-                cells: one is derived from the metric name and the other is a live number, and
-                neither is a question this list can answer. Not drawn on a phone, where four grid
-                tracks in ~366px leave each trigger too narrow to read its own summary —
-                `FilterButton` above is the other half, and the gate itself is inside
-                `ColumnFilterRow`. */}
-            <ColumnFilterRow
-              columns={columns}
-              slots={['metric', null, null, { key: 'status', align: 'right' }]}
-              filters={filters}
-              onChange={setFilters}
-              counts={metricCounts}
-              labels={metricLabels}
-              className="nd-coll-mfilters"
-            />
             {shownMetrics.map((m) => (
               <MetricRow key={m.metric} nodeId={node.id} entry={m} range={range} />
             ))}

@@ -24,7 +24,6 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
-import { FilterBar } from '../components/ui/FilterBar';
 import { type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { RcaModal } from '../components/Rca/RcaModal';
@@ -51,7 +50,10 @@ import { urlOnlyResolver } from './activeAlertFilters';
 export function ActiveAlertsPage() {
   const { t } = useTranslation('alerts');
   const [rcaEnabled, setRcaEnabled] = useState(false);
-  const [explaining, setExplaining] = useState<{ node: string; check: string } | null>(null);
+  const [explaining, setExplaining] = useState<{
+    node: string;
+    check: string;
+  } | null>(null);
   const [muting, setMuting] = useState<AlertMuteSeed | null>(null);
 
   // The filters live in the URL — nothing else holds them, so a narrowed triage view survives a
@@ -176,20 +178,12 @@ export function ActiveAlertsPage() {
               <ListToolbar
                 list={serverToolbarFilters(cols, { filters, setFilters }, undefined, counts)}
                 labels={labels}
+                menu
                 count={{
                   shown: shown,
                   total: total,
                   noun: (n) => t('common:noun.alert', { count: n }),
                 }}
-              />
-              {/* No header row on this list, so the controls sit in a bar with their names beside
-                  them rather than under columns that do not exist (ADR-053 Inc.6 decision E). */}
-              <FilterBar
-                columns={cols}
-                labels={labels}
-                filters={filters}
-                onChange={setFilters}
-                counts={counts}
               />
               <WatchChips
                 chips={watchChips({

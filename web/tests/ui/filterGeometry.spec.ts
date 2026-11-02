@@ -1,31 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// ADR-053 in a browser: the half of the filter row that is not a predicate.
+// ADR-053 / ADR-228 in a browser: the half of the filters that is not a predicate.
 //
 // `columnFilter.spec.ts` covers what the controls *do* — reaching the request, the URL round-trip,
 // clear-all. This file covers whether they are **there**, which is the half that shipped broken six
 // times and that 1,966 unit tests could not ask about. Three properties, each browser-only:
 //
-//   1. **The window is not always 1280px.** The filter row shares one `gridTemplateColumns` with
-//      the header and every data row, and a track that resolves differently in one of the three
-//      slides every control out from under its column. Whether it does depends on the width the
-//      operator's window happens to be.
+//   1. **The window is not always 1280px.** A narrow column squeezes the funnel beside its header
+//      label, and whether it does depends on the width the operator's window happens to be.
 //   2. **The popover has to escape the table.** `.dt` is `overflow: hidden` and a virtualized row
 //      carries a `transform`, which is a containing block for `position: fixed` — so the panel is
 //      portalled to `<body>`. A regression here does not throw; the panel is laid out somewhere
 //      off-screen and the filter simply cannot be opened.
-//   3. **Mobile is an either/or, not a variant.** `FilterBar` and `DataTable` both refuse to draw a
-//      filter row under `useViewportMode() === 'mobile'`, and `MobileFilterButton` refuses to draw
-//      unless. A screen that lost the second half still looks correct — it has simply stopped
-//      being filterable on a phone, silently.
+//   3. **Mobile is an either/or, not a variant.** A phone draws no header and no toolbar funnel,
+//      and `FilterButton` opens the sheet instead. A screen that lost the second half still looks
+//      correct — it has simply stopped being filterable on a phone, silently.
 
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
-import { FILTER_SURFACE, inspectFilterSurface, MUST_FILTER } from './filterSurface';
+import { FILTER_TRIGGER, inspectFilterSurface, MUST_FILTER } from './filterSurface';
 
 const SCREENS = Object.keys(MUST_FILTER);
 
-/** The two node-detail tabs that hand-roll a filter row of their own. They are not routes, so the
- *  walk's screen list cannot reach them — and both were drawing their row on a phone. */
+/** The two node-detail tabs with hand-built headers of their own. They are not routes, so the walk's
+ *  screen list cannot reach them. */
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 const TABS_WITH_A_FILTER_ROW = ['interfaces', 'collection'];
 
@@ -42,41 +39,31 @@ for (const width of WIDTHS) {
     test.use({ viewport: { width, height: 900 } });
 
     for (const path of SCREENS) {
-      test(`${path} keeps its filter controls under their columns`, async ({ page }) => {
+      test(`${path} keeps its funnels beside their columns`, async ({ page }) => {
         await page.goto(path);
-        await expect(page.locator('.dt-f-trigger').first()).toBeVisible();
+        await expect(page.locator(FILTER_TRIGGER).first()).toBeVisible();
         expect(await inspectFilterSurface(page), `${path} at ${width}px`).toEqual([]);
       });
     }
   });
 }
 
-test.describe('the toolbar the filter button sits in', () => {
-  // Events is the pair from the report: a node picker (`.field`, the shared control height) with
-  // `Filter` and `Clear all filters` beside it. The buttons carried `--touch-target` (44px), which
-  // is right on a phone and half again too tall next to a 30px picker — and that only became
-  // visible when Inc.9 started rendering them on a desktop. Nothing else can see this: the two
-  // heights come from different files and both are individually valid.
-  test('the filter buttons are the same height as the controls beside them', async ({ page }) => {
-    // `message` is the Message column's key, and the column key *is* the URL key (ADR-053 decision
-    // 12 refuses a prefix). `msg` is the API's parameter name and does not appear in a URL.
-    await page.goto('/events?message=router');
-    const picker = page.locator('.nodepick-control.field');
-    const button = page.locator('.mfilt-btn').first();
+test.describe('the toolbar the filter funnel sits in', () => {
+  // A header-less list puts its funnel in the toolbar beside "Clear all filters". The two carry
+  // the toolbar control height on a desktop and the touch target on a phone, from two files, and
+  // both are individually valid — so nothing but a browser sees them disagree.
+  test('the funnel is the same height as the clear button beside it', async ({ page }) => {
+    await page.goto('/settings/users?role=admin');
+    const funnel = page.locator('.mfilt-menu > .mfilt-btn');
     const clear = page.getByRole('button', { name: /Clear all filters/ });
-    await expect(picker).toBeVisible();
-    await expect(button).toBeVisible();
-    // A filter is in the URL, so the clear button is mounted and the row is forced open.
+    await expect(funnel).toBeVisible();
     await expect(clear).toBeVisible();
-
-    const boxes = await Promise.all([picker, button, clear].map((l) => l.boundingBox()));
-    const [p, b, c] = boxes.map((box) => box?.height ?? 0);
-    expect(p, 'the picker did not lay out').toBeGreaterThan(0);
-    // 1px of slop for border rounding; a mismatched token is 14px, never one.
-    expect(Math.abs(b - p), `Filter is ${b}px beside a ${p}px picker`).toBeLessThanOrEqual(1);
-    expect(Math.abs(c - p), `Clear all filters is ${c}px beside a ${p}px picker`).toBeLessThanOrEqual(
-      1,
+    const [f, c] = (await Promise.all([funnel, clear].map((l) => l.boundingBox()))).map(
+      (box) => box?.height ?? 0,
     );
+    expect(f, 'the funnel did not lay out').toBeGreaterThan(0);
+    // 1px of slop for border rounding; a mismatched token is 14px, never one.
+    expect(Math.abs(f - c), `the funnel is ${f}px beside a ${c}px clear button`).toBeLessThanOrEqual(1);
   });
 });
 
@@ -87,7 +74,7 @@ test.describe('the filter popover', () => {
 
   test('opens outside the table it belongs to, and inside the window', async ({ page }) => {
     await page.goto(PATH);
-    const triggers = page.locator('.dt-f-trigger');
+    const triggers = page.locator('.hf-trigger');
     await expect(triggers.first()).toBeVisible();
     const count = await triggers.count();
 
@@ -151,12 +138,11 @@ test.describe('on a phone', () => {
     page: import('@playwright/test').Page,
     where: string,
   ) {
-    // Half one: the desktop surfaces are gone. Each refuses in its own component, off the same
-    // `useViewportMode()`, and the bug this catches shipped twice — first as the row and a
-    // `Filter (N)` button on a desktop, then as both of them on a phone.
+    // Half one: the desktop funnels are gone. A phone draws no header and the toolbar funnel is
+    // `FilterButton`'s desktop half, so both answer to the same `useViewportMode()`.
     expect(
-      await page.locator(FILTER_SURFACE).count(),
-      `${where}: a desktop filter row/bar on a phone`,
+      await page.locator(FILTER_TRIGGER).count(),
+      `${where}: a desktop funnel on a phone`,
     ).toBe(0);
 
     // Half two: something replaced them. A screen that is filterable on a desktop and not on a
@@ -173,16 +159,14 @@ test.describe('on a phone', () => {
       await expect(page.locator('.app-loading')).toHaveCount(0, {
         timeout: 15_000,
       });
-      await expect(page.locator('.dt-row, .fbar, .mfilt-btn, .ntree-row').first()).toBeVisible({
+      await expect(page.locator('.dt-row, .mfilt-btn, .ntree-row').first()).toBeVisible({
         timeout: 15_000,
       });
       await expectTheSheetInsteadOfTheRow(page, path);
     });
   }
 
-  // A node-detail tab is a screen with a filter row that no route names, so nothing above visits
-  // it. `Interfaces` is where the defect was reported from: its row is `position: sticky` at the
-  // height of a header that mobile hides, so the rows scrolled through the gap above it.
+  // A node-detail tab is a screen with filters that no route names, so nothing above visits it.
   test.describe('a node detail tab', () => {
     test.use({
       mockConfig: {

@@ -27,7 +27,7 @@
 
 import { expect, test } from '../support/app';
 import { MOCK_PREFIX } from '../support/openapi';
-import { inspectFilterSurface, MUST_FILTER } from './filterSurface';
+import { FILTER_TRIGGER, inspectFilterSurface, MUST_FILTER } from './filterSurface';
 import { inspectRowActions } from './rowActions';
 import { inspectScreenGeometry, MIN_TEXT_ELEMENTS } from './screenGeometry';
 import {
@@ -135,7 +135,7 @@ for (const screen of ALL_SCREENS) {
     expect(await inspectFilterSurface(page), `${screen.path}: filter surface`).toEqual([]);
     if (MUST_FILTER[screen.path]) {
       expect(
-        await page.locator('.dt-f-trigger').count(),
+        await page.locator(FILTER_TRIGGER).count(),
         `${screen.path} has no filter control — ${MUST_FILTER[screen.path]}`,
       ).toBeGreaterThan(0);
     }

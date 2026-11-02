@@ -145,7 +145,6 @@ export function interfaceFilters(
       readText: (r) => addressesOf(r).map(formatAddress),
       containsSemantics: 'substring',
       placeholder: t('interfaces.colAddresses'),
-      hint: t('interfaces.addressesHint'),
     },
     // ⚠️ Text, where its two neighbours are enums, and the asymmetry is forced rather than chosen:
     // `dot3MauType` is an IANA registry of 250-and-growing designations, so there is no closed
@@ -158,7 +157,6 @@ export function interfaceFilters(
       readText: (r) => [mediaText(r.if_media), r.transceiver_model],
       containsSemantics: 'substring',
       placeholder: t('interfaces.colMedia'),
-      hint: t('interfaces.mediaHint'),
     },
     // Speed and duplex are why this column set grew (ADR-063): "which port is not running at its
     // rate" is a question you answer by *narrowing*, which is what makes them columns rather than a

@@ -54,23 +54,30 @@ export function readSortParams(
   params: URLSearchParams,
   sortable: readonly string[],
   fallback: SortState,
+  /** The table's key prefix when its route holds another table (`interfaces.`), as filters take. */
+  prefix = '',
 ): SortState {
-  const by = params.get(SORT_PARAM);
+  const by = params.get(prefix + SORT_PARAM);
   if (!by || !sortable.includes(by)) return fallback;
-  return { by, dir: params.get(DIR_PARAM) === 'desc' ? 'desc' : 'asc' };
+  return { by, dir: params.get(prefix + DIR_PARAM) === 'desc' ? 'desc' : 'asc' };
 }
 
 /** Write a sort into `params`, deleting both keys when it is the table's default — so a bare URL is
  *  the default order, the same rule every filter key follows. Both keys move together: a sort is one
  *  state, and `?dir=` with no `?sort=` would be a key nothing reads. */
-export function writeSortParams(params: URLSearchParams, next: SortState, fallback: SortState): void {
+export function writeSortParams(
+  params: URLSearchParams,
+  next: SortState,
+  fallback: SortState,
+  prefix = '',
+): void {
   if (next.by === fallback.by && next.dir === fallback.dir) {
-    params.delete(SORT_PARAM);
-    params.delete(DIR_PARAM);
+    params.delete(prefix + SORT_PARAM);
+    params.delete(prefix + DIR_PARAM);
     return;
   }
-  params.set(SORT_PARAM, next.by);
-  params.set(DIR_PARAM, next.dir);
+  params.set(prefix + SORT_PARAM, next.by);
+  params.set(prefix + DIR_PARAM, next.dir);
 }
 
 /** How one column's value is extracted for comparison, per column key.

@@ -3,7 +3,7 @@
 // (ADR-129). **One component for every table in the product** — `DataTable`'s `.dt-head` and the
 // node-detail Interfaces list's `.nd-if-head` both render this.
 //
-// WHY ONE COMPONENT. `ui/ColumnFilterRow.tsx` is the precedent and the cautionary tale: five
+// WHY ONE COMPONENT. The column filter row (removed by ADR-228) was the precedent and the cautionary tale: five
 // screens hand-rolled a filter row, and four of the five had forgotten the visibility gate
 // entirely. A grip written twice is a grip the next person fixes once.
 //

@@ -2,10 +2,10 @@
 // Table toolbar — the **action row** above every list. The pieces are small composables so each
 // screen arranges the slots it needs; styles live with the table standard (styles/table.css).
 //
-// **This row no longer filters (ADR-053).** A list is narrowed under its column headers
-// (`ColumnFilterCell` in `DataTable`'s `.dt-filters`), or by a `FilterBar` when the list has no
-// headers. What is left here is what acts on the list rather than describing it: the mobile filter
-// button, "clear all filters", a sort control, a spacer, the result count and the primary action —
+// **This row no longer holds the filter controls (ADR-053, ADR-228).** A list is narrowed from the
+// funnel beside each column header, or from one funnel here when the list has no headers. What is
+// left here is what acts on the list: that funnel or the mobile filter button, the chips naming each
+// set filter, "clear all filters", a sort control, a spacer, the result count and the primary action —
 // in that left-to-right order.
 //
 // Two things were deleted from this file in Inc.7 rather than kept "just in case":

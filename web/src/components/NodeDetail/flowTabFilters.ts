@@ -4,7 +4,7 @@
 // **These are not column filters and must never be placed under a table's headers.** They narrow
 // all six flow queries at once — the trend, the four Top-N cards, the Sankey and the conversations
 // table — so a row of controls sitting under the conversations headers would claim to filter that
-// table and would in fact be re-asking every question on the tab. They go in a `FilterBar` at the
+// table and would in fact be re-asking every question on the tab. They open from the toolbar's funnel at the
 // top of the tab (decision N), where what they govern is what is below them: everything.
 //
 // 🚨 **And the conversations table cannot have a filter row of its own either.** It holds
@@ -120,7 +120,7 @@ export function flowFilterColumns(t: TFunction): FilterableColumn<FlowRow>[] {
   return specColumns(flowFilters(t));
 }
 
-/** Plain-text names for the bar and the mobile sheet — a `FilterBar` has no header above a cell. */
+/** Plain-text names for the toolbar funnel and the mobile sheet — neither has a header above it. */
 export function flowFilterLabels(t: TFunction): Record<string, string> {
   return {
     proto: t('flow.filter.protoLabel'),

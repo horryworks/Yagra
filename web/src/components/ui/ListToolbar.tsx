@@ -18,10 +18,14 @@
 // ⚠️ **`DataTable` stays on the screen.** `tableIds.test.ts` reads each table's id as a literal at
 // its tag; a wrapper passing the id through as a variable would read as an unnamed table.
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ClearFilters } from './ClearFilters';
 import { FilterButton, MobileFilterSheet } from './MobileFilterSheet';
 import { ResultCount, TableSpacer, TableToolbar } from './TableToolbar';
-import { resultCount, type ToolbarFilters } from '../../lib/listToolbar';
+import { filterChips, resultCount, type ToolbarFilters } from '../../lib/listToolbar';
+import { clearFilter, type FilterableColumn } from '../../lib/columnFilter';
+import { filterSummaryText } from '../../lib/filterWords';
+import './FilterChips.css';
 
 interface ControlsProps<T> {
   list: ToolbarFilters<T>;
@@ -30,11 +34,23 @@ interface ControlsProps<T> {
   /** Runs as the phone's sheet opens: a server-counted list fetches every column's counts here,
    *  since the sheet shows them all at once (Events). */
   onSheetOpen?: () => void;
+  /** The list is drawn without a header row, so its filters open from one funnel here — all of
+   *  them (`true`), or only the ones that have no column to sit on (Device profiles' category). */
+  menu?: boolean | readonly FilterableColumn<T>[];
 }
 
-/** The filter button, "clear all filters", and the phone's filter sheet. */
-export function FilterControls<T>({ list, labels, onSheetOpen }: ControlsProps<T>) {
+/** The filter button, the chips naming each set filter, "clear all filters", and the phone's
+ *  filter sheet (ADR-228). A list with a header row filters from each column's funnel, so on a
+ *  desktop it gets no button; a list drawn without one passes `menu` and gets a funnel here. */
+export function FilterControls<T>({ list, labels, onSheetOpen, menu }: ControlsProps<T>) {
   const [sheet, setSheet] = useState(false);
+  const sections = {
+    columns: list.filterCols,
+    labels,
+    filters: list.filters,
+    onChange: list.setFilters,
+    counts: list.counts,
+  };
   return (
     <>
       <FilterButton
@@ -44,24 +60,55 @@ export function FilterControls<T>({ list, labels, onSheetOpen }: ControlsProps<T
           onSheetOpen?.();
           setSheet(true);
         }}
+        menu={menu ? { ...sections, columns: menu === true ? list.filterCols : menu } : undefined}
       />
+      <FilterChips list={list} labels={labels} />
       <ClearFilters
         columns={list.filterCols}
         filters={list.filters}
         onClear={list.clear}
         extraActive={list.extraActive}
       />
-      {sheet && (
-        <MobileFilterSheet
-          columns={list.filterCols}
-          filters={list.filters}
-          onChange={list.setFilters}
-          counts={list.counts}
-          labels={labels}
-          onClose={() => setSheet(false)}
-        />
-      )}
+      {sheet && <MobileFilterSheet {...sections} onClose={() => setSheet(false)} />}
     </>
+  );
+}
+
+/** One chip per column that is narrowing the list: its name, what it is set to, and a × that
+ *  clears that column alone. This is where the closed filter-row trigger's job went - saying which
+ *  filters are on - now that the controls open from the headers. */
+function FilterChips<T>({
+  list,
+  labels,
+}: {
+  list: ToolbarFilters<T>;
+  labels: Record<string, string>;
+}) {
+  const { t } = useTranslation('common');
+  const chips = filterChips(list.filterCols, list.filters);
+  if (chips.length === 0) return null;
+  return (
+    <span className="filter-chips">
+      {chips.map((c) => {
+        const name = labels[c.key] ?? c.key;
+        const mark = c.not ? '≠ ' : '';
+        const value = mark + filterSummaryText(c.summary, t);
+        return (
+          <span className="filter-chip" key={c.key} title={`${name}: ${value}`}>
+            <span className="filter-chip-name">{name}</span>
+            <span className="filter-chip-value">{value}</span>
+            <button
+              type="button"
+              className="filter-chip-x"
+              aria-label={t('filter.clearAria', { column: name })}
+              onClick={() => list.setFilters(clearFilter(list.filterCols, list.filters, c.key))}
+            >
+              ✕
+            </button>
+          </span>
+        );
+      })}
+    </span>
   );
 }
 
@@ -88,6 +135,7 @@ export function ListToolbar<T>({
   list,
   labels,
   onSheetOpen,
+  menu,
   count,
   leading,
   tools,
@@ -98,7 +146,7 @@ export function ListToolbar<T>({
   return (
     <TableToolbar>
       {leading}
-      <FilterControls list={list} labels={labels} onSheetOpen={onSheetOpen} />
+      <FilterControls list={list} labels={labels} onSheetOpen={onSheetOpen} menu={menu} />
       {tools}
       <TableSpacer />
       {note}

@@ -106,7 +106,7 @@ test.describe('inside a column filter', () => {
 
   test('the box clears its own term and the popover stays open', async ({ page }) => {
     await page.goto('/events');
-    await expect(page.getByRole('group', { name: 'Column filters' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Filter by Message/ })).toBeVisible();
 
     await page.getByRole('button', { name: /Filter by Message/ }).click();
     const panel = page.getByRole('dialog');
@@ -115,9 +115,8 @@ test.describe('inside a column filter', () => {
     await input.fill(NEEDLE);
     await expect(page, 'the term never reached the URL').toHaveURL(new RegExp(NEEDLE));
 
-    // Two ✕ are on screen and they are different controls: this one empties the box, the one beside
-    // the closed trigger drops the whole condition. The second is `ColumnFilterCell`'s own and
-    // predates this ADR.
+    // Two ✕ are on screen and they are different controls: this one empties the box, the one on
+    // the toolbar's chip drops the whole condition (ADR-228).
     const inBox = panel.getByRole('button', { name: CLEAR });
     await expect(inBox).toHaveCount(1);
     await expect(page.getByRole('button', { name: /Clear the Message filter/ })).toHaveCount(1);

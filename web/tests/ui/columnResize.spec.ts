@@ -5,7 +5,7 @@
 // Why Tier1 and not a unit test: `lib/columnWidths.test.ts` owns the arithmetic, and none of it can
 // say whether the grip is in the right grid track, whether the column actually took the width, or
 // whether **the three grids still agree afterwards**. That last one is the point of this file.
-// `.dt-head`, `.dt-filters` and every `.dt-row` resolve from one template string (ADR-054); a
+// `.dt-head` and every `.dt-row` resolve from one template string (ADR-054); a
 // resize is precisely the edit that can desynchronise them, and the symptom is silent — filter
 // controls slide out from under their headings and nothing throws.
 //
@@ -130,13 +130,12 @@ test('dragging a grip widens its own column and leaves the others where they wer
   );
 });
 
-test('the three grids still resolve to the same tracks after a drag', async ({ page }) => {
+test('the header and the rows still resolve to the same tracks after a drag', async ({ page }) => {
   // 🚨 This is the one that must never go red quietly. `DataTable` builds ONE template string and
-  // hands it to the header, the filter row and every data row; ADR-054 exists because they once
+  // hands it to the header and every data row; ADR-054 exists because they once
   // resolved it to different widths and the last columns were drawn past an unreachable edge.
   await page.goto('/events');
   await expect(page.locator(TABLE).first()).toBeVisible();
-  await expect(page.locator('.dt-filters').first()).toBeVisible();
 
   const grip = page.locator(`${HEAD} .colresize`).first();
   const box = (await grip.boundingBox())!;
@@ -145,13 +144,8 @@ test('the three grids still resolve to the same tracks after a drag', async ({ p
   await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2);
   await page.mouse.up();
 
-  const [head, filters, row] = await Promise.all([
-    tracks(page, HEAD),
-    tracks(page, '.dt-filters'),
-    tracks(page, '.dt-row'),
-  ]);
+  const [head, row] = await Promise.all([tracks(page, HEAD), tracks(page, '.dt-row')]);
   expect(head.split(' ').length).toBeGreaterThan(3);
-  expect(filters, 'the filter row drifted from the header after a resize').toBe(head);
   expect(row, 'the data rows drifted from the header after a resize').toBe(head);
 });
 
@@ -294,13 +288,8 @@ test.describe('the node-detail Interfaces list', () => {
     // thing that distinguishes "the property is applied" from "the fallback is".
     expect(after[0], 'the custom property never reached the grid').toBeGreaterThan(before[0] + 60);
 
-    // Same rule as the DataTable case: one template, three grids (ADR-054).
-    const [head, filters, row] = await Promise.all([
-      tracks(page, '.nd-if-head'),
-      tracks(page, '.nd-if-filters'),
-      tracks(page, '.nd-if-row'),
-    ]);
-    expect(filters, 'the filter row drifted from the header after a resize').toBe(head);
+    // Same rule as the DataTable case: one template, every grid (ADR-054).
+    const [head, row] = await Promise.all([tracks(page, '.nd-if-head'), tracks(page, '.nd-if-row')]);
     expect(row, 'the data rows drifted from the header after a resize').toBe(head);
   });
 });
@@ -319,7 +308,7 @@ test('a phone gets no grips at all', async ({ page }) => {
     localStorage.setItem(
       'yagra_prefs',
       JSON.stringify({
-        state: { theme: 'dark', language: 'en', uiMode: 'auto', filterRowOpen: true },
+        state: { theme: 'dark', language: 'en', uiMode: 'auto' },
         version: 0,
       }),
     );

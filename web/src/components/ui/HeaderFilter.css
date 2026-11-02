@@ -1,0 +1,133 @@
+/* A column's funnel, beside its header label (ADR-228). Quiet until it matters: tertiary at
+   rest, accent with a dot while the column narrows the list. Always drawn rather than revealed on
+   hover, so a touch screen and a keyboard can find it. */
+.hf {
+  display: inline-flex;
+  flex: none;
+}
+
+.hf-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.hf-trigger:hover,
+.hf-trigger.open {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  opacity: 1;
+}
+
+.hf-trigger:focus-visible {
+  outline: none;
+  opacity: 1;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+.hf-trigger.on {
+  color: var(--accent-color);
+  opacity: 1;
+}
+
+.hf-trigger.on::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-color);
+}
+
+/* A header cell that carries a funnel: the label (or its sort button) takes the room, the funnel
+   keeps its own. Shared by DataTable and the hand-built tables. */
+.hcell {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.hcell > .hcell-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hcell.right {
+  justify-content: flex-end;
+}
+
+/* The sort button, shared by DataTable and the hand-built tables (`SortHeaderButton`). */
+/* A sortable header's label is a real <button> inside the header cell (since ADR-228 the cell
+   may also hold a funnel beside it), so it takes the cell's look rather than the platform
+   button's — otherwise the row stops reading as a header row. */
+.dt-h-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.dt-h-sort:hover {
+  color: var(--text-secondary);
+}
+
+.dt-h-sort:focus-visible {
+  /* Focus is a border-color change everywhere else (ui-conventions), but this control has no
+     border to change; an inset ring keeps it visible without shifting the 38px header height. */
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+.dt-h-sort.active {
+  color: var(--accent-color);
+}
+
+/* The inactive arrow stays in the layout rather than appearing on hover: a header that grows a
+   glyph when the pointer touches it shifts its own label, and the affordance is then invisible to
+   anyone driving the table from the keyboard. */
+.dt-h-arrow::after {
+  content: '↕';
+}
+
+.dt-h-arrow[data-dir='asc']::after {
+  content: '▲';
+}
+
+.dt-h-arrow[data-dir='desc']::after {
+  content: '▼';
+}
+
+.dt-h-arrow {
+  font-size: 0.85em;
+  opacity: 0.45;
+}
+
+.dt-h-sort.active .dt-h-arrow {
+  opacity: 1;
+}

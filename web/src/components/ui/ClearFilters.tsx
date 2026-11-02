@@ -33,7 +33,7 @@ interface Props<T> {
   /** The state `onClear` resets to, when that is not the spec defaults. Discovery's endpoints table
    *  is the only one: its default narrows (`monitored: 'unmonitored'`), so without this the button
    *  offered to clear a filter the operator never set — and, on the default view, clearing did not
-   *  change what was on screen. Same object as `FilterButton.baseline` / `useFilterRowVisible`. */
+   *  change what was on screen. Same object as `FilterButton.baseline`. */
   baseline?: FilterState;
 }
 

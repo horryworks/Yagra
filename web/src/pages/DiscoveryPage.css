@@ -87,7 +87,6 @@ html[data-viewport='mobile'] .disco-actions .btn {
    that row's tracks and left every row's columns somewhere other than under their headers. The
    `minmax(0, …)` makes the template the only thing deciding a width. */
 .disco-head,
-.disco-filters,
 .disco-row {
   display: grid;
   grid-template-columns:
@@ -96,11 +95,6 @@ html[data-viewport='mobile'] .disco-actions .btn {
   align-items: center;
   gap: 12px;
   padding: 8px 0;
-}
-
-.disco-filters {
-  padding: 4px 0;
-  border-bottom: var(--border-width) solid var(--border-color);
 }
 
 .disco-head {
@@ -267,16 +261,15 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   margin-top: 8px;
 }
 
-/* ⚠️ ONE declaration, THREE grids — see the note on `.disco-head` above. */
+/* ⚠️ ONE declaration for the header and every row — see the note on `.disco-head` above. */
 .disco-seen-head,
-.disco-seen-filters,
 .disco-seen-row {
   display: grid;
   /* The last three tracks carry the monitoring-setup cell (Detect, then two labelled dropdowns and
      up to two buttons), so they get the room; the MAC is a fixed-width string.
      ⚠️ No `auto` and no bare `fr`: either sizes to its own row's content, and the last track held
-     nothing in the header, the Monitored filter in the filter row and Detect in a data row, so the
-     three grids resolved this template to three different sets of widths. */
+     nothing in the header, the Monitored filter in the filter row (removed by ADR-228) and Detect
+     in a data row, so the grids resolved this template to different sets of widths. */
   grid-template-columns:
     minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.4fr)
     minmax(0, 1.4fr);
@@ -284,10 +277,6 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   gap: 12px;
   padding: 8px 0;
   border-bottom: var(--border-width) solid var(--border-color);
-}
-
-.disco-seen-filters {
-  padding: 4px 0;
 }
 
 .disco-seen-row {

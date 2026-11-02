@@ -27,9 +27,8 @@
   gap: 8px;
 }
 
-/* The drill-down bar itself is the shared `.fbar` (ADR-053 Inc.8) and needs no rules here. The
-   hand-rolled selects and chip row it replaced are gone: what each filter holds is now the cell's
-   own trigger summary, and removing one value is the ✕ inside it. */
+/* The drill-down filters open from the toolbar's funnel and are named by its chips (ADR-228), so
+   they need no rules here. */
 
 /* Clickable IP in the conversations table — reset the button chrome, keep the mono cell look.
    Stacks the IP over its AS sub-line (mirrors the Sankey label). */

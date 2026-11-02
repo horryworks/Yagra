@@ -14,6 +14,8 @@ import {
   type FilterableColumn,
 } from './columnFilter';
 import type { FilterParams } from './useFilterParams';
+import { summarize, summaryIsActive } from './filterSummary';
+import type { SetSummary } from './filterWords';
 
 /** What a toolbar needs to know about a list's filters. `useClientFilters`' result is one as it
  *  stands; a server-filtered list builds one with `serverToolbarFilters`. */
@@ -92,7 +94,11 @@ export function resultCount(i: {
 export function serverToolbarFilters<T>(
   filterCols: readonly FilterableColumn<T>[],
   params: Pick<FilterParams, 'filters' | 'setFilters'>,
-  extra?: { active: boolean; clear: (p: URLSearchParams) => void; onClear?: () => void },
+  extra?: {
+    active: boolean;
+    clear: (p: URLSearchParams) => void;
+    onClear?: () => void;
+  },
   counts?: Record<string, Record<string, number>>,
 ): ToolbarFilters<T> {
   return {
@@ -107,4 +113,30 @@ export function serverToolbarFilters<T>(
     anyFiltered: isAnyFiltered(filterCols, params.filters) || !!extra?.active,
     extraActive: extra?.active,
   };
+}
+
+/** One filter that is narrowing the list, as the toolbar's chip names it (ADR-228). */
+export interface FilterChip {
+  key: string;
+  summary: SetSummary;
+  /** A negated text condition: the chip prefixes `≠`, as the old row trigger drew it. */
+  not: boolean;
+}
+
+/**
+ * The chips, in column order: every column whose filter the operator set. A range at its default
+ * is not one — it narrows, but nobody set it, and a chip whose ✕ changes nothing is a lie
+ * (`summaryIsActive` makes the same call for the trigger's clear button).
+ */
+export function filterChips<T>(
+  columns: readonly FilterableColumn<T>[],
+  filters: FilterState,
+): FilterChip[] {
+  return columns.flatMap((c) => {
+    const value = filters[c.key] ?? '';
+    if (!summaryIsActive(c.filter, value)) return [];
+    const summary = summarize(c.filter, value);
+    if (summary.kind === 'none') return [];
+    return [{ key: c.key, summary, not: summary.kind === 'text' && summary.not }];
+  });
 }
