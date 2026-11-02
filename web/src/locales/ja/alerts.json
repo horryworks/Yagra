@@ -98,5 +98,10 @@
       "none": "一致なし"
     },
     "emptyNodeWindow": "このノードから過去 24 時間に受信したイベントはありません。"
+  },
+  "watch": {
+    "silenced": "黙らせ中 {{count}} 件",
+    "maintenance": "保守中 {{count}} 台",
+    "notWatched": "見ていない {{count}} 台"
   }
 }

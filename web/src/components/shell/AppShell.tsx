@@ -31,6 +31,7 @@ import { TroubleshootToast } from '../../troubleshoot/TroubleshootToast';
 import { useAlertStream } from '../../hooks/useAlertStream';
 import { useConfigChangeStream } from '../../lib/configChanges';
 import { usePrefsStore } from '../../prefs';
+import { NothingPolledBanner } from './NothingPolledBanner';
 import './AppShell.css';
 
 export function AppShell() {
@@ -70,6 +71,7 @@ export function AppShell() {
       <div className="shell">
         <MobileTopBar onOpenMenu={() => setDrawerOpen(true)} />
         <main className="shell-content shell-content--mobile">
+          <NothingPolledBanner />
           <Outlet key={zoneKey} />
         </main>
         <MobileNavDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
@@ -84,6 +86,7 @@ export function AppShell() {
       <div className="shell-body">
         <SideBar />
         <main className="shell-content">
+          <NothingPolledBanner />
           <Outlet key={zoneKey} />
         </main>
       </div>

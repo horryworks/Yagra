@@ -32,6 +32,9 @@ import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { AlertRows } from '../widgets/AlertRows';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useFleetSummary } from '../dashboard/useFleetSummary';
+import { useFleetWatch } from '../hooks/useFleetWatch';
+import { watchChips } from '../lib/watchCounts';
+import { WatchChips } from '../widgets/WatchChips';
 import { addNodeHref } from '../lib/treeSelection';
 import {
   activeAlertColumns,
@@ -113,6 +116,16 @@ export function ActiveAlertsPage() {
   // `total` is null-safe — until the summary arrives the ordinary empty sentence stands.
   const { summary } = useFleetSummary();
   const noNodes = summary?.total === 0;
+  // What this list is not seeing (ADR-227). `?silenced=1` narrows it to the silenced rows; it is
+  // in the URL beside the other filters so a link to "what are we holding back" can be pasted.
+  const watch = useFleetWatch();
+  const onlySilenced = params.get('silenced') === '1';
+  const toggleSilenced = useCallback(() => {
+    const p = new URLSearchParams(params);
+    if (onlySilenced) p.delete('silenced');
+    else p.set('silenced', '1');
+    setParams(p, { replace: true });
+  }, [onlySilenced, params, setParams]);
   const canExplain = rcaEnabled && canSuppress;
 
   return (
@@ -142,11 +155,12 @@ export function ActiveAlertsPage() {
           ) : undefined
         }
         emptyFiltered={t('active.emptyFiltered')}
+        onlySilenced={onlySilenced}
         // The toolbar is a slot of the list rather than a sibling because the counts come from the
         // sorted-and-filtered set, which only the list has. Fixed order (design-system §4.1):
         // search → filters → spacer → count → primary action (there is no primary action here — creating
         // an alert is not a thing an operator does).
-        toolbar={({ shown, total, nameOf, rows }) => {
+        toolbar={({ shown, total, nameOf, rows, silenced }) => {
           // Built here, with the resolver the list already owns. `severity` / `state` / `ack` never
           // read the free-text column's strings, so this costs no name resolution unless something
           // is typed — the property `buildPredicate` gives for free and the old hand-written
@@ -176,6 +190,15 @@ export function ActiveAlertsPage() {
                 filters={filters}
                 onChange={setFilters}
                 counts={counts}
+              />
+              <WatchChips
+                chips={watchChips({
+                  silenced,
+                  maintenance: summary?.states.maintenance ?? 0,
+                  watch,
+                })}
+                onlySilenced={onlySilenced}
+                onToggleSilenced={toggleSilenced}
               />
             </>
           );

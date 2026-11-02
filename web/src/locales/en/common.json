@@ -175,5 +175,8 @@
     "stored": "Stored",
     "replace": "Replace",
     "keep": "Keep stored"
+  },
+  "watch": {
+    "nothingPolled": "No poller is running. Nothing is being monitored — <lnk/>"
   }
 }

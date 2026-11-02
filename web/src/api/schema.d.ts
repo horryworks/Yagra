@@ -1420,6 +1420,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/fleet/watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many of the caller's nodes are not being watched — their pool has no live poller, or they
+         *     have reported nothing recently.
+         */
+        get: operations["fleet_watch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/flow/conversations": {
         parameters: {
             query?: never;
@@ -8922,6 +8942,29 @@ export interface components {
             };
             /** Format: int64 */
             total: number;
+        };
+        /**
+         * @description How many of the caller's nodes are not being watched right now, and why.
+         *
+         *     Counts only — no node names and no pool names, so it answers "is this quiet screen quiet because
+         *     nothing is wrong?" without becoming a second inventory. Each node is counted once; the pool
+         *     reason wins over the data reason.
+         */
+        FleetWatch: {
+            /** @description Nodes polled through a pool that has no live poller. Their jobs are published to nobody. */
+            no_live_poller: number;
+            /** @description Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`. */
+            no_recent_data: number;
+            /**
+             * @description Whether this core can see poller liveness. `false` on an HA standby, which runs no
+             *     coordinator: `no_live_poller` is then `0` because it is unknown, not because it is fine.
+             */
+            pollers_known: boolean;
+            /**
+             * @description Of the caller's nodes, how many are polled through a pool at all (Meraki devices are not).
+             *     `no_live_poller == pool_polled` and above zero means nothing the caller can see is polled.
+             */
+            pool_polled: number;
         };
         /**
          * @description An autonomous-system aggregate. `asn = 0` means unknown (the UI labels it accordingly). `name`
@@ -21754,6 +21797,53 @@ export interface operations {
             };
             /** @description Role lacks the view permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    fleet_watch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts of the caller's nodes that are not being watched, by reason */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetWatch"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the view permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no inventory to count */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

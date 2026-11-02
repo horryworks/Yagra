@@ -6821,6 +6821,57 @@
         }
       }
     },
+    "/api/v1/fleet/watch": {
+      "get": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "How many of the caller's nodes are not being watched — their pool has no live poller, or they\nhave reported nothing recently.",
+        "operationId": "fleet_watch",
+        "responses": {
+          "200": {
+            "description": "Counts of the caller's nodes that are not being watched, by reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetWatch"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the view permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no inventory to count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/flow/conversations": {
       "get": {
         "tags": [
@@ -34720,6 +34771,37 @@
           "total": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "FleetWatch": {
+        "type": "object",
+        "description": "How many of the caller's nodes are not being watched right now, and why.\n\nCounts only — no node names and no pool names, so it answers \"is this quiet screen quiet because\nnothing is wrong?\" without becoming a second inventory. Each node is counted once; the pool\nreason wins over the data reason.",
+        "required": [
+          "no_live_poller",
+          "no_recent_data",
+          "pool_polled",
+          "pollers_known"
+        ],
+        "properties": {
+          "no_live_poller": {
+            "type": "integer",
+            "description": "Nodes polled through a pool that has no live poller. Their jobs are published to nobody.",
+            "minimum": 0
+          },
+          "no_recent_data": {
+            "type": "integer",
+            "description": "Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`.",
+            "minimum": 0
+          },
+          "pollers_known": {
+            "type": "boolean",
+            "description": "Whether this core can see poller liveness. `false` on an HA standby, which runs no\ncoordinator: `no_live_poller` is then `0` because it is unknown, not because it is fine."
+          },
+          "pool_polled": {
+            "type": "integer",
+            "description": "Of the caller's nodes, how many are polled through a pool at all (Meraki devices are not).\n`no_live_poller == pool_polled` and above zero means nothing the caller can see is polled.",
+            "minimum": 0
           }
         }
       },

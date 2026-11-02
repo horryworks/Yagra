@@ -1,0 +1,43 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.watch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.watch-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-sm);
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.watch-chip:hover {
+  border-color: var(--accent-color);
+}
+
+.watch-chip:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.watch-chip[aria-pressed='true'] {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+@media (hover: none) {
+  .watch-chip {
+    min-height: var(--touch-target, 44px);
+  }
+}

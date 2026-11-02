@@ -7,7 +7,7 @@
 //! model picks worse from a longer list. That fold creates a problem the ADR did not anticipate:
 //! **the endpoints behind one tool do not share a permission.**
 //!
-//! The measured spread across the routes folded here is `View` ×51, `ManageConfig` ×14,
+//! The measured spread across the routes folded here is `View` ×52, `ManageConfig` ×14,
 //! `ManageSystem` ×9, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
 //! two that are deliberately unauthenticated over REST. Picking one permission for the whole tool
 //! fails in both directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
@@ -458,6 +458,16 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "coverage",
         method: "GET",
         path: "/api/v1/fleet/coverage",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_fleet_summary",
+        arg: "watch",
+        method: "GET",
+        path: "/api/v1/fleet/watch",
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,

@@ -31,6 +31,7 @@ use yagra_common::{NodeId, NodeKind, NodeState};
     fleet_summary,
     fleet_group_summary,
     fleet_coverage,
+    fleet_watch,
     fleet_state_history
 ))]
 pub(super) struct Doc;
@@ -41,6 +42,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/fleet/summary", get(fleet_summary))
         .route("/api/v1/fleet/group-summary", get(fleet_group_summary))
         .route("/api/v1/fleet/coverage", get(fleet_coverage))
+        .route("/api/v1/fleet/watch", get(fleet_watch))
         .route("/api/v1/fleet/state-history", get(fleet_state_history))
 }
 
@@ -285,7 +287,11 @@ pub(crate) async fn group_summary(
 /// interval per node would pull the scheduler's resolver into a rollup, and the flat window's known
 /// wrong answer — a node polled less often than this always reads stale — predates the per-kind
 /// work and is unchanged by it (ADR-059).
-const COVERAGE_FRESH_SECS: u64 = 600;
+///
+/// The same window as the display-state fallback, by construction rather than by coincidence: the
+/// two were separate `600`s, and a node read `ok` on the Nodes page while this called it stale the
+/// moment one of them moved (ADR-227).
+const COVERAGE_FRESH_SECS: u64 = crate::runtime::node_display::FALLBACK_FRESH_SECS;
 /// Cap on the returned watchlist. A fleet that is 90% stale has a systemic problem, not 40,000
 /// individual ones, so the first 50 names are as much as a human can act on.
 const STALE_WATCHLIST_MAX: usize = 50;
@@ -400,6 +406,98 @@ pub(crate) async fn coverage(
         .into_iter()
         .collect();
     Ok(coverage_of(nodes, &fresh_ids))
+}
+
+// ── What is not being watched (ADR-227) ──────────────────────────────────────
+
+/// How many of the caller's nodes are not being watched right now, and why.
+///
+/// Counts only — no node names and no pool names, so it answers "is this quiet screen quiet because
+/// nothing is wrong?" without becoming a second inventory. Each node is counted once; the pool
+/// reason wins over the data reason.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct FleetWatch {
+    /// Nodes polled through a pool that has no live poller. Their jobs are published to nobody.
+    pub no_live_poller: usize,
+    /// Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`.
+    pub no_recent_data: usize,
+    /// Of the caller's nodes, how many are polled through a pool at all (Meraki devices are not).
+    /// `no_live_poller == pool_polled` and above zero means nothing the caller can see is polled.
+    pub pool_polled: usize,
+    /// Whether this core can see poller liveness. `false` on an HA standby, which runs no
+    /// coordinator: `no_live_poller` is then `0` because it is unknown, not because it is fine.
+    pub pollers_known: bool,
+}
+
+/// Count what is not being watched. Shared by `GET /api/v1/fleet/watch` and the MCP
+/// `get_fleet_summary(kind="watch")` tool.
+///
+/// Shown at once, unlike the pool coverage alert, which waits five minutes before it pages
+/// (`pool_coverage::DEFAULT_RAISE_AFTER`): a number on a screen pages nobody, so there is nothing to
+/// debounce, and a poller restart showing for a few seconds is a true reading.
+pub(crate) async fn watch(
+    st: &ApiState,
+    admin: &super::AdminState,
+    scope: &NodeScope,
+) -> Result<FleetWatch, ApiError> {
+    use crate::fleet::pool_coverage as pc;
+    let internal = |e: anyhow::Error| {
+        ApiError::from_internal(e.as_ref(), "fleet watch", "failed to count unwatched nodes")
+    };
+    let all = admin.repo.list_nodes().await.map_err(internal)?;
+    let meraki = admin.meraki_devices.node_ids().await.map_err(internal)?;
+    let resolver = super::util::pool_resolver(admin).await;
+    let pollers_known = st.is_leader.load(std::sync::atomic::Ordering::Acquire);
+    // Coverage is a fact about the whole pool, so it is judged over the whole inventory; only the
+    // count below is narrowed to what the caller may see.
+    let uncovered = pollers_known.then(|| {
+        let polled: Vec<_> = all
+            .iter()
+            .filter(|n| pc::is_pool_polled(n, &meraki))
+            .cloned()
+            .collect();
+        pc::uncovered_pools(
+            &admin.coordinator.poller_views(std::time::Instant::now()),
+            &pc::count_by_pool(&polled, &resolver),
+        )
+    });
+    let visible: Vec<_> = all
+        .into_iter()
+        .filter(|n| scope.allows_group(n.group.map(|g| g.as_uuid())))
+        .collect();
+    let fresh: HashSet<Uuid> = st
+        .store
+        .fresh_node_ids(&NodeKind::LIVENESS_METRICS, COVERAGE_FRESH_SECS)
+        .await
+        .into_iter()
+        .collect();
+    let n = pc::not_watched(&visible, &meraki, &resolver, uncovered.as_ref(), &fresh);
+    Ok(FleetWatch {
+        no_live_poller: n.no_live_poller,
+        no_recent_data: n.no_recent_data,
+        pool_polled: n.pool_polled,
+        pollers_known,
+    })
+}
+
+/// How many of the caller's nodes are not being watched — their pool has no live poller, or they
+/// have reported nothing recently.
+#[utoipa::path(
+    get, path = "/api/v1/fleet/watch", tag = "fleet",
+    responses(
+        (status = 200, description = "Counts of the caller's nodes that are not being watched, by reason", body = FleetWatch),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no inventory to count", body = super::error::ErrorBody),
+    ),
+)]
+async fn fleet_watch(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    State(st): State<ApiState>,
+) -> ApiResult<Json<FleetWatch>> {
+    Ok(Json(watch(&st, &admin, &scope).await?))
 }
 
 // ── State timeline ───────────────────────────────────────────────────────────

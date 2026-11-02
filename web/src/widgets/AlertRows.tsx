@@ -28,6 +28,7 @@ import { sortedAlerts, useAlertStore } from '../store';
 import { EntityName } from '../components/ui/EntityName';
 import { nodeHref } from '../lib/entityHref';
 import { muteCovering } from '../lib/suppression';
+import { isSilenced } from '../lib/watchCounts';
 import { useMuteLists } from './useMuteLists';
 import { useHeldNotifications } from './useHeldNotifications';
 import { heldFireFor } from '../pages/deliveryHours';
@@ -70,6 +71,8 @@ type ToolbarSlot = (ctx: {
   total: number;
   nameOf: NameOf;
   rows: SortedAlert[];
+  /** Rows a mute or a root cause is silencing, over the unfiltered set (ADR-227). */
+  silenced: number;
 }) => ReactNode;
 
 interface Props {
@@ -83,6 +86,8 @@ interface Props {
    *  and only here — because the whole set is in the browser; a server-side list must key its empty
    *  state off the filter instead (`lib/filterQuery.ts`). */
   emptyFiltered?: ReactNode;
+  /** Draw only the rows a mute or a root cause is silencing (ADR-227). */
+  onlySilenced?: boolean;
 }
 
 
@@ -261,7 +266,15 @@ function VirtualAlertRows({
   );
 }
 
-export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltered }: Props) {
+export function AlertRows({
+  limit,
+  actions,
+  filter,
+  toolbar,
+  empty,
+  emptyFiltered,
+  onlySilenced,
+}: Props) {
   const { t } = useTranslation('alerts');
   const alerts = useAlertStore((s) => s.alerts);
   // One resolver for the whole list. `nodeName` enqueues only the ids the current render actually
@@ -296,10 +309,15 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
   // Filter after sorting, before windowing — the virtualizer must count only the rows that will be
   // drawn. Recomputes when `nodeName` gains a batch of resolutions, which is what lets a search on
   // a node name settle rather than matching only the ids resolved so far.
-  const shown = useMemo(
-    () => (filter ? all.filter(filter(nodeName)) : all),
-    [all, filter, nodeName],
+  const silencedOf = useCallback(
+    (a: SortedAlert) => isSilenced(a, muteOf(a) !== null),
+    [muteOf],
   );
+  const silenced = useMemo(() => all.filter(silencedOf).length, [all, silencedOf]);
+  const shown = useMemo(() => {
+    const base = filter ? all.filter(filter(nodeName)) : all;
+    return onlySilenced ? base.filter(silencedOf) : base;
+  }, [all, filter, nodeName, onlySilenced, silencedOf]);
 
   const body =
     all.length === 0 ? (
@@ -322,7 +340,7 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
   if (!toolbar) return body;
   return (
     <>
-      {toolbar({ shown: shown.length, total: all.length, nameOf: nodeName, rows: all })}
+      {toolbar({ shown: shown.length, total: all.length, nameOf: nodeName, rows: all, silenced })}
       {body}
     </>
   );

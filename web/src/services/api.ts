@@ -69,6 +69,7 @@ import type {
   FleetCoverage,
   FleetGroupSummary,
   FleetSummary,
+  FleetWatch,
   FlowAsAgg,
   FlowConversation,
   FlowFilters,
@@ -2362,6 +2363,9 @@ export const api = {
 
   /** Fleet data coverage + the stale-data watchlist (silent/blind-spot nodes). */
   getFleetCoverage: (): Promise<FleetCoverage> => apiGet('/api/v1/fleet/coverage'),
+
+  /** How many of the caller's nodes are not being watched right now, by reason (ADR-227). */
+  getFleetWatch: (): Promise<FleetWatch> => apiGet('/api/v1/fleet/watch'),
 
   /** Node-state counts over time (fleet health timeline; default last 24h). */
   getStateHistory: (opts?: { from?: number; to?: number }): Promise<StateHistory> =>

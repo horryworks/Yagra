@@ -16,6 +16,8 @@
 - **フォルダにタイムゾーンを持たせられるようになった。** ノードは、上にあるフォルダのうち一番近いもののタイムゾーンで時間割を読む。どこにも無ければ配備の既定（節の横で選ぶ。選ぶまでは UTC）。NetBox の Site のタイムゾーンは同期が取り込み、そのフォルダでは読み取り専用で出る。
 - 通知を保留しているアクティブアラートの行に **… まで保留中** と出る。`list_suppressions` が保留中の通知も返す。
 - `GET/POST /api/v1/delivery-hours`・`PUT/DELETE /api/v1/delivery-hours/{id}`・`PUT /api/v1/delivery-hours/default-time-zone`（ManageSystem。知らないゾーンは `400 invalid_time_zone`）、`GET /api/v1/held-notifications`（View。見えるものだけ）、`PUT /api/v1/node-groups/{id}/time-zone`（ManageConfig。NetBox が決めている間は `409 time_zone_from_netbox`）。フォルダに `time_zone`・`netbox_time_zone`・`effective_time_zone` が増えた。`get_config` が `kind=delivery_hours` を受ける。
+- **静かなアラート一覧が、見えていない分を数字で出すようになった。** Alerts ▸ アクティブなアラート の上に、0 より大きいものだけ数字が出る。**黙らせ中**（ミュートか上流の障害で抑えている行。押すとその行だけになる）、**保守中**（台数）、**見ていない**（ポーラーのプールに動いているポーラーが無いノードと、10 分間何も報告していないノード）。見えるノードがどれもポーリングされていないときは、どの画面でも上に 1 文と Settings ▸ Pollers へのリンクが出る。プールのアラートは通知まで 5 分待つが、こちらはすぐに出る。
+- `GET /api/v1/fleet/watch`（View。呼んだ人に見えるノードだけを数える）が `no_live_poller`・`no_recent_data`・`pool_polled`・`pollers_known`（HA の待機側ではポーラーの生死が分からないので `false`）を返す。`get_fleet_summary` が `kind=watch` で同じ数を返す。
 
 ## v0.3.66 — ノードごとの稼働状況を概要タブで見られる。Config backups の一覧からオン・オフできる。戻った機器を通知し直さない
 

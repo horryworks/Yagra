@@ -67,7 +67,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
   alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
   auth: [79, 43],
-  common: [749, 401],
+  common: [806, 438], // + watch.nothingPolled, the shell state sentence when no poller is live (ADR-227, 2026-11-02)
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],

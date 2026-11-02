@@ -30,6 +30,7 @@ use super::*;
 pub(super) enum FleetSummaryKind {
     Summary,
     Coverage,
+    Watch,
 }
 
 /// Resolve the `kind` argument, or `None` for one that names neither view.
@@ -42,6 +43,7 @@ pub(super) fn fleet_summary_kind(kind: Option<&str>) -> Option<FleetSummaryKind>
     match kind {
         None | Some("summary") => Some(FleetSummaryKind::Summary),
         Some("coverage") => Some(FleetSummaryKind::Coverage),
+        Some("watch") => Some(FleetSummaryKind::Watch),
         Some(_) => None,
     }
 }
@@ -61,7 +63,7 @@ pub(super) fn bad_fleet_summary_kind(kind: Option<&str>) -> Result<CallToolResul
     tool_bad_params(
         "get_fleet_summary",
         &format!(
-            "unknown kind {:?}; must be summary or coverage",
+            "unknown kind {:?}; must be summary, coverage or watch",
             kind.unwrap_or_default()
         ),
     )
@@ -71,7 +73,8 @@ pub(super) fn bad_fleet_summary_kind(kind: Option<&str>) -> Result<CallToolResul
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct FleetSummaryParams {
-    /// `summary` (default) for the state tally, or `coverage` for the monitoring blind-spot view.
+    /// `summary` (default) for the state tally, `coverage` for the monitoring blind-spot view, or
+    /// `watch` for how many nodes are not being watched right now and why.
     pub(super) kind: Option<String>,
 }
 
@@ -162,7 +165,10 @@ impl YagraMcp {
                        (ok/warning/critical/unknown/unreachable/maintenance), the number of active \
                        alerts, and which optional data tiers (metrics/flow/log) are enabled. Start here. \
                        Pass kind=\"coverage\" instead for the blind-spot view — which nodes have \
-                       actually reported recently, and a watchlist of the ones that have not."
+                       actually reported recently, and a watchlist of the ones that have not. \
+                       Pass kind=\"watch\" for counts of nodes not being watched right now: \
+                       no_live_poller (their poller pool has no live poller), no_recent_data, \
+                       pool_polled, and pollers_known (false on an HA standby)."
     )]
     async fn get_fleet_summary(
         &self,
@@ -195,6 +201,22 @@ impl YagraMcp {
         match kind {
             FleetSummaryKind::Summary => self.fleet_summary_in(scope).await,
             FleetSummaryKind::Coverage => self.fleet_coverage_in(scope).await,
+            FleetSummaryKind::Watch => self.fleet_watch_in(scope).await,
+        }
+    }
+
+    /// The watch branch (ADR-227): the same counts the Active alerts page shows above its list.
+    pub(super) async fn fleet_watch_in(
+        &self,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_fleet_summary";
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "watch requires live mode");
+        };
+        match crate::api::fleet::watch(&self.state, admin, scope).await {
+            Ok(w) => ok_json(TOOL, &w),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1164,6 +1186,10 @@ mod tests {
         assert_eq!(
             fleet_summary_kind(Some("summary")),
             Some(FleetSummaryKind::Summary)
+        );
+        assert_eq!(
+            fleet_summary_kind(Some("watch")),
+            Some(FleetSummaryKind::Watch)
         );
         assert_eq!(
             fleet_summary_kind(Some("coverage")),

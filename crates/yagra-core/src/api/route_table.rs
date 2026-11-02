@@ -760,6 +760,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         PostFiltered,
         Tool("get_fleet_summary"),
     ),
+    (
+        "GET",
+        "/api/v1/fleet/watch",
+        GroupFiltered,
+        Tool("get_fleet_summary"),
+    ),
     // The six fleet-wide flow aggregations. `top_flows` takes an optional `node_id` and mirrors the
     // REST refusal for a group-scoped caller when it is omitted (ADR-042 I1).
     (

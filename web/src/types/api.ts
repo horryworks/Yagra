@@ -1596,6 +1596,7 @@ export type FleetCoverage = components['schemas']['FleetCoverage'];
  *  computed server-side so the dashboard's status/health/down widgets are correct over the whole
  *  fleet (not a paged slice). Every state key is present and the counts sum to `total`. */
 export type FleetSummary = components['schemas']['FleetSummary'];
+export type FleetWatch = components['schemas']['FleetWatch'];
 
 /** Per-group health rollup (`GET /api/v1/fleet/group-summary`): for each group id, the state tally
  *  of its **direct** member nodes, computed server-side over the whole fleet (not a paged slice) so

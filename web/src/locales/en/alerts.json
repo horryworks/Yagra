@@ -98,5 +98,10 @@
       "none": "unmatched"
     },
     "emptyNodeWindow": "No events from this node in the last 24 hours."
+  },
+  "watch": {
+    "silenced": "Silenced {{count}}",
+    "maintenance": "In maintenance {{count}}",
+    "notWatched": "Not watched {{count}}"
   }
 }

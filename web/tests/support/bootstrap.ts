@@ -71,6 +71,16 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // account with no pins is the honest start; `treePinned.spec.ts` brings its own.
   '/api/v1/pins': { group_ids: [], nodes: [] } satisfies Schemas['Pins'] as unknown as Json,
 
+  // What is not being watched (ADR-227). The generator answers every integer with `1`, which reads
+  // as "the one pool-polled node has no live poller" — the shell's nothing-is-polled sentence on
+  // every screen the walk visits. A fleet that is fully watched is the honest start.
+  '/api/v1/fleet/watch': {
+    no_live_poller: 0,
+    no_recent_data: 0,
+    pool_polled: 1,
+    pollers_known: true,
+  } satisfies Schemas['FleetWatch'] as unknown as Json,
+
   // The sweep limit (ADR-219). The generator answers every integer with `1`, so the Discovery page
   // would read a one-address limit and mark its pre-filled targets as over it — a deployment no
   // one ships. 4096 and its band are what a fresh database answers.

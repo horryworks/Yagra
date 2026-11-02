@@ -18,7 +18,7 @@
 //! `PoolSummary.warning` is derived from the same function — so the pill an operator sees and the
 //! page they receive cannot disagree.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use std::sync::Arc;
@@ -199,8 +199,75 @@ pub async fn pool_dependent_nodes(
         .list_nodes()
         .await?
         .into_iter()
-        .filter(|n| !meraki_ids.contains(&n.id.as_uuid()))
+        .filter(|n| is_pool_polled(n, &meraki_ids))
         .collect())
+}
+
+/// Whether `node`'s polling depends on a pool poller: everything but a Meraki-managed node. The
+/// one spelling of the exclusion described on [`pool_dependent_nodes`], for a caller that already
+/// holds the inventory and the Meraki ids.
+#[must_use]
+pub fn is_pool_polled(node: &Node, meraki_ids: &HashSet<uuid::Uuid>) -> bool {
+    !meraki_ids.contains(&node.id.as_uuid())
+}
+
+/// The pools that have nodes and no live poller — [`PoolCoverage::is_uncovered`] over a whole
+/// coverage sample, as a set. Pure.
+#[must_use]
+pub fn uncovered_pools(
+    live: &[PollerView],
+    node_pools: &HashMap<String, usize>,
+) -> HashSet<String> {
+    coverage(live, node_pools, &[])
+        .into_iter()
+        .filter(PoolCoverage::is_uncovered)
+        .map(|c| c.pool)
+        .collect()
+}
+
+/// How many nodes are not being watched, and why (ADR-227).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NotWatched {
+    /// Pool-polled nodes whose pool has no live poller.
+    pub no_live_poller: usize,
+    /// Nodes with no recent liveness sample, not already counted in `no_live_poller`.
+    pub no_recent_data: usize,
+    /// Of the nodes counted, how many depend on a pool poller at all.
+    pub pool_polled: usize,
+}
+
+/// Count the nodes in `nodes` that are not being watched. Pure.
+///
+/// A node is counted **once**, and the pool reason wins: a node whose pool has no live poller has
+/// no recent data either, and saying so twice would make the two numbers add up to more nodes than
+/// there are. `uncovered` is `None` when this core cannot see poller liveness (an HA standby runs
+/// no coordinator); the pool reason is then never given, rather than given for every node.
+///
+/// ⚠️ This is a display count and nothing acts on it. It must never close or raise an alert —
+/// absence is not evidence (ADR-156 decision 3).
+#[must_use]
+pub fn not_watched(
+    nodes: &[Node],
+    meraki_ids: &HashSet<uuid::Uuid>,
+    resolver: &PoolResolver,
+    uncovered: Option<&HashSet<String>>,
+    fresh: &HashSet<uuid::Uuid>,
+) -> NotWatched {
+    let mut out = NotWatched::default();
+    for n in nodes {
+        let polled = is_pool_polled(n, meraki_ids);
+        if polled {
+            out.pool_polled += 1;
+            if uncovered.is_some_and(|u| u.contains(resolver.resolve_pool(n))) {
+                out.no_live_poller += 1;
+                continue;
+            }
+        }
+        if !fresh.contains(&n.id.as_uuid()) {
+            out.no_recent_data += 1;
+        }
+    }
+    out
 }
 
 /// The watch loop's last successful node count, with the config generation it was read at.
@@ -1000,6 +1067,88 @@ mod tests {
             count_by_pool(&nodes, &resolver),
             counts(&[("siteA", 2), ("siteB", 1), ("default", 1)])
         );
+    }
+
+    fn pooled(pool: &str) -> Node {
+        let mut n = Node::new(
+            yagra_common::NodeId::new(),
+            "n",
+            std::net::IpAddr::from([10, 0, 0, 1]),
+        );
+        n.pool = Some(pool.to_owned());
+        n
+    }
+
+    #[test]
+    fn only_pools_with_nodes_and_no_live_poller_are_uncovered() {
+        let live = [view("p1", "osaka", true), view("p2", "nagoya", false)];
+        let got = uncovered_pools(&live, &counts(&[("tokyo", 3), ("osaka", 2), ("nagoya", 1)]));
+        assert_eq!(
+            got,
+            ["tokyo", "nagoya"]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect()
+        );
+    }
+
+    #[test]
+    fn a_node_in_an_uncovered_pool_is_counted_once_and_for_the_pool() {
+        let (dark, lit_fresh, lit_stale) = (pooled("tokyo"), pooled("osaka"), pooled("osaka"));
+        let fresh: HashSet<uuid::Uuid> = [lit_fresh.id.as_uuid()].into();
+        let uncovered: HashSet<String> = ["tokyo".to_owned()].into();
+        let got = not_watched(
+            &[dark, lit_fresh, lit_stale],
+            &HashSet::new(),
+            &PoolResolver::empty(),
+            Some(&uncovered),
+            &fresh,
+        );
+        // `dark` has no fresh data either; counting it twice would add up to four of three nodes.
+        assert_eq!(
+            got,
+            NotWatched {
+                no_live_poller: 1,
+                no_recent_data: 1,
+                pool_polled: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn a_meraki_node_is_never_blamed_on_a_pool() {
+        let m = pooled("tokyo");
+        let meraki: HashSet<uuid::Uuid> = [m.id.as_uuid()].into();
+        let uncovered: HashSet<String> = ["tokyo".to_owned()].into();
+        let got = not_watched(
+            &[m],
+            &meraki,
+            &PoolResolver::empty(),
+            Some(&uncovered),
+            &HashSet::new(),
+        );
+        assert_eq!(
+            got,
+            NotWatched {
+                no_live_poller: 0,
+                no_recent_data: 1,
+                pool_polled: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn a_core_that_cannot_see_pollers_never_gives_the_pool_reason() {
+        let n = pooled("tokyo");
+        let got = not_watched(
+            &[n],
+            &HashSet::new(),
+            &PoolResolver::empty(),
+            None,
+            &HashSet::new(),
+        );
+        assert_eq!(got.no_live_poller, 0);
+        assert_eq!(got.no_recent_data, 1);
     }
 
     use yagra_base::pgtest;
