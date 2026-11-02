@@ -15,7 +15,7 @@
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
 //! anything else. ADR-042 decision 2 declined a `Permission` column on the 244-row ledger because
-//! nothing could check it; that reasoning holds there and not here — over these 81 rows the
+//! nothing could check it; that reasoning holds there and not here — over these 82 rows the
 //! permission is a value a test can compare against the REST handler's own extractor, and
 //! [`tests::every_folded_read_demands_what_its_rest_route_demands`] does exactly that.
 //!
