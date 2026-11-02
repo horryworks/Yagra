@@ -28,6 +28,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { classificationRuleFilters } from './classificationFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
@@ -75,6 +76,7 @@ export function ClassificationRulesPage() {
     const cols: Column<ClassificationRule>[] = [
       {
         key: 'priority',
+        sortValue: (r) => r.priority,
         header: t('rules.cols.priority'),
         width: '90px',
         render: (r) => <span className="mono">{r.priority}</span>,
@@ -158,6 +160,7 @@ export function ClassificationRulesPage() {
   // URL-backed: one table on this route, so a narrowed view is linkable.
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div>
@@ -187,8 +190,10 @@ export function ClassificationRulesPage() {
 
         <DataTable
           tableId="nodes.classification"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           rowKey={(r) => r.id}
           filters={filters}
           onFiltersChange={setFilters}

@@ -42,6 +42,9 @@ export interface Column<T> {
    *  unbounded value space must not offer a value list at all. `source_ip` is the named example —
    *  ADR-024 calls it out — and a facet query over it would enumerate the internet. */
   filter?: ColumnFilterSpec<T>;
+  /** What this column orders by on a browser-held list, when its `filter` does not say (ADR-228
+   *  Inc.2, `lib/clientSort.ts`). Read by `useClientSort`, never by this component. */
+  sortValue?: (row: T) => string | number | null | undefined;
 }
 
 interface Props<T> {

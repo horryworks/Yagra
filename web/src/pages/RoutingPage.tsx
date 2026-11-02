@@ -39,6 +39,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import {
   CHANNEL_FILTER_PREFIX,
   channelFilters,
@@ -265,6 +266,7 @@ function ChannelsSection({
   // the URL altogether, and a reload threw the filters away.
   const filtering = useClientFilters(columns, channels, { prefix: CHANNEL_FILTER_PREFIX });
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown, { prefix: CHANNEL_FILTER_PREFIX });
 
   return (
     <section>
@@ -289,8 +291,10 @@ function ChannelsSection({
 
       <DataTable
         tableId="settings.notificationChannels"
-        rows={shown}
-        columns={columns}
+        rows={sorting.rows}
+        columns={sorting.columns}
+        sort={sorting.sort}
+        onSortChange={sorting.setSort}
         rowKey={(c) => c.id}
         rowClass={(c) => (c.enabled ? undefined : 'is-muted')}
         filters={filters}
@@ -633,6 +637,7 @@ function RulesSection({
       },
       {
         key: 'channels',
+        sortValue: (r) => r.channel_ids.map(channelName).join(', ') || null,
         header: t('routing.rules.cols.channels'),
         width: '1fr',
         render: (r) => {
@@ -689,6 +694,7 @@ function RulesSection({
   // In the URL, under `rules.` — see the channels table above.
   const filtering = useClientFilters(columns, rules, { prefix: ROUTING_RULE_FILTER_PREFIX });
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown, { prefix: ROUTING_RULE_FILTER_PREFIX });
 
   return (
     <section className="routing-rules-section">
@@ -728,8 +734,10 @@ function RulesSection({
 
       <DataTable
         tableId="settings.routingRules"
-        rows={shown}
-        columns={columns}
+        rows={sorting.rows}
+        columns={sorting.columns}
+        sort={sorting.sort}
+        onSortChange={sorting.setSort}
         rowKey={(r) => r.id}
         rowClass={(r) => (r.enabled ? undefined : 'is-muted')}
         filters={filters}

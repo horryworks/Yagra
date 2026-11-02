@@ -48,6 +48,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { LoadGate } from '../components/ui/LoadGate';
@@ -139,6 +140,7 @@ function destinationColumns(
     },
     {
       key: 'filter',
+      sortValue: (r) => r.filter?.conditions?.length ?? 0,
       header: t('cols.filter'),
       width: '130px',
       render: (r) => {
@@ -156,6 +158,10 @@ function destinationColumns(
     },
     {
       key: 'health',
+      sortValue: (r) => {
+          const s = status.get(r.id);
+          return s ? s.dropped + s.errors : null;
+        },
       header: t('cols.health'),
       width: '210px',
       render: (r) => {
@@ -627,6 +633,7 @@ export function ForwardingPage() {
   // (ui-conventions). URL-backed — one table on this route, so a filtered view is linkable.
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   // A byte-exact destination cannot be honoured for traffic from a poller that predates raw
   // capture — say so rather than silently shipping re-rendered output.
@@ -689,8 +696,10 @@ export function ForwardingPage() {
 
           <DataTable
             tableId="settings.forwarding"
-            rows={shown}
-            columns={columns}
+            rows={sorting.rows}
+            columns={sorting.columns}
+            sort={sorting.sort}
+            onSortChange={sorting.setSort}
             filters={filters}
             onFiltersChange={setFilters}
             filterCounts={counts}

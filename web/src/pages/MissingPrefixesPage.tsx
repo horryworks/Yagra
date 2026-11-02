@@ -23,6 +23,7 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { useLoad } from '../lib/useLoad';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { useStableOrder } from '../lib/stableOrder';
 import { columnLabels } from '../lib/listToolbar';
 import { saveBlob } from '../lib/download';
@@ -235,6 +236,7 @@ export function MissingPrefixesPage() {
       },
       {
         key: 'gaps',
+        sortValue: ({ gaps }) => gaps.length,
         header: t('missingPrefixes.cols.gaps'),
         width: '2fr',
         render: ({ site, gaps }) => {
@@ -262,6 +264,7 @@ export function MissingPrefixesPage() {
       },
       {
         key: 'read',
+        sortValue: ({ site }) => site.nodes_with_addresses,
         header: t('missingPrefixes.cols.read'),
         width: '170px',
         render: ({ site }) =>
@@ -272,6 +275,7 @@ export function MissingPrefixesPage() {
       },
       {
         key: 'prefixes',
+        sortValue: ({ site }) => site.prefixes,
         header: t('missingPrefixes.cols.prefixes'),
         width: '110px',
         align: 'right',
@@ -308,6 +312,7 @@ export function MissingPrefixesPage() {
       },
       {
         key: 'devices',
+        sortValue: (r) => r.gap.node_count,
         header: t('missingPrefixes.cols.devices'),
         width: '90px',
         align: 'right',
@@ -330,6 +335,10 @@ export function MissingPrefixesPage() {
   }, [t, openKey, canConfig]);
   const siteFiltering = useClientFilters(siteColumns, siteRows);
   const subnetFiltering = useClientFilters(subnetColumns, view === 'subnet' ? gapTabRows : NO_SUBNETS, {
+    prefix: SUBNET_FILTER_PREFIX,
+  });
+  const siteSorting = useClientSort(siteColumns, siteFiltering.shown);
+  const subnetSorting = useClientSort(subnetColumns, subnetFiltering.shown, {
     prefix: SUBNET_FILTER_PREFIX,
   });
   const anyFiltered = view === 'site' ? siteFiltering.anyFiltered : subnetFiltering.anyFiltered;
@@ -527,8 +536,10 @@ export function MissingPrefixesPage() {
         {view === 'site' ? (
           <DataTable
             tableId="nodes.missingPrefixes"
-            rows={siteFiltering.shown}
-            columns={siteColumns}
+            rows={siteSorting.rows}
+            columns={siteSorting.columns}
+            sort={siteSorting.sort}
+            onSortChange={siteSorting.setSort}
             filters={siteFiltering.filters}
             onFiltersChange={siteFiltering.setFilters}
             filterCounts={siteFiltering.counts}
@@ -542,8 +553,10 @@ export function MissingPrefixesPage() {
         ) : (
           <DataTable
             tableId="nodes.missingPrefixesSubnets"
-            rows={subnetFiltering.shown}
-            columns={subnetColumns}
+            rows={subnetSorting.rows}
+            columns={subnetSorting.columns}
+            sort={subnetSorting.sort}
+            onSortChange={subnetSorting.setSort}
             filters={subnetFiltering.filters}
             onFiltersChange={subnetFiltering.setFilters}
             filterCounts={subnetFiltering.counts}

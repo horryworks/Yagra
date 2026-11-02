@@ -25,6 +25,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { useLoad } from '../lib/useLoad';
 import { useStableOrder } from '../lib/stableOrder';
 import { scheduleFilters } from './scheduleFilters';
@@ -73,12 +74,14 @@ function scheduleColumns(
     },
     {
       key: 'cadence',
+      sortValue: (s) => cadenceLabel(t, s),
       header: t('schedule.cols.cadence'),
       width: '1.2fr',
       render: (s) => <span>{cadenceLabel(t, s)}</span>,
     },
     {
       key: 'next',
+      sortValue: (s) => (s.enabled ? s.next_run_ms : null),
       header: t('schedule.cols.next'),
       width: '190px',
       // A disabled schedule still carries a computed next_run_at; showing it would claim a run
@@ -178,6 +181,7 @@ export function ScheduledPage() {
   // (ui-conventions). URL-backed — one table on this route.
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   const saved = () => {
     setCreating(false);
@@ -223,8 +227,10 @@ export function ScheduledPage() {
 
           <DataTable
             tableId="troubleshoot.scheduled"
-            rows={shown}
-            columns={columns}
+            rows={sorting.rows}
+            columns={sorting.columns}
+            sort={sorting.sort}
+            onSortChange={sorting.setSort}
             filters={filters}
             onFiltersChange={setFilters}
             filterCounts={counts}

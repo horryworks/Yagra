@@ -41,6 +41,7 @@ import { PermissionHint } from '../ui/PermissionHint';
 import { EntityName } from '../ui/EntityName';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
 import { useClientFilters } from '../../lib/useClientFilters';
+import { useClientSort } from '../../lib/useClientSort';
 import { apFilters } from './tabFilters';
 import { nodeTabFilterPrefix } from './tabs';
 import {
@@ -154,13 +155,21 @@ export function ApTab({ node, groups, onChanged }: Props) {
       },
       {
         key: 'ip',
+        sortValue: (r) => r.ip ?? null,
         header: t('ap.colAddress'),
         width: '1.1fr',
         render: (r) => <span className="mono">{r.ip ?? '—'}</span>,
       },
-      { key: 'model', header: t('ap.colModel'), width: '1.1fr', render: (r) => <ClippedText text={r.model ?? '—'} /> },
+      {
+        key: 'model',
+        header: t('ap.colModel'),
+        width: '1.1fr',
+        sortValue: (r) => r.model ?? null,
+        render: (r) => <ClippedText text={r.model ?? '—'} />,
+      },
       {
         key: 'clients',
+        sortValue: (r) => r.clients ?? null,
         header: t('ap.colClients'),
         width: '90px',
         align: 'right',
@@ -174,6 +183,7 @@ export function ApTab({ node, groups, onChanged }: Props) {
       },
       {
         key: 'last_seen',
+        sortValue: (r) => Date.parse(r.last_seen) || null,
         header: t('ap.colLastSeen'),
         width: '1.1fr',
         render: (r) => <span title={r.last_seen}>{relativeTime(r.last_seen)}</span>,
@@ -202,6 +212,7 @@ export function ApTab({ node, groups, onChanged }: Props) {
 
   const filtering = useClientFilters(columns, rows, { prefix: nodeTabFilterPrefix('ap') });
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown, { prefix: nodeTabFilterPrefix('ap') });
 
   const overCap = apsOverCap(summary);
 
@@ -236,8 +247,10 @@ export function ApTab({ node, groups, onChanged }: Props) {
       <div className="nd-ap-table">
         <DataTable
           tableId="node.wirelessAps"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           filters={filters}
           onFiltersChange={setFilters}
           filterCounts={counts}

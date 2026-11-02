@@ -12,6 +12,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -73,24 +74,28 @@ export function DeliveryHoursSection({
     () => [
       {
         key: 'name',
+        sortValue: (s) => s.name,
         header: t('deliveryHours.cols.name'),
         width: '1.2fr',
         render: (s) => <ClippedText className="yt-name-txt" text={s.name} />,
       },
       {
         key: 'days',
+        sortValue: (s) => (s.days.length > 0 ? Math.min(...s.days) : null),
         header: t('deliveryHours.cols.days'),
         width: '160px',
         render: (s) => daysText(t, s.days),
       },
       {
         key: 'hours',
+        sortValue: (s) => s.start_minute,
         header: t('deliveryHours.cols.hours'),
         width: '130px',
         render: (s) => <span className="mono">{hoursText(s)}</span>,
       },
       {
         key: 'appliesTo',
+        sortValue: (s) => [...s.group_ids.map(groupName), ...s.labels].join(', ') || null,
         header: t('deliveryHours.cols.appliesTo'),
         width: '1.4fr',
         render: (s) => (
@@ -102,6 +107,7 @@ export function DeliveryHoursSection({
       },
       {
         key: 'status',
+        sortValue: (s) => (s.enabled ? 0 : 1),
         header: t('deliveryHours.cols.status'),
         width: '130px',
         render: (s) => (
@@ -145,6 +151,7 @@ export function DeliveryHoursSection({
   );
   const filtering = useClientFilters(columns, schedules, { prefix: 'hours.' });
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown, { prefix: 'hours.' });
 
   return (
     <section className="routing-rules-section">
@@ -181,8 +188,10 @@ export function DeliveryHoursSection({
       </ListToolbar>
       <DataTable
         tableId="settings.deliveryHours"
-        rows={shown}
-        columns={columns}
+        rows={sorting.rows}
+        columns={sorting.columns}
+        sort={sorting.sort}
+        onSortChange={sorting.setSort}
         rowKey={(s) => s.id}
         rowClass={(s) => (s.enabled ? undefined : 'is-muted')}
         filters={filters}

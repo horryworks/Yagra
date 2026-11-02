@@ -17,6 +17,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { eventSourceFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons';
 import './EventSourcesPage.css';
@@ -123,6 +124,7 @@ export function EventSourcesPage() {
 
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div>
@@ -146,8 +148,10 @@ export function EventSourcesPage() {
         {error && <p className="form-error">{error}</p>}
         <DataTable
           tableId="events.sources"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           rowKey={(r) => r.id}
           filters={filters}
           onFiltersChange={setFilters}

@@ -24,6 +24,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName } from '../components/ui/EntityName';
@@ -191,6 +192,7 @@ export function MaintenancePage() {
       },
       {
         key: 'range',
+        sortValue: (w) => Date.parse(w.starts_at) || null,
         header: t('maintenance.cols.range'),
         width: '230px',
         render: (w) => (
@@ -239,6 +241,7 @@ export function MaintenancePage() {
   // URL-backed: one table on this route, so a narrowed view is linkable.
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div>
@@ -279,8 +282,10 @@ export function MaintenancePage() {
 
         <DataTable
           tableId="alerts.maintenance"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           rowKey={(w) => w.id}
           filters={filters}
           onFiltersChange={setFilters}

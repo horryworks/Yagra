@@ -37,6 +37,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { pollerFilters } from './pollerFilters';
 import { FunnelIcon, TrashIcon, WarningIcon } from '../components/ui/icons';
 import { ActionMenu } from '../components/ui/ActionMenu';
@@ -1534,6 +1535,7 @@ export function PollersPage() {
       },
       {
         key: 'workingSet',
+        sortValue: (p) => p.working_set_nodes ?? null,
         header: t('pollers.cols.workingSet'),
         width: '150px',
         render: (p) =>
@@ -1541,6 +1543,7 @@ export function PollersPage() {
       },
       {
         key: 'results',
+        sortValue: (p) => p.results_total ?? null,
         header: t('pollers.cols.results'),
         width: '82px',
         align: 'right',
@@ -1548,6 +1551,7 @@ export function PollersPage() {
       },
       {
         key: 'cpu',
+        sortValue: (p) => p.cpu_pct ?? null,
         header: t('pollers.cols.cpu'),
         width: '64px',
         align: 'right',
@@ -1555,6 +1559,7 @@ export function PollersPage() {
       },
       {
         key: 'mem',
+        sortValue: (p) => p.mem_used_pct ?? null,
         header: t('pollers.cols.mem'),
         width: '64px',
         align: 'right',
@@ -1562,6 +1567,7 @@ export function PollersPage() {
       },
       {
         key: 'disk',
+        sortValue: (p) => p.disk_used_pct ?? null,
         header: t('pollers.cols.disk'),
         width: '64px',
         align: 'right',
@@ -1571,6 +1577,7 @@ export function PollersPage() {
         // Date only: this is inventory ("since when has this poller existed"), so a registration
         // date beats a relative age. Exact instant on hover.
         key: 'firstSeen',
+        sortValue: (p) => (p.first_seen ? Date.parse(p.first_seen) : null),
         header: t('pollers.cols.firstSeen'),
         width: '96px',
         render: (p) => (
@@ -1581,6 +1588,7 @@ export function PollersPage() {
       },
       {
         key: 'lastSeen',
+        sortValue: (p) => (p.last_seen ? Date.parse(p.last_seen) : null),
         header: t('pollers.cols.lastSeen'),
         width: '112px',
         render: (p) => lastSeenLabel(p.last_seen ?? null, p.status === 'online', t),
@@ -1589,6 +1597,7 @@ export function PollersPage() {
         // Editable even while the poller is online, unlike Remove: this is the operator's column,
         // not the poller's, and it is what unblocks derived suppression.
         key: 'anchor',
+        sortValue: (p) => (p.anchor_node_id ? nodeName(p.anchor_node_id) : null),
         header: t('pollers.cols.anchor'),
         width: '130px',
         render: (p) =>
@@ -1611,6 +1620,7 @@ export function PollersPage() {
         // detail: "shared" is the state that makes one site's leaked `.env` everyone's problem, and
         // an operator cannot otherwise tell the two apart.
         key: 'token',
+        sortValue: (p) => (p.has_token ? 0 : 1),
         header: t('pollers.cols.token'),
         width: '128px',
         render: (p) =>
@@ -1660,6 +1670,7 @@ export function PollersPage() {
   // drill-down subsections below carry no filters of their own.
   const filtering = useClientFilters(columns, pollers);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   // 🚨 **The strip's selection IS the pool column filter.** Not a mirror of it and not a second
   // piece of state that has to be kept in step: a card reads `filters.pool` to know whether it is
@@ -1855,8 +1866,10 @@ export function PollersPage() {
 
         <DataTable
           tableId="settings.pollers"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           rowKey={(p) => p.id}
           filters={filters}
           onFiltersChange={setFilters}

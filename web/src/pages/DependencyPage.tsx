@@ -26,6 +26,7 @@ import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { dependencyFilters } from './dependencyFilters';
 import { EntityName } from '../components/ui/EntityName';
 import { SetParentModal } from '../components/SetParentModal/SetParentModal';
@@ -270,6 +271,7 @@ export function DependencyPage() {
   // by it; the filter row narrows the same array the page already held.
   const filtering = useClientFilters(columns, nodes);
   const { filters, setFilters, shown: rows, counts } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div className="page-fill">
@@ -390,8 +392,10 @@ export function DependencyPage() {
 
           <DataTable
             tableId="nodes.dependencies"
-            rows={rows}
-            columns={columns}
+            rows={sorting.rows}
+            columns={sorting.columns}
+            sort={sorting.sort}
+            onSortChange={sorting.setSort}
             filters={filters}
             onFiltersChange={setFilters}
             filterCounts={counts}

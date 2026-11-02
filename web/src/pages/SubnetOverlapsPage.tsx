@@ -32,6 +32,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useLoad } from '../lib/useLoad';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { columnLabels } from '../lib/listToolbar';
 import { LoadGate } from '../components/ui/LoadGate';
 import { nodeHref } from '../lib/entityHref';
@@ -179,6 +180,7 @@ export function SubnetOverlapsPage() {
     const cols: Column<SubnetOverlap>[] = [
       {
         key: 'subnet',
+        sortValue: (o) => o.subnet,
         header: t('subnetOverlaps.cols.subnet'),
         width: '200px',
         render: (o) => (
@@ -192,6 +194,7 @@ export function SubnetOverlapsPage() {
       },
       {
         key: 'kind',
+        sortValue: (o) => o.kind,
         header: t('subnetOverlaps.cols.kind'),
         width: '210px',
         render: (o) => (
@@ -224,6 +227,7 @@ export function SubnetOverlapsPage() {
       },
       {
         key: 'devices',
+        sortValue: (o) => o.node_count,
         header: t('subnetOverlaps.cols.devices'),
         width: '90px',
         align: 'right',
@@ -252,7 +256,8 @@ export function SubnetOverlapsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- whyCell reads `view` through ruleName; markButton only `t` and `reload`
   }, [t, openKey, tab, view, canConfig]);
   const filtering = useClientFilters(columns, rows);
-  const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const { filters, setFilters, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   const detail = (o: SubnetOverlap) => {
     const bars = rangeBars(o);
@@ -415,8 +420,10 @@ export function SubnetOverlapsPage() {
 
         <DataTable
           tableId="nodes.subnetOverlaps"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           filters={filters}
           onFiltersChange={setFilters}
           filterCounts={counts}

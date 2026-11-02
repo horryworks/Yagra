@@ -47,6 +47,7 @@ import { Button } from '../ui/Button';
 import { DataTable, type Column } from '../ui/DataTable';
 import { ListToolbar } from '../../components/ui/ListToolbar';
 import { useClientFilters } from '../../lib/useClientFilters';
+import { useClientSort } from '../../lib/useClientSort';
 import { neighborFilters } from './tabFilters';
 import { nodeTabFilterPrefix } from './tabs';
 import {
@@ -305,6 +306,7 @@ export function NeighborsTab({ node }: Props) {
     },
     {
       key: 'caps',
+      sortValue: (n) => neighborCapabilities(n, lookups).caps.join(' ') || null,
       header: t('neighbors.colCapabilities'),
       width: '1fr',
       render: (n) => <Capabilities neighbor={n} lookups={lookups} />,
@@ -338,7 +340,8 @@ export function NeighborsTab({ node }: Props) {
   // In the URL under `neighbors.` (ADR-153): it survives a reload, and it stays on while the
   // operator walks the tree to the next device — the tab's own "Clear all filters (N)" says why.
   const filtering = useClientFilters(columns, neighbors, { prefix: nodeTabFilterPrefix('neighbors') });
-  const { filters, setFilters, shown: shownNeighbors, counts, anyFiltered } = filtering;
+  const { filters, setFilters, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown, { prefix: nodeTabFilterPrefix('neighbors') });
 
   return (
     <div className="nd-nb">
@@ -391,8 +394,10 @@ export function NeighborsTab({ node }: Props) {
               // (ADR-179 Inc.3); at the fixed 44px it spilled over the next row, which then took
               // its clicks. Rows without one stay the height they were (ADR-078 Inc.5).
               autoRowHeight
-              rows={shownNeighbors}
-              columns={columns}
+              rows={sorting.rows}
+              columns={sorting.columns}
+              sort={sorting.sort}
+              onSortChange={sorting.setSort}
               filters={filters}
               onFiltersChange={setFilters}
               filterCounts={counts}

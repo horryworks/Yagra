@@ -16,6 +16,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { useEnumParam } from '../lib/useEnumParam';
 import {
   definitionFilters,
@@ -313,6 +314,9 @@ export function ReportsPage() {
   const runF = useClientFilters(runColumns, runs, { prefix: REPORT_TABLE_PREFIX.saved });
   const defF = useClientFilters(defColumns, definitions, { prefix: REPORT_TABLE_PREFIX.templates });
   const schedF = useClientFilters(schedColumns, schedules, { prefix: REPORT_TABLE_PREFIX.schedules });
+  const runS = useClientSort(runColumns, runF.shown, { prefix: REPORT_TABLE_PREFIX.saved });
+  const defS = useClientSort(defColumns, defF.shown, { prefix: REPORT_TABLE_PREFIX.templates });
+  const schedS = useClientSort(schedColumns, schedF.shown, { prefix: REPORT_TABLE_PREFIX.schedules });
 
   const tabs: { key: ReportTab; label: string; count: number }[] = [
     { key: 'saved', label: t('tabs.saved'), count: runs.length },
@@ -359,8 +363,10 @@ export function ReportsPage() {
           />
           <DataTable
             tableId="reports.runs"
-            rows={runF.shown}
-            columns={runColumns}
+            rows={runS.rows}
+            columns={runS.columns}
+            sort={runS.sort}
+            onSortChange={runS.setSort}
             filters={runF.filters}
             onFiltersChange={runF.setFilters}
             filterCounts={runF.counts}
@@ -397,8 +403,10 @@ export function ReportsPage() {
           </ListToolbar>
           <DataTable
             tableId="reports.definitions"
-            rows={defF.shown}
-            columns={defColumns}
+            rows={defS.rows}
+            columns={defS.columns}
+            sort={defS.sort}
+            onSortChange={defS.setSort}
             filters={defF.filters}
             onFiltersChange={defF.setFilters}
             filterCounts={defF.counts}
@@ -453,8 +461,10 @@ export function ReportsPage() {
           </ListToolbar>
           <DataTable
             tableId="reports.schedules"
-            rows={schedF.shown}
-            columns={schedColumns}
+            rows={schedS.rows}
+            columns={schedS.columns}
+            sort={schedS.sort}
+            onSortChange={schedS.setSort}
             filters={schedF.filters}
             onFiltersChange={schedF.setFilters}
             filterCounts={schedF.counts}

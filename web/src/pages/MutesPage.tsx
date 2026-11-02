@@ -29,6 +29,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { EntityName } from '../components/ui/EntityName';
@@ -188,6 +189,7 @@ export function MutesPage() {
   // sent to someone.
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div>
@@ -211,8 +213,10 @@ export function MutesPage() {
 
         <DataTable
           tableId="alerts.mutes"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           rowKey={(m) => m.id}
           filters={filters}
           onFiltersChange={setFilters}

@@ -22,6 +22,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
+import { useClientSort } from '../lib/useClientSort';
 import { eventRuleFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
@@ -164,6 +165,7 @@ export function EventRulesPage() {
 
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div>
@@ -187,8 +189,10 @@ export function EventRulesPage() {
         {error && <p className="form-error">{error}</p>}
         <DataTable
           tableId="alerts.eventRules"
-          rows={shown}
-          columns={columns}
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
           rowKey={(r) => r.id}
           filters={filters}
           onFiltersChange={setFilters}

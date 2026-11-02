@@ -28,6 +28,7 @@ import { useCan } from '../../store';
 import type { MerakiDevice, MerakiNetwork, MerakiOrg } from '../../types/api';
 import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
 import { useClientFilters } from '../../lib/useClientFilters';
+import { useClientSort } from '../../lib/useClientSort';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -437,6 +438,8 @@ export function MerakiOrgPage() {
 
   const filtering = useClientFilters(filterColumns, devices);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
+  // Sorted on the drawn columns, which carry the same filter specs (hung on them above).
+  const sorting = useClientSort(columns, shown);
 
   const importSelected = () => {
     if (!org) return;
@@ -617,8 +620,10 @@ export function MerakiOrgPage() {
           <div className="meraki-orgpage-table">
             <DataTable
               tableId="settings.merakiDevices"
-              rows={shown}
-              columns={columns}
+              rows={sorting.rows}
+              columns={sorting.columns}
+              sort={sorting.sort}
+              onSortChange={sorting.setSort}
               filters={filters}
               onFiltersChange={setFilters}
               filterCounts={counts}

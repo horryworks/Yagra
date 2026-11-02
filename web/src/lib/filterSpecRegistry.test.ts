@@ -555,6 +555,7 @@ const NOT_A_SCREEN: readonly string[] = [
   'lib/columnFilter.ts', // the types themselves
   'lib/filterPredicate.ts', // compiles a spec to a row predicate
   'lib/filterSummary.ts', // renders a spec's value as prose
+  'lib/clientSort.ts', // derives a sort value from a spec's reader (ADR-228 Inc.2)
   'lib/useClientFilters.ts', // the client-side state hook
   'components/ui/ColumnFilterCell.tsx', // the control
   'components/ui/HeaderFilter.tsx', // the funnel beside a header (ADR-228)
