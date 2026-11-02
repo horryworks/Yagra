@@ -2189,16 +2189,18 @@ mod override_tests {
     #[test]
     fn a_nodes_rules_list_each_level_that_reaches_it_and_mark_the_winner() {
         let f = fixture();
+        // Searched in full: the map's order is random, and node a also sits in the child folder.
         let d = *f
             .meta
             .iter()
-            .find(|(_, m)| m.folder_chain.len() == 2 && m.profile.as_deref() == Some("switch"))
-            .map(|(id, _)| id)
-            .filter(|id| {
-                !f.rules
-                    .iter()
-                    .any(|t| t.level == ScopeLevel::Node && t.scope_ids.contains(&id.to_string()))
+            .find(|(id, m)| {
+                m.folder_chain.len() == 2
+                    && m.profile.as_deref() == Some("switch")
+                    && !f.rules.iter().any(|t| {
+                        t.level == ScopeLevel::Node && t.scope_ids.contains(&id.to_string())
+                    })
             })
+            .map(|(id, _)| id)
             .expect("node d: a switch in the child folder with no rule of its own");
         let got = node_matching_rules(&f.rules, d, f.meta.get(&d), &f.per_interface);
         let by_id: HashMap<Uuid, bool> = got.iter().map(|(t, on)| (t.id, *on)).collect();
