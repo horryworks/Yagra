@@ -2119,7 +2119,6 @@ mod override_tests {
                 profile: Some("switch".into()),
                 folder_group: Some(child),
                 folder_chain: vec![child, parent],
-                ..NodeMeta::default()
             },
         );
         meta.insert(
@@ -2128,7 +2127,6 @@ mod override_tests {
                 profile: Some("switch".into()),
                 folder_group: Some(parent),
                 folder_chain: vec![parent],
-                ..NodeMeta::default()
             },
         );
         meta.insert(
@@ -2354,7 +2352,6 @@ mod override_tests {
                     profile: Some(format!("p{}", i % 10)),
                     folder_group: Some(f),
                     folder_chain: vec![f],
-                    ..NodeMeta::default()
                 },
             );
         }
