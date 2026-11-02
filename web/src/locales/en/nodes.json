@@ -1313,6 +1313,7 @@
     },
     "list": {
       "cols": {
+        "pick": "Select",
         "node": "Node",
         "state": "State",
         "last": "Last attempt",

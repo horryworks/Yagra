@@ -13183,7 +13183,7 @@
         ],
         "responses": {
           "200": {
-            "description": "When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open.",
+            "description": "When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open. While no liveness rule reaches the node, or its pool has no live poller, the time it was not down is not recorded rather than up, and there is no share.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13213,7 +13213,7 @@
             }
           },
           "403": {
-            "description": "Missing View, or the node is outside the caller's scope",
+            "description": "Missing View",
             "content": {
               "application/json": {
                 "schema": {
@@ -13223,7 +13223,7 @@
             }
           },
           "404": {
-            "description": "No such node",
+            "description": "No such node, or the node is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {

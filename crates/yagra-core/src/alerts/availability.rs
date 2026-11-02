@@ -124,6 +124,11 @@ pub struct Inputs {
     pub created_at_ms: i64,
     /// The oldest instant the alert history still holds (now − the alert-linked retention).
     pub history_start_ms: i64,
+    /// Nothing would record an outage of this node: no liveness rule reaches it, or its pool has
+    /// no live poller. Time no span covers is then not recorded rather than up — an alert that
+    /// cannot open is not evidence that the node was up (ADR-223 decision 8). ⚠️ Decided from the
+    /// current state, like the maintenance windows: nothing recorded either fact at the time.
+    pub unobserved: bool,
 }
 
 /// The down intervals the liveness rows describe, unclipped, plus how many there were.
@@ -194,7 +199,10 @@ pub fn compute(
             .map(|(a, b)| (SpanKind::NoRecord, a, b)),
     );
 
-    let spans = flatten(&tagged);
+    let mut spans = flatten(&tagged);
+    if inputs.unobserved {
+        spans = fill_unrecorded(&spans, from, to);
+    }
     let secs_of = |kind: SpanKind| -> i64 {
         spans
             .iter()
@@ -209,8 +217,8 @@ pub fn compute(
         secs_of(SpanKind::NoRecord),
     );
     let up_secs = ((to - from) / 1000 - down_secs - maintenance_secs - no_record_secs).max(0);
-    let availability_pct =
-        (up_secs + down_secs > 0).then(|| up_secs as f64 / (up_secs + down_secs) as f64 * 100.0);
+    let availability_pct = (!inputs.unobserved && up_secs + down_secs > 0)
+        .then(|| up_secs as f64 / (up_secs + down_secs) as f64 * 100.0);
 
     let (spans, truncated_before_unix_ms) = if spans.len() > SPANS_MAX {
         let kept = spans[spans.len() - SPANS_MAX..].to_vec();
@@ -234,6 +242,38 @@ pub fn compute(
         outages,
         availability_pct,
     }
+}
+
+/// Fill the time `spans` leave uncovered inside `[from, to)` with not-recorded spans, joining them
+/// to a neighbouring not-recorded span.
+fn fill_unrecorded(spans: &[AvailabilitySpan], from: i64, to: i64) -> Vec<AvailabilitySpan> {
+    let mut out: Vec<AvailabilitySpan> = Vec::with_capacity(spans.len() * 2 + 1);
+    let mut push = |span: AvailabilitySpan| match out.last_mut() {
+        Some(last) if last.kind == span.kind && last.to_unix_ms == span.from_unix_ms => {
+            last.to_unix_ms = span.to_unix_ms;
+        }
+        _ => out.push(span),
+    };
+    let mut at = from;
+    for &span in spans {
+        if span.from_unix_ms > at {
+            push(AvailabilitySpan {
+                kind: SpanKind::NoRecord,
+                from_unix_ms: at,
+                to_unix_ms: span.from_unix_ms,
+            });
+        }
+        push(span);
+        at = at.max(span.to_unix_ms);
+    }
+    if at < to {
+        push(AvailabilitySpan {
+            kind: SpanKind::NoRecord,
+            from_unix_ms: at,
+            to_unix_ms: to,
+        });
+    }
+    out
 }
 
 /// Lay overlapping tagged intervals onto one timeline: at each instant the highest-ranked kind
@@ -473,6 +513,28 @@ mod tests {
         );
         // The gap split the span on screen, not the outage.
         assert_eq!(a.outages, 1);
+    }
+
+    #[test]
+    fn a_node_nothing_watches_reads_as_not_recorded_with_its_outages_kept() {
+        let a = day(Inputs {
+            liveness: vec![fire(NOW - 10 * H), clear(NOW - 10 * H, NOW - 8 * H)],
+            unobserved: true,
+            ..old_node()
+        });
+        assert_eq!(a.up_secs, 0);
+        assert_eq!(a.down_secs, 2 * 3_600, "an outage that was recorded stays");
+        assert_eq!(a.no_record_secs, 22 * 3_600);
+        assert_eq!(
+            a.availability_pct, None,
+            "no share when nothing could have seen it go down"
+        );
+        assert_eq!(
+            a.spans.iter().map(|s| s.kind).collect::<Vec<_>>(),
+            vec![SpanKind::NoRecord, SpanKind::Down, SpanKind::NoRecord]
+        );
+        assert_eq!(a.spans[0].from_unix_ms, NOW - 24 * H);
+        assert_eq!(a.spans[2].to_unix_ms, NOW);
     }
 
     #[test]

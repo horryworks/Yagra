@@ -1440,7 +1440,7 @@ export const api = {
     apiGet('/api/v1/nodes/{node_id}/assignment', { path: { node_id: id } }),
 
   /** When a node was down, in maintenance or not recorded over `period` (ADR-223). */
-  getNodeAvailability: (id: string, period: string): Promise<NodeAvailability> =>
+  getNodeAvailability: (id: string, period: NodeAvailability['period']): Promise<NodeAvailability> =>
     apiGet('/api/v1/nodes/{node_id}/availability', {
       path: { node_id: id },
       query: { period },

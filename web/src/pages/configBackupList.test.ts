@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { ConfigBackupRow } from '../types/api';
-import { countsOf, planSwitch, rowsIn, stateOf } from './configBackupList';
+import { countsOf, defaultFilter, planSwitch, rowsIn, stateOf } from './configBackupList';
 
 function row(id: string, over: Partial<ConfigBackupRow>): ConfigBackupRow {
   return {
@@ -44,5 +44,13 @@ describe('config backup list', () => {
     expect(plan.ids).toEqual(['b', 'c']);
     expect(plan.skipped).toEqual([noModel]);
     expect(plan.needsInput).toBe(true);
+  });
+});
+
+describe('the view the list opens on', () => {
+  it('is what is backed up once anything is, and everything while nothing is', () => {
+    expect(defaultFilter({ on: 2, off: 1, never: 5, all: 8 })).toBe('on');
+    expect(defaultFilter({ on: 0, off: 1, never: 5, all: 6 })).toBe('all');
+    expect(defaultFilter({ on: 0, off: 0, never: 0, all: 0 })).toBe('on');
   });
 });

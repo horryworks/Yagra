@@ -5,9 +5,12 @@
 // follow the zone the operator picked on the top-bar clock (ADR-221), which core does not know.
 
 import { displayTimeZone, wallClock, zonedWallToMs } from '../../lib/timeZone';
+import type { RangeToken } from '../../lib/filterPresets';
 import type { AvailabilitySpan as Span, NodeAvailability } from '../../types/api';
 
-export const AVAILABILITY_PERIODS = ['24h', '7d', '30d', '90d'] as const;
+// The server's `period` values, and range tokens, so their labels are the shared ones.
+export const AVAILABILITY_PERIODS = ['24h', '7d', '30d', '90d'] as const satisfies readonly (RangeToken &
+  NodeAvailability['period'])[];
 export type AvailabilityPeriod = (typeof AVAILABILITY_PERIODS)[number];
 export const DEFAULT_AVAILABILITY_PERIOD: AvailabilityPeriod = '30d';
 

@@ -26615,7 +26615,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open. */
+            /** @description When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open. While no liveness rule reaches the node, or its pool has no live poller, the time it was not down is not recorded rather than up, and there is no share. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -26642,7 +26642,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Missing View, or the node is outside the caller's scope */
+            /** @description Missing View */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -26651,7 +26651,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node */
+            /** @description No such node, or the node is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;

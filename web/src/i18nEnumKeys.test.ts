@@ -209,6 +209,7 @@ import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
 import enFormat from './locales/en/format.json';
 import jaFormat from './locales/ja/format.json';
+import { LIST_FILTERS } from './pages/configBackupList';
 import enNodes from './locales/en/nodes.json';
 import jaNodes from './locales/ja/nodes.json';
 import enMonitoring from './locales/en/monitoring.json';
@@ -265,6 +266,12 @@ function expectKeys(
 }
 
 describe('i18n coverage for enum-driven dynamic keys', () => {
+  it('every Config backups list state has a label and an empty line (nodes:config.list.*)', () => {
+    const states = LIST_FILTERS.filter((f) => f !== 'all');
+    expectKeys('config backup state', { en: enNodes, ja: jaNodes }, 'config.list.state.', LIST_FILTERS);
+    expectKeys('config backup empty', { en: enNodes, ja: jaNodes }, 'config.list.emptyOf.', LIST_FILTERS);
+    expect(states.length).toBe(3);
+  });
   it('every node state has a label (format:state.*)', () => {
     expectKeys('node state', { en: enFormat, ja: jaFormat }, 'state.', SEVERITY_ORDER);
   });

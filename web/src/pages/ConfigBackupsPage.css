@@ -114,3 +114,10 @@
   padding: 0 var(--space-3);
   white-space: nowrap;
 }
+
+.cfgbl-pickall {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}

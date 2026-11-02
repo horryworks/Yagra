@@ -55,7 +55,7 @@ use yagra_base::config_save::SaveRecord;
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{
-    Admin, RequireManageConfig, RequireRevealCredentials, RequireView, Scoped, VisibleNode,
+    Actor, Admin, RequireManageConfig, RequireRevealCredentials, RequireView, Scoped, VisibleNode,
 };
 use super::ApiState;
 use crate::oxidized::{
@@ -1138,6 +1138,7 @@ async fn switch_config_backups(
     // Optional: needed only to switch on, as for the PUT.
     reveal: Option<RequireRevealCredentials>,
     Scoped(scope): Scoped,
+    Actor(actor): Actor,
     admin: Admin,
     Json(body): Json<SwitchBody>,
 ) -> ApiResult<Json<SwitchResult>> {
@@ -1186,6 +1187,19 @@ async fn switch_config_backups(
     }
     if !out.switched.is_empty() {
         reload_quietly(&admin).await;
+    }
+    // One row per node switched, beside `audit_mw`'s row for the request (ADR-224 decision 9):
+    // the path names no node, and switching one on hands it the CLI logins, so "who started
+    // sending passwords to this device, and when" has to be answerable per device.
+    let who = actor.as_deref().unwrap_or("(unknown)");
+    for id in &out.switched {
+        super::util::audit_record(
+            &admin.audit,
+            who,
+            &format!("config_backup.switch node={id} enabled={}", body.enabled),
+            200,
+        )
+        .await;
     }
     Ok(Json(SwitchResult {
         unchanged: ids.len() - out.switched.len() - out.no_model.len(),
@@ -1736,6 +1750,19 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["switched"].as_array().map(Vec::len), Some(2), "{body}");
         assert_eq!(body["unchanged"], 0);
+        // Each node switched has its own audit row, naming it and the direction.
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT action FROM audit_log WHERE action LIKE 'config_backup.switch %' ORDER BY action",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("audit");
+        let mut want = vec![
+            format!("config_backup.switch node={a} enabled=false"),
+            format!("config_backup.switch node={b} enabled=false"),
+        ];
+        want.sort();
+        assert_eq!(rows, want);
         let (_, body) = send(&st, "GET", "/api/v1/config-backups", &operator, None).await;
         assert_eq!(body.as_array().map(Vec::len), Some(0), "{body}");
         let list = "/api/v1/config-backups?state=off";

@@ -10,9 +10,7 @@ import { Segmented } from '../components/ui/Segmented';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
-import type { BackupInput } from '../types/api';
-
-const INPUTS: BackupInput[] = ['ssh', 'telnet', 'ssh_then_telnet'];
+import { BACKUP_INPUTS, type BackupInput } from '../types/api';
 
 interface Props {
   ids: string[];
@@ -51,7 +49,7 @@ export function ConfigBackupSwitchOnModal({ ids, skipped, onClose, onSaved }: Pr
         <span className="modal-field-label">{t('config.connection')}</span>
         <Segmented
           ariaLabel={t('config.connection')}
-          options={INPUTS.map((i) => ({ value: i, label: t(`config.input.${i}`) }))}
+          options={BACKUP_INPUTS.map((i) => ({ value: i, label: t(`config.input.${i}`) }))}
           value={input}
           onChange={(next) => setInput(next as BackupInput)}
         />

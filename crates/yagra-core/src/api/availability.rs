@@ -61,11 +61,11 @@ pub(crate) fn parse_period(raw: Option<&str>) -> Result<AvailabilityPeriod, ApiE
     get, path = "/api/v1/nodes/{node_id}/availability", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id"), AvailabilityQuery),
     responses(
-        (status = 200, description = "When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open.", body = NodeAvailability),
+        (status = 200, description = "When the node was down, in maintenance or not recorded over the period, and the share of the rest it was up. Down means its liveness alert was open. While no liveness rule reaches the node, or its pool has no live poller, the time it was not down is not recorded rather than up, and there is no share.", body = NodeAvailability),
         (status = 400, description = "Unknown `period`", body = super::error::ErrorBody),
         (status = 401, description = "Not signed in", body = super::error::ErrorBody),
-        (status = 403, description = "Missing View, or the node is outside the caller's scope", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 403, description = "Missing View", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no database", body = super::error::ErrorBody),
     ),
 )]
@@ -156,7 +156,27 @@ pub(crate) async fn availability_of(
         })
         .collect();
 
+    // Whether anything would have recorded an outage (ADR-223 decision 8): a liveness rule that
+    // reaches the node, and a live poller in its pool. Without either, a quiet history is silence.
+    let liveness_rules: Vec<_> = admin
+        .thresholds
+        .list_all()
+        .await
+        .map_err(fail("availability: threshold rules"))?
+        .into_iter()
+        .filter(|r| r.rule.metric == yagra_alert::rules::LIVENESS)
+        .collect();
+    let ruled = st
+        .alerts
+        .matching_rules(&liveness_rules, NodeId(node_id), None)
+        .iter()
+        .any(|(_, in_force)| *in_force);
+
     let pool = pool_resolver(admin).await.resolve(&node).pool;
+    let polled = admin
+        .coordinator
+        .live_pools(std::time::Instant::now())
+        .contains(&pool);
     let monitoring_gaps = admin
         .pollers
         .gaps_for_pool(&pool, from_ms, now_ms)
@@ -173,6 +193,7 @@ pub(crate) async fn availability_of(
             monitoring_gaps,
             created_at_ms,
             history_start_ms,
+            unobserved: !ruled || !polled,
         },
     ))
 }
@@ -203,6 +224,111 @@ mod tests {
         let st = private_state();
         let (status, _) = send(&st, "GET", &uri(), "", None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// The read end to end over a real database: the node's liveness rows become one outage, and
+    /// the time before the node was added is not recorded (ADR-223).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_viewer_reads_one_outage_and_the_time_before_the_node_existed(pool: sqlx::PgPool) {
+        use crate::api::tests_support::live_state;
+        use yagra_alert::{Alert, Subject};
+        use yagra_common::{NodeState, Severity};
+
+        let st = live_state(pool.clone()).await;
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        const H: i64 = 3_600_000;
+        let now = Utc::now().timestamp_millis();
+        sqlx::query("UPDATE nodes SET created_at = to_timestamp($2 / 1000.0) WHERE id = $1")
+            .bind(node)
+            .bind((now - 12 * H) as f64)
+            .execute(&pool)
+            .await
+            .expect("created_at");
+        let fired = now - 5 * H;
+        let liveness = Alert {
+            subject: Subject::Node(NodeId::from(node)),
+            check: yagra_alert::rules::check_id(NodeId::from(node), yagra_alert::rules::LIVENESS),
+            severity: Severity::Critical,
+            state: NodeState::Unreachable,
+            at_unix_ms: fired,
+            metric: yagra_alert::rules::LIVENESS.to_owned(),
+            breach: None,
+            flapping: false,
+            root_cause: None,
+            ifindex: None,
+            row: None,
+            row_name: None,
+        };
+        crate::alerts::history::AlertHistoryStore::new(pool.clone())
+            .record_batch(&[(liveness.clone(), false), (liveness, true)])
+            .await
+            .expect("record");
+        // The writer stamps `now()`; the clear is recorded an hour after the fire.
+        sqlx::query(
+            "UPDATE alert_history SET recorded_at = to_timestamp(\
+             (at_unix_ms + CASE WHEN resolved THEN 3600000 ELSE 0 END) / 1000.0)",
+        )
+        .execute(&pool)
+        .await
+        .expect("stamp");
+
+        let viewer = token(&st, Role::Viewer);
+        let uri = format!("/api/v1/nodes/{node}/availability?period=24h");
+
+        // Nothing watches it yet: the seeded liveness rule is not there and no poller is live,
+        // so the quiet hours are not recorded rather than up (ADR-223 decision 8).
+        let (status, body) = send(&st, "GET", &uri, &viewer, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["up_secs"], 0, "{body}");
+        assert!(body["availability_pct"].is_null(), "{body}");
+
+        // The built-in rules, and a live poller in the node's pool.
+        let admin = st.admin.as_ref().expect("live state");
+        admin.repo.seed_builtin_profiles().await.expect("seed");
+        sqlx::query("INSERT INTO pollers (id, pool) VALUES ('edge-1', 'default')")
+            .execute(&pool)
+            .await
+            .expect("register the poller");
+        admin
+            .coordinator
+            .observe_heartbeat(
+                yagra_bus::HeartbeatMsg {
+                    poller_id: "edge-1".to_owned(),
+                    pool: "default".to_owned(),
+                    incarnation: Uuid::new_v4(),
+                    version: "0.3.66".to_owned(),
+                    epoch: None,
+                    last_seq: 0,
+                    working_set_nodes: 0,
+                    working_set_specs: 0,
+                    inflight: 0,
+                    results_total: 0,
+                    listeners: Vec::new(),
+                    caps: Vec::new(),
+                    host: None,
+                    leaving: false,
+                    mgmt_addrs: Vec::new(),
+                    upgrade: None,
+                },
+                std::time::Instant::now(),
+            )
+            .await;
+        let (status, body) = send(&st, "GET", &uri, &viewer, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["period"], "24h");
+        assert_eq!(body["outages"], 1, "{body}");
+        assert_eq!(body["down_secs"], 3_600, "{body}");
+        // The handler reads its own clock a few milliseconds after this test read its.
+        let no_record = body["no_record_secs"].as_i64().expect("no_record_secs");
+        assert!((12 * 3_600 - 1..=12 * 3_600).contains(&no_record), "{body}");
+        let kinds: Vec<&str> = body["spans"]
+            .as_array()
+            .expect("spans")
+            .iter()
+            .map(|s| s["kind"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(kinds, ["no_record", "down"], "{body}");
     }
 
     #[tokio::test]

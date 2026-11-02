@@ -3,13 +3,13 @@
 // three states a row is in, how many rows each holds, and what a switch would send. Pure, so the
 // page stays a renderer and these rules are tested on their own.
 
-import type { ConfigBackupRow } from '../types/api';
+import type { ConfigBackupListState, ConfigBackupRow } from '../types/api';
 
+/** The list's filter: one state, or all three — the server's `state` values, in display order. */
+export const LIST_FILTERS = ['on', 'off', 'never', 'all'] as const satisfies readonly ConfigBackupListState[];
+export type ListFilter = (typeof LIST_FILTERS)[number];
 /** Where a node stands: fetched, switched off with its settings kept, or never switched on. */
-export type RowState = 'on' | 'off' | 'never';
-/** The list's filter: one state, or all three. */
-export type ListFilter = RowState | 'all';
-export const LIST_FILTERS: readonly ListFilter[] = ['on', 'off', 'never', 'all'];
+export type RowState = Exclude<ListFilter, 'all'>;
 
 export function stateOf(row: ConfigBackupRow): RowState {
   if (row.enabled) return 'on';
@@ -20,6 +20,12 @@ export function countsOf(rows: readonly ConfigBackupRow[]): Record<ListFilter, n
   const counts: Record<ListFilter, number> = { on: 0, off: 0, never: 0, all: rows.length };
   for (const r of rows) counts[stateOf(r)] += 1;
   return counts;
+}
+
+/** The view the list opens on until a person picks one: what is backed up, or everything while
+ *  nothing is yet — an empty first view would hide the nodes there are to switch on. */
+export function defaultFilter(counts: Record<ListFilter, number>): ListFilter {
+  return counts.on > 0 || counts.all === 0 ? 'on' : 'all';
 }
 
 export function rowsIn(rows: readonly ConfigBackupRow[], filter: ListFilter): ConfigBackupRow[] {

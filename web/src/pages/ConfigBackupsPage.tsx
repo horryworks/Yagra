@@ -33,6 +33,7 @@ import {
   LIST_FILTERS,
   canSwitchOn,
   countsOf,
+  defaultFilter,
   planSwitch,
   rowsIn,
   stateOf,
@@ -89,10 +90,11 @@ export function ConfigBackupsPage() {
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [asking, setAsking] = useState<{ ids: string[]; skipped: string[] } | null>(null);
   const counts = useMemo(() => countsOf(list.data), [list.data]);
-  const filter: ListFilter = picking ?? (counts.on > 0 || counts.all === 0 ? 'on' : 'all');
+  const filter: ListFilter = picking ?? defaultFilter(counts);
   const shown = useMemo(() => rowsIn(list.data, filter), [list.data, filter]);
   // Only rows still on screen count as picked: a filter change or a reload drops the rest.
   const picked = useMemo(() => shown.filter((r) => selected.has(r.node_id)), [shown, selected]);
+  const allPicked = shown.length > 0 && picked.length === shown.length;
 
   const pickFilter = (next: ListFilter) => {
     setFilter(next);
@@ -149,23 +151,15 @@ export function ConfigBackupsPage() {
         if (!next.delete(id)) next.add(id);
         return next;
       });
-    const allPicked = shown.length > 0 && shown.every((r) => selected.has(r.node_id));
     return [
       ...(canOff
         ? [
             {
               key: 'pick',
-              header: (
-                <input
-                  type="checkbox"
-                  checked={allPicked}
-                  aria-label={t('config.list.pickAll')}
-                  onChange={() =>
-                    setSelected(allPicked ? new Set() : new Set(shown.map((r) => r.node_id)))
-                  }
-                />
-              ),
-              width: '56px',
+              // Text, not the select-all box: a phone draws each row as a card that repeats the
+              // header, and a box there would select every row from any card.
+              header: t('config.list.cols.pick'),
+              width: '70px',
               render: (r: ConfigBackupRow) => (
                 <input
                   type="checkbox"
@@ -257,7 +251,7 @@ export function ConfigBackupsPage() {
         render: (r) => (r.try_after ? <TimeCell iso={r.try_after} /> : '—'),
       },
     ];
-  }, [t, nodeName, names, canCreds, canOff, canOn, shown, selected, switching, onSwitch]);
+  }, [t, nodeName, names, canCreds, canOff, canOn, selected, switching, onSwitch]);
 
   const onPlan = planSwitch(picked, true);
   const offPlan = planSwitch(picked, false);
@@ -335,6 +329,18 @@ export function ConfigBackupsPage() {
         </p>
       )}
       <div className="cfgbl-tools">
+        {canOff && shown.length > 0 && (
+          <label className="cfgbl-pickall">
+            <input
+              type="checkbox"
+              checked={allPicked}
+              onChange={() =>
+                setSelected(allPicked ? new Set() : new Set(shown.map((r) => r.node_id)))
+              }
+            />
+            <span>{t('config.list.pickAll')}</span>
+          </label>
+        )}
         <Segmented
           ariaLabel={t('config.list.filter')}
           options={LIST_FILTERS.map((f) => ({

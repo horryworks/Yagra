@@ -933,7 +933,9 @@ impl YagraMcp {
                        `spans` lists every down, maintenance and no_record stretch (Unix ms, \
                        oldest first); time no span covers was up. no_record is before the node \
                        was added, older than the alert-history retention, or while a poller of \
-                       its pool could not reach core - never read it as up or as down. \
+                       its pool could not reach core, and every quiet stretch while nothing would \
+                       record an outage (no liveness rule reaches the node, or its pool has no \
+                       live poller now) - never read it as up or as down. \
                        `availability_pct` is up / (up + down) and leaves maintenance and \
                        no_record out; `outages` counts how often the alert opened. If \
                        `truncated_before_unix_ms` is set, spans before it were dropped (totals \
