@@ -151,6 +151,8 @@ import type {
   RoleMatrix,
   NotificationDefaultRoute,
   RoutingRule,
+  DeliveryHoursConfig,
+  HeldNotification,
   ChannelKind,
   NotifyEvent,
   TemplatePreview,
@@ -627,6 +629,17 @@ export interface ClientConfig {
    *  for the same reason as `rca_enabled`: an older core omits it and that must read as off. */
   flow_enabled?: boolean;
 }
+
+/** A delivery-hours schedule as the create and replace routes take it (ADR-226). */
+type DeliveryHoursBody = {
+  name: string;
+  enabled: boolean;
+  days: number[];
+  start_minute: number;
+  end_minute: number;
+  group_ids: string[];
+  labels: string[];
+};
 
 export const api = {
   /** Public bootstrap config: whether reads are open, login availability, default poll interval. */
@@ -1762,6 +1775,11 @@ export const api = {
     body: { latitude: number | null; longitude: number | null },
   ): Promise<void> => apiPut('/api/v1/node-groups/{id}/geo', { path: { id }, body }),
 
+  /** Set or clear the time zone a folder's nodes keep delivery hours in (ADR-226). Refused with
+   *  `time_zone_from_netbox` while the folder's NetBox Site names one. */
+  setNodeGroupTimeZone: (id: string, time_zone: string | null): Promise<void> =>
+    apiPut('/api/v1/node-groups/{id}/time-zone', { path: { id }, body: { time_zone } }),
+
   /** Replace a folder's **hand-made** IP ranges (ADR-131).
    *
    *  ⚠️ Whole list, not a diff — `{ prefixes: [] }` clears them, which is why there is no
@@ -2462,6 +2480,29 @@ export const api = {
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
     apiDelete('/api/v1/routing-rules/{id}', { path: { id } }),
+
+  /** Delivery-hours schedules and the default time zone (ADR-226). */
+  getDeliveryHours: (): Promise<DeliveryHoursConfig> => apiGet('/api/v1/delivery-hours'),
+
+  /** Create a delivery-hours schedule. Times are minutes after local midnight. */
+  createDeliveryHours: (body: DeliveryHoursBody): Promise<{ id: string }> =>
+    apiPost('/api/v1/delivery-hours', { body }),
+
+  /** Replace a delivery-hours schedule, its on/off switch included. */
+  updateDeliveryHours: (id: string, body: DeliveryHoursBody): Promise<void> =>
+    apiPut('/api/v1/delivery-hours/{id}', { path: { id }, body }),
+
+  /** Delete a delivery-hours schedule; what it held goes out on the next pass. */
+  deleteDeliveryHours: (id: string): Promise<void> =>
+    apiDelete('/api/v1/delivery-hours/{id}', { path: { id } }),
+
+  /** Set the zone a node with no zoned folder above it keeps time in. `null` ⇒ UTC. */
+  setDefaultTimeZone: (time_zone: string | null): Promise<void> =>
+    apiPut('/api/v1/delivery-hours/default-time-zone', { body: { time_zone } }),
+
+  /** Notifications held until their node's delivery hours open (ADR-226). */
+  listHeldNotifications: (): Promise<HeldNotification[]> =>
+    apiGet('/api/v1/held-notifications'),
 
   // ── Passive events (syslog / SNMP traps / webhooks) ──
 

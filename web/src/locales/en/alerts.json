@@ -29,7 +29,9 @@
     },
     "merakiOrgSubjectWhy": {
       "info": "The Meraki Dashboard API is not answering for this organization, so its devices are not being collected. Each device keeps its last collected state; this one alert stands for all of them."
-    }
+    },
+    "heldUntil": "held until {{until}}",
+    "held": "held"
   },
   "acked": {
     "title": "Acknowledged in {{source}} by {{by}}{{note}}",

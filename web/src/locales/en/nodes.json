@@ -187,7 +187,10 @@
     },
     "prefixesUse": {
       "info": "Discovery can sweep these ranges, and an import files each device into the folder whose range holds its address."
-    }
+    },
+    "timeZone": "Time zone (optional)",
+    "timeZoneInherit": "Inherit",
+    "timeZoneFromNetbox": "{{zone}} (NetBox)"
   },
   "deleteGroup": {
     "confirm": "Delete group <b>{{name}}</b>? {{impact}} — <b>this cannot be undone</b>.",

@@ -903,6 +903,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/delivery-hours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_delivery_hours"];
+        put?: never;
+        post: operations["create_delivery_hours"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/delivery-hours/default-time-zone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_default_time_zone"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/delivery-hours/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["update_delivery_hours"];
+        post?: never;
+        delete: operations["delete_delivery_hours"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/discovered-endpoints": {
         parameters: {
             query?: never;
@@ -1534,6 +1582,22 @@ export interface paths {
          *     original bytes, so a byte-exact destination silently degrading is visible in the UI.
          */
         get: operations["forwarding_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/held-notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_held_notifications"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2408,6 +2472,27 @@ export interface paths {
         };
         get?: never;
         put: operations["set_node_group_tags"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-groups/{id}/time-zone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set the zone a folder's nodes keep delivery hours in (ADR-226 decision 5).
+         * @description Refused with 409 while the folder's NetBox Site names a zone: NetBox's value wins on every
+         *     read, so a zone typed here would be stored and never used (decision 6).
+         */
+        put: operations["set_node_group_time_zone"];
         post?: never;
         delete?: never;
         options?: never;
@@ -7913,6 +7998,12 @@ export interface components {
          * @enum {string}
          */
         DeliveryEvent: "fire" | "resolve" | "suppress" | "test" | "test_close" | "unknown";
+        /** @description Every schedule, and the zone a node with no zoned folder above it keeps time in. */
+        DeliveryHoursConfig: {
+            /** @description IANA name, or null for UTC. */
+            default_time_zone?: string | null;
+            schedules: components["schemas"]["DeliverySchedule"][];
+        };
         /**
          * @description Whether a delivery arrived.
          * @enum {string}
@@ -7972,6 +8063,28 @@ export interface components {
             subject: string;
             /** @description The subject's display name, when it was known at delivery time. */
             subject_name?: string | null;
+        };
+        /** @description One named schedule, as stored and as the API returns it (ADR-226 decision 3). */
+        DeliverySchedule: {
+            /** @description ISO weekdays the window opens on, 1 = Monday .. 7 = Sunday. Never empty. */
+            days: number[];
+            /** @description Switched off, it covers nothing and every node it named is open again. */
+            enabled: boolean;
+            /** Format: int32 */
+            end_minute: number;
+            /** @description Folders it applies to, each with everything beneath it. */
+            group_ids: string[];
+            /** Format: uuid */
+            id: string;
+            /** @description Labels it applies to, inherited from folders as every label is (ADR-135). */
+            labels: string[];
+            name: string;
+            /**
+             * Format: int32
+             * @description Minutes after local midnight. A start later than the end spans midnight, and the window
+             *     belongs to the day it opens on; equal start and end means the whole of each listed day.
+             */
+            start_minute: number;
         };
         /**
          * @description Where a failed delivery failed.
@@ -9285,6 +9398,12 @@ export interface components {
              */
             effective_tags: string[];
             /**
+             * @description The zone this folder's nodes are judged in after inheritance: its own (NetBox's first,
+             *     then a person's), else the nearest ancestor's, else null for the deployment's default.
+             *     Resolved on every read, never stored - the same call the effective position makes.
+             */
+            effective_time_zone?: string | null;
+            /**
              * Format: uuid
              * @description The group that supplied the effective position: this group when `geo_source` is `own`, the
              *     ancestor it inherited from when `inherited`, null when `unset`. This is the pin the group's
@@ -9305,6 +9424,11 @@ export interface components {
             /** Format: double */
             longitude?: number | null;
             name: string;
+            /**
+             * @description The zone the NetBox Site this folder mirrors names, or null. It wins over `time_zone`
+             *     whenever it is set, and the editor shows it read-only (ADR-226 decision 6).
+             */
+            netbox_time_zone?: string | null;
             origin?: null | components["schemas"]["GroupOrigin"];
             /** Format: uuid */
             parent_id?: string | null;
@@ -9340,6 +9464,8 @@ export interface components {
              *     be undone.
              */
             tags_excluded: string[];
+            /** @description The IANA time zone a person set on this folder, or null (ADR-226 decision 5). */
+            time_zone?: string | null;
         };
         /**
          * @description The folder's labels, in full (ADR-135 inc. 2).
@@ -9370,6 +9496,39 @@ export interface components {
              *     `api::nodes::normalized_removals` records.
              */
             tags_excluded?: string[];
+        };
+        /** @description A folder's time zone: an IANA name, or null (or empty) to inherit (ADR-226). */
+        GroupTimeZone: {
+            time_zone?: string | null;
+        };
+        /**
+         * @description What the notifier was handed when it held a notification.
+         * @enum {string}
+         */
+        HeldEvent: "fire" | "resolve" | "suppress";
+        /** @description One notification held because its node is outside its delivery hours. */
+        HeldNotification: {
+            /**
+             * Format: uuid
+             * @description The alert's check id - with `node_id`, what an active-alert row is matched by.
+             */
+            check: string;
+            event: components["schemas"]["HeldEvent"];
+            /** Format: date-time */
+            held_at: string;
+            metric: string;
+            /**
+             * Format: uuid
+             * @description The node the alert is about.
+             */
+            node_id?: string | null;
+            /**
+             * Format: date-time
+             * @description When the node's hours were next due to open, as computed when it was held. A schedule
+             *     edited since moves the real release without moving this.
+             */
+            release_at?: string | null;
+            severity: components["schemas"]["Severity"];
         };
         /**
          * @description A per-mount filesystem trend. The frontend derives % from the pair, or shows a bare-bytes trend
@@ -14371,6 +14530,22 @@ export interface components {
              */
             same_device: components["schemas"]["SameDeviceMatch"][];
         };
+        /**
+         * @description Create or replace body. Times are minutes after local midnight; a start later than the end
+         *     spans midnight, and an equal pair means the whole of each listed day.
+         */
+        ScheduleBody: {
+            /** @description ISO weekdays, 1 = Monday .. 7 = Sunday. At least one. */
+            days: number[];
+            enabled?: boolean;
+            /** Format: int32 */
+            end_minute: number;
+            group_ids?: string[];
+            labels?: string[];
+            name: string;
+            /** Format: int32 */
+            start_minute: number;
+        };
         /** @description A point-in-time view of [`SchedulerStats`] for the API. */
         SchedulerStatsSnapshot: {
             /**
@@ -15324,6 +15499,10 @@ export interface components {
             in_bps: (number | null)[];
             out_bps: (number | null)[];
             timestamps: number[];
+        };
+        /** @description Set-zone body: an IANA name, or null (or empty) for UTC. */
+        TimeZoneBody: {
+            time_zone?: string | null;
         };
         /**
          * @description Where a certificate came from, and therefore whether core may replace it on its own.
@@ -19687,6 +19866,298 @@ export interface operations {
             };
         };
     };
+    list_delivery_hours: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every delivery-hours schedule and the default time zone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeliveryHoursConfig"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    create_delivery_hours: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleBody"];
+            };
+        };
+        responses: {
+            /** @description Schedule created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedId"];
+                };
+            };
+            /** @description Empty name, no weekday, a time outside the day, or no folder or label */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_default_time_zone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TimeZoneBody"];
+            };
+        };
+        responses: {
+            /** @description Default time zone set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not an IANA zone name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_delivery_hours: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Schedule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleBody"];
+            };
+        };
+        responses: {
+            /** @description Schedule replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Empty name, no weekday, a time outside the day, or no folder or label */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such schedule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_delivery_hours: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Schedule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedule deleted; what it was holding goes out on the next pass */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such schedule */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     list_discovered_endpoints: {
         parameters: {
             query?: {
@@ -22087,6 +22558,53 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode: no forwarder */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_held_notifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notifications held until their node's delivery hours open, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeldNotification"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -25470,6 +25988,85 @@ export interface operations {
                 };
             };
             /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_node_group_time_zone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Group id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupTimeZone"];
+            };
+        };
+        responses: {
+            /** @description Time zone set or cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not an IANA zone name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such group, or one outside the caller's folders */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The folder's NetBox Site sets its time zone */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

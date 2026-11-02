@@ -46,6 +46,7 @@ pub(crate) mod config_remote;
 pub(crate) mod config_save;
 pub(crate) mod credentials;
 mod dashboard;
+pub(crate) mod delivery_hours;
 pub(crate) mod discovery;
 pub(crate) mod duplicates;
 mod error;
@@ -174,6 +175,8 @@ pub struct AdminState {
     pub thresholds: Arc<ThresholdStore>,
     pub collection: Arc<CollectionRepo>,
     pub notifications: Arc<NotificationRepo>,
+    /// Delivery-hours schedules, the default zone and the held notifications (ADR-226).
+    pub delivery_hours: Arc<crate::alerts::delivery_hours::DeliveryHoursRepo>,
     /// The notification delivery log (ADR-195): read by the Notification delivery screen and
     /// written directly by a test send. Real deliveries are written by the notifier's own writer.
     pub deliveries: Arc<crate::alerts::notification_log::DeliveryLogRepo>,
@@ -521,6 +524,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(openapi::routes())
         .merge(discovery::routes())
         .merge(notifications::routes())
+        .merge(delivery_hours::routes())
         .merge(rca::routes())
         .merge(forwarding::routes())
         .merge(groups::routes())

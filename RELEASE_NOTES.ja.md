@@ -10,6 +10,13 @@
 
 ## Unreleased
 
+### 新機能
+
+- **配信時間: 拠点が決めた時間の中でだけ通知を届けるようになった。** Alerts ▸ 通知の配信 に **配信時間** の節が増えた。時間割には曜日と時間（たとえば 08:30–17:20。開始が終了より後なら日をまたぐ）と、当てるフォルダとラベルを書く。時間の外では、そのノードの通知を保留する。アラートは普段どおり開き、画面にも履歴にも出る。待つのは通知だけ。時間に入った瞬間、まだ開いていて、まとめられておらず、ack もされていないアラートを、そのときの内容で 1 回送る。時間の外で起きて時間の外で治った問題は送らない。時間の外の復旧も朝まで待つ。時間はすべてのチャネルに同じように効く。祝日は考えない。
+- **フォルダにタイムゾーンを持たせられるようになった。** ノードは、上にあるフォルダのうち一番近いもののタイムゾーンで時間割を読む。どこにも無ければ配備の既定（節の横で選ぶ。選ぶまでは UTC）。NetBox の Site のタイムゾーンは同期が取り込み、そのフォルダでは読み取り専用で出る。
+- 通知を保留しているアクティブアラートの行に **… まで保留中** と出る。`list_suppressions` が保留中の通知も返す。
+- `GET/POST /api/v1/delivery-hours`・`PUT/DELETE /api/v1/delivery-hours/{id}`・`PUT /api/v1/delivery-hours/default-time-zone`（ManageSystem。知らないゾーンは `400 invalid_time_zone`）、`GET /api/v1/held-notifications`（View。見えるものだけ）、`PUT /api/v1/node-groups/{id}/time-zone`（ManageConfig。NetBox が決めている間は `409 time_zone_from_netbox`）。フォルダに `time_zone`・`netbox_time_zone`・`effective_time_zone` が増えた。`get_config` が `kind=delivery_hours` を受ける。
+
 ## v0.3.66 — ノードごとの稼働状況を概要タブで見られる。Config backups の一覧からオン・オフできる。戻った機器を通知し直さない
 
 ### 新機能

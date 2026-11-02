@@ -10,6 +10,13 @@
 
 ## Unreleased
 
+### New Features
+
+- **Delivery hours: notifications reach people only inside the hours a site keeps.** Alerts ▸ Notification delivery has a new **Delivery hours** section. A schedule names weekdays and a span (08:30–17:20, say; a start later than the end spans midnight) and the folders and labels it applies to. Outside it, notifications about those nodes are held: the alert opens, shows and is recorded as usual, and the page waits. When the hours open, a held alert that is still open, not rolled up and not acknowledged goes out once, as it is then. A problem that starts and ends outside the hours is not sent at all, and a recovery outside them waits for the morning too. The same hours apply to every channel. Holidays are not taken into account.
+- **A folder has a time zone.** Each node keeps its schedule in the local time of the nearest folder above it that names a zone, else in the deployment's default (set beside the section; UTC until set). A NetBox Site's own time zone is taken by the sync and shown read-only on its folder.
+- An active alert whose page is being held reads **held until …** on its row, and `list_suppressions` returns the held notifications.
+- `GET/POST /api/v1/delivery-hours`, `PUT/DELETE /api/v1/delivery-hours/{id}`, `PUT /api/v1/delivery-hours/default-time-zone` (ManageSystem; an unknown zone is `400 invalid_time_zone`), `GET /api/v1/held-notifications` (View, narrowed to what the caller may see), `PUT /api/v1/node-groups/{id}/time-zone` (ManageConfig; `409 time_zone_from_netbox` while NetBox sets it). Folders now carry `time_zone`, `netbox_time_zone` and `effective_time_zone`. `get_config` takes `kind=delivery_hours`.
+
 ## v0.3.66 — See each node's availability on its Overview, switch config backups on and off from the list, and stop re-paging a device that comes back
 
 ### New Features

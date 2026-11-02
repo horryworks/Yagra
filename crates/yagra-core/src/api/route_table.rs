@@ -596,6 +596,26 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/delivery-hours",
+        ADMIN_CFG,
+        Tool("get_config"),
+    ),
+    ("POST", "/api/v1/delivery-hours", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "PUT",
+        "/api/v1/delivery-hours/default-time-zone",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    ("PUT", "/api/v1/delivery-hours/:id", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "DELETE",
+        "/api/v1/delivery-hours/:id",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/discovered-endpoints",
         GroupFiltered,
         // Not folded into `get_topology`: a discovered endpoint is inventory, not graph structure —
@@ -813,6 +833,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/forwarding/status",
         ADMIN_CFG,
         Tool("get_system_health"),
+    ),
+    (
+        "GET",
+        "/api/v1/held-notifications",
+        PostFiltered,
+        Tool("list_suppressions"),
     ),
     (
         "POST",
@@ -1062,6 +1088,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("PUT", "/api/v1/node-groups/:id", ADMIN_CFG, NO_MCP_WRITE),
     ("PUT", "/api/v1/node-groups/:id/geo", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "PUT",
+        "/api/v1/node-groups/:id/time-zone",
+        // `GroupFiltered` for the reason `/tags` gives: `manage_config` is held by a group-scoped
+        // Operator too, and a folder's zone decides when every node beneath it pages (ADR-226).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
     (
         "PUT",
         "/api/v1/node-groups/:id/placement",

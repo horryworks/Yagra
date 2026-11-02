@@ -5,7 +5,8 @@
   },
   "noun": {
     "channel_other": "チャネル",
-    "source_other": "ソース"
+    "source_other": "ソース",
+    "schedule_other": "件"
   },
   "routing": {
     "channels": {
@@ -664,6 +665,51 @@
     "filter": {
       "allKinds": "すべての種別",
       "allStatuses": "有効・無効を問わない"
+    }
+  },
+  "deliveryHours": {
+    "title": "配信時間",
+    "add": "+ 配信時間を追加",
+    "empty": "配信時間はありません。通知はすべてすぐに送られます。",
+    "defaultZone": "既定のタイムゾーン",
+    "utc": "UTC",
+    "cols": {
+      "name": "名前",
+      "days": "曜日",
+      "hours": "時間",
+      "appliesTo": "対象",
+      "status": "状態",
+      "actions": "操作"
+    },
+    "edit": "配信時間を編集",
+    "enable": "配信時間を有効化",
+    "disable": "配信時間を無効化",
+    "delete": "配信時間を削除",
+    "deleteTitle": "配信時間を削除",
+    "deleteBody": "<strong>{{name}}</strong> を削除しますか？保留中の通知は 1 分以内に送られます。",
+    "modal": {
+      "title": "配信時間を追加",
+      "editTitle": "{{name}} を編集",
+      "name": "名前",
+      "days": "曜日",
+      "start": "開始",
+      "end": "終了",
+      "folders": "フォルダ",
+      "addFolder": "フォルダを追加",
+      "removeFolder": "{{name}} を外す",
+      "labels": "ラベル",
+      "add": "追加",
+      "save": "保存"
+    },
+    "err": {
+      "name": "名前を入力してください。",
+      "days": "曜日を 1 つ以上選んでください。",
+      "time": "時刻を HH:MM で 2 つとも入力してください。",
+      "target": "フォルダを選ぶか、ラベルを入力してください。",
+      "save": "配信時間を保存できませんでした。",
+      "update": "配信時間を更新できませんでした。",
+      "delete": "配信時間を削除できませんでした。",
+      "zone": "既定のタイムゾーンを設定できませんでした。"
     }
   }
 }

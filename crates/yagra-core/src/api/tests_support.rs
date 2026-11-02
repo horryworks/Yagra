@@ -442,6 +442,9 @@ async fn live_state_with(
         deliveries: Arc::new(crate::alerts::notification_log::DeliveryLogRepo::new(
             pool.clone(),
         )),
+        delivery_hours: Arc::new(crate::alerts::delivery_hours::DeliveryHoursRepo::new(
+            pool.clone(),
+        )),
         notify_default_route,
         mib,
         discovery: Arc::new(crate::discover::discovery::DiscoveryRunner::new(

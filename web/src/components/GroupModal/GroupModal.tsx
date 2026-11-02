@@ -4,7 +4,7 @@
 // A group's parent doubles as its 'move', so this one dialog covers create, rename, retype, move
 // and re-pool. Lived at the bottom of NodesPage as a second component in the page file.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { GROUP_TYPES } from '../../types/api';
@@ -13,6 +13,7 @@ import { asGroupType, groupOptions, subtreeGroupIds } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { fallbackPool, isValidPoolName, poolPlaceholder } from '../../lib/pool';
 import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields';
+import { knownTimeZones } from '../../lib/timeZone';
 import { tagDraftFrom, tagsChanged } from './tagFields';
 import { ChipInput } from '../ui/ChipInput';
 import { labelsAreValid } from '../ui/labelRules';
@@ -73,6 +74,11 @@ export function GroupModal({
   /** The folder's labels (ADR-135 inc. 2). The third sub-resource, saved on the same terms as the
    *  pin and the ranges: its own endpoint, after the group body, skipped when untouched. */
   const [tagDraft, setTagDraft] = useState(() => tagDraftFrom(state.group));
+  /** The zone a person set on this folder ('' = inherit), for delivery hours (ADR-226). A NetBox
+   *  folder whose Site names a zone shows that one instead, read-only: it wins on every read. */
+  const [zone, setZone] = useState(state.group?.time_zone ?? '');
+  const netboxZone = state.group?.netbox_time_zone ?? null;
+  const zones = useMemo(() => knownTimeZones(), []);
   /** Ranges a NetBox sync maintains — shown, never editable. */
   const syncRows = syncOwnedRows(state.group);
   const form = useSubmit({ errorFallback: t('err.saveGroup'), onDone: onSaved });
@@ -148,6 +154,9 @@ export function GroupModal({
           // and put an audit row in for a write that alters nothing.
           if (tagsChanged(tagDraft, state.group)) {
             await api.setNodeGroupTags(id, tagDraft.tags, tagDraft.tagsExcluded);
+          }
+          if (!netboxZone && zone !== (state.group?.time_zone ?? '')) {
+            await api.setNodeGroupTimeZone(id, zone === '' ? null : zone);
           }
           // Handed on rather than swallowed: `onSaved` takes the id (ADR-159), and this block's own
           // return value is what reaches it.
@@ -351,6 +360,21 @@ export function GroupModal({
         {pinnedAt && (
           <p className="form-status">{t('group.geoInherited', { name: pinnedAt.name })}</p>
         )}
+        <label className="form-label">
+          {t('group.timeZone')}
+          {netboxZone ? (
+            <TextInput value={t('group.timeZoneFromNetbox', { zone: netboxZone })} disabled />
+          ) : (
+            <Select value={zone} onChange={(e) => setZone(e.target.value)}>
+              <option value="">{t('group.timeZoneInherit')}</option>
+              {zones.map((z) => (
+                <option key={z} value={z}>
+                  {z}
+                </option>
+              ))}
+            </Select>
+          )}
+        </label>
         <FormError form={form} />
       </div>
     </Modal>

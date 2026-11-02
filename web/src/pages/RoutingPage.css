@@ -27,6 +27,15 @@
   font-size: var(--font-sm);
 }
 
+/* The default time zone beside the delivery-hours toolbar's add button (ADR-226). */
+.routing-zone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
 /* Channel multi-select inside the add-rule modal. */
 .routing-picks {
   display: flex;

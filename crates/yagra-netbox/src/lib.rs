@@ -16,6 +16,7 @@
 //! | column | owner | what a sync does |
 //! |---|---|---|
 //! | `node_groups.name` / `parent_id` / `latitude` / `longitude` | NetBox | overwrite every time |
+//! | `node_groups.netbox_time_zone` | NetBox | overwrite every time (ADR-226; `time_zone` beside it is the operator's) |
 //! | `node_groups.pool` | the operator | **never touched** |
 //! | `node_groups.sort_order` | NetBox **on create only** | seeded name-ordered, then never touched (ADR-162) |
 //! | a row that vanished from NetBox | nobody | **marked, never deleted** |
@@ -565,6 +566,11 @@ pub struct NetboxSite {
     /// a value an operator added). Only an `active` site becomes a folder (ADR-100 decision 11).
     #[serde(default)]
     pub status: Option<NetboxChoice>,
+    /// NetBox's own IANA zone for the site (`Asia/Tokyo`), or empty. Written to the folder's
+    /// `netbox_time_zone`, which decides when the site's notifications are delivered (ADR-226
+    /// decision 6). An empty name is stored as nothing, so the folder inherits.
+    #[serde(default)]
+    pub time_zone: Option<String>,
 }
 
 impl NetboxSite {
@@ -1393,7 +1399,7 @@ impl NetboxRepo {
 
     /// Upsert one NetBox object's folder, and the mapping row that records who owns it.
     ///
-    /// 🚨 The `DO UPDATE SET` names exactly the four columns NetBox owns. **`pool` must never be
+    /// 🚨 The `DO UPDATE SET` names exactly the columns NetBox owns. **`pool` must never be
     /// added** — that is decision 2's entire content, and a sync that overwrote it would silently
     /// undo an operator's poller placement on every cycle.
     ///
@@ -1422,6 +1428,7 @@ impl NetboxRepo {
         parent: Option<Uuid>,
         latitude: Option<f64>,
         longitude: Option<f64>,
+        time_zone: Option<&str>,
         order: f64,
     ) -> anyhow::Result<bool> {
         let group_id = kind.group_id(server_id, object_id);
@@ -1437,19 +1444,21 @@ impl NetboxRepo {
         // statement of intent.
         let written = sqlx::query(
             "INSERT INTO node_groups \
-               (id, name, group_type, parent_id, sort_order, latitude, longitude) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+               (id, name, group_type, parent_id, sort_order, latitude, longitude, \
+                netbox_time_zone) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (id) DO UPDATE SET \
                name = EXCLUDED.name, \
                group_type = EXCLUDED.group_type, \
                parent_id = EXCLUDED.parent_id, \
                latitude = EXCLUDED.latitude, \
-               longitude = EXCLUDED.longitude \
+               longitude = EXCLUDED.longitude, \
+               netbox_time_zone = EXCLUDED.netbox_time_zone \
              WHERE (node_groups.name, node_groups.group_type, node_groups.parent_id, \
-                    node_groups.latitude, node_groups.longitude) \
+                    node_groups.latitude, node_groups.longitude, node_groups.netbox_time_zone) \
                    IS DISTINCT FROM \
                    (EXCLUDED.name, EXCLUDED.group_type, EXCLUDED.parent_id, \
-                    EXCLUDED.latitude, EXCLUDED.longitude)",
+                    EXCLUDED.latitude, EXCLUDED.longitude, EXCLUDED.netbox_time_zone)",
         )
         .bind(group_id)
         .bind(name)
@@ -1458,6 +1467,7 @@ impl NetboxRepo {
         .bind(order)
         .bind(latitude)
         .bind(longitude)
+        .bind(time_zone)
         .execute(&mut *tx)
         .await?
         .rows_affected()
@@ -1699,6 +1709,8 @@ pub async fn apply(
                 parent,
                 None,
                 None,
+                // A region has no zone of its own in NetBox.
+                None,
                 order_of(&region_order, parent_netbox, r.id),
             )
             .await?
@@ -1746,6 +1758,10 @@ pub async fn apply(
                 parent,
                 s.latitude,
                 s.longitude,
+                s.time_zone
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|z| !z.is_empty()),
                 // Sites sort after regions within the same parent, so a folder that contains both
                 // reads "areas, then places". The offset is large enough that no realistic region
                 // count collides with it.
@@ -2232,6 +2248,7 @@ mod tests {
             description: Some(String::new()),
             custom_fields: BTreeMap::new(),
             status: None,
+            time_zone: None,
         }
     }
 
@@ -2862,6 +2879,19 @@ mod tests {
         assert_eq!(page.results[1].latitude, None);
     }
 
+    /// NetBox sends a site's zone as an IANA name or `null` (ADR-226 decision 6).
+    #[test]
+    fn a_sites_time_zone_is_read_as_netbox_sends_it() {
+        let s: NetboxSite =
+            serde_json::from_str(r#"{"id":1,"name":"a","time_zone":"Asia/Tokyo"}"#).unwrap();
+        assert_eq!(s.time_zone.as_deref(), Some("Asia/Tokyo"));
+        let s: NetboxSite =
+            serde_json::from_str(r#"{"id":1,"name":"a","time_zone":null}"#).unwrap();
+        assert_eq!(s.time_zone, None);
+        let s: NetboxSite = serde_json::from_str(r#"{"id":1,"name":"a"}"#).unwrap();
+        assert_eq!(s.time_zone, None);
+    }
+
     /// A site with its NetBox `status` set, as the listing sends it.
     fn with_status(mut s: NetboxSite, value: &str) -> NetboxSite {
         s.status = Some(NetboxChoice {
@@ -3194,6 +3224,8 @@ mod tests {
             "parent_id = EXCLUDED.parent_id",
             "latitude = EXCLUDED.latitude",
             "longitude = EXCLUDED.longitude",
+            // ADR-226 decision 6: NetBox owns its own column, never the one a person writes.
+            "netbox_time_zone = EXCLUDED.netbox_time_zone",
         ] {
             assert!(stmt.contains(owned), "{owned} must be synced");
         }

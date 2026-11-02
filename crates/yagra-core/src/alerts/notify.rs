@@ -24,6 +24,7 @@ use yagra_common::{
     is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
 };
 
+use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore, HoursPolicy};
 use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
 use crate::alerts::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
 use crate::alerts::notify_facts::{context_for, node_ids_for, AlertFactsSource};
@@ -1092,6 +1093,8 @@ impl Routing {
 /// endpoint is wedged and every page is 31.5 seconds late" was invisible on the metrics endpoint,
 /// which is the one place an operator would look for it.
 const M_DISPATCH: &str = "yagra_notification_dispatch_total";
+/// Notifications kept back because their node was outside its delivery hours (ADR-226), by event.
+const M_HELD: &str = "yagra_notification_held_total";
 /// Wall time for one dispatch, including retries and backoff. See [`M_DISPATCH`].
 const M_DELIVERY_SECONDS: &str = "yagra_notification_delivery_seconds";
 
@@ -1211,6 +1214,12 @@ pub struct Notifier {
     /// Which kinds of channel make up the env default route, in the order [`Self::from_env`]
     /// adds them (ADR-200 Inc.28). Fixed for the process's life, like the route itself.
     default_kinds: Vec<DefaultRouteKind>,
+    /// Which nodes keep delivery hours, and which (ADR-226). Empty until the first refresh and on
+    /// every deployment with no enabled schedule, and an empty policy holds nothing.
+    hours: RwLock<Arc<HoursPolicy>>,
+    /// Where a notification outside its node's hours is kept until they open (ADR-226 decision
+    /// 7). `None` in skeleton mode and in tests that do not ask, which holds nothing.
+    held: RwLock<Option<Arc<dyn HeldStore>>>,
 }
 
 impl Notifier {
@@ -1279,6 +1288,8 @@ impl Notifier {
             delivery_log: RwLock::new(None),
             sides: std::sync::Mutex::new(HashMap::new()),
             default_kinds,
+            hours: RwLock::new(Arc::new(HoursPolicy::default())),
+            held: RwLock::new(None),
         }
     }
 
@@ -1402,6 +1413,30 @@ impl Notifier {
         });
     }
 
+    /// Attach the store held notifications are kept in (ADR-226). Called once at startup by a core
+    /// with a write side.
+    pub fn set_held_store(&self, store: Arc<dyn HeldStore>) {
+        *self.held.write().expect("notifier held lock poisoned") = Some(store);
+    }
+
+    /// Replace the delivery-hours snapshot (refreshed alongside routing). Not `async`, for the
+    /// reason [`Self::set_mutes`] is not.
+    pub fn set_hours(&self, policy: HoursPolicy) {
+        *self.hours.write().expect("notifier hours lock poisoned") = Arc::new(policy);
+    }
+
+    /// The current delivery-hours snapshot. One `Arc` clone; never held across an await.
+    pub fn hours(&self) -> Arc<HoursPolicy> {
+        Arc::clone(&self.hours.read().expect("notifier hours lock poisoned"))
+    }
+
+    fn held_store(&self) -> Option<Arc<dyn HeldStore>> {
+        self.held
+            .read()
+            .expect("notifier held lock poisoned")
+            .clone()
+    }
+
     /// Replace the unexpired-mute snapshot (refreshed alongside routing).
     ///
     /// **Not `async` since ADR-104** — see the type doc. This is the call an operator is waiting
@@ -1474,6 +1509,142 @@ impl Notifier {
     /// channel its own queue would need a policy for a full queue, and dropping a page is worse
     /// than delaying one; deliberately left out (ADR-104 decision 6).
     pub async fn handle(&self, action: NotifyAction) {
+        self.handle_at(action, chrono::Utc::now()).await;
+    }
+
+    /// [`Self::handle`] at a given instant, so a test can stand inside or outside delivery hours.
+    async fn handle_at(&self, action: NotifyAction, now: chrono::DateTime<chrono::Utc>) {
+        if self.hold_if_closed(&action, now).await {
+            return;
+        }
+        self.deliver(action).await;
+    }
+
+    /// Keep `action` back if its node is outside its delivery hours, and say whether it was kept
+    /// (ADR-226). A notification about a node no schedule covers, or any notification on a
+    /// deployment with no schedule, passes straight through without a query.
+    ///
+    /// 🚨 **A failed write delivers.** If the held store cannot take the row, the notification
+    /// goes out now: a page at night is a nuisance, a page lost is an outage nobody hears about.
+    async fn hold_if_closed(
+        &self,
+        action: &NotifyAction,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let policy = self.hours();
+        if policy.is_empty() {
+            return false;
+        }
+        let Some(store) = self.held_store() else {
+            return false;
+        };
+        let (event, alert) = match action {
+            NotifyAction::Fire(a) => (HeldEvent::Fire, a),
+            NotifyAction::Resolve(a) => (HeldEvent::Resolve, a),
+            NotifyAction::Suppress(a) => (HeldEvent::Suppress, a),
+        };
+        match event {
+            HeldEvent::Fire => {
+                // Neither of these would be delivered anyway, so there is nothing to hold.
+                let mutes = Arc::clone(&self.mutes.read().expect("notifier mutes lock poisoned"));
+                if alert.root_cause.is_some() || mute_matches(&mutes, alert) {
+                    return false;
+                }
+            }
+            HeldEvent::Resolve | HeldEvent::Suppress => {
+                // A fire still held never reached anyone, so its end reaches nobody either
+                // (decision 8): drop both and clear what the dispatchers remember.
+                match store.discard_fires(&alert.subject, alert.check).await {
+                    Ok(0) => {}
+                    Ok(_) => {
+                        self.forget_side(alert);
+                        let key = alert.dedup_key();
+                        let routing = self.routing();
+                        if let Some(d) = routing.default.as_ref() {
+                            d.mark_resolved(&key).await;
+                        }
+                        for d in routing.channels.values() {
+                            d.mark_resolved(&key).await;
+                        }
+                        tracing::debug!(subject = %alert.subject, "held fire dropped with its resolve");
+                        return true;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "could not read held notifications; delivering");
+                        return false;
+                    }
+                }
+                // A rolled-up alert's fire was never delivered, so its resolve closes nothing.
+                if event == HeldEvent::Resolve && alert.root_cause.is_some() {
+                    return false;
+                }
+            }
+        }
+        if policy.is_open(alert.node(), now) {
+            return false;
+        }
+        let release_at = policy.next_open(alert.node(), now);
+        match store.hold(event, alert, release_at).await {
+            Ok(()) => {
+                metrics::counter!(M_HELD, "event" => event.as_str()).increment(1);
+                tracing::info!(subject = %alert.subject, event = event.as_str(), "notification held until delivery hours open");
+                true
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "could not hold a notification; delivering it now");
+                false
+            }
+        }
+    }
+
+    /// Send what was held for every node whose hours are open at `now` (ADR-226 decision 7).
+    ///
+    /// A held fire goes out only if its alert is still open, not rolled up and not acknowledged
+    /// (decision 9) - and then as the alert is **now**, so a severity that rose overnight is the
+    /// one sent. A held resolve or roll-up goes out as it was (decision 10). Each row is removed
+    /// once handled, whatever happened to it. `acked` answers for one alert from the ack store.
+    pub async fn release(
+        &self,
+        rows: Vec<HeldRow>,
+        active: &[Alert],
+        acked: &(dyn Fn(&Alert) -> bool + Sync),
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let Some(store) = self.held_store() else {
+            return;
+        };
+        let policy = self.hours();
+        let mut sent: HashSet<(String, yagra_common::CheckId)> = HashSet::new();
+        for row in rows {
+            if !policy.is_open(row.alert.node(), now) {
+                continue;
+            }
+            match row.event {
+                HeldEvent::Fire => {
+                    let live = active
+                        .iter()
+                        .find(|a| a.subject == row.alert.subject && a.check == row.alert.check);
+                    if let Some(a) = live {
+                        if a.root_cause.is_none()
+                            && !acked(a)
+                            && sent.insert((a.subject.to_string(), a.check))
+                        {
+                            self.deliver(NotifyAction::Fire(a.clone())).await;
+                        }
+                    }
+                }
+                HeldEvent::Resolve => self.deliver(NotifyAction::Resolve(row.alert)).await,
+                HeldEvent::Suppress => self.deliver(NotifyAction::Suppress(row.alert)).await,
+            }
+            if let Err(e) = store.remove(row.id).await {
+                tracing::warn!(error = %e, id = row.id, "could not forget a released notification");
+            }
+        }
+    }
+
+    /// Deliver one notify action now, whatever the hour - what [`Self::handle`] does once
+    /// delivery hours have let it through, and what [`Self::release`] does in the morning.
+    async fn deliver(&self, action: NotifyAction) {
         // Resolving names is I/O, so it happens first. A muted or rolled-up alert pays for a
         // lookup it will not use, which the facts cache makes negligible and which is worth not
         // restructuring the suppression checks around.
@@ -3168,6 +3339,201 @@ mod delivery_tests {
             row: None,
             row_name: None,
         }
+    }
+
+    // -- Delivery hours (ADR-226) ---------------------------------------------------------------
+
+    use crate::alerts::delivery_hours::{
+        build_policy, testkit::MemHeld, DeliverySchedule, HeldEvent, NodeTarget,
+    };
+    use chrono::TimeZone;
+
+    /// A notifier whose default route records, holding into memory, with `node` keeping
+    /// weekdays 08:30-17:20 UTC.
+    fn office_hours(node: NodeId) -> (Notifier, Log, Arc<MemHeld>) {
+        let dflt = log();
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let held = Arc::new(MemHeld::default());
+        n.set_held_store(held.clone());
+        let schedule = DeliverySchedule {
+            id: Uuid::nil(),
+            name: "office".to_owned(),
+            enabled: true,
+            days: vec![1, 2, 3, 4, 5],
+            start_minute: 8 * 60 + 30,
+            end_minute: 17 * 60 + 20,
+            group_ids: Vec::new(),
+            labels: vec!["office".to_owned()],
+        };
+        let target = NodeTarget {
+            id: node,
+            group: None,
+            labels: ["office".to_owned()].into_iter().collect(),
+        };
+        n.set_hours(build_policy(
+            &[schedule],
+            &[target],
+            &[],
+            yagra_base::wall_clock::Tz::UTC,
+        ));
+        (n, dflt, held)
+    }
+
+    /// Monday 2026-11-02 20:00 UTC: after hours.
+    fn evening() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 11, 2, 20, 0, 0).unwrap()
+    }
+    /// Tuesday 2026-11-03 09:00 UTC: open.
+    fn morning() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 11, 3, 9, 0, 0).unwrap()
+    }
+
+    async fn release_now(n: &Notifier, held: &MemHeld, active: &[Alert], acked: bool) {
+        let rows = held.list().await.unwrap();
+        n.release(rows, active, &|_| acked, morning()).await;
+    }
+
+    #[tokio::test]
+    async fn a_fire_after_hours_is_held_and_sent_in_the_morning_if_still_open() {
+        let node = NodeId::new();
+        let (n, dflt, held) = office_hours(node);
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
+        assert_eq!(
+            dflt.lock().unwrap().count("fire"),
+            0,
+            "nothing reaches anyone at night"
+        );
+        assert_eq!(held.rows.lock().unwrap().len(), 1);
+        assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Fire);
+
+        // Still closed: a release pass at night sends nothing and keeps the row.
+        let rows = held.list().await.unwrap();
+        n.release(rows, std::slice::from_ref(&a), &|_| false, evening())
+            .await;
+        assert_eq!(dflt.lock().unwrap().count("fire"), 0);
+        assert_eq!(held.rows.lock().unwrap().len(), 1);
+
+        release_now(&n, &held, std::slice::from_ref(&a), false).await;
+        assert_eq!(
+            dflt.lock().unwrap().count("fire"),
+            1,
+            "the morning delivers it once"
+        );
+        assert!(held.rows.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_problem_that_starts_and_ends_at_night_reaches_nobody() {
+        let node = NodeId::new();
+        let (n, dflt, held) = office_hours(node);
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
+        n.handle_at(NotifyAction::Resolve(a), evening()).await;
+        assert!(
+            held.rows.lock().unwrap().is_empty(),
+            "the resolve dropped the held fire"
+        );
+        release_now(&n, &held, &[], false).await;
+        assert!(
+            dflt.lock().unwrap().0.is_empty(),
+            "neither the fire nor its end was sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resolve_after_hours_waits_for_the_morning() {
+        let node = NodeId::new();
+        let (n, dflt, held) = office_hours(node);
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Fire(a.clone()), morning()).await;
+        assert_eq!(
+            dflt.lock().unwrap().count("fire"),
+            1,
+            "inside hours it goes straight out"
+        );
+        n.handle_at(NotifyAction::Resolve(a), evening()).await;
+        assert_eq!(dflt.lock().unwrap().count("close"), 0);
+        assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Resolve);
+        release_now(&n, &held, &[], false).await;
+        assert_eq!(dflt.lock().unwrap().count("close"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_held_fire_someone_acknowledged_or_that_closed_is_not_sent() {
+        let node = NodeId::new();
+        let (n, dflt, held) = office_hours(node);
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
+        release_now(&n, &held, std::slice::from_ref(&a), true).await;
+        assert_eq!(
+            dflt.lock().unwrap().count("fire"),
+            0,
+            "acknowledged overnight"
+        );
+        assert!(held.rows.lock().unwrap().is_empty(), "and forgotten");
+
+        n.handle_at(NotifyAction::Fire(a), evening()).await;
+        release_now(&n, &held, &[], false).await;
+        assert_eq!(
+            dflt.lock().unwrap().count("fire"),
+            0,
+            "no longer open in the morning"
+        );
+        assert!(held.rows.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_node_no_schedule_covers_is_delivered_at_any_hour() {
+        let (n, dflt, held) = office_hours(NodeId::new());
+        n.handle_at(
+            NotifyAction::Fire(alert(NodeId::new(), Severity::Critical, None)),
+            evening(),
+        )
+        .await;
+        assert_eq!(dflt.lock().unwrap().count("fire"), 1);
+        assert!(held.rows.lock().unwrap().is_empty());
+    }
+
+    /// A store that cannot take a row: the notification goes out now rather than being lost.
+    struct BrokenHeld;
+
+    #[async_trait]
+    impl crate::alerts::delivery_hours::HeldStore for BrokenHeld {
+        async fn hold(
+            &self,
+            _: HeldEvent,
+            _: &Alert,
+            _: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("the database said no")
+        }
+        async fn discard_fires(
+            &self,
+            _: &Subject,
+            _: yagra_common::CheckId,
+        ) -> anyhow::Result<u64> {
+            Ok(0)
+        }
+        async fn list(&self) -> anyhow::Result<Vec<crate::alerts::delivery_hours::HeldRow>> {
+            Ok(Vec::new())
+        }
+        async fn remove(&self, _: i64) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_notification_that_cannot_be_held_is_delivered() {
+        let node = NodeId::new();
+        let (n, dflt, _) = office_hours(node);
+        n.set_held_store(Arc::new(BrokenHeld));
+        n.handle_at(
+            NotifyAction::Fire(alert(node, Severity::Critical, None)),
+            evening(),
+        )
+        .await;
+        assert_eq!(dflt.lock().unwrap().count("fire"), 1);
     }
 
     /// A channel that always refuses, the way JSM refuses a wrong key.

@@ -434,6 +434,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let alerts = Arc::new(alerts::manager_with(poll_intervals.clone()));
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
+    // Delivery hours (ADR-226): the schedules, the default zone, and what is held outside them.
+    let delivery_hours = Arc::new(alerts::delivery_hours::DeliveryHoursRepo::new(repo.pool()));
     let deliveries = Arc::new(alerts::notification_log::DeliveryLogRepo::new(repo.pool()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
     // Give the engine back what it knew before this process started (ADR-097). Awaited here, and
@@ -735,6 +737,15 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // channels stay always-on). The periodic refresh loop is leader-only (`leader_work`).
     alerts::config::load_routing(&notifier, &notifications).await;
     alerts::config::load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
+    notifier.set_held_store(delivery_hours.clone());
+    alerts::config::load_hours(
+        &notifier,
+        &delivery_hours,
+        &repo,
+        &group_repo,
+        &mut alerts::config::HoursCache::default(),
+    )
+    .await;
 
     // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
     let users = Arc::new(UserStore::new(repo.pool()));
@@ -872,6 +883,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classifier: classifier.clone(),
         classification: classification.clone(),
         notifications: notifications.clone(),
+        delivery_hours: delivery_hours.clone(),
+        acks: acks.clone(),
         analysis_repo: analysis_repo.clone(),
         analysis: analysis.clone(),
         reports_repo: reports_repo.clone(),
@@ -921,6 +934,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         thresholds,
         collection,
         notifications,
+        delivery_hours: delivery_hours.clone(),
         deliveries,
         notify_default_route: notifier.default_route_kinds().to_vec(),
         mib,
@@ -1190,6 +1204,10 @@ struct LeaderTasks {
     classifier: Arc<discover::classification::Classifier>,
     classification: Arc<discover::classification::ClassificationRepo>,
     notifications: Arc<NotificationRepo>,
+    /// Delivery hours (ADR-226): read by the routing refresh, drained by the release loop.
+    delivery_hours: Arc<alerts::delivery_hours::DeliveryHoursRepo>,
+    /// Acknowledgements, so the release loop does not send a held fire someone already took.
+    acks: Arc<AckRepo>,
     analysis_repo: Arc<analysis::AnalysisRepo>,
     analysis: Arc<analysis::AnalysisRunner>,
     reports_repo: Arc<reports::ReportsRepo>,
@@ -1693,6 +1711,18 @@ impl LeaderTasks {
                 self.maintenance.clone(),
                 self.repo.clone(),
                 self.groups.clone(),
+                self.delivery_hours.clone(),
+            ),
+        );
+        // Held notifications go out when their hours open (ADR-226). Leader-only because only the
+        // leader delivers; the rows wait in PostgreSQL through a failover.
+        spawn_cancellable(
+            &self.shutdown,
+            alerts::delivery_hours::run_release_loop(
+                self.notifier.clone(),
+                self.delivery_hours.clone(),
+                self.alerts.clone(),
+                self.acks.clone(),
             ),
         );
         // Per-interface bandwidth utilisation (ADR-076). Leader-only for the same reason pool
@@ -2325,11 +2355,15 @@ async fn run_routing_refresh(
     maintenance: Arc<MaintenanceRepo>,
     repo: Arc<NodeRepo>,
     group_repo: Arc<groups::GroupRepo>,
+    delivery_hours: Arc<alerts::delivery_hours::DeliveryHoursRepo>,
 ) {
+    let mut hours = alerts::config::HoursCache::default();
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
         alerts::config::load_routing(&notifier, &notifications).await;
         alerts::config::load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
+        alerts::config::load_hours(&notifier, &delivery_hours, &repo, &group_repo, &mut hours)
+            .await;
     }
 }
 

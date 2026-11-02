@@ -29,8 +29,10 @@ import { EntityName } from '../components/ui/EntityName';
 import { nodeHref } from '../lib/entityHref';
 import { muteCovering } from '../lib/suppression';
 import { useMuteLists } from './useMuteLists';
+import { useHeldNotifications } from './useHeldNotifications';
+import { heldFireFor } from '../pages/deliveryHours';
 import { Link } from 'react-router-dom';
-import type { Mute } from '../types/api';
+import type { HeldNotification, Mute } from '../types/api';
 import { useEntityNames } from '../components/ui/entityNames';
 import { AlertSubjectName } from './AlertSubjectName';
 import { AlertWhatText } from './AlertWhatText';
@@ -101,6 +103,9 @@ type NameOf = (id: string) => string;
 /** The mute silencing an alert, or `null` — resolved once per list, like {@link NameOf}. */
 type MuteOf = (alert: SortedAlert) => Mute | null;
 
+/** The held fire for an alert outside its node's delivery hours, or `null` (ADR-226). */
+type HeldOf = (alert: SortedAlert) => HeldNotification | null;
+
 // One source of truth for a row's markup — shared by the capped (dashboard) and the virtualized
 // (full triage) paths. In the virtualized path the row is absolutely positioned (see AlertRows.css)
 // and carries the `data-index` + measure ref + translate offset the virtualizer drives.
@@ -109,18 +114,21 @@ function AlertRow({
   actions,
   nodeName,
   muteOf,
+  heldOf,
   v,
 }: {
   a: SortedAlert;
   actions?: RowActions;
   nodeName: NameOf;
   muteOf: MuteOf;
+  heldOf: HeldOf;
   v?: VProps;
 }) {
   const { t } = useTranslation('alerts');
   const subject = alertSubject(a);
   const cause = rootCause(a);
   const muted = muteOf(a);
+  const held = heldOf(a);
   return (
     <div
       className="alertrow"
@@ -174,6 +182,15 @@ function AlertRow({
           {t('row.mutedUntil', { until: formatTimestamp(Date.parse(muted.until_at)) })}
         </Link>
       )}
+      {/* Outside its node's delivery hours the page waits (ADR-226 decision 11); the mark opens the
+          screen where the hours are kept. */}
+      {held && (
+        <Link className="alertrow-muted" to="/alerts/routing">
+          {held.release_at
+            ? t('row.heldUntil', { until: formatTimestamp(Date.parse(held.release_at)) })
+            : t('row.held')}
+        </Link>
+      )}
       <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
       {actions && (
         <span className="alertrow-actions">
@@ -193,11 +210,13 @@ function VirtualAlertRows({
   actions,
   nodeName,
   muteOf,
+  heldOf,
 }: {
   alerts: SortedAlert[];
   actions?: RowActions;
   nodeName: NameOf;
   muteOf: MuteOf;
+  heldOf: HeldOf;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const cardMode = useViewportMode() === 'mobile';
@@ -228,6 +247,7 @@ function VirtualAlertRows({
               actions={actions}
               nodeName={nodeName}
               muteOf={muteOf}
+              heldOf={heldOf}
               v={{
                 index: vi.index,
                 translateY: vi.start,
@@ -266,6 +286,11 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
     },
     [mutes, exemptions, groups, nodeGroup],
   );
+  const held = useHeldNotifications();
+  const heldOf = useCallback<HeldOf>(
+    (a) => (held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a))),
+    [held],
+  );
   // Sort once per store change, not on every SSE-driven render.
   const all = useMemo(() => sortedAlerts(alerts), [alerts]);
   // Filter after sorting, before windowing — the virtualizer must count only the rows that will be
@@ -286,11 +311,11 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
       // natural height (no bounded scroll region).
       <div className="alertrows">
         {shown.slice(0, limit).map((a) => (
-          <AlertRow key={rowKey(a)} a={a} actions={actions} nodeName={nodeName} muteOf={muteOf} />
+          <AlertRow key={rowKey(a)} a={a} actions={actions} nodeName={nodeName} muteOf={muteOf} heldOf={heldOf} />
         ))}
       </div>
     ) : (
-      <VirtualAlertRows alerts={shown} actions={actions} nodeName={nodeName} muteOf={muteOf} />
+      <VirtualAlertRows alerts={shown} actions={actions} nodeName={nodeName} muteOf={muteOf} heldOf={heldOf} />
     );
 
   // No toolbar (every dashboard widget) ⇒ the same single element as before, not a fragment.

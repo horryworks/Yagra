@@ -73,6 +73,7 @@ export const TABLE_IDS = [
   'settings.credentialsHttp',
   'settings.credentialsIntegration',
   'settings.credentialsOther',
+  'settings.deliveryHours',
   'settings.forwarding',
   'settings.merakiDevices',
   'settings.notificationChannels',

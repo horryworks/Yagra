@@ -586,6 +586,80 @@ pub(crate) async fn load_mutes(
     notifier.set_mutes(active);
 }
 
+/// What [`load_hours`] last built from, so an unchanged deployment does not re-read every node
+/// every 30 seconds: the config generation (bumped by any folder, label, node or schedule write),
+/// the schedules and the default zone.
+#[derive(Default)]
+pub(crate) struct HoursCache {
+    key: Option<(
+        u64,
+        Vec<super::delivery_hours::DeliverySchedule>,
+        Option<String>,
+    )>,
+}
+
+/// Load the delivery-hours policy into the notifier (ADR-226).
+///
+/// A deployment with no enabled schedule installs the empty policy and reads nothing else. With
+/// one, every node is read - but only when something it depends on changed. A failed read keeps
+/// the previous policy, the direction every other read in this refresh takes.
+pub(crate) async fn load_hours(
+    notifier: &Notifier,
+    store: &super::delivery_hours::DeliveryHoursRepo,
+    repo: &NodeRepo,
+    groups: &groups::GroupRepo,
+    cache: &mut HoursCache,
+) {
+    use super::delivery_hours::{build_policy, HoursPolicy, NodeTarget};
+    let schedules = match store.list().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load delivery hours");
+            return;
+        }
+    };
+    if !schedules.iter().any(|s| s.enabled) {
+        notifier.set_hours(HoursPolicy::default());
+        cache.key = None;
+        return;
+    }
+    let default_zone = match store.default_zone().await {
+        Ok(z) => z,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load the default time zone");
+            return;
+        }
+    };
+    let key = (config_gen::current(), schedules, default_zone);
+    if cache.key.as_ref() == Some(&key) {
+        return;
+    }
+    let (nodes, tag_rows, folders) = match (
+        repo.list_nodes().await,
+        groups.tag_rows().await,
+        groups.time_zone_rows().await,
+    ) {
+        (Ok(n), Ok(t), Ok(f)) => (n, t, f),
+        (n, t, f) => {
+            let e = [n.err(), t.err(), f.err()].into_iter().flatten().next();
+            tracing::warn!(error = ?e, "failed to resolve delivery hours");
+            return;
+        }
+    };
+    let tags = crate::inventory::tagres::TagResolver::build(tag_rows);
+    let targets: Vec<NodeTarget> = nodes
+        .iter()
+        .map(|n| NodeTarget {
+            id: n.id,
+            group: n.group.map(|g| g.as_uuid()),
+            labels: tags.effective_set(n),
+        })
+        .collect();
+    let zone = yagra_base::wall_clock::zone_or_utc(key.2.as_deref());
+    notifier.set_hours(build_policy(&key.1, &targets, &folders, zone));
+    cache.key = Some(key);
+}
+
 /// Load the DB notification channels + routing rules into the notifier. Failures degrade to
 /// the existing snapshot (warn) rather than dropping routing.
 pub(crate) async fn load_routing(notifier: &Notifier, notifications: &NotificationRepo) {

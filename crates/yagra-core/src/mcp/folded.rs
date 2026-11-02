@@ -8,14 +8,14 @@
 //! **the endpoints behind one tool do not share a permission.**
 //!
 //! The measured spread across the routes folded here is `View` ×51, `ManageConfig` ×14,
-//! `ManageSystem` ×8, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
+//! `ManageSystem` ×9, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
 //! two that are deliberately unauthenticated over REST. Picking one permission for the whole tool
 //! fails in both directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
 //! strict choice recreates the very gap ADR-042 exists to close.
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
 //! anything else. ADR-042 decision 2 declined a `Permission` column on the 244-row ledger because
-//! nothing could check it; that reasoning holds there and not here — over these 80 rows the
+//! nothing could check it; that reasoning holds there and not here — over these 81 rows the
 //! permission is a value a test can compare against the REST handler's own extractor, and
 //! [`tests::every_folded_read_demands_what_its_rest_route_demands`] does exactly that.
 //!
@@ -637,9 +637,9 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     },
     // ── get_config(kind=…) — ADR-042 I3b ─────────────────────────────────────
     //
-    // The configuration-read family, 35 routes behind one `kind`. This is the block that proves the
+    // The configuration-read family, 36 routes behind one `kind`. This is the block that proves the
     // module doc's point about permission: it spans `ManageConfig` ×13, `View` ×15,
-    // `ManageSystem` ×5 and `ManageUsers` ×2, and one permission for the tool would either hand the
+    // `ManageSystem` ×6 and `ManageUsers` ×2, and one permission for the tool would either hand the
     // identity-provider configuration to any viewer or refuse a viewer thirteen reads the WebUI
     // already shows them.
     //
@@ -700,6 +700,16 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "notification_default_route",
         method: "GET",
         path: "/api/v1/notification-default-route",
+        perm: Some(Permission::ManageSystem),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "delivery_hours",
+        method: "GET",
+        path: "/api/v1/delivery-hours",
         perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
         opaque_ok: None,

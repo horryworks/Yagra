@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
   alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
-  alertsConfig: [8368, 4434], // + routing.rules.emptyNoChannels and the port picker's two state lines, - interfaceHint (ADR-209, 2026-10-21)
+  alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
   auth: [79, 43],
   common: [749, 401],
   dashboard: [6229, 3448],

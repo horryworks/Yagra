@@ -716,6 +716,9 @@ pub struct SuppressionsDto {
     pub maintenance_windows: Vec<crate::alerts::maintenance::StoredWindow>,
     pub mutes: Vec<crate::alerts::maintenance::StoredMute>,
     pub exemptions: Vec<crate::alerts::maintenance::StoredExemption>,
+    /// Notifications kept back because their node is outside its delivery hours (ADR-226). The
+    /// alerts themselves are open and visible; only the page is waiting.
+    pub held_notifications: Vec<crate::api::delivery_hours::HeldNotification>,
 }
 
 /// A Troubleshoot analysis job (ADR-022), sanitized for AI consumption — identity, tool, scope, and
@@ -1463,6 +1466,9 @@ mod tests {
                 source: yagra_base::groups::PrefixSource::Manual,
             }],
             origin: Some(yagra_base::groups::GroupOrigin::Meraki),
+            time_zone: None,
+            netbox_time_zone: None,
+            effective_time_zone: None,
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();
         assert!(
@@ -1609,6 +1615,15 @@ mod tests {
                 kind: crate::alerts::maintenance::ExemptionKind::Maintenance,
                 node_id: node.id.0,
                 until_at: "1970-01-01T01:00:00Z".to_owned(),
+            }],
+            held_notifications: vec![crate::api::delivery_hours::HeldNotification {
+                node_id: Some(node.id.0),
+                check: uuid::Uuid::new_v4(),
+                metric: "icmp_rtt_ms".to_owned(),
+                severity: yagra_common::Severity::Critical,
+                event: crate::alerts::delivery_hours::HeldEvent::Fire,
+                held_at: chrono::Utc::now(),
+                release_at: None,
             }],
         };
         assert_no_forbidden_keys(

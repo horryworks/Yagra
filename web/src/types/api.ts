@@ -849,6 +849,14 @@ export type RoutingRule = components['schemas']['RoutingRule'];
  *  whether it exists and which kinds of channel it sends every alert to (ADR-200 Inc.28). */
 export type NotificationDefaultRoute = components['schemas']['NotificationDefaultRoute'];
 
+/** A delivery-hours schedule (ADR-226): notifications about the nodes it covers are held outside
+ *  these weekdays and minutes, read in each node's local time. */
+export type DeliverySchedule = components['schemas']['DeliverySchedule'];
+/** Every schedule plus the default time zone (`GET /api/v1/delivery-hours`). */
+export type DeliveryHoursConfig = components['schemas']['DeliveryHoursConfig'];
+/** A notification held until its node's delivery hours open (`GET /api/v1/held-notifications`). */
+export type HeldNotification = components['schemas']['HeldNotification'];
+
 /** One name a notification template may reference (ADR-039). The catalogue is served rather than
  *  transcribed, so the editor's palette and the renderer's context cannot disagree. */
 export type TemplateVariable = components['schemas']['TemplateVariable'];

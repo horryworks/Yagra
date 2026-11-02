@@ -29,7 +29,9 @@
     },
     "merakiOrgSubjectWhy": {
       "info": "Meraki の Dashboard API がこの組織に応答せず、ノードの値を取得できていません。各ノードは最後に取得した状態のままで、このアラート 1 つが全部を代表します。"
-    }
+    },
+    "heldUntil": "{{until}} まで保留中",
+    "held": "保留中"
   },
   "acked": {
     "title": "{{source}} で {{by}} が ACK 済み{{note}}",

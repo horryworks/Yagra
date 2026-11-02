@@ -187,7 +187,10 @@
     },
     "prefixesUse": {
       "info": "ディスカバリでこの IP レンジをスキャンできます。取り込みでは、アドレスを含む IP レンジを持つグループへノードを振り分けます。"
-    }
+    },
+    "timeZone": "タイムゾーン（任意）",
+    "timeZoneInherit": "上のフォルダと同じ",
+    "timeZoneFromNetbox": "{{zone}}（NetBox）"
   },
   "deleteGroup": {
     "confirm": "グループ <b>{{name}}</b> を削除しますか？{{impact}} — <b>元に戻せません</b>。",

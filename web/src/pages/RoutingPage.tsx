@@ -6,6 +6,7 @@
 // any env-configured channel stays an always-on default route, shown as one line above the rules
 // (ADR-200 Inc.28). The third section is the delivery
 // log (ADR-195, `DeliveryLog.tsx`): what each delivery did, and on whose side a failure was.
+// Between the rules and the log sit the delivery hours (ADR-226, `DeliveryHoursSection.tsx`).
 //
 // Data-table standard v2: each list is a section header + toolbar (count + "+ Add …") over the
 // shared `.ytable`. Add via modal; enable/disable is an inline icon toggle; delete confirms in a
@@ -57,6 +58,7 @@ import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTes
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { DeliveryLog } from './DeliveryLog';
+import { DeliveryHoursSection } from './DeliveryHoursSection';
 import { defaultRouteChannels } from './defaultRoute';
 import { DELIVERY_FILTER_PREFIX, deliveryFilters } from './deliveryLogQuery';
 import { specColumns } from '../lib/columnFilter';
@@ -137,6 +139,7 @@ export function RoutingPage() {
           onChange={load}
           onError={setError}
         />
+        <DeliveryHoursSection canSystem={canSystem} onError={setError} />
         <DeliveryLog channels={channels} filterState={logFilters} sectionRef={logRef} />
       </LoadGate>
     </div>

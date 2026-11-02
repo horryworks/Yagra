@@ -15,9 +15,9 @@ test('every row action on Notification delivery can be pressed', async ({ page }
   await expect(page.locator('.dt-row').first()).toBeVisible();
   const report = await inspectRowActions(page);
   expect(report.findings).toEqual([]);
-  // Five on a channel (test, delivery log, template, on/off, delete — ADR-195 added the log) and
-  // three on a rule (edit, on/off, delete).
-  expect(report.buttons).toBe(8);
+  // Five on a channel (test, delivery log, template, on/off, delete — ADR-195 added the log),
+  // three on a rule (edit, on/off, delete) and three on a delivery-hours schedule (ADR-226).
+  expect(report.buttons).toBe(11);
 });
 
 // Refresh used to write the same filters back to the URL. The query string did not change, so

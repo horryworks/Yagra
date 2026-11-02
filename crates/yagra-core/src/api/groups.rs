@@ -38,6 +38,7 @@ use yagra_base::groups::{placement_order, would_create_cycle, GroupType, SortDir
     sort_group_children,
     set_node_group_pool,
     set_node_group_geo,
+    set_node_group_time_zone,
     set_node_group_prefixes,
     set_node_group_tags,
     get_prefix_gaps
@@ -59,6 +60,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/node-groups/:id/sort", post(sort_group_children))
         .route("/api/v1/node-groups/:id/pool", put(set_node_group_pool))
         .route("/api/v1/node-groups/:id/geo", put(set_node_group_geo))
+        .route(
+            "/api/v1/node-groups/:id/time-zone",
+            put(set_node_group_time_zone),
+        )
         .route(
             "/api/v1/node-groups/:id/prefixes",
             put(set_node_group_prefixes),
@@ -441,6 +446,76 @@ async fn set_node_group_pool(
             ApiError::from_internal(e.as_ref(), "set group pool", "failed to set group pool")
         })?;
     if updated {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "group_not_found",
+            format!("no group {id}"),
+        ))
+    }
+}
+
+/// A folder's time zone: an IANA name, or null (or empty) to inherit (ADR-226).
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct GroupTimeZone {
+    time_zone: Option<String>,
+}
+
+/// Set the zone a folder's nodes keep delivery hours in (ADR-226 decision 5).
+///
+/// Refused with 409 while the folder's NetBox Site names a zone: NetBox's value wins on every
+/// read, so a zone typed here would be stored and never used (decision 6).
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/time-zone", tag = "groups",
+    params(("id" = Uuid, Path, description = "Group id")),
+    request_body = GroupTimeZone,
+    responses(
+        (status = 204, description = "Time zone set or cleared"),
+        (status = 400, description = "Not an IANA zone name", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such group, or one outside the caller's folders", body = super::error::ErrorBody),
+        (status = 409, description = "The folder's NetBox Site sets its time zone", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_group_time_zone(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<GroupTimeZone>,
+) -> ApiResult<StatusCode> {
+    // A folder's zone decides when every node beneath it pages, so a group-scoped Operator may set
+    // it only on a folder they can see - the rule `set_node_group_tags` follows.
+    super::scope::require_visible_group(&scope, id)?;
+    super::util::parse_time_zone(body.time_zone.as_deref())?;
+    let zone = super::util::stored_time_zone(body.time_zone.as_deref());
+    let internal = |e: anyhow::Error| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "set group time zone",
+            "failed to set the folder's time zone",
+        )
+    };
+    if admin
+        .groups
+        .netbox_time_zone(id)
+        .await
+        .map_err(internal)?
+        .is_some()
+    {
+        return Err(ApiError::conflict(
+            "time_zone_from_netbox",
+            "this folder's time zone comes from NetBox; change it there",
+        ));
+    }
+    if admin
+        .groups
+        .set_time_zone(id, zone.as_deref())
+        .await
+        .map_err(internal)?
+    {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(

@@ -276,7 +276,9 @@ impl YagraMcp {
                        windows (each with its scope, start/end, and whether it covers now), \
                        reactive mutes (node or folder, with an expiry), and exemptions — nodes an \
                        operator has released from a window or mute they only inherited, which are \
-                       alerting normally despite it. Check this before concluding a fleet is \
+                       alerting normally despite it — and held_notifications, pages kept back \
+                       because the node is outside its delivery hours, each with when it is due \
+                       to go out. Check this before concluding a fleet is \
                        healthy — a quiet fleet and a silenced one look the same in \
                        get_active_alerts. Windows opened with open_maintenance appear here. \
                        Requires live mode."
@@ -319,12 +321,18 @@ impl YagraMcp {
                 Ok(x) => x,
                 Err(e) => return tool_api_error(TOOL, &e),
             };
+        let held_notifications =
+            match crate::api::delivery_hours::visible_held(&self.state, scope, admin).await {
+                Ok(h) => h,
+                Err(e) => return tool_api_error(TOOL, &e),
+            };
         ok_json(
             TOOL,
             &crate::mcp::dto::SuppressionsDto {
                 maintenance_windows: windows,
                 mutes,
                 exemptions,
+                held_notifications,
             },
         )
     }

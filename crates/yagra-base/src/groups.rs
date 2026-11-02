@@ -191,6 +191,40 @@ pub struct GroupSummary {
     /// The integration that made this folder and still keeps it, or `null` for one a person made
     /// (ADR-164 Inc.7). See [`GroupOrigin`] for what "still keeps" means.
     pub origin: Option<GroupOrigin>,
+    /// The IANA time zone a person set on this folder, or null (ADR-226 decision 5).
+    pub time_zone: Option<String>,
+    /// The zone the NetBox Site this folder mirrors names, or null. It wins over `time_zone`
+    /// whenever it is set, and the editor shows it read-only (ADR-226 decision 6).
+    pub netbox_time_zone: Option<String>,
+    /// The zone this folder's nodes are judged in after inheritance: its own (NetBox's first,
+    /// then a person's), else the nearest ancestor's, else null for the deployment's default.
+    /// Resolved on every read, never stored - the same call the effective position makes.
+    pub effective_time_zone: Option<String>,
+}
+
+/// A folder's own zone: NetBox's when it names one, else the one a person set (ADR-226 decision 6).
+#[must_use]
+pub fn own_time_zone(time_zone: Option<&str>, netbox_time_zone: Option<&str>) -> Option<String> {
+    netbox_time_zone
+        .filter(|z| !z.is_empty())
+        .or(time_zone.filter(|z| !z.is_empty()))
+        .map(str::to_owned)
+}
+
+/// Fill every row's `effective_time_zone` from its own zone or its nearest ancestor's (ADR-226).
+///
+/// The zone twin of [`resolve_group_geo`], over the same walk.
+pub fn resolve_group_time_zone(groups: &mut [GroupSummary]) {
+    let resolved = resolve_nearest_ancestor(groups.iter().map(|g| {
+        (
+            g.id,
+            g.parent_id,
+            own_time_zone(g.time_zone.as_deref(), g.netbox_time_zone.as_deref()),
+        )
+    }));
+    for g in groups.iter_mut() {
+        g.effective_time_zone = resolved.get(&g.id).map(|(zone, _)| zone.clone());
+    }
 }
 
 /// Which integration a folder belongs to (ADR-164 Inc.7).
@@ -888,7 +922,7 @@ impl GroupRepo {
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
             "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool, \
-                    tags, tags_excluded \
+                    tags, tags_excluded, time_zone, netbox_time_zone \
              FROM node_groups ORDER BY sort_order, name, id",
         )
         .fetch_all(&self.pool)
@@ -921,11 +955,16 @@ impl GroupRepo {
                     prefixes: Vec::new(),
                     // Filled by `attach_origin` below.
                     origin: None,
+                    time_zone: row.try_get("time_zone")?,
+                    netbox_time_zone: row.try_get("netbox_time_zone")?,
+                    // Overwritten wholesale by `resolve_group_time_zone` below.
+                    effective_time_zone: None,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         resolve_group_geo(&mut groups);
         resolve_group_tags(&mut groups);
+        resolve_group_time_zone(&mut groups);
         self.attach_prefixes(&mut groups).await?;
         self.attach_origin(&mut groups).await?;
         Ok(groups)
@@ -1552,6 +1591,51 @@ scope_predicate(2, "p.group_id"),
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with `None`) the zone a person gave this folder (ADR-226 decision 5). Returns
+    /// whether the folder exists. The caller checks the name against the zone database; a NetBox
+    /// folder's own zone is a different column and is left alone.
+    pub async fn set_time_zone(&self, id: Uuid, time_zone: Option<&str>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE node_groups SET time_zone = $2 WHERE id = $1")
+            .bind(id)
+            .bind(time_zone)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// The zone NetBox gives this folder, if any, so a person's write can be refused while it
+    /// wins (ADR-226 decision 6). `Ok(None)` for a folder that does not exist, too.
+    pub async fn netbox_time_zone(&self, id: Uuid) -> anyhow::Result<Option<String>> {
+        let zone: Option<Option<String>> =
+            sqlx::query_scalar("SELECT netbox_time_zone FROM node_groups WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(zone.flatten().filter(|z| !z.is_empty()))
+    }
+
+    /// `(group, parent, own zone)` for every folder, the own zone being NetBox's first and then a
+    /// person's (ADR-226). What the delivery-hours policy resolves each node's zone from.
+    pub async fn time_zone_rows(
+        &self,
+    ) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
+        let rows =
+            sqlx::query("SELECT id, parent_id, time_zone, netbox_time_zone FROM node_groups")
+                .fetch_all(&self.pool)
+                .await?;
+        rows.into_iter()
+            .map(|row| {
+                let own: Option<String> = row.try_get("time_zone")?;
+                let netbox: Option<String> = row.try_get("netbox_time_zone")?;
+                Ok((
+                    row.try_get("id")?,
+                    row.try_get("parent_id")?,
+                    own_time_zone(own.as_deref(), netbox.as_deref()),
+                ))
+            })
+            .collect()
+    }
+
     /// The distinct non-empty pools folders assign. Feeds the pool picker together with
     /// [`crate::repo::NodeRepo::distinct_pools`].
     pub async fn distinct_pools(&self) -> anyhow::Result<Vec<String>> {
@@ -1770,6 +1854,35 @@ pub async fn delete_subtree(
 mod tests {
     use super::*;
 
+    /// NetBox's zone beats a person's on the same folder, and a folder with neither inherits the
+    /// nearest ancestor's (ADR-226 decisions 5 and 6).
+    #[test]
+    fn a_folder_takes_netbox_zone_first_then_its_own_then_its_parents() {
+        let mut site = geo_row(1, None, None);
+        site.time_zone = Some("Europe/London".to_owned());
+        site.netbox_time_zone = Some("Asia/Tokyo".to_owned());
+        let floor = geo_row(2, Some(1), None);
+        let mut lab = geo_row(3, None, None);
+        lab.time_zone = Some("America/New_York".to_owned());
+        lab.netbox_time_zone = Some(String::new());
+        let none = geo_row(4, None, None);
+        let mut rows = vec![site, floor, lab, none];
+        resolve_group_time_zone(&mut rows);
+        let zone = |i: usize| rows[i].effective_time_zone.as_deref();
+        assert_eq!(zone(0), Some("Asia/Tokyo"));
+        assert_eq!(
+            zone(1),
+            Some("Asia/Tokyo"),
+            "a sub-folder inherits the site's zone"
+        );
+        assert_eq!(
+            zone(2),
+            Some("America/New_York"),
+            "an empty NetBox zone is no zone"
+        );
+        assert_eq!(zone(3), None);
+    }
+
     /// **The anchor does not have to be the same kind as the thing being placed** (ADR-162).
     ///
     /// This is the property the whole increment rests on and it needed no code change: the function
@@ -1862,6 +1975,9 @@ mod tests {
             effective_tags: Vec::new(),
             prefixes: Vec::new(),
             origin: None,
+            time_zone: None,
+            netbox_time_zone: None,
+            effective_time_zone: None,
         }
     }
 
