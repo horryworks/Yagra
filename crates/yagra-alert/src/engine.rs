@@ -260,6 +260,13 @@ pub struct AlertManager {
     /// check is observed again: at most one `u32` per check, and harmless, because a new alert
     /// only opens through a committed transition, which clears it first.
     side_pending: Mutex<HashMap<CheckId, u32>>,
+    /// A node's own alerts that its outage rolled up, held after the node came back until their
+    /// check has been bad for its rule's dwell again (ADR-225), with the count of consecutive bad
+    /// observations since. [`Self::resweep_suppression`] adds an entry instead of re-firing,
+    /// [`Self::advance_release`] counts and releases, and the node going down again removes it.
+    /// ⚠️ Memory only: a core restart forgets what was being held. A stale entry is harmless —
+    /// it releases only an alert that still carries its roll-up marker.
+    releasing: Mutex<HashMap<CheckId, u32>>,
     /// What an alert is called in its stream frame ([`AlertTitles`]).
     titles: AlertTitles,
 }
@@ -311,6 +318,7 @@ impl AlertManager {
             intervals,
             reports: Mutex::new(ReportLedger::default()),
             side_pending: Mutex::new(HashMap::new()),
+            releasing: Mutex::new(HashMap::new()),
             titles,
         }
     }
@@ -1466,8 +1474,11 @@ impl AlertManager {
             return actions;
         }
 
+        let released = self.advance_release(check, raw, transition.is_some(), dwell);
         let Some(t) = transition else {
-            return self.refresh_breached_side(check, raw, at_unix_ms, eval, dwell);
+            let mut actions = self.refresh_breached_side(check, raw, at_unix_ms, eval, dwell);
+            actions.extend(released);
+            return actions;
         };
         // A committed transition replaces whatever side change was pending on the old alert.
         self.side_pending
@@ -1623,6 +1634,48 @@ impl AlertManager {
         vec![NotifyAction::Fire(updated)]
     }
 
+    /// One observation of a check whose alert is held after its node came back (ADR-225).
+    ///
+    /// A bad observation counts; `dwell` of them in a row take the roll-up marker off and fire,
+    /// so an agent that stays dead after the device pings again still pages (ADR-160 decision 5).
+    /// A good one resets the count, and the check then closes through its own dwell with the
+    /// marker still on, which `Notifier` delivers nowhere. A committed transition ends the hold:
+    /// the transition itself decides what is said.
+    fn advance_release(
+        &self,
+        check: CheckId,
+        raw: NodeState,
+        transitioned: bool,
+        dwell: u32,
+    ) -> Option<NotifyAction> {
+        {
+            let mut releasing = self.releasing.lock().expect("releasing mutex poisoned");
+            let seen = releasing.get_mut(&check)?;
+            if transitioned {
+                releasing.remove(&check);
+                return None;
+            }
+            if !raw.is_problem() {
+                *seen = 0;
+                return None;
+            }
+            *seen += 1;
+            if *seen < dwell.max(1) {
+                return None;
+            }
+            releasing.remove(&check);
+        }
+        let updated = {
+            let mut active = self.active.lock().expect("alerts mutex poisoned");
+            let alert = active.get_mut(&check)?;
+            // Only an alert still carrying the marker was being held; any other is its own already.
+            alert.root_cause.take()?;
+            alert.clone()
+        };
+        self.broadcast(&updated, false);
+        Some(NotifyAction::Fire(updated))
+    }
+
     /// Re-evaluate dependency suppression for active liveness alerts after `changed`'s down-set
     /// membership flipped. For each *other* node's active liveness alert whose root-cause
     /// attribution changed, update the active alert (and notify subscribers), then:
@@ -1636,6 +1689,10 @@ impl AlertManager {
     /// Liveness alerts of `changed`'s descendants, **plus `changed`'s own non-liveness alerts**
     /// (ADR-087). Bounded by the current active-alert count; runs only when a node actually
     /// entered/left `Unreachable`.
+    ///
+    /// ⚠️ `changed`'s own alerts do **not** take the `Some → None` branch above: a node that came
+    /// back keeps them rolled up and [`Self::advance_release`] fires them only once their check has
+    /// been bad for its dwell again (ADR-225).
     ///
     /// The second half is what makes ADR-087 work in both directions. A node's `snmp_up` alert can
     /// commit *before* its liveness does — measured across 13 down nodes, `snmp_up` won 7 times,
@@ -1694,6 +1751,21 @@ impl AlertManager {
             } else {
                 down.contains(&alert_node).then_some(alert_node)
             };
+            // ADR-225: a node that came back keeps its own rolled-up alerts rolled up until their
+            // check proves it is still broken. Re-firing here paged every ordinary recovery once
+            // and wrote a "fired" row minutes before the check closed on its own — measured on the
+            // PoC, a device switched off every night re-fired `snmp_up` at 07:45 and closed it at
+            // 07:49. [`Self::advance_release`] takes the marker off after the rule's dwell.
+            if alert.metric != LIVENESS {
+                let mut releasing = self.releasing.lock().expect("releasing mutex poisoned");
+                if new_rc.is_some() {
+                    // Down again (or still): the outage owns it, nothing to wait for.
+                    releasing.remove(&alert.check);
+                } else if alert.root_cause.is_some() {
+                    releasing.insert(alert.check, 0);
+                    continue;
+                }
+            }
             if new_rc == alert.root_cause {
                 continue; // attribution unchanged
             }
@@ -5225,10 +5297,11 @@ mod tests {
         }
         assert_eq!(mgr.node_liveness(node), Some(NodeState::Maintenance));
 
-        // The window ends with the device answering ICMP and its agent still dead.
+        // The window ends with the device answering ICMP and its agent still dead. Since ADR-225 the
+        // page waits for the rule's dwell of bad readings after the node is back — 50 here.
         mgr.set_config(cfg(vec![snmp_up_rule(50)], meta_for(node)));
         let mut paged = false;
-        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) + 50 {
             for action in mgr.observe(&snmp_down(node, CheckOutcome::Reachable, 20_000 + i)) {
                 if let NotifyAction::Fire(alert) = action {
                     paged |= alert.metric == yagra_common::METRIC_SNMP_UP;
@@ -5454,6 +5527,150 @@ mod tests {
              would mean an agent-only outage never pages",
         );
         assert_eq!(fired.root_cause, None);
+    }
+
+    // ── ADR-225: a node that comes back does not re-fire what its outage rolled up ──────────────
+    //
+    // Measured on the PoC (2026-11-02): a device switched off every night came back at 07:45, its
+    // `snmp_up` alert was re-fired standalone at that second and closed at 07:49 when the agent
+    // answered — one page and one "fired" History row per ordinary recovery.
+
+    /// Commit an outage on `node` with its `snmp_up` (dwell `snmp_dwell`) rolled into it.
+    fn outage_with_rolled_snmp(node: NodeId, snmp_dwell: u32) -> AlertManager {
+        let mgr = AlertManager::new(untitled);
+        mgr.set_config(cfg(
+            vec![liveness_rule(), snmp_up_rule(snmp_dwell)],
+            meta_for(node),
+        ));
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL.max(snmp_dwell)) {
+            mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, i));
+        }
+        assert!(mgr.down_set().contains(&node), "the outage is committed");
+        assert_eq!(snmp_root_cause(&mgr), Some(node), "snmp_up rolled into it");
+        mgr
+    }
+
+    /// One poll result carrying `snmp_up = 1`: the agent answers.
+    fn snmp_answering(node: NodeId, at: i64) -> PollResult {
+        let mut r = result(node, CheckOutcome::Reachable, at);
+        r.samples = vec![yagra_bus::Sample::gauge(yagra_common::METRIC_SNMP_UP, 1.0)];
+        r
+    }
+
+    #[test]
+    fn an_ordinary_recovery_closes_the_rolled_up_alert_without_firing_it() {
+        let node = NodeId::new();
+        let mgr = outage_with_rolled_snmp(node, 2);
+
+        let mut fires = Vec::new();
+        let mut resolved = None;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) + 2 {
+            for action in mgr.observe(&snmp_answering(node, 100 + i)) {
+                match action {
+                    NotifyAction::Fire(al) => fires.push(al.metric),
+                    NotifyAction::Resolve(al) if al.metric == yagra_common::METRIC_SNMP_UP => {
+                        resolved = Some(al);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(!mgr.down_set().contains(&node), "the outage is over");
+        assert!(
+            fires.is_empty(),
+            "the device came back healthy and something was re-fired: {fires:?}"
+        );
+        let resolved = resolved.expect("the agent answered for its dwell, so snmp_up closes");
+        assert_eq!(
+            resolved.root_cause,
+            Some(node),
+            "closed with the marker on — `Notifier` has no incident to resolve for it"
+        );
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn a_dead_agent_pages_only_after_its_dwell_of_bad_readings_once_the_node_is_back() {
+        let node = NodeId::new();
+        let mgr = outage_with_rolled_snmp(node, 2);
+
+        // Liveness commits Ok on the DEFAULT_LIVENESS_DWELL-th reachable result; that result's
+        // `snmp_up = 0` is the first bad reading after the return, the next one is the second.
+        let mut fired_at = None;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) + 1 {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Reachable, 100 + i)) {
+                if let NotifyAction::Fire(al) = action {
+                    if al.metric == yagra_common::METRIC_SNMP_UP {
+                        assert!(fired_at.is_none(), "fired twice");
+                        fired_at = Some((i, al.root_cause));
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            fired_at,
+            Some((i64::from(DEFAULT_LIVENESS_DWELL), None)),
+            "the page comes on the second bad reading after the return, standalone"
+        );
+    }
+
+    #[test]
+    fn a_node_that_falls_again_while_held_fires_nothing() {
+        let node = NodeId::new();
+        let mgr = outage_with_rolled_snmp(node, 5);
+
+        // Back, with the agent still dead — fewer bad readings than the dwell.
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&snmp_down(node, CheckOutcome::Reachable, 100 + i));
+        }
+        assert!(!mgr.down_set().contains(&node));
+        // Down again before the hold ran out, and staying down well past the old dwell.
+        let mut fires = Vec::new();
+        for i in 0..20 {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 200 + i)) {
+                if let NotifyAction::Fire(al) = action {
+                    fires.push(al.metric);
+                }
+            }
+        }
+        assert!(mgr.down_set().contains(&node));
+        assert_eq!(
+            fires,
+            vec![LIVENESS.to_string()],
+            "only the new outage pages; snmp_up stays inside it"
+        );
+        assert_eq!(snmp_root_cause(&mgr), Some(node));
+    }
+
+    /// The branch ADR-225 deliberately left alone: a child whose parent recovered is still known to
+    /// be down itself, so its liveness alert pages at once.
+    #[test]
+    fn a_child_left_down_when_its_parent_recovers_still_pages_at_once() {
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mut meta = meta_for(parent);
+        meta.extend(meta_for(child));
+        let mut topo = Topology::new();
+        topo.add_dependency(child, parent);
+        let mgr = AlertManager::new(untitled);
+        mgr.set_config(cfg(vec![liveness_rule()], meta).with_topology(topo));
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(parent, CheckOutcome::Unreachable, i));
+            mgr.observe(&result(child, CheckOutcome::Unreachable, i));
+        }
+
+        let mut child_fired = false;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&result(parent, CheckOutcome::Reachable, 100 + i)) {
+                if let NotifyAction::Fire(al) = action {
+                    child_fired |= al.node() == Some(child);
+                }
+            }
+        }
+        assert!(
+            child_fired,
+            "the parent is back and the child is still down: that is its own incident now"
+        );
     }
 
     /// A neighbour's alert is not touched when this node flips, and a pool-coverage alert is not

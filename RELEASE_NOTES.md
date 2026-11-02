@@ -18,6 +18,10 @@
 - **A node switched back on keeps the login that worked.** Switching config backup off and on again, from the list or from the node's Config tab, used to forget the working login and try the logins from the top of the order again, sending the ones ahead of it to the device and counting them against the lockout limits. The working login is now kept unless the try order changed; a node that had no working login starts its pass again, as before.
 - `GET /api/v1/config-backups` takes `state=on|off|never|all` (default `on`, the previous answer; an unknown value is `400`), and each row now carries `enabled`, `configured`, `model` and `input`. `POST /api/v1/config-backups/switch` with `{node_ids, enabled, input?}` (up to 5,000 nodes, one transaction) answers `200` with `switched`, `no_model` and `unchanged`; turning on a node with no settings without `input` is `400 input_required`. Permissions are those of `PUT /api/v1/nodes/{node_id}/config-backup`.
 
+### Improvements
+
+- **A device that comes back no longer re-fires its SNMP and ping-loss alerts.** While a node is down, its other alerts are part of that outage and page nobody. When it answered again they were re-fired as new standalone alerts at that moment, so every ordinary recovery sent one notification and wrote a "fired" row in History minutes before the alert closed by itself. They now stay part of the outage after the node is back and close quietly when the check answers. They fire on their own only after the check has stayed bad for its rule's dwell once the node is back, so an SNMP agent that stays dead on a device that pings still pages, a little later than before.
+
 ## v0.3.65 — Save a device's running configuration from Yagra, fetch config backups on a daily schedule, and pick the time zone from the clock in the top bar
 
 ### New Features
