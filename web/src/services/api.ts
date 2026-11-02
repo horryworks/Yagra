@@ -1389,6 +1389,11 @@ export const api = {
       path: { node_id: nodeId, ifindex },
     }),
 
+  /** The threshold rules on a node's node-wide metrics that reach it, each flagged with whether
+   *  it is in force (ADR-229). Per-interface metrics are answered per port above. */
+  listNodeThresholds: (nodeId: string): Promise<MatchingThreshold[]> =>
+    apiGet('/api/v1/nodes/{node_id}/thresholds', { path: { node_id: nodeId } }),
+
   /** Delete a node. */
   deleteNode: (id: string): Promise<void> =>
     apiDelete('/api/v1/nodes/{node_id}', { path: { node_id: id } }),

@@ -708,51 +708,29 @@ export type ProfileInput = components['schemas']['ProfileBody'];
 
 /** Every threshold scope level, broadest → most specific. `global` is every node and carries no
  *  scope id (ADR-075); the server pins its `scope_id` to the empty string. `group_id` is a folder
- *  group in the inventory tree and covers every group inside it; the older `group` matches a node
- *  **tag** and is legacy (ADR-075 Inc.3).
- *
- *  ⚠️ Since ADR-135 Inc.2 a `group` rule matches a node's **effective** tags — the ones it
- *  carries plus every one its folder chain supplies. */
+ *  group in the inventory tree and covers every group inside it. There is no label level: ADR-229
+ *  removed it, because a label is a description for notifications and never a threshold scope. */
 export const SCOPE_LEVELS = [
   'global',
   'profile',
-  'group',
   'group_id',
   'node',
   'interface',
 ] as const;
 
-/** The levels a *new* rule may be created at from the Metric alert rules screen.
- *
- *  One is excluded.
- *
- *  `group` (a node **tag**) is legacy because a folder group is the better-typed axis: it is
- *  recursive, it is the unit RBAC scopes by, and since ADR-135 Inc.2 it is also what carries tags.
- *  Two ways to say "the Tokyo site" is one more than the screen should offer.
- *
- *  ⚠️ **The reason used to be "nothing writes `nodes.tags`", and that stopped being true in
- *  ADR-135.** It was written as a justification for a decision that survives its own argument —
- *  exactly the shape that rots, since a comment giving a reason does not update itself when the
- *  reason does. The decision (ADR-075 Inc.3 decision 10) is unchanged; only this text is.
+/** The levels a *new* rule may be created at from the Metric alert rules screen: all of them.
  *
  *  `interface` (one port of one node, ADR-076) is creatable since ADR-209 decision 7: the dialog
  *  picks a node, then one of its ports, and hands the port to the same port-rule dialog Node
  *  detail ▸ Interfaces opens. That is the ADD dialog only: the edit dialog drops `interface`, since
- *  nothing there picks a port, and re-adds it just for a rule already at that level.
- *
- *  `group` still resolves, lists, filters and **edits** at its level, which is why it stays in
- *  `SCOPE_LEVELS` above — the filter row, the table badge and the edit dialog all iterate that one,
- *  and the dialog re-adds a rule's own level when it is not creatable. */
-export const CREATABLE_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(
-  (l) => l !== 'group',
-);
+ *  nothing there picks a port, and re-adds it just for a rule already at that level. */
+export const CREATABLE_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS;
 
 /** Threshold scope level (snake_case). Most-specific wins. Pinned to `schemas.ScopeLevel`. */
 export type ScopeLevel = (typeof SCOPE_LEVELS)[number];
 
-/** Maintenance-window scope. The threshold scopes plus `group_id` — a hierarchical folder group
- *  (the All Nodes tree), resolved recursively incl. subgroups (ADR-022). Distinct from the legacy
- *  tag-based `group` scope (`scope_id` is a group UUID, not a tag). */
+/** Maintenance-window scope: a node, a profile, or `group_id` — a hierarchical folder group (the
+ *  All Nodes tree), resolved recursively incl. subgroups (ADR-022). `system` is the upgrade's own. */
 export type MaintenanceScopeLevel = components['schemas']['WindowScope'];
 
 /** Every breach direction. */

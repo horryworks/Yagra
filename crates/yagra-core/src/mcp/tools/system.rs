@@ -411,7 +411,7 @@ impl ThresholdFilterOwned {
 pub(super) fn threshold_filter_of(p: &ConfigParams) -> Result<ThresholdFilterOwned, ApiError> {
     // Both vocabularies are rendered from the enums rather than written out, through the same
     // helper the REST edge uses. Its hand-written copy had rotted to "global, profile, group or
-    // node" — four of the six levels, unchanged since ADR-075 added `group_id` and ADR-076 added
+    // node" — four of the six levels there were then, unchanged since ADR-075 added `group_id` and ADR-076 added
     // `interface` — and a second hand-written list here would have rotted the same way (ADR-079).
     Ok(ThresholdFilterOwned {
         metric: crate::api::util::normalize_search(p.search.as_deref()),
@@ -920,12 +920,11 @@ impl YagraMcp {
                        `warning` and `critical` as well: those are the rule's **primary side** \
                        only, kept for clients written before bands existed. On a band rule they \
                        describe half of it — read the four bounds, not these three. `scope_level` \
-                       is one of six, \
+                       is one of five, \
                        broadest first: `global` (every node, `scope_ids` empty), `profile`, \
-                       `group` (a node **tag value**), `group_id` (a folder group, inherited by \
-                       everything inside it), `node`, `interface`. **`scope_ids` holds a \
-                       different kind of id at each level** — profile UUIDs, tag strings, \
-                       folder-group UUIDs, node UUIDs, or `<node-uuid>:<ifindex>` for one port — \
+                       `group_id` (a folder group, inherited by everything inside it), `node`, \
+                       `interface`. **`scope_ids` holds a different kind of id at each level** — \
+                       profile UUIDs, folder-group UUIDs, node UUIDs, or `<node-uuid>:<ifindex>` for one port — \
                        so resolve them with get_config(kind=profiles), list_node_groups or \
                        list_nodes rather than assuming a UUID. The narrowest level that reaches a \
                        target wins, and rules at that level merge by keeping the more restrictive \

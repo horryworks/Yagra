@@ -20,7 +20,6 @@
     },
     "scope": {
       "group": "group",
-      "groupTag": "group (tag)",
       "node": "node",
       "profile": "profile",
       "system": "whole deployment"

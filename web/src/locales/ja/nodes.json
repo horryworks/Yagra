@@ -269,7 +269,8 @@
     "collection": "収集",
     "events": "イベント",
     "flow": "フロー",
-    "config": "Config"
+    "config": "Config",
+    "rules": "アラートルール"
   },
   "ap": {
     "colAp": "アクセスポイント",
@@ -1431,5 +1432,18 @@
         "save": "自動保存の設定を保存できませんでした"
       }
     }
+  },
+  "rules": {
+    "colMetric": "メトリクス",
+    "colBounds": "効いている境界値",
+    "colDecided": "決まった場所",
+    "colOverridden": "上書きされたルール",
+    "overridden_one": "{{count}} 件",
+    "overridden_other": "{{count}} 件",
+    "overriddenRule": "上書き済み:",
+    "thisNode": "このノード",
+    "edit": "編集",
+    "override": "このノードだけ変える",
+    "empty": "このノードに当たるアラートルールはありません。"
   }
 }

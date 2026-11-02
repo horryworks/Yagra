@@ -269,7 +269,8 @@
     "collection": "Collection",
     "events": "Events",
     "flow": "Flow",
-    "config": "Config"
+    "config": "Config",
+    "rules": "Alert rules"
   },
   "ap": {
     "colAp": "Access point",
@@ -1441,5 +1442,18 @@
         "save": "Could not save the automatic-save setting"
       }
     }
+  },
+  "rules": {
+    "colMetric": "Metric",
+    "colBounds": "In force",
+    "colDecided": "Decided at",
+    "colOverridden": "Overridden",
+    "overridden_one": "{{count}} rule",
+    "overridden_other": "{{count}} rules",
+    "overriddenRule": "Overridden:",
+    "thisNode": "This node",
+    "edit": "Edit",
+    "override": "Change for this node",
+    "empty": "No alert rules reach this node."
   }
 }

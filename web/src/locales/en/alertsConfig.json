@@ -480,7 +480,6 @@
     "scopeLevel": {
       "global": "every node",
       "profile": "profile",
-      "group": "node tag",
       "node": "node",
       "group_id": "folder group",
       "interface": "interface"
@@ -496,7 +495,6 @@
       "scopeId": "Scope",
       "scopeIdPlaceholder": {
         "profile": "Pick a device profile",
-        "group": "node tag (e.g. a site name)",
         "node": "Pick a node",
         "group_id": "Pick a folder group"
       },
@@ -508,7 +506,6 @@
       "critPlaceholder": "crit",
       "add": "Add rule",
       "folderGroupHint": "Also covers every group inside it.",
-      "legacyTagHint": "Legacy scope: matches a node tag. New rules use a folder group.",
       "port": "Port",
       "portPlaceholder": "Pick a port",
       "noPorts": "This node reports no ports.",

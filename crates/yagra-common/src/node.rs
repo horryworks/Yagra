@@ -130,7 +130,7 @@ mod tests {
 
     // `tags_are_looked_up_by_key` lived here and was deleted with the key (ADR-135 inc. 2).
     // `Node::tag(key)` had exactly one caller in the whole workspace — that test — because both
-    // readers of this field (`ScopeLevel::Group` thresholds, `WindowScope::Group` maintenance)
-    // matched on `tags.values()` and threw the key away. A set of labels is what they were both
-    // already treating it as.
+    // readers of this field at the time (the node-tag threshold and maintenance scopes, both
+    // removed by ADR-229) matched on `tags.values()` and threw the key away. A set of labels is
+    // what they were both already treating it as.
 }

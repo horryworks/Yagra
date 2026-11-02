@@ -7,7 +7,7 @@
 //! model picks worse from a longer list. That fold creates a problem the ADR did not anticipate:
 //! **the endpoints behind one tool do not share a permission.**
 //!
-//! The measured spread across the routes folded here is `View` ×52, `ManageConfig` ×14,
+//! The measured spread across the routes folded here is `View` ×52, `ManageConfig` ×15,
 //! `ManageSystem` ×9, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
 //! two that are deliberately unauthenticated over REST. Picking one permission for the whole tool
 //! fails in both directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
@@ -15,7 +15,7 @@
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
 //! anything else. ADR-042 decision 2 declined a `Permission` column on the 244-row ledger because
-//! nothing could check it; that reasoning holds there and not here — over these 82 rows the
+//! nothing could check it; that reasoning holds there and not here — over these 83 rows the
 //! permission is a value a test can compare against the REST handler's own extractor, and
 //! [`tests::every_folded_read_demands_what_its_rest_route_demands`] does exactly that.
 //!
@@ -402,16 +402,27 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     },
     FoldedRead {
         tool: "get_interface_thresholds",
-        // Single-branch, like `list_node_metrics` above: here rather than in `TOOL_RESULT_TYPES`
-        // because this table checks more for less — the permission is compared against the REST
-        // handler's own extractor, and the forbidden-key check walks the response schema in the
-        // OpenAPI document rather than whichever fields one hand-built instance happened to fill.
-        arg: "",
+        // Here rather than in `TOOL_RESULT_TYPES` because this table checks more for less — the
+        // permission is compared against the REST handler's own extractor, and the forbidden-key
+        // check walks the response schema in the OpenAPI document rather than whichever fields one
+        // hand-built instance happened to fill. Two branches since ADR-229: `ifindex` given asks
+        // about one port, left out about the node's node-wide metrics (the row after this one).
+        arg: "ifindex",
         method: "GET",
         path: "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
         // ManageConfig, not View: a threshold decides when the fleet pages someone, so reading the
         // ruleset is as sensitive as writing it — the same reasoning the whole thresholds domain
         // carries, and the same permission `get_config`'s `thresholds` branch demands.
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_interface_thresholds",
+        arg: "",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/thresholds",
         perm: Some(Permission::ManageConfig),
         inventory_ids_ok: None,
         opaque_ok: None,

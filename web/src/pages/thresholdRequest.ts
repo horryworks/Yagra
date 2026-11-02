@@ -110,7 +110,7 @@ export function scopeAcceptsRowMatch(level: ScopeLevel): boolean {
  *  Named rather than branched on inline because two places need the same answer (which control to
  *  show, and whether the form is ready) and a second copy would let them disagree — a field that
  *  renders a picker while readiness still tests a text box is a Save button that never enables. */
-export type ScopeIdKind = 'none' | 'profile' | 'folderGroup' | 'tag' | 'node' | 'interface';
+export type ScopeIdKind = 'none' | 'profile' | 'folderGroup' | 'node' | 'interface';
 
 /** ⚠️ Exhaustive over `ScopeLevel` on purpose: a new level must decide what its target is, rather
  *  than falling into a default that renders a free-text box for something the server will reject. */
@@ -122,8 +122,6 @@ export function scopeIdKind(level: ScopeLevel): ScopeIdKind {
       return 'profile';
     case 'group_id':
       return 'folderGroup';
-    case 'group':
-      return 'tag';
     case 'node':
       return 'node';
     case 'interface':
@@ -134,8 +132,7 @@ export function scopeIdKind(level: ScopeLevel): ScopeIdKind {
 /** Whether the level accepts more than one target (ADR-078 decision 3).
  *
  *  `interface` is deliberately single: a rule at that level covers one port of one node, and every
- *  control that creates one picks exactly one port. `tag` is single because it is the legacy
- *  free-text scope and no new rule is created at it. */
+ *  control that creates one picks exactly one port. */
 export function scopeAcceptsMany(level: ScopeLevel): boolean {
   const kind = scopeIdKind(level);
   return kind === 'profile' || kind === 'folderGroup' || kind === 'node';

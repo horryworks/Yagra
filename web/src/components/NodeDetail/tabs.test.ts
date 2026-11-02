@@ -27,6 +27,7 @@ describe('node-detail tabs', () => {
       'interfaces',
       'neighbors',
       'collection',
+      'rules',
       'config',
       'events',
       'flow',
@@ -208,23 +209,39 @@ describe('node-detail tab visibility', () => {
     expect(tabs('device', true, true)).toEqual([...NODE_DETAIL_TABS]);
     // And the AP tab is the only thing that changes — the wireless answer must not disturb the
     // SNMP one, which is the mistake a single combined flag would have made.
-    expect(tabs('device', false, true)).toEqual(['overview', 'collection', 'config', 'events', 'flow']);
+    expect(tabs('device', false, true)).toEqual(['overview', 'collection', 'rules', 'config', 'events', 'flow']);
     // The ADR-119 case: Interfaces and Neighbors go, Events and Flow stay — they are attributed by
     // the device's address, so a ping-only node can have rows in either.
     // Config too (ADR-210 stage 2): it is read over SSH or telnet, not SNMP.
-    expect(tabs('device', false)).toEqual(['overview', 'collection', 'config', 'events', 'flow']);
-    expect(tabs('url', true)).toEqual(['overview', 'collection']);
-    expect(tabs('url', false)).toEqual(['overview', 'collection']);
-    expect(tabs('dns', false)).toEqual(['overview', 'collection']);
-    expect(tabs('meraki', false)).toEqual(['overview', 'collection', 'events']);
-    expect(tabs('meraki', true, false, 'appliance')).toEqual(['overview', 'neighbors', 'collection', 'events']);
+    expect(tabs('device', false)).toEqual(['overview', 'collection', 'rules', 'config', 'events', 'flow']);
+    expect(tabs('url', true)).toEqual(['overview', 'collection', 'rules']);
+    expect(tabs('url', false)).toEqual(['overview', 'collection', 'rules']);
+    expect(tabs('dns', false)).toEqual(['overview', 'collection', 'rules']);
+    expect(tabs('meraki', false)).toEqual(['overview', 'collection', 'rules', 'events']);
+    expect(tabs('meraki', true, false, 'appliance')).toEqual([
+      'overview',
+      'neighbors',
+      'collection',
+      'rules',
+      'events',
+    ]);
     expect(tabs('meraki', false, false, 'switch')).toEqual([
       'overview',
       'interfaces',
       'neighbors',
       'collection',
+      'rules',
       'events',
     ]);
+  });
+
+  // ADR-229: the rules tab is drawn only for a caller who may read the rules, and that is the
+  // only tab the permission moves.
+  it('leaves the rules tab out of the bar for a caller without manage_config', () => {
+    const device = { kind: 'device' as const, snmpConfigured: true, isWlanController: false, merakiProductType: null };
+    expect(visibleNodeDetailTabs(device, false)).toEqual(
+      visibleNodeDetailTabs(device).filter((tab) => tab !== 'rules'),
+    );
   });
 
   // The bar's order comes from NODE_DETAIL_TABS, never from a per-node list, so nothing can

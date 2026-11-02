@@ -276,11 +276,11 @@ impl ThresholdStore {
     /// a prefix cannot answer.
     ///
     /// The predicate is the exact complement of what [`yagra_alert::rules::threshold_applies`] can
-    /// reject cheaply. The four broad levels are taken whole because whether one matches depends
-    /// on the node's profile, tags and folder chain, which live in the engine's snapshot rather
-    /// than in this table; the two narrow levels are matched by their `scope_id`, which is this
-    /// table's own column. In practice the broad levels are per profile or per group and stay
-    /// small, while the ones that grow with the fleet are exactly the two that get filtered.
+    /// reject cheaply. The three broad levels are taken whole because whether one matches depends
+    /// on the node's profile and folder chain, which live in the engine's snapshot rather than in
+    /// this table; the two narrow levels are matched by their `scope_id`, which is this table's own
+    /// column. In practice the broad levels are per profile or per folder and stay small, while the
+    /// ones that grow with the fleet are exactly the two that get filtered.
     ///
     /// ⚠️ The narrow clauses are string comparisons against the stored `scope_id` because that is
     /// what the column holds — `<uuid>` for a node rule, `<uuid>:<ifindex>` for a port rule. Both
@@ -309,6 +309,35 @@ impl ThresholdStore {
         .bind(node.to_string())
         .bind(ScopeLevel::Interface.as_str())
         .bind(yagra_common::interface_scope_id(node, ifindex))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Self::row_to_threshold).collect()
+    }
+
+    /// Every rule that could conceivably reach one node's node-wide metrics (ADR-229) - the input to
+    /// `yagra_alert::rules::node_matching_rules`. The sibling of [`Self::candidates_for_interface`],
+    /// for the same reasons: the broad levels whole, the node's own rules by `scope_id`, and no port
+    /// rule at all, since a port rule never governs a node-wide metric.
+    pub async fn candidates_for_node(
+        &self,
+        node: uuid::Uuid,
+    ) -> anyhow::Result<Vec<StoredThreshold>> {
+        let broad: Vec<String> = ScopeLevel::ALL
+            .iter()
+            .filter(|l| !matches!(l, ScopeLevel::Node | ScopeLevel::Interface))
+            .map(|l| l.as_str().to_owned())
+            .collect();
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM thresholds \
+             WHERE scope_level = ANY($1) \
+                OR (scope_level = $2 AND $3 = ANY(scope_ids)) \
+             ORDER BY {}, metric, scope_id",
+            Self::COLUMNS,
+            Self::scope_level_rank()
+        ))
+        .bind(broad)
+        .bind(ScopeLevel::Node.as_str())
+        .bind(node.to_string())
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter().map(Self::row_to_threshold).collect()
@@ -490,7 +519,8 @@ mod tests {
         assert_eq!(parse_direction("nonsense"), Direction::Above);
         // Known tokens still resolve, so the fallback is not swallowing everything.
         assert_eq!(parse_level("node"), ScopeLevel::Node);
-        assert_eq!(parse_level("group"), ScopeLevel::Group);
+        // The node-tag level ADR-229 removed reads as the inert fallback, never as a folder rule.
+        assert_eq!(parse_level("group"), ScopeLevel::Profile);
         assert_eq!(parse_level("profile"), ScopeLevel::Profile);
         assert_eq!(parse_level("global"), ScopeLevel::Global);
         assert_eq!(parse_direction("below"), Direction::Below);
@@ -676,10 +706,11 @@ mod tests {
     #[test]
     fn the_column_list_is_named_once_and_used_by_every_read() {
         // Every read builds its SELECT from `COLUMNS`, so the positional `row_to_threshold`
-        // cannot drift from what was selected. Three of them: the engine's uncapped snapshot, the
-        // API's capped page, and the per-interface candidate set (ADR-076 decision 11).
+        // cannot drift from what was selected. Four of them: the engine's uncapped snapshot, the
+        // API's capped page, the per-interface candidate set (ADR-076 decision 11) and the
+        // per-node one (ADR-229).
         let src = production_source();
-        assert_eq!(src.matches("Self::COLUMNS").count(), 3);
+        assert_eq!(src.matches("Self::COLUMNS").count(), 4);
         // 13 since ADR-081 added the four bounds, 14 since ADR-143 added `row_match`. Deliberately
         // a written-out number: this is the one assertion whose whole job is to make someone
         // confirm the column set changed on purpose, so deriving it from `COLUMNS` would make it

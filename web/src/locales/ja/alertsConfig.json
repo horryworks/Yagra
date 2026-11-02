@@ -477,7 +477,6 @@
     "scopeLevel": {
       "global": "全ノード",
       "profile": "プロファイル",
-      "group": "タグ",
       "node": "ノード",
       "group_id": "グループ",
       "interface": "インターフェース"
@@ -493,7 +492,6 @@
       "scopeId": "スコープ",
       "scopeIdPlaceholder": {
         "profile": "デバイスプロファイルを選択",
-        "group": "タグ（例: サイト名）",
         "node": "ノードを選択",
         "group_id": "グループを選択"
       },
@@ -505,7 +503,6 @@
       "critPlaceholder": "重大",
       "add": "ルールを追加",
       "folderGroupHint": "中のグループもすべて対象です。",
-      "legacyTagHint": "旧スコープ: タグと照合します。新しいルールはグループを使ってください。",
       "port": "ポート",
       "portPlaceholder": "ポートを選択",
       "noPorts": "このノードはポートを報告していません。",

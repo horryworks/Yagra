@@ -161,9 +161,9 @@ describe('buildSuppressionIndex', () => {
     expect(idx.maintenanceNodes.size).toBe(0);
   });
 
-  it('does not map profile/tag windows onto tree rows (those surface via node state)', () => {
+  it('does not map profile windows onto tree rows (those surface via node state)', () => {
     const idx = buildSuppressionIndex(
-      [window({ scope_level: 'profile', scope_id: 'p1' }), window({ scope_level: 'group', scope_id: 'tokyo' })],
+      [window({ scope_level: 'profile', scope_id: 'p1' })],
       [],
       groups,
       nodes,

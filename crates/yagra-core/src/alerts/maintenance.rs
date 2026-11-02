@@ -23,19 +23,20 @@ use uuid::Uuid;
 use yagra_base::repo::scope_predicate;
 use yagra_common::{Node, NodeId};
 
-/// How a maintenance window is scoped. The first three mirror threshold scoping (ADR-013):
-/// `Node` = node id, `Profile` = device-class id, `Group` = a tag value. `FolderGroup` is the
-/// hierarchical inventory group (resolved recursively, incl. subgroups, ADR-022) — the scope the
-/// All Nodes right-click uses. It is *not* a threshold concept, so it stays local to maintenance
-/// rather than extending the shared [`yagra_common::ScopeLevel`].
+/// How a maintenance window is scoped: `Node` = node id, `Profile` = device-class id,
+/// `FolderGroup` = the hierarchical inventory group (resolved recursively, incl. subgroups,
+/// ADR-022) — the scope the All Nodes right-click uses. Kept apart from the shared
+/// [`yagra_common::ScopeLevel`] because `System` is not a threshold concept.
+///
+/// There is no label scope: ADR-229 removed it, because a label is a description carried to
+/// notifications and never decides whether Yagra judges a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowScope {
     Node,
     Profile,
-    Group,
     /// Hierarchical folder group (recursive). Serialized as `group_id` (the scope_id is a group
-    /// UUID) so it can't be confused with the tag-based `group` scope.
+    /// UUID), the spelling `ScopeLevel::FolderGroup` uses too.
     #[serde(rename = "group_id")]
     FolderGroup,
     /// Every node, with no id at all — the deployment itself is out of service.
@@ -76,7 +77,6 @@ pub const UPGRADE_SCOPE_ID: &str = "upgrade";
 yagra_base::stored_enum::token_enum!(WindowScope, Profile, "maintenance_windows.scope_level", [
     Node => "node",
     Profile => "profile",
-    Group => "group",
     FolderGroup => "group_id",
     System => "system",
 ]);
@@ -600,21 +600,11 @@ scope_predicate(6, "n.group_id"),
 /// falling into a wildcard. The hierarchical [`WindowScope::FolderGroup`] scope is resolved
 /// separately by the caller (it needs the group edges + DB membership, via
 /// [`yagra_base::groups::group_subtree`] + `NodeRepo::nodes_in_groups`), so it is never covered here.
-///
-/// `labels` is the node's **effective** label set (its own plus everything its folder chain
-/// supplies, ADR-135 inc. 2), passed in rather than read off `node` because the caller resolves it
-/// once per node and asks about many windows.
 #[must_use]
-fn scope_covers(
-    level: WindowScope,
-    scope_id: &str,
-    node: &Node,
-    labels: &BTreeSet<String>,
-) -> bool {
+fn scope_covers(level: WindowScope, scope_id: &str, node: &Node) -> bool {
     match level {
         WindowScope::Node => scope_id == node.id.to_string(),
         WindowScope::Profile => node.profile.map(|p| p.to_string()).as_deref() == Some(scope_id),
-        WindowScope::Group => labels.contains(scope_id),
         WindowScope::FolderGroup => false,
         // No id to match: the deployment itself is out of service, so every node is.
         WindowScope::System => true,
@@ -632,22 +622,20 @@ pub fn nodes_named_by_a_window(
     scopes: &[(WindowScope, String)],
     nodes: &[Node],
 ) -> BTreeSet<NodeId> {
-    // The filter admits only `WindowScope::Node`, which reads no label — so an empty set is the
-    // whole truth here, not a shortcut. `scope_covers` stays exhaustive over `WindowScope`, so a
-    // new scope still has to decide what it means on both of these paths.
-    let no_labels = BTreeSet::new();
+    // `scope_covers` stays exhaustive over `WindowScope`, so a new scope still has to decide what
+    // it means on both of these paths.
     nodes
         .iter()
         .filter(|node| {
-            scopes.iter().any(|(level, id)| {
-                *level == WindowScope::Node && scope_covers(*level, id, node, &no_labels)
-            })
+            scopes
+                .iter()
+                .any(|(level, id)| *level == WindowScope::Node && scope_covers(*level, id, node))
         })
         .map(|node| node.id)
         .collect()
 }
 
-/// The nodes an active window covers **as part of a class** — profile, tag, or the whole fleet.
+/// The nodes an active window covers **as part of a class** — profile, or the whole fleet.
 ///
 /// The other half of [`nodes_named_by_a_window`], and the half an exemption may cancel.
 /// Folder-group coverage is also inherited but is resolved by the caller against the group tree, so
@@ -656,17 +644,13 @@ pub fn nodes_named_by_a_window(
 pub fn nodes_covered_by_a_class_window(
     scopes: &[(WindowScope, String)],
     nodes: &[Node],
-    tags: &crate::inventory::tagres::TagResolver,
 ) -> BTreeSet<NodeId> {
     nodes
         .iter()
         .filter(|node| {
-            // Resolved once per node, then asked about every window — the other way round would
-            // rebuild the same set once per (node, window) pair.
-            let labels = tags.effective_set(node);
-            scopes.iter().any(|(level, id)| {
-                *level != WindowScope::Node && scope_covers(*level, id, node, &labels)
-            })
+            scopes
+                .iter()
+                .any(|(level, id)| *level != WindowScope::Node && scope_covers(*level, id, node))
         })
         .map(|node| node.id)
         .collect()
@@ -692,9 +676,6 @@ fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
 /// A node's coverage-relevant facts, resolved once so the decisions over them are pure.
 pub(crate) struct CoverageFacts {
     profile: Option<String>,
-    /// The node's **effective** labels — a window's `group` scope matches any of them (ADR-013),
-    /// and since ADR-135 inc. 2 that includes the ones its folder chain supplies.
-    tags: Vec<String>,
     /// This node's folder group plus every group above it.
     ///
     /// This is the same question the alert engine answers from the other end (it walks
@@ -707,11 +688,7 @@ pub(crate) struct CoverageFacts {
 impl CoverageFacts {
     /// Resolve them for one already-loaded node. `edges` is the whole `(id, parent_id)` set, so a
     /// caller checking several nodes loads it once.
-    pub(crate) fn of(
-        node: &Node,
-        edges: &[(Uuid, Option<Uuid>)],
-        tags: &crate::inventory::tagres::TagResolver,
-    ) -> Self {
+    pub(crate) fn of(node: &Node, edges: &[(Uuid, Option<Uuid>)]) -> Self {
         let mut containing_groups = Vec::new();
         if let Some(group) = node.group {
             let gid = group.as_uuid();
@@ -720,7 +697,6 @@ impl CoverageFacts {
         }
         Self {
             profile: node.profile.map(|p| p.to_string()),
-            tags: tags.effective(node),
             containing_groups,
         }
     }
@@ -737,7 +713,6 @@ pub(crate) fn window_is_inherited_by(
         // Names the node. Excluded on purpose: a release never cancels coverage aimed at the node.
         WindowScope::Node => false,
         WindowScope::Profile => facts.profile.as_deref() == Some(scope_id),
-        WindowScope::Group => facts.tags.iter().any(|t| t == scope_id),
         WindowScope::FolderGroup => {
             Uuid::parse_str(scope_id).is_ok_and(|g| facts.containing_groups.contains(&g))
         }
@@ -832,10 +807,6 @@ pub(crate) async fn reconcile_exemptions(
     let windows = maintenance.active_windows().await?;
     let mutes = maintenance.list_mutes().await?;
     let edges = groups.edges().await?;
-    // Propagated, not degraded: this decides whether a node's release from a window is still
-    // justified, and resolving it from an empty label map would re-apply coverage an operator
-    // deliberately cancelled. The two reads above already fail the whole reconcile the same way.
-    let tags = crate::inventory::tagres::TagResolver::build(groups.tag_rows().await?);
     let mut changed = 0;
     for row in rows {
         let Some(stored_until) = parse_ts(&row.until_at) else {
@@ -848,7 +819,7 @@ pub(crate) async fn reconcile_exemptions(
             changed += 1;
             continue;
         };
-        let facts = CoverageFacts::of(&node, &edges, &tags);
+        let facts = CoverageFacts::of(&node, &edges);
         let in_force = match row.kind {
             ExemptionKind::Maintenance => inherited_maintenance_end(&windows, &facts),
             ExemptionKind::Mute => inherited_mute_end(&mutes, &facts),
@@ -966,11 +937,8 @@ mod tests {
     /// about the *rule* rather than about that split, so they read over the union — and
     /// [`a_direct_window_and_a_class_window_are_told_apart`] is what pins the split itself.
     fn covered(scopes: &[(WindowScope, String)], nodes: &[Node]) -> BTreeSet<NodeId> {
-        // An empty resolver: these nodes carry their labels directly, and folder inheritance has
-        // its own tests in `tagres.rs`. What is under test here is the scope matching.
-        let tags = crate::inventory::tagres::TagResolver::empty();
         nodes_named_by_a_window(scopes, nodes)
-            .union(&nodes_covered_by_a_class_window(scopes, nodes, &tags))
+            .union(&nodes_covered_by_a_class_window(scopes, nodes))
             .copied()
             .collect()
     }
@@ -1014,13 +982,12 @@ mod tests {
     }
 
     #[test]
-    fn group_scope_matches_tag_values() {
+    fn a_label_never_puts_a_node_in_maintenance() {
+        // ADR-229: a label is a description for notifications. A stored `group` row from before
+        // the level was removed reads as a profile window naming no profile, so it covers nothing.
         let a = node(None, &["tokyo"]);
-        let b = node(None, &["osaka"]);
-        let scopes = vec![(WindowScope::Group, "tokyo".to_owned())];
-        let set = covered(&scopes, &[a.clone(), b.clone()]);
-        assert!(set.contains(&a.id));
-        assert!(!set.contains(&b.id));
+        let scopes = vec![(WindowScope::from_stored("group"), "tokyo".to_owned())];
+        assert!(covered(&scopes, &[a]).is_empty());
     }
 
     #[test]
@@ -1038,7 +1005,6 @@ mod tests {
         for (s, scope) in [
             ("node", WindowScope::Node),
             ("profile", WindowScope::Profile),
-            ("group", WindowScope::Group),
             ("group_id", WindowScope::FolderGroup),
         ] {
             assert_eq!(WindowScope::from_stored(s), scope);
@@ -1098,31 +1064,25 @@ mod tests {
         let profile = ProfileId::new();
         let named = node(Some(profile), &[]);
         let by_profile = node(Some(profile), &[]);
-        let by_tag = node(None, &["tokyo"]);
         let untouched = node(None, &["osaka"]);
-        let nodes = [named.clone(), by_profile.clone(), by_tag.clone(), untouched];
+        let nodes = [named.clone(), by_profile.clone(), untouched];
         let scopes = vec![
             (WindowScope::Node, named.id.to_string()),
             (WindowScope::Profile, profile.to_string()),
-            (WindowScope::Group, "tokyo".to_owned()),
         ];
 
         let direct = nodes_named_by_a_window(&scopes, &nodes);
         assert_eq!(direct, BTreeSet::from([named.id]));
 
-        let class = nodes_covered_by_a_class_window(
-            &scopes,
-            &nodes,
-            &crate::inventory::tagres::TagResolver::empty(),
-        );
-        assert_eq!(class, BTreeSet::from([named.id, by_profile.id, by_tag.id]));
+        let class = nodes_covered_by_a_class_window(&scopes, &nodes);
+        assert_eq!(class, BTreeSet::from([named.id, by_profile.id]));
 
         // `named` is in both — it is named *and* a member of the covered profile — which is the
         // case that matters: releasing it must still leave the direct window in force. And the two
         // halves together are the whole answer, with the node no window touches still outside it.
         assert_eq!(
             covered(&scopes, &nodes),
-            BTreeSet::from([named.id, by_profile.id, by_tag.id])
+            BTreeSet::from([named.id, by_profile.id])
         );
     }
 
@@ -1135,21 +1095,16 @@ mod tests {
         let scopes = vec![(WindowScope::System, UPGRADE_SCOPE_ID.to_owned())];
         assert!(nodes_named_by_a_window(&scopes, one).is_empty());
         assert_eq!(
-            nodes_covered_by_a_class_window(
-                &scopes,
-                one,
-                &crate::inventory::tagres::TagResolver::empty()
-            ),
+            nodes_covered_by_a_class_window(&scopes, one),
             BTreeSet::from([a.id])
         );
     }
 
     // ── What a release may be granted from, and how long it survives ────────────────────────
 
-    fn facts(profile: Option<&str>, tags: &[&str], groups: &[Uuid]) -> CoverageFacts {
+    fn facts(profile: Option<&str>, groups: &[Uuid]) -> CoverageFacts {
         CoverageFacts {
             profile: profile.map(str::to_owned),
-            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
             containing_groups: groups.to_vec(),
         }
     }
@@ -1176,7 +1131,7 @@ mod tests {
         // could cancel a node-scoped window, an operator who released a box and then deliberately
         // put *that box* into maintenance would get a node that keeps alerting, with nothing on
         // screen saying why.
-        let f = facts(Some("p1"), &["tokyo"], &[Uuid::from_u128(1)]);
+        let f = facts(Some("p1"), &[Uuid::from_u128(1)]);
         assert!(!window_is_inherited_by(
             WindowScope::Node,
             &Uuid::from_u128(99).to_string(),
@@ -1184,8 +1139,6 @@ mod tests {
         ));
         assert!(window_is_inherited_by(WindowScope::Profile, "p1", &f));
         assert!(!window_is_inherited_by(WindowScope::Profile, "p2", &f));
-        assert!(window_is_inherited_by(WindowScope::Group, "tokyo", &f));
-        assert!(!window_is_inherited_by(WindowScope::Group, "osaka", &f));
         assert!(window_is_inherited_by(
             WindowScope::FolderGroup,
             &Uuid::from_u128(1).to_string(),
@@ -1216,12 +1169,10 @@ mod tests {
         // The latest end, not the earliest: while a longer window still covers the node, putting
         // it back would re-suppress a box the operator has said is back in service.
         let group = Uuid::from_u128(1);
-        let f = facts(Some("p1"), &[], &[group]);
+        let f = facts(Some("p1"), &[group]);
         let windows = vec![
             (WindowScope::FolderGroup, group.to_string(), at(2)),
             (WindowScope::Profile, "p1".to_owned(), at(5)),
-            // Covers nothing here, and must not extend the release.
-            (WindowScope::Group, "osaka".to_owned(), at(9)),
             // Names some other node.
             (WindowScope::Node, Uuid::from_u128(7).to_string(), at(11)),
         ];
@@ -1232,7 +1183,7 @@ mod tests {
     fn a_window_that_only_names_the_node_leaves_nothing_to_release() {
         // The pure half of the API's `not_suppressed` refusal: storing an exemption here would
         // leave the operator believing the node was out of a window it is still in.
-        let f = facts(None, &[], &[]);
+        let f = facts(None, &[]);
         let windows = vec![(WindowScope::Node, Uuid::from_u128(3).to_string(), at(4))];
         assert!(inherited_maintenance_end(&windows, &f).is_none());
     }
@@ -1240,7 +1191,7 @@ mod tests {
     #[test]
     fn only_a_group_mute_can_be_released_from() {
         let group = Uuid::from_u128(1);
-        let f = facts(None, &[], &[group]);
+        let f = facts(None, &[group]);
         let node_mute = StoredMute {
             scope_kind: MuteScope::Node,
             node_id: Some(Uuid::from_u128(5)),
@@ -1312,7 +1263,7 @@ mod tests {
             .await
             .expect("create running");
         let later = repo
-            .create_window("next week", "group", "g-1", now + hour, now + hour * 2)
+            .create_window("next week", "group_id", "g-1", now + hour, now + hour * 2)
             .await
             .expect("create later");
         let over = repo
@@ -1342,7 +1293,7 @@ mod tests {
         assert_eq!(w.level, WindowScope::Node);
         assert_eq!(w.scope_id, "n-1");
         assert!(w.enabled, "a new window was created disabled");
-        assert_eq!(by(later).level, WindowScope::Group);
+        assert_eq!(by(later).level, WindowScope::FolderGroup);
 
         // Disabling takes it out of force without touching its times.
         assert!(

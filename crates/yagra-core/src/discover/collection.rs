@@ -57,7 +57,6 @@ fn parse_metric_kind(s: &str) -> MetricKind {
 fn parse_scope_level(s: &str) -> ScopeLevel {
     match s {
         "node" => ScopeLevel::Node,
-        "group" => ScopeLevel::Group,
         _ => ScopeLevel::Profile,
     }
 }
@@ -560,7 +559,6 @@ mod tests {
         assert_eq!(parse_metric_kind("counter"), MetricKind::Counter);
         assert_eq!(parse_metric_kind("gauge"), MetricKind::Gauge);
         assert_eq!(parse_scope_level("node"), ScopeLevel::Node);
-        assert_eq!(parse_scope_level("group"), ScopeLevel::Group);
         assert_eq!(parse_scope_level("profile"), ScopeLevel::Profile);
     }
 

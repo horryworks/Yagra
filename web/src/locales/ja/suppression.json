@@ -20,7 +20,6 @@
     },
     "scope": {
       "group": "グループ",
-      "groupTag": "タグ",
       "node": "ノード",
       "profile": "プロファイル",
       "system": "システム全体"

@@ -128,7 +128,6 @@ export function useEntityNames() {
         case 'profile':
           return profileName(id);
         case 'group_id':
-        case 'group':
           return groupName(id);
         // `<node-uuid>:<ifindex>` (ADR-076). The port by the name the server sent beside the rule
         // (ADR-196 decision 6), the ifIndex when it sent none.

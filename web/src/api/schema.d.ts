@@ -1722,8 +1722,7 @@ export interface paths {
          *     (migration 0011), and widening that is a schema change the alert engine, the suppression index
          *     and `list_suppressions` all read.
          *
-         *     ⚠️ **Only the `node` level.** The class levels (`profile`, `group`) already reach many nodes by
-         *     naming a class, and the folder level reaches a subtree — a batch of ids is the case none of them
+         *     ⚠️ **Only the `node` level.** The `profile` level already reaches many nodes by naming a class, and the folder level reaches a subtree — a batch of ids is the case none of them
          *     covers. The scope check is therefore the node one, applied by the store's `JOIN nodes` rather
          *     than a pre-check, so a node deleted between the check and the write cannot get a window.
          */
@@ -3267,14 +3266,14 @@ export interface paths {
         };
         /**
          * The threshold rules that reach one port (ADR-076 decision 11).
-         * @description A port is governed by rules at six scope levels, and the narrow ones are usually not where the
+         * @description A port is governed by rules at five scope levels, and the narrow ones are usually not where the
          *     interesting rule lives — a fleet-wide "any link over 90%" is a global rule, and a page that
          *     listed only the port's own rules would show an empty list about a port that is alerting.
          *
          *     Rules come from PostgreSQL on every call rather than from the alert engine's snapshot, which
          *     refreshes on the config generation: a rule saved a second ago is not in that snapshot, and the
          *     operator who just pressed Save is precisely the caller of this endpoint. The node's own
-         *     metadata (profile, tag values, folder chain) does come from the snapshot — it is what decides
+         *     metadata (profile, folder chain) does come from the snapshot — it is what decides
          *     whether a broad rule reaches this node, and it does not change under the operator's hand.
          */
         get: operations["list_interface_thresholds"];
@@ -3572,6 +3571,28 @@ export interface paths {
          *     effect while the deployment is on the hand-authored graph.
          */
         put: operations["set_node_suppression_opt_out"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The threshold rules that reach one node's node-wide metrics (ADR-229 decision 5).
+         * @description The node's half of [`list_interface_thresholds`], read the same way: rules fresh from
+         *     PostgreSQL, the node's profile and folder chain from the engine's snapshot. A rule with a row
+         *     pattern is listed with that pattern; which rows it covers is not resolved here.
+         */
+        get: operations["list_node_thresholds"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -7838,8 +7859,8 @@ export interface components {
             username: string;
         };
         /**
-         * @description Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013) plus
-         *     `group_id` (a folder-group UUID, resolved recursively — the All Nodes right-click scope).
+         * @description Create-window body. Times are RFC 3339; `scope_level` is `node`, `profile` or `group_id` (a
+         *     folder-group UUID, resolved recursively — the All Nodes right-click scope).
          */
         CreateWindow: {
             ends_at: string;
@@ -11926,8 +11947,8 @@ export interface components {
              *     a replacement is what the operator sees. `[]` clears them all.
              *
              *     Free-form strings of at most 64 characters, at most 32 of them; trimmed, de-duplicated and
-             *     sorted by the server. A label is what a `ScopeLevel::Group` threshold and a
-             *     `WindowScope::Group` maintenance window match on.
+             *     sorted by the server. A label is a description carried to notifications (PagerDuty, Jira
+             *     Service Management) for routing; no threshold or maintenance window matches on it.
              *
              *     ⚠️ This sets only what the node itself carries. Labels it inherits from its folder are
              *     changed on the folder (`PUT /api/v1/node-groups/{id}/tags`) or refused here with
@@ -14659,11 +14680,12 @@ export interface components {
         };
         /**
          * @description The scope a threshold is defined at, ordered least → most specific: `Interface` (one port)
-         *     wins over `Node`, which wins over a folder group, which wins over `Group`, which wins over
-         *     `Profile`, which wins over `Global` (every node).
+         *     wins over `Node`, which wins over a folder group, which wins over `Profile`, which wins over
+         *     `Global` (every node). Five levels since ADR-229 removed the node-tag level: a label is a
+         *     description carried to notifications, never something Yagra judges by.
          * @enum {string}
          */
-        ScopeLevel: "global" | "profile" | "group" | "group_id" | "node" | "interface";
+        ScopeLevel: "global" | "profile" | "group_id" | "node" | "interface";
         /**
          * @description How secrets appear in a bundle. See the module docs for why there is only one variant.
          * @enum {string}
@@ -16189,14 +16211,16 @@ export interface components {
             subject: string;
         };
         /**
-         * @description How a maintenance window is scoped. The first three mirror threshold scoping (ADR-013):
-         *     `Node` = node id, `Profile` = device-class id, `Group` = a tag value. `FolderGroup` is the
-         *     hierarchical inventory group (resolved recursively, incl. subgroups, ADR-022) — the scope the
-         *     All Nodes right-click uses. It is *not* a threshold concept, so it stays local to maintenance
-         *     rather than extending the shared [`yagra_common::ScopeLevel`].
+         * @description How a maintenance window is scoped: `Node` = node id, `Profile` = device-class id,
+         *     `FolderGroup` = the hierarchical inventory group (resolved recursively, incl. subgroups,
+         *     ADR-022) — the scope the All Nodes right-click uses. Kept apart from the shared
+         *     [`yagra_common::ScopeLevel`] because `System` is not a threshold concept.
+         *
+         *     There is no label scope: ADR-229 removed it, because a label is a description carried to
+         *     notifications and never decides whether Yagra judges a node.
          * @enum {string}
          */
-        WindowScope: "node" | "profile" | "group" | "group_id" | "system";
+        WindowScope: "node" | "profile" | "group_id" | "system";
         /** @description Keyset cursor for the next page. */
         WirelessApCursor: {
             /**
@@ -30259,6 +30283,56 @@ export interface operations {
                 };
             };
             /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_node_thresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every rule on a node-wide metric that reaches this node, from any scope level, most specific first, each flagged with whether it is in force. Per-interface metrics are answered per port by the interface route */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchingThreshold"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the node is outside the token's group scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
             503: {
                 headers: {
                     [name: string]: unknown;

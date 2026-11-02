@@ -2,9 +2,9 @@
 //! Thresholds and their inheritance resolution.
 //!
 //! Thresholds resolve by **inheritance with override** (ADR-013, monitoring-conventions):
-//! most-specific scope wins — `Node` > `FolderGroup` > `Group` > `Profile` > `Global`. `Global` is
+//! most-specific scope wins — `Interface` > `Node` > `FolderGroup` > `Profile` > `Global`. `Global` is
 //! the "system default" tier ADR-013 named from the start and ADR-075 finally implemented. When a
-//! node matches several scopes at the *same* level (e.g. two tag groups), the tie-break is
+//! node matches several scopes at the *same* level (e.g. two folder rules), the tie-break is
 //! **most-restrictive value wins**. Resolution lives *only here* so precedence logic is
 //! never scattered. Hysteresis (dwell) is carried on the rule but applied over time by
 //! the alert engine, not here.
@@ -293,8 +293,9 @@ impl fmt::Display for Direction {
 }
 
 /// The scope a threshold is defined at, ordered least → most specific: `Interface` (one port)
-/// wins over `Node`, which wins over a folder group, which wins over `Group`, which wins over
-/// `Profile`, which wins over `Global` (every node).
+/// wins over `Node`, which wins over a folder group, which wins over `Profile`, which wins over
+/// `Global` (every node). Five levels since ADR-229 removed the node-tag level: a label is a
+/// description carried to notifications, never something Yagra judges by.
 //
 // The two notes below are deliberately `//`, not `///`: this type derives `ToSchema`, so a `///`
 // line is published verbatim to every API client (see `openapi.json`). They are for whoever edits
@@ -326,14 +327,8 @@ pub enum ScopeLevel {
     Global,
     /// Defined on a device-class/profile.
     Profile,
-    /// Defined on a **node tag value** (site/region/role/…), matched as a string against any of the
-    /// node's tags. Legacy: nothing in the product writes `nodes.tags` except a config-bundle
-    /// import, so `FolderGroup` is what a new rule uses. Kept because existing rules resolve
-    /// through it.
-    Group,
     /// Defined on a **folder group** (the inventory tree, ADR-022), and inherited by every group
-    /// inside it. Serialized as `group_id` — the same spelling `WindowScope::FolderGroup` uses — so
-    /// it cannot be confused with the tag-based `Group` above.
+    /// inside it. Serialized as `group_id` — the same spelling `WindowScope::FolderGroup` uses.
     #[serde(rename = "group_id")]
     FolderGroup,
     /// Defined directly on the node.
@@ -352,10 +347,9 @@ pub enum ScopeLevel {
 impl ScopeLevel {
     /// Every level, broadest first — the order the threshold list is sorted in and the order a
     /// picker should offer them.
-    pub const ALL: [ScopeLevel; 6] = [
+    pub const ALL: [ScopeLevel; 5] = [
         ScopeLevel::Global,
         ScopeLevel::Profile,
-        ScopeLevel::Group,
         ScopeLevel::FolderGroup,
         ScopeLevel::Node,
         ScopeLevel::Interface,
@@ -363,7 +357,7 @@ impl ScopeLevel {
 
     /// Stable lowercase string for API payloads, DB columns, and logs.
     ///
-    /// The `thresholds.scope_level` column holds exactly these six, written verbatim from the
+    /// The `thresholds.scope_level` column holds exactly these five, written verbatim from the
     /// create request and read back by `ThresholdStore::parse_level`, so anything that binds a
     /// level into SQL must go through here rather than formatting the enum.
     #[must_use]
@@ -371,7 +365,6 @@ impl ScopeLevel {
         match self {
             ScopeLevel::Global => "global",
             ScopeLevel::Profile => "profile",
-            ScopeLevel::Group => "group",
             ScopeLevel::FolderGroup => "group_id",
             ScopeLevel::Node => "node",
             ScopeLevel::Interface => "interface",
@@ -603,7 +596,7 @@ const fn state_rank(state: NodeState) -> u8 {
 /// Resolve a set of scoped rules **for a single metric** into one effective threshold.
 ///
 /// Precedence: only the most-specific [`ScopeLevel`] present is considered. Among rules
-/// at that level, bounds combine **most-restrictively** per field (the `Group`-vs-`Group`
+/// at that level, bounds combine **most-restrictively** per field (the same-level
 /// tie-break of ADR-013); dwell takes the longest (most damping). Returns `None` if the
 /// input is empty.
 ///
@@ -758,24 +751,16 @@ mod tests {
             );
         }
         // ALL is the whole enum, not a list someone forgot to extend when a level was added.
-        assert_eq!(ScopeLevel::ALL.len(), 6);
+        assert_eq!(ScopeLevel::ALL.len(), 5);
         assert_eq!(
             ScopeLevel::ALL.map(ScopeLevel::as_str),
-            [
-                "global",
-                "profile",
-                "group",
-                "group_id",
-                "node",
-                "interface"
-            ],
+            ["global", "profile", "group_id", "node", "interface"],
             "ALL is ordered broadest-first — the threshold list and its filter both rely on it"
         );
         // The order is also the precedence (`resolve_effective` takes `.max()`), so assert it as
         // an ordering rather than trusting the array to be read that way.
         assert!(ScopeLevel::Global < ScopeLevel::Profile);
-        assert!(ScopeLevel::Profile < ScopeLevel::Group);
-        assert!(ScopeLevel::Group < ScopeLevel::FolderGroup);
+        assert!(ScopeLevel::Profile < ScopeLevel::FolderGroup);
         assert!(ScopeLevel::FolderGroup < ScopeLevel::Node);
         assert!(ScopeLevel::Node < ScopeLevel::Interface);
     }
@@ -847,10 +832,10 @@ mod tests {
 
     #[test]
     fn most_specific_level_wins() {
-        // Profile 80/95, Group 70/90, Node 60/85 → Node wins outright.
+        // Profile 80/95, folder 70/90, Node 60/85 → Node wins outright.
         let rules = [
             rule(ScopeLevel::Profile, 80.0, 95.0),
-            rule(ScopeLevel::Group, 70.0, 90.0),
+            rule(ScopeLevel::FolderGroup, 70.0, 90.0),
             rule(ScopeLevel::Node, 60.0, 85.0),
         ];
         let eff = resolve_effective(&rules).unwrap();
@@ -876,10 +861,10 @@ mod tests {
     }
     #[test]
     fn same_level_tiebreak_takes_most_restrictive_above() {
-        // Two groups; "above" → smaller bound is stricter.
+        // Two folders; "above" → smaller bound is stricter.
         let rules = [
-            rule(ScopeLevel::Group, 70.0, 90.0),
-            rule(ScopeLevel::Group, 65.0, 92.0),
+            rule(ScopeLevel::FolderGroup, 70.0, 90.0),
+            rule(ScopeLevel::FolderGroup, 65.0, 92.0),
         ];
         let eff = resolve_effective(&rules).unwrap();
         assert_eq!(eff.warning(), Some(65.0)); // stricter warning
@@ -891,7 +876,7 @@ mod tests {
         // "below" → larger bound is stricter (trips earlier as value falls).
         let mk = |w: f64, c: f64| {
             ScopedThreshold::new(
-                ScopeLevel::Group,
+                ScopeLevel::FolderGroup,
                 ThresholdRule::new("free_mem", ThresholdBounds::below(Some(w), Some(c)), 1),
             )
         };
@@ -1080,8 +1065,8 @@ mod tests {
             critical_above: Some(-3.0),
         };
         let eff = resolve_effective(&[
-            bounded(ScopeLevel::Group, wide),
-            bounded(ScopeLevel::Group, narrow),
+            bounded(ScopeLevel::FolderGroup, wide),
+            bounded(ScopeLevel::FolderGroup, narrow),
         ])
         .unwrap();
         assert_eq!(eff.warning_below, Some(-16.0));

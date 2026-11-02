@@ -100,7 +100,7 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// by the upgrade path, which knows its own end time. Leaving it out of this list means no caller —
 /// scoped or not — can silence the entire fleet through the ordinary CRUD surface, and the list
 /// stays the answer to "what may an operator create", which is what the error message promises.
-const WINDOW_SCOPE_LEVELS: [&str; 4] = ["profile", "group", "node", "group_id"];
+const WINDOW_SCOPE_LEVELS: [&str; 3] = ["profile", "node", "group_id"];
 /// The scope kinds a mute may target.
 const MUTE_SCOPE_KINDS: [&str; 2] = ["node", "group"];
 
@@ -148,10 +148,10 @@ pub(crate) fn check_order(starts: DateTime<Utc>, ends: DateTime<Utc>) -> Result<
 /// A window's target, as [`ScopeTarget`].
 ///
 /// ⚠️ **Exhaustive over [`WindowScope`], and deliberately not shared with [`mute_target`].** A
-/// window's `Group` scope is a *tag value* and its folder group is `FolderGroup`; a mute's `Group`
-/// **is** the folder group. Both serialize as `"group"`. A converter keyed on that string would read
-/// a window's tag as a folder id — an operator may perfectly well tag nodes with a UUID — and hand a
-/// scoped caller somebody else's window. Only the decision is shared; the reading is per row type.
+/// window's folder group is `FolderGroup` (`group_id`); a mute's `Group` **is** the folder group
+/// (`group`). A stored window row with the old `group` token (the label scope ADR-229 removed)
+/// reads back as `Profile` and so stays unbounded here — a converter keyed on the string would read
+/// it as a folder id. Only the decision is shared; the reading is per row type.
 fn window_target(w: &crate::alerts::maintenance::StoredWindow) -> ScopeTarget {
     use crate::alerts::maintenance::WindowScope;
     match w.level {
@@ -165,10 +165,9 @@ fn window_target(w: &crate::alerts::maintenance::StoredWindow) -> ScopeTarget {
             .scope_id
             .parse::<Uuid>()
             .map_or(ScopeTarget::Unbounded, ScopeTarget::Group),
-        // A device class, and a free-form tag value, respectively — each an open-ended node set.
-        // `System` joins them for the same reason and the strongest version of it: it names the
-        // whole fleet, so no group scope narrows it.
-        WindowScope::Profile | WindowScope::Group | WindowScope::System => ScopeTarget::Unbounded,
+        // A device class is an open-ended node set. `System` joins it for the same reason and the
+        // strongest version of it: it names the whole fleet, so no group scope narrows it.
+        WindowScope::Profile | WindowScope::System => ScopeTarget::Unbounded,
     }
 }
 
@@ -297,7 +296,7 @@ async fn list_maintenance_windows(
 /// The maintenance windows `scope` may see.
 ///
 /// A window names its own target, so this filters on the row rather than on a query predicate — and
-/// a profile/tag-scoped window is hidden from a scoped caller entirely, matching the rule
+/// a profile-scoped window is hidden from a scoped caller entirely, matching the rule
 /// [`create_maintenance_window`] enforces on the way in.
 pub(crate) async fn visible_windows(
     st: &ApiState,
@@ -317,8 +316,8 @@ pub(crate) async fn visible_windows(
         .collect())
 }
 
-/// Create-window body. Times are RFC 3339; the scope mirrors thresholds (ADR-013) plus
-/// `group_id` (a folder-group UUID, resolved recursively — the All Nodes right-click scope).
+/// Create-window body. Times are RFC 3339; `scope_level` is `node`, `profile` or `group_id` (a
+/// folder-group UUID, resolved recursively — the All Nodes right-click scope).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateWindow {
     name: String,
@@ -363,9 +362,9 @@ async fn create_maintenance_window(
         validate_group_scope(&admin, &body.scope_id).await?;
     }
     // Same reasoning as `create_mute`: `ManageMaintenance` is an operator permission, so a scoped
-    // caller must not open a window over something outside their scope. The `profile`/`group` (tag)
-    // levels name a *class* of node rather than one — they are refused outright for a scoped
-    // caller, because there is no way to open one that is honestly bounded by their scope.
+    // caller must not open a window over something outside their scope. The `profile` level names a
+    // *class* of node rather than one — it is refused outright for a scoped caller, because there
+    // is no way to open one that is honestly bounded by their scope.
     if !scope.is_all() {
         match body.scope_level.as_str() {
             "node" => {
@@ -380,11 +379,11 @@ async fn create_maintenance_window(
                 })?;
                 super::scope::require_visible_group(&scope, gid)?;
             }
-            // Reached by `profile` and `group` (a tag), both of which name a *class* of node with
-            // no honestly-bounded version for a scoped caller.
+            // Reached by `profile`, which names a *class* of node with no honestly-bounded version
+            // for a scoped caller.
             //
             // The wildcard stays because `scope_level` is a `String`, but it is not the guard: a
-            // fifth `WINDOW_SCOPE_LEVELS` entry landing here would not leak anything — refusing is
+            // fourth `WINDOW_SCOPE_LEVELS` entry landing here would not leak anything — refusing is
             // the safe direction — it would silently become un-openable for every scoped account
             // while this message claimed a reason that was not the real one.
             // `the_scope_check_decides_every_window_scope_level` fails the build instead.
@@ -392,7 +391,7 @@ async fn create_maintenance_window(
                 return Err(ApiError::forbidden_code(
                     "scope_unsupported",
                     "a group-scoped account can open a maintenance window over a node or a folder \
-                     group, not over a profile or a tag",
+                     group, not over a profile",
                 ))
             }
         }
@@ -447,8 +446,7 @@ pub(super) struct BulkSuppressionResult {
 /// (migration 0011), and widening that is a schema change the alert engine, the suppression index
 /// and `list_suppressions` all read.
 ///
-/// ⚠️ **Only the `node` level.** The class levels (`profile`, `group`) already reach many nodes by
-/// naming a class, and the folder level reaches a subtree — a batch of ids is the case none of them
+/// ⚠️ **Only the `node` level.** The `profile` level already reaches many nodes by naming a class, and the folder level reaches a subtree — a batch of ids is the case none of them
 /// covers. The scope check is therefore the node one, applied by the store's `JOIN nodes` rather
 /// than a pre-check, so a node deleted between the check and the write cannot get a window.
 #[utoipa::path(
@@ -1017,11 +1015,7 @@ async fn coverage_facts(
             "failed to load groups",
         )
     })?;
-    Ok(CoverageFacts::of(
-        &node,
-        &edges,
-        &super::util::tag_resolver(admin).await,
-    ))
+    Ok(CoverageFacts::of(&node, &edges))
 }
 
 /// Re-derive every release against the coverage that is left, after this request removed some.
@@ -1235,7 +1229,7 @@ mod tests {
     fn the_scope_check_decides_every_window_scope_level() {
         // The two the check resolves to a concrete target, and the two it refuses outright.
         let resolved = ["node", "group_id"];
-        let refused = ["profile", "group"];
+        let refused = ["profile"];
         let mut decided: Vec<&str> = resolved.iter().chain(refused.iter()).copied().collect();
         decided.sort_unstable();
         let mut levels = super::WINDOW_SCOPE_LEVELS.to_vec();
@@ -1337,20 +1331,16 @@ mod tests {
     }
 
     #[test]
-    fn a_windows_tag_group_is_never_read_as_a_folder_group() {
-        // ⚠️ The trap this whole `Target` type exists for. A window's `group` scope holds a *tag
-        // value*, a mute's `group` holds a folder-group id, and both serialize as "group". An
-        // operator is perfectly entitled to tag nodes with a UUID-shaped string, so a helper keyed
-        // on the scope text would parse a window's tag as a folder id, compare it against the
-        // caller's visible set, and hand them a window belonging to a group they cannot see.
+    fn a_windows_old_label_row_is_never_read_as_a_folder_group() {
+        // A window row stored with the `group` token (the label scope ADR-229 removed) holds a
+        // label, while a mute's `group` holds a folder-group id. A helper keyed on the text would
+        // parse the label as a folder id and hand a scoped caller a window it cannot see.
         use crate::alerts::maintenance::{MuteScope, WindowScope};
         let g = Uuid::from_u128(42);
-
-        // Same text, same shape, two different meanings — and they must not resolve alike.
         assert_eq!(
-            window_target(&window(WindowScope::Group, &g.to_string())),
+            window_target(&window(WindowScope::from_stored("group"), &g.to_string())),
             ScopeTarget::Unbounded,
-            "a window's `group` is a tag value, not a folder group"
+            "an old label window is not a folder group"
         );
         assert_eq!(
             mute_target(&mute(MuteScope::Group, None, Some(g))),

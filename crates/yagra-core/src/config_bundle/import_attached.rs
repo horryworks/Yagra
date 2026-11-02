@@ -22,6 +22,10 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 use yagra_base::seed_ids;
 
+/// The stored token of the node-label threshold level ADR-229 removed. Only an import reads it: a
+/// bundle from an older deployment may still carry such rules.
+const REMOVED_LABEL_LEVEL: &str = "group";
+
 pub(super) async fn write<'a>(
     mut tx: Transaction<'a, Postgres>,
     bundle: &ConfigBundle,
@@ -66,6 +70,18 @@ pub(super) async fn write<'a>(
         // imported `snmp_up below 0.5` as `above 0.5`, which pages for **every healthy device**.
         // The API edge has always parsed both through `from_token`; a second writer of the same
         // rows enforcing neither is the shape `extensibility.md` §3 names.
+        // ADR-229 removed the node-label level. A bundle exported from an older deployment may
+        // still carry such rules; they are skipped and counted under their own field, so the
+        // report says how many, and the rest of the bundle still imports.
+        if t.scope_level == REMOVED_LABEL_LEVEL {
+            notes.add(
+                "thresholds",
+                NoteCode::SkippedInvalidValue,
+                Some("scope_level"),
+            );
+            c.skipped += 1;
+            continue;
+        }
         let (Some(level), Some(direction)) = (
             yagra_common::ScopeLevel::from_token(&t.scope_level),
             yagra_common::Direction::from_token(&t.direction),
@@ -103,9 +119,7 @@ pub(super) async fn write<'a>(
             c.skipped += 1;
             continue;
         }
-        // `scope_id`/`scope_ids` are TEXT because the legacy `group` scope is a tag value, not
-        // a uuid. Only the levels that *are* uuids are validated; a tag scope has nothing to
-        // resolve against, and `global` has no id at all.
+        // Every level but `global` names uuids; `global` has no id at all.
         //
         // ⚠️ EVERY target is checked, not just the first: a rule that names four profiles of
         // which one is missing would otherwise import as a rule that silently covers three,

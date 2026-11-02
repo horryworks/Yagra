@@ -1,0 +1,38 @@
+/* Node detail ▸ Alert rules (ADR-229). A flex column with a height, or `.dt`'s `flex: 1` is
+   ignored and the table grows past it — the same reason `.nd-nb-table` has one. */
+.nd-rules-table {
+  display: flex;
+  flex-direction: column;
+  height: 50vh;
+  min-height: 220px;
+}
+
+/* Several rules can be in force for one metric; each gets its own line in the cell. */
+.nd-rules-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.nd-rules-overridden {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nd-rules-overridden li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .nd-rules-table {
+  height: auto;
+  min-height: 0;
+  padding: 0 var(--space-2);
+}

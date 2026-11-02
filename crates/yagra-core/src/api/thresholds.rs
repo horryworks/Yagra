@@ -35,6 +35,7 @@ const THRESHOLDS_MAX: i64 = 500;
 #[openapi(paths(
     list_thresholds,
     list_interface_thresholds,
+    list_node_thresholds,
     create_threshold,
     update_threshold,
     delete_threshold
@@ -55,6 +56,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
             get(list_interface_thresholds),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/thresholds",
+            get(list_node_thresholds),
         )
 }
 
@@ -304,14 +309,14 @@ pub(crate) struct MatchingThreshold {
 )]
 /// The threshold rules that reach one port (ADR-076 decision 11).
 ///
-/// A port is governed by rules at six scope levels, and the narrow ones are usually not where the
+/// A port is governed by rules at five scope levels, and the narrow ones are usually not where the
 /// interesting rule lives — a fleet-wide "any link over 90%" is a global rule, and a page that
 /// listed only the port's own rules would show an empty list about a port that is alerting.
 ///
 /// Rules come from PostgreSQL on every call rather than from the alert engine's snapshot, which
 /// refreshes on the config generation: a rule saved a second ago is not in that snapshot, and the
 /// operator who just pressed Save is precisely the caller of this endpoint. The node's own
-/// metadata (profile, tag values, folder chain) does come from the snapshot — it is what decides
+/// metadata (profile, folder chain) does come from the snapshot — it is what decides
 /// whether a broad rule reaches this node, and it does not change under the operator's hand.
 async fn list_interface_thresholds(
     _perm: RequireManageConfig,
@@ -350,6 +355,57 @@ pub(crate) async fn interface_thresholds(
     Ok(st
         .alerts
         .matching_rules(&candidates, NodeId::from(node_id), Some(IfIndex(ifindex)))
+        .into_iter()
+        .map(|(rule, in_force)| MatchingThreshold { rule, in_force })
+        .collect())
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/thresholds", tag = "thresholds",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "Every rule on a node-wide metric that reaches this node, from any scope level, most specific first, each flagged with whether it is in force. Per-interface metrics are answered per port by the interface route", body = Vec<MatchingThreshold>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the node is outside the token's group scope", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
+/// The threshold rules that reach one node's node-wide metrics (ADR-229 decision 5).
+///
+/// The node's half of [`list_interface_thresholds`], read the same way: rules fresh from
+/// PostgreSQL, the node's profile and folder chain from the engine's snapshot. A rule with a row
+/// pattern is listed with that pattern; which rows it covers is not resolved here.
+async fn list_node_thresholds(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    State(st): State<ApiState>,
+    Path(node_id): Path<Uuid>,
+    admin: Admin,
+) -> ApiResult<Json<Vec<MatchingThreshold>>> {
+    Ok(Json(node_thresholds(&st, &admin.0, node_id).await?))
+}
+
+/// The seam both edges call for one node - REST above, and `get_interface_thresholds` with no
+/// `ifindex`. One function for the reason [`interface_thresholds`] is one.
+pub(crate) async fn node_thresholds(
+    st: &ApiState,
+    admin: &super::AdminState,
+    node_id: Uuid,
+) -> ApiResult<Vec<MatchingThreshold>> {
+    let candidates = admin
+        .thresholds
+        .candidates_for_node(node_id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "list node thresholds",
+                "failed to list threshold rules for this node",
+            )
+        })?;
+    Ok(st
+        .alerts
+        .node_matching_rules(&candidates, NodeId::from(node_id))
         .into_iter()
         .map(|(rule, in_force)| MatchingThreshold { rule, in_force })
         .collect())
@@ -548,16 +604,6 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
                     return Err(ApiError::bad_request(
                         "invalid_scope_id",
                         "scope_id must be <node-uuid>:<ifindex> for the interface level",
-                    ));
-                }
-            }
-            // A tag value is free-form text, so only emptiness is checkable — and an empty one is the
-            // same silent no-op as a malformed uuid.
-            ScopeLevel::Group => {
-                if scope_id.trim().is_empty() {
-                    return Err(ApiError::bad_request(
-                        "invalid_scope_id",
-                        "scope_id must name a node tag value for the group level",
                     ));
                 }
             }
@@ -1005,11 +1051,10 @@ mod tests {
         assert!(parse_threshold_body(&b).unwrap().scope_ids.is_empty());
         // The receiving half, and it is the one that makes the test mean something: a normalizer
         // that emptied every scope id would pass the assertion above while silently making every
-        // profile/group/node rule fleet-wide.
+        // profile/folder/node rule fleet-wide.
         let id = Uuid::from_u128(7).to_string();
         for (level, sent) in [
             ("profile", id.as_str()),
-            ("group", "keep-me"),
             ("group_id", id.as_str()),
             ("node", id.as_str()),
         ] {
@@ -1023,7 +1068,7 @@ mod tests {
     #[test]
     fn a_scope_id_that_cannot_match_anything_is_refused_instead_of_stored() {
         // Before this check a malformed id was accepted, listed, and evaluated for no node at all
-        // — `applies` compares it against a uuid or a tag and simply never matches. A rule that
+        // — `applies` compares it against a uuid and simply never matches. A rule that
         // exists and does nothing is worse than one that was refused, because the operator has
         // been told it is in place.
         let id = Uuid::from_u128(9).to_string();
@@ -1039,9 +1084,6 @@ mod tests {
             // The accepting side — without it, a validator that refused everything would pass.
             assert!(parse_threshold_body(&body(level, &id, "icmp_rtt_ms", "above")).is_ok());
         }
-        // A tag value is free text, so only emptiness is checkable. Both directions again.
-        assert!(parse_threshold_body(&body("group", "  ", "icmp_rtt_ms", "above")).is_err());
-        assert!(parse_threshold_body(&body("group", "osaka", "icmp_rtt_ms", "above")).is_ok());
         // And `global` still keeps its exemption: it has nothing to point at.
         assert!(parse_threshold_body(&body("global", "", "icmp_rtt_ms", "above")).is_ok());
     }
@@ -1056,6 +1098,9 @@ mod tests {
             ("global", "sideways"),
             ("", "above"),
             ("node", ""),
+            // The node-label level ADR-229 removed: a client still sending it is told so, never
+            // stored a rule that would read back as an inert profile rule.
+            ("group", "above"),
         ] {
             let b = body(level, "x", "icmp_rtt_ms", dir);
             let err = parse_threshold_body(&b).unwrap_err();

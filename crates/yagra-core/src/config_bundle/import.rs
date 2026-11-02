@@ -438,6 +438,39 @@ mod tests {
         }
     }
 
+    /// A bundle from an older deployment may carry a rule at the node-label level ADR-229
+    /// removed. It is skipped and counted under its own field; every other row still imports.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_at_the_removed_label_level_is_skipped_and_counted(pool: sqlx::PgPool) {
+        let mut bundle = testkit::full_bundle();
+        let mut label_rule = bundle.thresholds[0].clone();
+        label_rule.id = Uuid::new_v4();
+        label_rule.scope_level = "group".to_owned();
+        label_rule.scope_id = "prod".to_owned();
+        label_rule.scope_ids = vec!["prod".to_owned()];
+        bundle.thresholds.push(label_rule);
+        let before = yagra_base::pgtest::rows(&pool, "thresholds").await;
+
+        let report = ConfigBundleRepo::new(pool.clone())
+            .import(&bundle, false)
+            .await
+            .expect("the import still succeeds");
+
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "thresholds").await - before,
+            1,
+            "only the node rule may arrive"
+        );
+        let note = report
+            .notes
+            .iter()
+            .find(|n| n.table == "thresholds" && n.field.as_deref() == Some("scope_level"))
+            .expect("the skipped rule is reported");
+        assert_eq!(note.code, NoteCode::SkippedInvalidValue);
+        assert_eq!(note.count, 1);
+    }
+
     /// An import writes nothing into the fifteen tables the format deliberately leaves out.
     ///
     /// An import is a write path reachable by anyone who may upload a document, so this list is the

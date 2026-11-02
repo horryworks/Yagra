@@ -49,8 +49,9 @@ pub(crate) struct QueryMetricsParams {
 pub(super) struct InterfaceThresholdsParams {
     /// The node's UUID.
     node_id: Uuid,
-    /// SNMP ifIndex of the interface (from get_node_status's `interfaces`).
-    ifindex: u32,
+    /// SNMP ifIndex of the interface (from get_node_status's `interfaces`). Leave it out to ask
+    /// about the node's node-wide metrics (CPU, memory, liveness) instead.
+    ifindex: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -367,10 +368,10 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "Which threshold rules govern one interface, and which of them is in \
-                       force. A port is reached by rules at six scope levels — all nodes, device \
-                       profile, tag group, folder group, node, and the port itself — and the \
-                       narrow ones are usually not where the interesting rule lives, so listing \
+        description = "Which threshold rules govern one interface - or, with `ifindex` left \
+                       out, one node's node-wide metrics - and which of them is in force. A port \
+                       is reached by rules at five scope levels - all nodes, device profile, \
+                       folder group, node, and the port itself - and the narrow ones are usually not where the interesting rule lives, so listing \
                        only the port's own rules would report nothing about a port that is \
                        alerting. Each entry carries the rule (its `scope_level`, `scope_id`, \
                        `metric`, `direction`, bounds and `dwell_samples`) and `in_force`: the \
@@ -391,7 +392,8 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_interface_thresholds";
-        match self.admit(identity_of(&ctx), TOOL, "").await {
+        let branch = if p.ifindex.is_some() { "ifindex" } else { "" };
+        match self.admit(identity_of(&ctx), TOOL, branch).await {
             Ok(scope) => self.get_interface_thresholds_in(p, &scope).await,
             Err(refusal) => refusal,
         }
@@ -412,9 +414,14 @@ impl YagraMcp {
         // The same seam the REST route calls, so the two surfaces cannot come to disagree about
         // which rules reach a port — the resolution is scope inheritance, and a second copy of it
         // is a second set of precedence rules.
-        match crate::api::thresholds::interface_thresholds(&self.state, admin, p.node_id, p.ifindex)
-            .await
-        {
+        let rows = match p.ifindex {
+            Some(ifindex) => {
+                crate::api::thresholds::interface_thresholds(&self.state, admin, p.node_id, ifindex)
+                    .await
+            }
+            None => crate::api::thresholds::node_thresholds(&self.state, admin, p.node_id).await,
+        };
+        match rows {
             Ok(rows) => ok_json(TOOL, &rows),
             Err(e) => tool_api_error(TOOL, &e),
         }

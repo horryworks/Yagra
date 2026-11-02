@@ -217,11 +217,11 @@ impl NodeScope {
 /// it? That decision is here, once ([`NodeScope::allows_target`]).
 ///
 /// ⚠️ **The mapping from a row's columns to this type stays in the row's own module, exhaustively
-/// over that module's enum, and must not be shared.** The three spellings genuinely disagree — a
-/// maintenance window's `group` scope is a *tag value* while its folder group is `group_id`, and a
-/// mute's `group` **is** the folder group. A converter keyed on the serialized string would read a
-/// window's tag as a folder id (an operator may legitimately tag a node with a UUID) and hand a
-/// scoped caller somebody else's window. What is shared here is only the *decision*, never the
+/// over that module's enum, and must not be shared.** The spellings genuinely disagree — a
+/// maintenance window's folder group is `group_id`, while a mute's `group` **is** the folder group,
+/// and a window row left over with the old `group` token (the label scope ADR-229 removed) holds a
+/// label. A converter keyed on the serialized string would read that label as a folder id and hand
+/// a scoped caller somebody else's window. What is shared here is only the *decision*, never the
 /// reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeTarget {
@@ -229,7 +229,7 @@ pub enum ScopeTarget {
     Node(NodeId),
     /// One folder group, and everything beneath it.
     Group(Uuid),
-    /// Fleet-wide, a device class, a tag value — or a target that could not be read at all. A set
+    /// Fleet-wide, a device class — or a target that could not be read at all. A set
     /// of nodes that no group scope bounds, so only an unrestricted caller may have it.
     Unbounded,
 }

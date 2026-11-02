@@ -1826,7 +1826,7 @@ impl AlertManager {
     }
 
     /// The node's **folder group** (`nodes.group_id`) per the config snapshot, for RBAC visibility
-    /// (`api/scope.rs`). Not a tag value — see the [`NodeMeta`] docs.
+    /// (`api/scope.rs`) — see the [`NodeMeta`] docs.
     ///
     /// Returns `None` both for a genuinely ungrouped node and for one the snapshot has never seen
     /// (created since the last config-generation refresh). The caller treats those the same and
@@ -2283,7 +2283,7 @@ impl AlertManager {
     /// reads them straight from PostgreSQL — while the **node metadata** comes from the snapshot
     /// held here. The split is deliberate: the snapshot refreshes on the config generation, so a
     /// rule saved a second ago is not in it yet, and a list that omitted the operator's own new
-    /// rule would fail at exactly the moment they are looking. A node's profile, tags and folder
+    /// rule would fail at exactly the moment they are looking. A node's profile and folder
     /// chain do not change under them in the same way.
     ///
     /// A node the snapshot has never seen resolves against `None` metadata, which matches only
@@ -2299,11 +2299,30 @@ impl AlertManager {
         matching_rules(rules, node, ifindex, config.node_meta.get(&node))
     }
 
+    /// The rules on one node's node-wide metrics, each flagged with whether it is in force there
+    /// (ADR-229) — see [`crate::rules::node_matching_rules`]. The same split as
+    /// [`Self::matching_rules`]: the rules come from the caller, read fresh; the node's membership
+    /// and which metrics are per-interface come from the snapshot.
+    #[must_use]
+    pub fn node_matching_rules(
+        &self,
+        rules: &[StoredThreshold],
+        node: NodeId,
+    ) -> Vec<(StoredThreshold, bool)> {
+        let config = self.config.read().expect("config rwlock poisoned");
+        crate::rules::node_matching_rules(
+            rules,
+            node,
+            config.node_meta.get(&node),
+            &config.per_interface,
+        )
+    }
+
     /// On how many nodes each of `rules` is overridden by a narrower rule (ADR-200 Inc.29) — see
     /// [`crate::rules::overridden_counts`] for what counts.
     ///
     /// The same split as [`Self::matching_rules`]: the **rules** come from the caller, read fresh,
-    /// so a rule saved a second ago is counted; **membership** (profile, tags, folder chain) and
+    /// so a rule saved a second ago is counted; **membership** (profile, folder chain) and
     /// which metrics are per-interface come from the snapshot, which can be one refresh old.
     #[must_use]
     pub fn overridden_counts(&self, rules: &[StoredThreshold]) -> HashMap<Uuid, u32> {
@@ -3409,13 +3428,10 @@ mod tests {
         assert!(ev.contains("\"unreachable\""), "state unreachable: {ev}");
     }
 
-    // ⚠️ The guard for the rename described in the `NodeMeta` docs. `tag_groups` (threshold scope)
-    // and `folder_group` (RBAC visibility) are different facts about a node, and `Scope::allows`
-    // takes a `BTreeSet<String>` — so wiring visibility to the tag set compiles and runs. This
-    // asserts the two stay independent: a node can carry tags and no folder, or a folder and no
-    // tags, and neither may be read as the other.
+    // The folder group is what visibility reads, and a node the snapshot has never seen, or one
+    // in no folder, resolves to `None` (invisible to a scoped caller).
     #[test]
-    fn node_meta_group_is_the_folder_group_not_a_tag_value() {
+    fn node_meta_group_is_the_folder_group() {
         let node = NodeId::new();
         let folder = Uuid::from_u128(42);
         let mut meta = HashMap::new();
@@ -3423,7 +3439,6 @@ mod tests {
             node,
             NodeMeta {
                 profile: None,
-                tag_groups: BTreeSet::from(["tokyo".to_owned()]),
                 folder_group: Some(folder),
                 folder_chain: vec![folder],
             },
@@ -3431,28 +3446,24 @@ mod tests {
         let mgr = manager();
         mgr.set_config(cfg(Vec::new(), meta));
 
-        // The folder group is what visibility reads, and it is a uuid — never the tag string.
         assert_eq!(mgr.node_folder_group(node), Some(folder));
-        // A node the snapshot has never seen resolves to `None` (⇒ invisible to a scoped caller),
-        // and so does a node carrying tags but sitting in no folder.
         assert_eq!(mgr.node_folder_group(NodeId::new()), None);
 
-        let mut tagged_only = HashMap::new();
-        tagged_only.insert(
+        let mut unfiled = HashMap::new();
+        unfiled.insert(
             node,
             NodeMeta {
                 profile: None,
-                tag_groups: BTreeSet::from(["tokyo".to_owned()]),
                 folder_group: None,
                 folder_chain: Vec::new(),
             },
         );
         let mgr2 = manager();
-        mgr2.set_config(cfg(Vec::new(), tagged_only));
+        mgr2.set_config(cfg(Vec::new(), unfiled));
         assert_eq!(
             mgr2.node_folder_group(node),
             None,
-            "a tag value must never be read as a folder group"
+            "a node in no folder has no folder group"
         );
     }
 

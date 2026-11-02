@@ -41,7 +41,7 @@ describe('ruleIsBaselineFor', () => {
   // profile rule rather than adding to one. Counting them as a baseline is what would make the
   // panel say "covered" about a metric that fires on four nodes out of forty.
   it('refuses every scope narrower than profile, even when it names this profile id', () => {
-    for (const level of ['group', 'group_id', 'node', 'interface'] as const) {
+    for (const level of ['group_id', 'node', 'interface'] as const) {
       expect(ruleIsBaselineFor(rule('m', level, [P]), P)).toBe(false);
     }
   });

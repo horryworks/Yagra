@@ -1390,11 +1390,19 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
         NodeScoped,
-        // Which threshold rules reach one port, from any of the six scope levels, each flagged
+        // Which threshold rules reach one port, from any of the five scope levels, each flagged
         // with whether it is in force (ADR-076 decision 11). A tool of its own rather than a branch of
         // `get_config`: that tool answers "what is configured" by kind, and this one answers "what
-        // governs this port", which needs the node's profile, tags and folder chain resolved
+        // governs this port", which needs the node's profile and folder chain resolved
         // against the ruleset — an MCP client holding `get_config`'s output cannot do that itself.
+        Tool("get_interface_thresholds"),
+    ),
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/thresholds",
+        NodeScoped,
+        // The same question for the node's node-wide metrics (ADR-229). The same tool with
+        // `ifindex` left out, rather than a new tool: a longer tool list makes a model pick worse.
         Tool("get_interface_thresholds"),
     ),
     (

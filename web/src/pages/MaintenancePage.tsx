@@ -129,10 +129,9 @@ export function MaintenancePage() {
       .then(load)
       .catch((e: unknown) => setError(errMsg(e, t('maintenance.err.update'))));
 
-  // Short badge for the scope level: `group_id` is a folder group, plain `group` the legacy tag.
+  // Short badge for the scope level: `group_id` is a folder group.
   const scopeBadge = (w: MaintenanceWindow): string => {
     if (w.scope_level === 'group_id') return t('maintenance.scope.group');
-    if (w.scope_level === 'group') return t('maintenance.scope.groupTag');
     if (w.scope_level === 'node') return t('maintenance.scope.node');
     if (w.scope_level === 'profile') return t('maintenance.scope.profile');
     // Opened by the upgrade path, never by hand — it is not offered in the add dialog (ADR-050).

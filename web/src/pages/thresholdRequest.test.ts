@@ -48,7 +48,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
     for (const r of [
       rule(),
       rule({ scope_level: 'node', warning: null, critical: 0.5, dwell_samples: 2 }),
-      rule({ scope_level: 'group', scope_ids: ['tokyo'], direction: 'below', warning: 20 }),
+      rule({ scope_level: 'profile', scope_ids: ['11111111-1111-1111-1111-111111111111'], direction: 'below', warning: 20 }),
       rule({ scope_level: 'group_id', scope_ids: ['22222222-2222-2222-2222-222222222222'] }),
       rule({ scope_level: 'global', scope_ids: [], metric: '__liveness__', warning: null, critical: null }),
       // ADR-078: several targets must survive the round trip too, in order — an edit that
@@ -170,15 +170,14 @@ describe('thresholdFormFrom + thresholdBody', () => {
     expect(thresholdBody(f).scope_ids).toEqual([]);
     // The receiving side: every other level keeps what was picked, trimmed, in order. Without
     // this the assertion above would also pass for a function that emptied every target list.
-    for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
+    for (const level of ['profile', 'group_id', 'node'] as const) {
       expect(thresholdBody({ ...f, level, scopeIds: ['  keep-me  ', ' and-me '] }).scope_ids).toEqual([
         'keep-me',
         'and-me',
       ]);
     }
-    // A blank entry is dropped rather than sent: the edge refuses an empty target, and the one
-    // that could produce one is the legacy tag box being cleared.
-    expect(thresholdBody({ ...f, level: 'group', scopeIds: ['a', '  ', 'b'] }).scope_ids).toEqual([
+    // A blank entry is dropped rather than sent: the edge refuses an empty target.
+    expect(thresholdBody({ ...f, level: 'node', scopeIds: ['a', '  ', 'b'] }).scope_ids).toEqual([
       'a',
       'b',
     ]);
@@ -186,7 +185,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
 
   it('says which levels accept more than one target', () => {
     // ADR-078 decision 3. `interface` is single because a rule there covers one port and is created
-    // from that port's own screen; `group` is the legacy free-text scope. Driven from
+    // from that port's own screen. Driven from
     // `SCOPE_LEVELS` so a new level has to decide rather than inherit whatever came last.
     const many = SCOPE_LEVELS.filter((l) => scopeAcceptsMany(l));
     expect(many).toEqual(['profile', 'group_id', 'node']);
@@ -202,7 +201,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
       scopeIds: [],
     };
     expect(isThresholdReady({ ...base, level: 'global' })).toBe(true);
-    for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
+    for (const level of ['profile', 'group_id', 'node'] as const) {
       expect(isThresholdReady({ ...base, level })).toBe(false);
       expect(isThresholdReady({ ...base, level, scopeIds: ['x'] })).toBe(true);
       // Several is ready too — the case the feature exists for.
@@ -226,15 +225,10 @@ describe('thresholdFormFrom + thresholdBody', () => {
     expect(kinds).toEqual({
       global: 'none',
       profile: 'profile',
-      group: 'tag',
       group_id: 'folderGroup',
       node: 'node',
       interface: 'interface',
     });
-    // The two "group" levels must never resolve to the same control — one picks a folder from the
-    // inventory tree, the other is free-form tag text, and offering the tree for the tag level
-    // would store a UUID that matches no tag at all.
-    expect(scopeIdKind('group')).not.toBe(scopeIdKind('group_id'));
     // Exactly one level has no id, and readiness agrees with it.
     expect(SCOPE_LEVELS.filter((l) => scopeIdKind(l) === 'none')).toEqual(['global']);
   });

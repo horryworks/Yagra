@@ -1507,8 +1507,8 @@ pub(crate) const LABELS_MAX: usize = 32;
 /// Validate and normalize one whole label set.
 ///
 /// **Deliberately unrestricted in character** beyond the length and a ban on control characters: a
-/// label is a word a person reads off a badge (`JAPAN`, a site name in Japanese, `spare parts`), and it is also
-/// what a `ScopeLevel::Group` threshold and a `WindowScope::Group` window match on. The old
+/// label is a word a person reads off a badge (`JAPAN`, a site name in Japanese, `spare parts`) and
+/// carries to a notification; since ADR-229 nothing Yagra judges by matches on it. The old
 /// key/value shape restricted the *key* to `[A-Za-z0-9_.:-]` and left the *value* free; with one
 /// string, the free rule is the one that survives — a badge is prose.
 ///
@@ -1725,8 +1725,8 @@ pub(super) struct NodeBindings {
     /// a replacement is what the operator sees. `[]` clears them all.
     ///
     /// Free-form strings of at most 64 characters, at most 32 of them; trimmed, de-duplicated and
-    /// sorted by the server. A label is what a `ScopeLevel::Group` threshold and a
-    /// `WindowScope::Group` maintenance window match on.
+    /// sorted by the server. A label is a description carried to notifications (PagerDuty, Jira
+    /// Service Management) for routing; no threshold or maintenance window matches on it.
     ///
     /// ⚠️ This sets only what the node itself carries. Labels it inherits from its folder are
     /// changed on the folder (`PUT /api/v1/node-groups/{id}/tags`) or refused here with

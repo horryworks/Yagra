@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireView, VisibleNode};
-use super::util::{pool_resolver, tag_resolver};
+use super::util::pool_resolver;
 use super::{AdminState, ApiState};
 use crate::alerts::availability::{compute, AvailabilityPeriod, Inputs, NodeAvailability};
 use crate::alerts::maintenance::{window_is_inherited_by, CoverageFacts, WindowScope};
@@ -133,7 +133,7 @@ pub(crate) async fn availability_of(
         .edges()
         .await
         .map_err(fail("availability: group edges"))?;
-    let facts = CoverageFacts::of(&node, &edges, &tag_resolver(admin).await);
+    let facts = CoverageFacts::of(&node, &edges);
     let node_text = node_id.to_string();
     let maintenance = admin
         .maintenance
@@ -144,10 +144,9 @@ pub(crate) async fn availability_of(
         .filter(|w| w.enabled)
         .filter(|w| match w.level {
             WindowScope::Node => w.scope_id == node_text,
-            WindowScope::Profile
-            | WindowScope::Group
-            | WindowScope::FolderGroup
-            | WindowScope::System => window_is_inherited_by(w.level, &w.scope_id, &facts),
+            WindowScope::Profile | WindowScope::FolderGroup | WindowScope::System => {
+                window_is_inherited_by(w.level, &w.scope_id, &facts)
+            }
         })
         .filter_map(|w| {
             let start = DateTime::parse_from_rfc3339(&w.starts_at).ok()?;

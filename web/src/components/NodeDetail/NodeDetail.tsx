@@ -35,6 +35,7 @@ import { InterfacesTab } from './InterfacesTab';
 import { NeighborsTab } from './NeighborsTab';
 import { ApTab } from './ApTab';
 import { CollectionTab } from './CollectionTab';
+import { RulesTab } from './RulesTab';
 import { EventsTab } from './EventsTab';
 import { ConfigBackupTab } from './ConfigBackupTab';
 import { FlowTab } from './FlowTab';
@@ -189,6 +190,7 @@ export function NodeDetail({
   const [dialog, setDialog] = useState<NodeHeaderDialog | null>(null);
   const canMaintenance = useCan('manage_maintenance');
   const canMute = useCan('ack_alerts');
+  const canConfig = useCan('manage_config');
   const pinsReady = usePinsStore((s) => s.status === 'ready');
   const pinned = usePinsStore((s) => s.nodeIds.has(nodeId));
   const setNodePinned = usePinsStore((s) => s.setNodePinned);
@@ -444,6 +446,7 @@ export function NodeDetail({
     ),
     neighbors: <NeighborsTab node={node} />,
     collection: <CollectionTab node={node} canEdit={canEdit} />,
+    rules: <RulesTab node={node} />,
     config: <ConfigBackupTab node={node} />,
     events: <EventsTab node={node} />,
     flow: <FlowTab node={node} />,
@@ -539,7 +542,7 @@ export function NodeDetail({
       )}
 
       <div className="nd-tabs" role="tablist">
-        {visibleNodeDetailTabs(subject).map((key) => {
+        {visibleNodeDetailTabs(subject, canConfig).map((key) => {
           const meta = NODE_DETAIL_TAB_META[key];
           const n = meta.badge?.(tabStats) ?? null;
           return (

@@ -54,7 +54,7 @@ import { groupOptions } from '../../lib/nodeTree';
  *  Since ADR-078 a rule may name SEVERAL targets, which is why the profile and folder-group
  *  controls are `MultiSelectList` and the node one is a list of chips fed by the picker. The two
  *  levels that stay single are the ones with no second thing to pick: an `interface` rule covers
- *  one port and is created from that port's own screen, and the legacy tag scope is free text.
+ *  one port and is created from that port's own screen.
  *
  *  Which control belongs to which level is `scopeIdKind`'s answer, not a second `switch` here —
  *  the same answer decides whether Save may be pressed, and two copies would let the dialog show a
@@ -108,15 +108,9 @@ function ScopeIdField({
       </div>
     );
   }
-  // What the target list needs said, by level: a folder reaches the folders inside it, and the
-  // legacy tag scope is on its way out. The others say nothing — the picker names its own targets
-  // (ADR-200).
-  const hint =
-    kind === 'folderGroup'
-      ? t('thresholds.addModal.folderGroupHint')
-      : kind === 'tag'
-        ? t('thresholds.addModal.legacyTagHint')
-        : null;
+  // What the target list needs said, by level: a folder reaches the folders inside it. The others
+  // say nothing — the picker names its own targets (ADR-200).
+  const hint = kind === 'folderGroup' ? t('thresholds.addModal.folderGroupHint') : null;
   return (
     <div className="modal-field">
       <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
@@ -161,7 +155,7 @@ function ScopeIdField({
               : 'thresholds.addModal.scopeIdPlaceholder.group_id',
           )}
         />
-      ) : kind === 'interface' ? (
+      ) : (
         // One port of one node (ADR-076), when an existing rule is edited: the port is shown, not
         // changed — moving a rule to another port is a different rule. A NEW port rule never gets
         // here: `PortPick` takes the dialog over and hands the port to the port-rule dialog.
@@ -171,17 +165,6 @@ function ScopeIdField({
           </div>
           <input type="hidden" value={single} readOnly />
         </>
-      ) : (
-        // The legacy tag scope. Free text because a tag *is* free text, and because no list of the
-        // ones in use is reachable from here: since ADR-135 Inc.2 a node's tags are partly its
-        // folder chain's, so "every tag in use" is a server-side question, not one this screen can
-        // answer from the rule it is editing.
-        <TextInput
-          className="mono"
-          placeholder={t('thresholds.addModal.scopeIdPlaceholder.group')}
-          value={single}
-          onChange={(e) => onChange(e.target.value ? [e.target.value] : [])}
-        />
       )}
       {hint && <span className="form-status">{hint}</span>}
     </div>
@@ -289,12 +272,16 @@ function PortPick({
 export function ThresholdModal({
   mode,
   rule,
+  start,
   portNames,
   onClose,
   onSaved,
 }: {
   mode: 'add' | 'edit';
   rule?: StoredThreshold;
+  /** What a NEW rule starts from. Node detail ▸ Alert rules passes the bounds in force there, at
+   *  the node level, so "change it for this node" begins from what applies now (ADR-229). */
+  start?: ThresholdForm;
   /** The list's `port_names`, so a port rule's target reads as it does in the row. */
   portNames?: Readonly<Record<string, string>>;
   onClose: () => void;
@@ -304,10 +291,8 @@ export function ThresholdModal({
 }) {
   const { t } = useTranslation('alertsConfig');
   // ⚠️ Held here, inside a conditionally-mounted component, so closing the dialog *is* the reset
-  // (ui-conventions "Modals"). It briefly took a `prefill` for the Interfaces dock; that caller
-  // now opens its own port-shaped dialog (ADR-076 Inc.5), and a prop with no caller is a prop
-  // nothing keeps true.
-  const [form, setForm] = useState<ThresholdForm>(() => thresholdFormFrom(rule));
+  // (ui-conventions "Modals"). `start` is read once, at mount, for the same reason.
+  const [form, setForm] = useState<ThresholdForm>(() => start ?? thresholdFormFrom(rule));
   const save = useSubmit({
     errorFallback: t('thresholds.err.save'),
     onDone: () => {
@@ -328,14 +313,9 @@ export function ThresholdModal({
    *  not reload the list or open its level filter as if a rule had been made. */
   const portRuleChanged = useRef(false);
 
-  // The legacy tag-based `group` level is not offered for a *new* rule — a folder group says the
-  // same thing with a type on it, recursively, and is the unit RBAC already scopes by (ADR-075
-  // Inc.3, the same move the maintenance-window form already made). ⚠️ The reason used to be
-  // "nothing writes `nodes.tags`", which ADR-135 made false; the decision did not change with it.
-  // ⚠️ It must still appear while editing a rule
-  // that already sits at it: a `<select>` whose value is absent from its options renders blank,
-  // and the next save would silently move the rule to whichever level rendered first.
-  // A port is picked only when a rule is ADDED (ADR-209 decision 7): an existing rule cannot be
+  // A level a rule already sits at must still appear while editing it: a `<select>` whose value
+  // is absent from its options renders blank, and the next save would silently move the rule to
+  // whichever level rendered first. A port is picked only when a rule is ADDED (ADR-209 decision 7): an existing rule cannot be
   // moved onto a port, because nothing in the edit path picks one — offering the level there
   // would be a choice that leaves the target empty.
   const levels = useMemo(() => {

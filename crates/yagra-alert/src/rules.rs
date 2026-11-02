@@ -3,7 +3,7 @@
 //!
 //! The **rule index and scope resolution** half of the alert module (ADR-083). Given a
 //! (node, port, metric) it answers which [`yagra_common::EffectiveThreshold`] governs, folding
-//! scope inheritance (global → profile → tag group → folder → node → port) and the ADR-076
+//! scope inheritance (global → profile → folder → node → port) and the ADR-076
 //! bucketing that keeps that answer from costing O(all rules) per sample. It also owns the
 //! deterministic check ids, because an id is a function of scope, not of state.
 //!
@@ -26,22 +26,14 @@ use yagra_common::StoredThreshold;
 /// Per-node metadata used to resolve threshold scope, and to answer "may this caller see this
 /// node" without a database round-trip (`api/scope.rs`).
 ///
-/// ⚠️ **The two group fields are different concepts and must not be confused.** [`Self::tag_groups`]
-/// holds *tag values* — free-form labels an operator puts on a node, which `ScopeLevel::Group`
-/// thresholds match against. [`Self::folder_group`] is the node's row in the inventory folder tree,
-/// which is what RBAC visibility is defined over (ADR-014).
-///
-/// The field was called `groups` until group scoping landed, and the collision was a live hazard:
-/// `Scope::allows` takes a `BTreeSet<String>`, so `principal.can_see(&meta.groups)` compiled, ran,
-/// and would have scoped visibility by *threshold tags* — failing **open** for any node whose tags
-/// happened to match, with nothing to catch it. Hence the rename and
-/// `node_meta_group_is_the_folder_group_not_a_tag_value`.
+/// ⚠️ [`Self::folder_group`] is what RBAC visibility is defined over (ADR-014), and
+/// [`Self::folder_chain`] is what a `ScopeLevel::FolderGroup` threshold matches. A node's labels
+/// are deliberately absent: since ADR-229 a label is a description carried to notifications and
+/// never a threshold scope, so nothing here can be confused with a folder.
 #[derive(Debug, Clone, Default)]
 pub struct NodeMeta {
     /// Profile id (as text) the node belongs to, if any.
     pub profile: Option<String>,
-    /// Node **tag values**, for group-scoped thresholds. Not the folder tree — see the type docs.
-    pub tag_groups: BTreeSet<String>,
     /// The node's folder group (`nodes.group_id`), for RBAC visibility. `None` = ungrouped, which
     /// a scoped principal may **not** see.
     pub folder_group: Option<Uuid>,
@@ -304,12 +296,11 @@ impl MetricRules {
                     _ => self.broad.push(e),
                 }
             }
-            // Listed rather than caught by `_` so a seventh level has to decide which bucket it
+            // Listed rather than caught by `_` so a sixth level has to decide which bucket it
             // belongs in, instead of silently becoming a rule nothing can look up.
-            ScopeLevel::Global
-            | ScopeLevel::Profile
-            | ScopeLevel::Group
-            | ScopeLevel::FolderGroup => self.broad.push(e),
+            ScopeLevel::Global | ScopeLevel::Profile | ScopeLevel::FolderGroup => {
+                self.broad.push(e)
+            }
         }
     }
 
@@ -516,10 +507,7 @@ impl AlertConfig {
                 }
                 // Not enumerable without walking the fleet — and a rule scoped this broadly is one
                 // whose author meant it to be.
-                ScopeLevel::Global
-                | ScopeLevel::Profile
-                | ScopeLevel::Group
-                | ScopeLevel::FolderGroup => nodes = None,
+                ScopeLevel::Global | ScopeLevel::Profile | ScopeLevel::FolderGroup => nodes = None,
             }
         }
         RuleCoverage {
@@ -619,7 +607,7 @@ pub fn prefer_row_rules(matched: Vec<&StoredThreshold>) -> Vec<&StoredThreshold>
 /// (ADR-076 decision 11). A second copy of scope inheritance is exactly the mirror `extensibility.md`
 /// forbids — the first one would drift the day a level is added.
 ///
-/// `meta` is the node's own metadata (profile, tag values, folder chain); `None` for a node the
+/// `meta` is the node's own metadata (profile, folder chain); `None` for a node the
 /// snapshot has never seen, which matches only the global level.
 pub fn threshold_applies(
     t: &StoredThreshold,
@@ -652,7 +640,7 @@ fn scope_applies(
     meta: Option<&NodeMeta>,
 ) -> bool {
     match t.level {
-        // The fleet default (ADR-075). It matches a node with no profile and no tags too —
+        // The fleet default (ADR-075). It matches a node with no profile too —
         // which is the whole reason it exists, since a profile-scoped default cannot reach
         // one. `scope_ids` is unread here; the API pins it to the empty set.
         ScopeLevel::Global => true,
@@ -666,11 +654,6 @@ fn scope_applies(
         ScopeLevel::Profile => meta
             .and_then(|m| m.profile.as_deref())
             .is_some_and(|p| t.scope_ids.iter().any(|s| s == p)),
-        // Tag values, deliberately — a `ScopeLevel::Group` threshold matches a node *tag*, not
-        // the folder tree. See the `NodeMeta` docs for why the distinction is load-bearing.
-        ScopeLevel::Group => {
-            meta.is_some_and(|m| t.scope_ids.iter().any(|s| m.tag_groups.contains(s)))
-        }
         // The folder tree (ADR-022), inherited downwards: the chain holds the node's own group
         // and every group above it. A rule on a parent therefore covers everything inside it,
         // the same way a maintenance window on a folder group does.
@@ -736,6 +719,41 @@ pub fn matching_rules(
         // No row name: this answers for a port, and a rule scoped to row names never reaches one.
         .filter(|t| threshold_applies(t, node, ifindex, None, meta))
         .collect();
+    flag_in_force(matched, meta)
+}
+
+/// The rules on a node's **node-wide** metrics that reach it, each flagged with whether it is in
+/// force there (ADR-229 decision 5) — the node's half of [`matching_rules`].
+///
+/// Two differences from asking [`matching_rules`] with no port, both about what an operator reading
+/// one node's rules expects to see:
+///
+/// * **Per-interface metrics are left out.** A broad rule on a port metric "reaches" the node in
+///   the sense that it reaches each of its ports, and each port answers on the Interfaces tab with
+///   its own winner; listing it here would show one row standing for many different answers.
+/// * **A row-pattern rule is listed.** Its scope reaches the node; which rows it covers is in its
+///   `row_match`, and the server does not resolve row names here — the same reading
+///   [`overridden_counts`] takes.
+pub fn node_matching_rules(
+    rules: &[StoredThreshold],
+    node: NodeId,
+    meta: Option<&NodeMeta>,
+    per_interface: &BTreeSet<String>,
+) -> Vec<(StoredThreshold, bool)> {
+    let matched: Vec<&StoredThreshold> = rules
+        .iter()
+        .filter(|t| !per_interface.contains(&t.rule.metric))
+        .filter(|t| scope_applies(t, node, None, meta))
+        .collect();
+    flag_in_force(matched, meta)
+}
+
+/// Flag each of `matched` with whether it sits at the winning level for its metric — the most
+/// specific level present, and among folder-group rules only the nearest folder.
+fn flag_in_force(
+    matched: Vec<&StoredThreshold>,
+    meta: Option<&NodeMeta>,
+) -> Vec<(StoredThreshold, bool)> {
     // The winning level per metric, and the nearest folder depth among that metric's own matches.
     let mut winner: HashMap<&str, ScopeLevel> = HashMap::new();
     let mut nearest: HashMap<&str, Option<usize>> = HashMap::new();
@@ -872,7 +890,7 @@ pub struct RuleCoverage {
     /// `interface_util::query_floor_bps`, which is where the consequence is spelled out.
     pub has_below: bool,
     /// The nodes the rules name, or `None` when at least one rule is scoped too broadly to
-    /// enumerate (global / profile / tag group / folder group) and the query must cover the fleet.
+    /// enumerate (global / profile / folder group) and the query must cover the fleet.
     pub nodes: Option<BTreeSet<Uuid>>,
 }
 
@@ -1203,7 +1221,7 @@ mod tests {
     }
 
     /// `matching_rules` is what the port's rule list is built from, so its two jobs are separate:
-    /// which rules *reach* the port at all (across six scope levels), and which of those are in
+    /// which rules *reach* the port at all (across five scope levels), and which of those are in
     /// force. Getting the first wrong shows an empty list about a port that is alerting; getting
     /// the second wrong tells the operator the wrong rule is the one to edit.
     #[test]
@@ -1582,7 +1600,6 @@ mod tests {
         let rules = vec![
             rule_at(ScopeLevel::Global, "", Direction::Above, 90.0),
             rule_at(ScopeLevel::Profile, "switch", Direction::Above, 85.0),
-            rule_at(ScopeLevel::Group, "prod", Direction::Above, 80.0),
             // Two folder-group rules at different depths — only the nearest may survive.
             rule_at(
                 ScopeLevel::FolderGroup,
@@ -1693,7 +1710,6 @@ mod tests {
 
         let deep = NodeMeta {
             profile: Some("switch".to_string()),
-            tag_groups: ["prod".to_string()].into_iter().collect(),
             folder_group: Some(child),
             folder_chain: vec![child, parent],
         };
@@ -1784,7 +1800,6 @@ mod tests {
             vec![
                 rule_at(ScopeLevel::Global, "", Direction::Above, 1.0),
                 rule_at(ScopeLevel::Profile, "switch", Direction::Above, 2.0),
-                rule_at(ScopeLevel::Group, "prod", Direction::Above, 3.0),
                 rule_at(
                     ScopeLevel::FolderGroup,
                     &group.to_string(),
@@ -1802,29 +1817,22 @@ mod tests {
             HashMap::new(),
         );
         let m = config.by_metric.get("cpu_util").expect("the metric bucket");
-        // The four levels that cannot be reduced to a key are the only ones scanned linearly.
+        // The three levels that cannot be reduced to a key are the only ones scanned linearly.
         assert_eq!(
             m.broad.len(),
-            4,
-            "broad should hold exactly global/profile/group/folder"
+            3,
+            "broad should hold exactly global/profile/folder"
         );
         assert_eq!(m.by_node.len(), 1);
         assert!(m.by_node.contains_key(&node.as_uuid()));
         assert_eq!(m.by_port.len(), 1);
         assert!(m.by_port.contains_key(&(node.as_uuid(), 7)));
         // `all()` must still see everything, in the original order.
-        assert_eq!(m.all().len(), 6);
+        assert_eq!(m.all().len(), 5);
         let bounds: Vec<Option<f64>> = m.all().iter().map(|t| t.rule.critical()).collect();
         assert_eq!(
             bounds,
-            vec![
-                Some(1.0),
-                Some(2.0),
-                Some(3.0),
-                Some(4.0),
-                Some(5.0),
-                Some(6.0)
-            ],
+            vec![Some(1.0), Some(2.0), Some(4.0), Some(5.0), Some(6.0)],
             "all() must return the config's original order, not the bucket order"
         );
     }
@@ -2064,7 +2072,6 @@ mod override_tests {
         let named: Vec<(&'static str, StoredThreshold)> = vec![
             ("global", rule(CPU, ScopeLevel::Global, &[], None)),
             ("profile", rule(CPU, ScopeLevel::Profile, &["switch"], None)),
-            ("tag", rule(CPU, ScopeLevel::Group, &["prod"], None)),
             ("parent", rule(CPU, ScopeLevel::FolderGroup, &[&ps], None)),
             ("child", rule(CPU, ScopeLevel::FolderGroup, &[&cs], None)),
             (
@@ -2135,7 +2142,6 @@ mod override_tests {
             d,
             NodeMeta {
                 profile: Some("switch".into()),
-                tag_groups: ["prod".to_owned()].into_iter().collect(),
                 folder_group: Some(child),
                 folder_chain: vec![child, parent],
             },
@@ -2154,7 +2160,7 @@ mod override_tests {
         let got = overridden_counts(&f.rules, &f.meta, &f.per_interface);
         let count = |name: &str| got.get(&f.names[name]).copied().unwrap_or(0);
         // a: the node rule wins. b: the parent folder wins. c: the row-pattern node rule wins.
-        // d: the child folder wins (nearest), so the tag rule and the parent folder lose there.
+        // d: the child folder wins (nearest), so the parent folder loses there.
         assert_eq!(count("global"), 4);
         assert_eq!(count("profile"), 3, "a, b and d, not c, which is a router");
         assert_eq!(
@@ -2162,7 +2168,6 @@ mod override_tests {
             3,
             "same level as `profile`, same nodes"
         );
-        assert_eq!(count("tag"), 1, "d only");
         assert_eq!(
             count("parent"),
             2,
@@ -2179,6 +2184,47 @@ mod override_tests {
         assert_eq!(count("util_port_c"), 0);
         // Zero is absent, never stored.
         assert!(got.values().all(|n| *n > 0));
+    }
+
+    /// ADR-229: one node's rules list every level that reaches it, marks the winner per metric,
+    /// keeps a row-pattern rule, and leaves per-interface metrics to the Interfaces tab.
+    #[test]
+    fn a_nodes_rules_list_each_level_that_reaches_it_and_mark_the_winner() {
+        let f = fixture();
+        let d = *f
+            .meta
+            .iter()
+            .find(|(_, m)| m.folder_chain.len() == 2 && m.profile.as_deref() == Some("switch"))
+            .map(|(id, _)| id)
+            .filter(|id| {
+                !f.rules
+                    .iter()
+                    .any(|t| t.level == ScopeLevel::Node && t.scope_ids.contains(&id.to_string()))
+            })
+            .expect("node d: a switch in the child folder with no rule of its own");
+        let got = node_matching_rules(&f.rules, d, f.meta.get(&d), &f.per_interface);
+        let by_id: HashMap<Uuid, bool> = got.iter().map(|(t, on)| (t.id, *on)).collect();
+        let flag = |name: &str| by_id.get(&f.names[name]).copied();
+
+        // Every broad level reaches d; the nearest folder wins.
+        assert_eq!(flag("global"), Some(false));
+        assert_eq!(flag("profile"), Some(false));
+        assert_eq!(
+            flag("profile_row"),
+            Some(false),
+            "a row-pattern rule is listed"
+        );
+        assert_eq!(flag("parent"), Some(false), "the farther folder loses");
+        assert_eq!(flag("child"), Some(true), "the nearest folder is in force");
+        // Another node's rule, a port rule, and every per-interface metric are not here.
+        assert_eq!(flag("node_a"), None);
+        assert_eq!(flag("port_a_cpu"), None);
+        assert_eq!(
+            flag("util_global"),
+            None,
+            "port metrics belong to the Interfaces tab"
+        );
+        assert_eq!(got.len(), 5);
     }
 
     #[test]

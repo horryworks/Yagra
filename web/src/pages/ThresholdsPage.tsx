@@ -22,9 +22,9 @@ import { useCan } from '../store';
 import type { StoredThreshold, ThresholdPage } from '../types/api';
 import { LIVENESS_METRIC } from '../lib/format';
 import { metricMeaningKey } from '../lib/metricMeaning';
-import { boundText } from '../lib/portRuleForm';
 import { boundSides } from '../lib/thresholdBounds';
 import { ThresholdModal } from '../components/ThresholdModal/ThresholdModal';
+import { RuleBounds } from '../components/ThresholdModal/RuleBounds';
 import { splitInterfaceScopeId } from '../lib/interfaceScope';
 import { overriddenRows } from './thresholdOverrides';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -319,31 +319,7 @@ export function ThresholdsPage() {
         key: 'bounds',
         header: t('thresholds.cols.bounds'),
         width: '230px',
-        // Every bound the rule names, each carrying the side it reads in — up to four since
-        // ADR-081. Rendering `warning`/`critical` here instead would show half of a band rule,
-        // with nothing on the row to say a half is what it was.
-        render: (row) => (
-          <span className="thresholds-bounds">
-            {/* Read in the metric's own unit. An absolute interface rate is stored in bits per
-                second (ADR-076 decision 9), so the raw value here was `800000000` — a number whose
-                digits an operator has to count. */}
-            {(
-              [
-                ['warning', '≤', row.warning_below],
-                ['critical', '≤', row.critical_below],
-                ['warning', '≥', row.warning_above],
-                ['critical', '≥', row.critical_above],
-              ] as const
-            )
-              .filter(([, , v]) => v != null)
-              .map(([tone, cmp, v]) => (
-                <Badge key={`${tone}${cmp}`} tone={tone}>
-                  {t(tone === 'warning' ? 'thresholds.warnShort' : 'thresholds.critShort')} {cmp}
-                  {boundText(row.metric, v as number)}
-                </Badge>
-              ))}
-          </span>
-        ),
+        render: (row) => <RuleBounds rule={row} />,
       },
       {
         key: 'dwell',
