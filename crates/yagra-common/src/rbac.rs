@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 pub enum Role {
     /// Read-only: inventory, metrics, alerts.
     Viewer,
-    /// Viewer plus operational actions (ack/mute alerts, maintenance windows).
+    /// Viewer plus operational actions (maintenance windows, Troubleshoot runs).
     Operator,
     /// Full control including configuration, credentials, and users.
     Admin,
@@ -46,7 +46,8 @@ pub enum Role {
 pub enum Permission {
     /// View inventory, metrics, and alerts.
     View,
-    /// Acknowledge / mute / snooze alerts.
+    /// React to an alert now: close an event alert, run a Troubleshoot analysis or an RCA. The
+    /// name predates ADR-233 and ADR-234, which removed ack and mute.
     AckAlerts,
     /// Open or close maintenance windows.
     ManageMaintenance,
@@ -357,8 +358,8 @@ impl Permission {
             // can run those. Keep this in step with every `RequireAckAlerts` / `Permission::AckAlerts`
             // call site — the privilege matrix renders this string verbatim.
             Permission::AckAlerts => {
-                "Acknowledge or mute alerts, close event alerts, run Troubleshoot analyses, \
-                 and request AI root-cause explanations."
+                "Close event alerts, run Troubleshoot analyses, and request AI root-cause \
+                 explanations."
             }
             Permission::ManageMaintenance => "Open or close maintenance windows.",
             Permission::ManageConfig => {

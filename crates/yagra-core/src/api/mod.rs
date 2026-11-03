@@ -477,7 +477,7 @@ pub fn router(state: ApiState) -> Router {
         // series behind the System Health "Host resources" charts.
         // Troubleshoot analysis jobs (ADR-022), in `api/analysis.rs`.
         .merge(analysis::routes())
-        // Maintenance windows + mutes (alert suppression), in `api/maintenance.rs`.
+        // Maintenance windows (alert suppression), in `api/maintenance.rs`.
         .merge(maintenance::routes())
         // The event-log read surface (list + stats), in `api/eventlog.rs`.
         .merge(eventlog::routes())

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! MCP tools: what is wrong now and what was wrong before, plus the one write that acts on an alert (ADR-086). There is no ack tool: acknowledgement is
-//! mirrored in from an external incident tool and only read here (ADR-015, ADR-233).
+//! MCP tools: what is wrong now and what was wrong before, plus opening a maintenance window
+//! (ADR-086). Yagra keeps no acknowledgement (ADR-233) and no mute (ADR-234).
 //!
 //! Split out of the single `tools.rs` by ADR-086; the module doc for the surface as a whole,
 //! and the rules every tool here obeys, are in [`super`].
@@ -254,8 +254,8 @@ impl YagraMcp {
     #[tool(
         description = "What is currently suppressing alerts, in one answer: planned maintenance \
                        windows (each with its scope, start/end, and whether it covers now), \
-                       reactive mutes (node or folder, with an expiry), and exemptions — nodes an \
-                       operator has released from a window or mute they only inherited, which are \
+                       exemptions — nodes an \
+                       operator has released from a window they only inherited, which are \
                        alerting normally despite it — and held_notifications, pages kept back \
                        because the node is outside its delivery hours, each with when it is due \
                        to go out. Check this before concluding a fleet is \
@@ -282,7 +282,7 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable(TOOL, "suppression state requires live mode");
         };
-        // Both lists filter on the row's own target, and a window scoped to a profile or a tag is
+        // The window list filters on the row's own target, and a window scoped to a profile or a tag is
         // hidden from a scoped caller entirely — the shared seams carry that, so this surface
         // cannot show a window the WebUI would not.
         let windows =
@@ -290,10 +290,6 @@ impl YagraMcp {
                 Ok(w) => w,
                 Err(e) => return tool_api_error(TOOL, &e),
             };
-        let mutes = match crate::api::maintenance::visible_mutes(&self.state, scope, admin).await {
-            Ok(m) => m,
-            Err(e) => return tool_api_error(TOOL, &e),
-        };
         // The negative half. Without it a released node reads as suppressed, which is the wrong
         // way round for a tool whose whole point is telling a quiet fleet from a silenced one.
         let exemptions =
@@ -310,7 +306,6 @@ impl YagraMcp {
             TOOL,
             &crate::mcp::dto::SuppressionsDto {
                 maintenance_windows: windows,
-                mutes,
                 exemptions,
                 held_notifications,
             },
@@ -414,7 +409,7 @@ impl YagraMcp {
                 Ok(pair) => pair,
                 Err(err) => return tool_api_error(TOOL, &err),
             },
-            // This surface's own convenience: "mute it for an hour" without composing timestamps.
+            // This surface's own convenience: "an hour from now" without composing timestamps.
             // The duration is clamped, so the ordering check below can only pass — it runs anyway
             // because the invariant belongs to the window, not to how the bounds were obtained.
             (None, None) => {

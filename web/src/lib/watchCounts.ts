@@ -5,10 +5,11 @@
 
 import type { Alert, FleetWatch } from '../types/api';
 
-/** A row is silenced when a mute covers it or it is held under a root cause (dependency
- *  suppression). Both stay in the list with their own mark; this only counts them. */
-export function isSilenced(a: Pick<Alert, 'root_cause'>, muted: boolean): boolean {
-  return muted || (a.root_cause !== null && a.root_cause !== undefined);
+/** A row is silenced when it is held under a root cause (dependency suppression). It stays in the
+ *  list with its own mark; this only counts it. A node in maintenance raises no alert at all, so
+ *  it is counted by the `maintenance` chip instead (ADR-234). */
+export function isSilenced(a: Pick<Alert, 'root_cause'>): boolean {
+  return a.root_cause !== null && a.root_cause !== undefined;
 }
 
 export type WatchChipKey = 'silenced' | 'maintenance' | 'notWatched';

@@ -2,8 +2,7 @@
 // Presentational alert rows (worst-first), shared by the dashboard widget and the Active
 // alerts triage screen. Each row: severity dot + node name + what fired + root-cause + flapping
 // flag + age. Triage-only per §3.2 — Yagra does not track acknowledgement at all (ADR-233); that
-// belongs to the external on-call tool. The optional actions slot is for suppression (Mute) and
-// diagnosis (Explain).
+// belongs to the external on-call tool. The optional actions slot is for diagnosis (Explain).
 //
 // Two things the row deliberately does NOT show as raw ids. The node and its root cause resolve to
 // names via the shared `useEntityNames` (ui-conventions: the visible primary is always the name,
@@ -26,13 +25,11 @@ import { useViewportMode } from '../lib/viewport';
 import { sortedAlerts, useAlertStore } from '../store';
 import { EntityName } from '../components/ui/EntityName';
 import { nodeHref } from '../lib/entityHref';
-import { muteCovering } from '../lib/suppression';
 import { isSilenced } from '../lib/watchCounts';
-import { useMuteLists } from './useMuteLists';
 import { useHeldNotifications } from './useHeldNotifications';
 import { heldFireFor } from '../pages/deliveryHours';
 import { Link } from 'react-router-dom';
-import type { HeldNotification, Mute } from '../types/api';
+import type { HeldNotification } from '../types/api';
 import { useEntityNames } from '../components/ui/entityNames';
 import { AlertSubjectName } from './AlertSubjectName';
 import { AlertWhatText } from './AlertWhatText';
@@ -42,8 +39,8 @@ import { alertRowKey as rowKey } from '../lib/alertSubject';
 type SortedAlert = ReturnType<typeof sortedAlerts>[number];
 
 /** Per-row actions. Triage-only. Receives the *resolved* node name alongside the
- *  alert: an action that opens a dialog naming the node (Mute) would otherwise need a second
- *  `useEntityNames()` resolver in the page, duplicating the batch this list already runs. */
+ *  alert: an action that names the node would otherwise need a second `useEntityNames()`
+ *  resolver in the page, duplicating the batch this list already runs. */
 type RowActions = (alert: SortedAlert, nodeName: string) => ReactNode;
 
 /** Optional row predicate (Alerts ▸ Active), supplied as a **factory** over the id→name resolver.
@@ -70,7 +67,7 @@ type ToolbarSlot = (ctx: {
   total: number;
   nameOf: NameOf;
   rows: SortedAlert[];
-  /** Rows a mute or a root cause is silencing, over the unfiltered set (ADR-227). */
+  /** Rows a root cause is silencing, over the unfiltered set (ADR-227). */
   silenced: number;
 }) => ReactNode;
 
@@ -85,7 +82,7 @@ interface Props {
    *  and only here — because the whole set is in the browser; a server-side list must key its empty
    *  state off the filter instead (`lib/filterQuery.ts`). */
   emptyFiltered?: ReactNode;
-  /** Draw only the rows a mute or a root cause is silencing (ADR-227). */
+  /** Draw only the rows a root cause is silencing (ADR-227). */
   onlySilenced?: boolean;
 }
 
@@ -104,9 +101,6 @@ interface VProps {
  *  mean one inventory fetch per row; this way the visible window batches into a single request. */
 type NameOf = (id: string) => string;
 
-/** The mute silencing an alert, or `null` — resolved once per list, like {@link NameOf}. */
-type MuteOf = (alert: SortedAlert) => Mute | null;
-
 /** The held fire for an alert outside its node's delivery hours, or `null` (ADR-226). */
 type HeldOf = (alert: SortedAlert) => HeldNotification | null;
 
@@ -117,21 +111,18 @@ function AlertRow({
   a,
   actions,
   nodeName,
-  muteOf,
   heldOf,
   v,
 }: {
   a: SortedAlert;
   actions?: RowActions;
   nodeName: NameOf;
-  muteOf: MuteOf;
   heldOf: HeldOf;
   v?: VProps;
 }) {
   const { t } = useTranslation('alerts');
   const subject = alertSubject(a);
   const cause = rootCause(a);
-  const muted = muteOf(a);
   const held = heldOf(a);
   return (
     <div
@@ -166,14 +157,6 @@ function AlertRow({
         <span className="alertrow-cause muted">{t('row.partOfOutage')}</span>
       )}
       {a.flapping && <span className="alertrow-flap">{t('row.flapping')}</span>}
-      {/* A mute silences the notification and leaves the alert open (ADR-209 decision 3), so this
-          is the only thing on the row that says nobody is being paged about it. It opens the
-          mute list, where the mute can be lifted. */}
-      {muted && (
-        <Link className="alertrow-muted" to="/alerts/mutes">
-          {t('row.mutedUntil', { until: formatTimestamp(Date.parse(muted.until_at)) })}
-        </Link>
-      )}
       {/* Outside its node's delivery hours the page waits (ADR-226 decision 11); the mark opens the
           screen where the hours are kept. */}
       {held && (
@@ -201,13 +184,11 @@ function VirtualAlertRows({
   alerts,
   actions,
   nodeName,
-  muteOf,
   heldOf,
 }: {
   alerts: SortedAlert[];
   actions?: RowActions;
   nodeName: NameOf;
-  muteOf: MuteOf;
   heldOf: HeldOf;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -238,7 +219,6 @@ function VirtualAlertRows({
               a={a}
               actions={actions}
               nodeName={nodeName}
-              muteOf={muteOf}
               heldOf={heldOf}
               v={{
                 index: vi.index,
@@ -267,25 +247,7 @@ export function AlertRows({
   // One resolver for the whole list. `nodeName` enqueues only the ids the current render actually
   // referenced — i.e. the visible window — and batch-resolves them after the commit, so this stays
   // one request per scroll burst even at the thousands-of-rows the triage screen must survive.
-  const { nodeName, nodeGroup } = useEntityNames();
-  // The folder tree comes with the mutes, not from `useEntityNames`, which reads it once: a folder
-  // moved under a muted one has to change the mark as soon as a new mute would.
-  const { mutes, exemptions, groups } = useMuteLists();
-  // Asks only once a mute exists: `nodeGroup` enqueues the node for the name batch, which the row
-  // has already done for its name, so this adds no request of its own.
-  const muteOf = useCallback<MuteOf>(
-    (a) => {
-      if (mutes.length === 0) return null;
-      const nodeId = subjectNodeId(a);
-      return muteCovering(
-        { nodeId, metric: a.metric ?? '', groupId: nodeId ? (nodeGroup(nodeId) ?? null) : null },
-        mutes,
-        groups,
-        exemptions,
-      );
-    },
-    [mutes, exemptions, groups, nodeGroup],
-  );
+  const { nodeName } = useEntityNames();
   const held = useHeldNotifications();
   const heldOf = useCallback<HeldOf>(
     (a) => (held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a))),
@@ -296,15 +258,11 @@ export function AlertRows({
   // Filter after sorting, before windowing — the virtualizer must count only the rows that will be
   // drawn. Recomputes when `nodeName` gains a batch of resolutions, which is what lets a search on
   // a node name settle rather than matching only the ids resolved so far.
-  const silencedOf = useCallback(
-    (a: SortedAlert) => isSilenced(a, muteOf(a) !== null),
-    [muteOf],
-  );
-  const silenced = useMemo(() => all.filter(silencedOf).length, [all, silencedOf]);
+  const silenced = useMemo(() => all.filter(isSilenced).length, [all]);
   const shown = useMemo(() => {
     const base = filter ? all.filter(filter(nodeName)) : all;
-    return onlySilenced ? base.filter(silencedOf) : base;
-  }, [all, filter, nodeName, onlySilenced, silencedOf]);
+    return onlySilenced ? base.filter(isSilenced) : base;
+  }, [all, filter, nodeName, onlySilenced]);
 
   const body =
     all.length === 0 ? (
@@ -316,11 +274,11 @@ export function AlertRows({
       // natural height (no bounded scroll region).
       <div className="alertrows">
         {shown.slice(0, limit).map((a) => (
-          <AlertRow key={rowKey(a)} a={a} actions={actions} nodeName={nodeName} muteOf={muteOf} heldOf={heldOf} />
+          <AlertRow key={rowKey(a)} a={a} actions={actions} nodeName={nodeName} heldOf={heldOf} />
         ))}
       </div>
     ) : (
-      <VirtualAlertRows alerts={shown} actions={actions} nodeName={nodeName} muteOf={muteOf} heldOf={heldOf} />
+      <VirtualAlertRows alerts={shown} actions={actions} nodeName={nodeName} heldOf={heldOf} />
     );
 
   // No toolbar (every dashboard widget) ⇒ the same single element as before, not a fragment.

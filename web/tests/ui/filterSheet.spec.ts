@@ -17,7 +17,7 @@ const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 
 /** A route, or a node-detail tab (a filter row no route names). */
 const SUBJECTS = [
-  '/alerts/mutes',
+  '/alerts/maintenance',
   '/events',
   '/settings/users',
   `/nodes/${NODE_ID}?tab=interfaces`,

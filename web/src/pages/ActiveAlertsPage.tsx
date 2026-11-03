@@ -4,10 +4,10 @@
 // (PagerDuty/JSM). So there is NO Ack button, and Yagra does not track acknowledgement at all —
 // not even as state mirrored back from the external tool (ADR-233).
 //
-// Two per-alert actions, and both appear only where they would actually work — a control that is
-// permanently disabled is a promise the UI cannot keep:
-//   - Mute (AckAlerts, operator and above) seeds a node mute with the metric that fired.
-//   - Explain (ADR-029) needs a configured provider AND a role that can spend the call.
+// One per-alert action, and it appears only where it would actually work — a control that is
+// permanently disabled is a promise the UI cannot keep: Explain (ADR-029) needs a configured
+// provider AND a role that can spend the call. Silencing alerts is a maintenance window, never a
+// per-alert action (ADR-234).
 // Alerts arrive live over SSE.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -17,7 +17,6 @@ import { useCan } from '../store';
 import { api } from '../services/api';
 import { subjectNodeId } from '../lib/alertSubject';
 import { SEVERITY_ORDER } from '../lib/nodeState';
-import { muteTargetFromAlert, type AlertMuteSeed } from '../lib/suppression';
 import { SEVERITIES } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -26,7 +25,6 @@ import { serverToolbarFilters } from '../lib/listToolbar';
 import { type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { RcaModal } from '../components/Rca/RcaModal';
-import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { AlertRows } from '../widgets/AlertRows';
 import { EmptyState } from '../components/ui/EmptyState';
 import { useFleetSummary } from '../dashboard/useFleetSummary';
@@ -53,7 +51,6 @@ export function ActiveAlertsPage() {
     node: string;
     check: string;
   } | null>(null);
-  const [muting, setMuting] = useState<AlertMuteSeed | null>(null);
 
   // The filters live in the URL — nothing else holds them, so a narrowed triage view survives a
   // reload and can be pasted to whoever is looking at the same incident. `replace: true` because a
@@ -108,9 +105,9 @@ export function ActiveAlertsPage() {
     };
   }, []);
 
-  // Both actions are AckAlerts-gated server-side — a caller without it would get a 403, so don't
-  // show a button that only ever fails. Explain additionally needs a provider.
-  const canSuppress = useCan('ack_alerts');
+  // Explain is AckAlerts-gated server-side — a caller without it would get a 403, so don't show a
+  // button that only ever fails. It additionally needs a provider.
+  const canRunRca = useCan('ack_alerts');
   const canConfig = useCan('manage_config');
   const navigate = useNavigate();
   // No alerts on an empty fleet is not "all clear" (ADR-209 decision 4): nothing is being watched.
@@ -127,7 +124,7 @@ export function ActiveAlertsPage() {
     else p.set('silenced', '1');
     setParams(p, { replace: true });
   }, [onlySilenced, params, setParams]);
-  const canExplain = rcaEnabled && canSuppress;
+  const canExplain = rcaEnabled && canRunRca;
 
   return (
     <div>
@@ -137,7 +134,7 @@ export function ActiveAlertsPage() {
       />
       {/* No `Card` around the list: the data-table standard is header → toolbar → rows, and this
           was the one list screen still wrapping its rows in a titled panel (§4.1). */}
-      {/* A viewer can do neither, so the actions slot is omitted rather than rendered empty — on
+      {/* A viewer cannot explain, so the actions slot is omitted rather than rendered empty — on
           mobile the cell takes a full-width row of its own, which would otherwise be blank. */}
       <AlertRows
         filter={filter}
@@ -197,33 +194,21 @@ export function ActiveAlertsPage() {
           );
         }}
         actions={
-          canSuppress
-            ? (a, subjectName) => {
-                // Both actions are node-scoped server-side (a mute names a node, RCA takes a node
-                // id), so a pool-coverage alert gets neither rather than a button that only fails.
+          canExplain
+            ? (a) => {
+                // RCA takes a node id, so a pool-coverage alert gets no button rather than one
+                // that only fails.
                 const node = subjectNodeId(a);
                 if (node === null) return null;
                 return (
-                  <>
-                    {canExplain && (
-                      <Button
-                        variant="ghost"
-                        aria-label={t('rca:actionHint')}
-                        title={t('rca:actionHint')}
-                        onClick={() => setExplaining({ node, check: a.check })}
-                      >
-                        {t('rca:action')}
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      aria-label={t('active.muteHint')}
-                      title={t('active.muteHint')}
-                      onClick={() => setMuting(muteTargetFromAlert(a, node, subjectName))}
-                    >
-                      {t('active.mute')}
-                    </Button>
-                  </>
+                  <Button
+                    variant="ghost"
+                    aria-label={t('rca:actionHint')}
+                    title={t('rca:actionHint')}
+                    onClick={() => setExplaining({ node, check: a.check })}
+                  >
+                    {t('rca:action')}
+                  </Button>
                 );
               }
             : undefined
@@ -234,17 +219,6 @@ export function ActiveAlertsPage() {
           node={explaining.node}
           check={explaining.check}
           onClose={() => setExplaining(null)}
-        />
-      )}
-      {/* The scope is locked to the alert's node, so the dialog never needs the group list. Mutes
-          don't change alert state (they suppress *notification*), so there is nothing to reload
-          here — the list is SSE-driven and unaffected. */}
-      {muting && (
-        <AddMuteModal
-          initialScope={muting.target}
-          initialMetric={muting.metric}
-          onClose={() => setMuting(null)}
-          onSaved={() => undefined}
         />
       )}
     </div>

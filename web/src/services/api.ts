@@ -106,7 +106,6 @@ import type {
   NodeMetricEntry,
   MetricTopAgg,
   MibCatalogEntry,
-  Mute,
   NodeDetail,
   NodeGroup,
   PrefixGapReport,
@@ -2719,16 +2718,6 @@ export const api = {
   }): Promise<{ requested: number; created: number }> =>
     apiPost('/api/v1/maintenance-windows/bulk', { body }),
 
-  /** Mute **each** of these nodes until one moment, in one request (ADR-124 Inc.11). The mute
-   *  twin of `createMaintenanceWindows`, and a separate call because muting asks for `AckAlerts`
-   *  where a window asks for `ManageMaintenance`. */
-  createMutes: (body: {
-    node_ids: string[];
-    until: string;
-    metric_name?: string;
-    reason?: string;
-  }): Promise<{ requested: number; created: number }> => apiPost('/api/v1/mutes/bulk', { body }),
-
   /** Create a maintenance window. Times are RFC 3339; scope mirrors thresholds plus `group_id`
    *  (a folder group, resolved recursively). */
   createMaintenanceWindow: (body: {
@@ -2759,25 +2748,8 @@ export const api = {
   clearEndedMaintenanceWindows: (): Promise<{ deleted: number }> =>
     apiDelete('/api/v1/maintenance-windows', { query: { status: 'ended' } }),
 
-  /** Unexpired mutes (notification silences; alerts still show in the UI/history). */
-  listMutes: (): Promise<Mute[]> => apiGet('/api/v1/mutes'),
-
-  /** Create a mute. `scope_kind` is `node` (one node, optionally one `metric_name`) or `group`
-   *  (every node under a folder group, recursive — `metric_name` ignored); `scope_id` is the
-   *  node/group id. `until` is RFC 3339. */
-  createMute: (body: {
-    scope_kind: 'node' | 'group';
-    scope_id: string;
-    metric_name?: string;
-    until: string;
-    reason?: string;
-  }): Promise<{ id: string }> => apiPost('/api/v1/mutes', { body }),
-
-  /** Delete (lift) a mute. */
-  deleteMute: (id: string): Promise<void> => apiDelete('/api/v1/mutes/{id}', { path: { id } }),
-
-  /** Nodes currently released from a suppression they only inherited. Fetched alongside the window
-   *  and mute lists — a released node is not suppressed, so the tree needs all three to be right. */
+  /** Nodes currently released from a maintenance window they only inherited. Fetched alongside the
+   *  window list — a released node is not suppressed, so the tree needs both to be right. */
   listSuppressionExemptions: (): Promise<SuppressionExemption[]> =>
     apiGet('/api/v1/suppression-exemptions'),
 
@@ -2790,14 +2762,6 @@ export const api = {
    *  which is ended directly instead. */
   setNodeMaintenanceExemption: (nodeId: string, exempt: boolean): Promise<void> =>
     apiPut('/api/v1/nodes/{node_id}/maintenance-exemption', {
-      path: { node_id: nodeId },
-      body: { exempt },
-    }),
-
-  /** The mute counterpart of {@link api.setNodeMaintenanceExemption} — releases one node from a
-   *  group mute. A mute naming the node is lifted directly instead. */
-  setNodeMuteExemption: (nodeId: string, exempt: boolean): Promise<void> =>
-    apiPut('/api/v1/nodes/{node_id}/mute-exemption', {
       path: { node_id: nodeId },
       body: { exempt },
     }),

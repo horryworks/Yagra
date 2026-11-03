@@ -5,7 +5,7 @@
 // the register-poller helper follow the shared Modal patterns. The list auto-refreshes every 10s
 // (no SSE — poller liveness is coarse-grained), on top of a manual reload.
 //
-// Modeled on MutesPage/EventSourcesPage (the data-table-standard exemplars): PageHeader with the
+// Modeled on EventSourcesPage (the data-table-standard exemplar): PageHeader with the
 // Settings ▸ Pollers trail, a TableToolbar (count + primary action) over the shared `.ytable`, and
 // destructive-consent via the shared Modal.
 
@@ -1222,7 +1222,7 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
           claim height a section below another table has none of. `.ytable-scroll` gives exactly
           what a subsection wants: content height, capped at 520px. The row count is bounded
           server-side at 200 (`api/pollers.rs::monitoring_gaps`), so virtualization buys nothing
-          here, and there is no filter row — which `MutesPage` names as the trigger for migrating.
+          here, and there is no filter row — needing one is the trigger for migrating.
           `styles/table.css` documents this markup as the v2 standard. */}
       <div className="ytable">
         <div className="ytable-scroll">

@@ -6,14 +6,12 @@ import { nodeHeaderActions, type NodeHeaderCaps } from './nodeHeaderActions';
 const all: NodeHeaderCaps = {
   canConfig: true,
   canMaintenance: true,
-  canMute: true,
   pinsReady: true,
   inline: true,
 };
 const none: NodeHeaderCaps = {
   canConfig: false,
   canMaintenance: false,
-  canMute: false,
   pinsReady: false,
   inline: false,
 };
@@ -21,9 +19,9 @@ const device = { kind: 'device' as const, name: 'sw-01', sys_name: 'sw-01' };
 const ranged = [{ id: 'g', prefixes: ['192.0.2.0/24'] } as unknown as NodeGroup];
 
 describe('nodeHeaderActions', () => {
-  it('draws the four buttons and the whole menu for an account that may do everything', () => {
+  it('draws every button and the whole menu for an account that may do everything', () => {
     const got = nodeHeaderActions(all, { ...device, sys_name: 'core-sw' }, ranged);
-    expect(got.primary).toEqual(['edit', 'maintenance', 'mute', 'pollNow']);
+    expect(got.primary).toEqual(['edit', 'maintenance', 'pollNow']);
     expect(got.more).toEqual([
       'openDetail',
       'map',
@@ -45,9 +43,7 @@ describe('nodeHeaderActions', () => {
     expect(got.more).toEqual(['map']);
   });
 
-  it('gates maintenance and mute on their own permissions, not on editing', () => {
-    const got = nodeHeaderActions({ ...none, canMute: true }, device, []);
-    expect(got.primary).toEqual(['mute']);
+  it('gates maintenance on its own permission, not on editing', () => {
     expect(nodeHeaderActions({ ...none, canMaintenance: true }, device, []).primary).toEqual([
       'maintenance',
     ]);

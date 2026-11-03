@@ -48,7 +48,7 @@ export function readTopSelection(settings: WidgetSettings | undefined): MetricTo
  * The metric names to offer under the field.
  *
  * Two sources, both honest about being partial: the shared presets every node emits
- * (`lib/suppression`, the same list the threshold and mute forms offer), and every metric this
+ * (`lib/suppression`, the same list the threshold form offered), and every metric this
  * session has seen on a node the operator opened. Anything known to be a counter is dropped from
  * both — suggesting a name the widget will then refuse to rank is worse than not suggesting it.
  */

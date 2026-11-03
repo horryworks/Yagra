@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Maintenance windows + mutes persistence (alert-quality).
+//! Maintenance-window persistence (alert-quality).
 //!
 //! Windows are scoped like thresholds (node / profile / group, ADR-013); the alert engine
 //! snapshots the *currently active* windows every refresh and treats matching nodes as
@@ -11,8 +11,9 @@
 //! [`crate::alerts::config::split_windows`], which takes it out of the operator scopes before they
 //! are resolved against the inventory. Treating the two the same is what closed and reopened a
 //! down device's incident on every upgrade.
-//! Mutes silence the **notification** for one node (optionally one check) until a given
-//! time; the alert still fires for the UI/history. This is the I/O adapter — the
+//!
+//! There used to be a second suppression, the mute, which silenced only the notification. ADR-234
+//! removed it: a window is the one way to keep a node quiet. This is the I/O adapter — the
 //! suppression itself lives in [`crate::alerts`].
 
 use chrono::{DateTime, Utc};
@@ -81,37 +82,23 @@ yagra_base::stored_enum::token_enum!(WindowScope, Profile, "maintenance_windows.
     System => "system",
 ]);
 
-/// Whether a mute targets a single node or a whole folder group (recursive).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MuteScope {
-    Node,
-    Group,
-}
-
-yagra_base::stored_enum::token_enum!(MuteScope, Node, "mutes.scope_kind", [
-    Node => "node",
-    Group => "group",
-]);
-
 /// Which kind of suppression a node has been released from.
 ///
 /// ⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived
-/// dependency* suppression (ADR-043). This is about maintenance windows and mutes, and the two must
-/// not be wired to each other.
+/// dependency* suppression (ADR-043). This is about maintenance windows, and the two must not be
+/// wired to each other.
+///
+/// One variant since ADR-234 removed mutes; it stays an enum because it is the stored `kind`
+/// column and the `kind` field of the API shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExemptionKind {
     Maintenance,
-    Mute,
 }
 
-// Falls back to `Maintenance` — the narrower of the two, since a mute-only exemption read as a
-// maintenance one releases a node from planned suppression it was already visible in, rather than
-// silently un-muting notifications nobody asked to hear.
+// Migration 0168 deleted every `mute` row, so `maintenance` is the only token left to read.
 yagra_base::stored_enum::token_enum!(ExemptionKind, Maintenance, "exemptions.kind", [
     Maintenance => "maintenance",
-    Mute => "mute",
 ]);
 
 /// A node released from an inherited suppression, until the suppression it was carved out of ends.
@@ -140,23 +127,7 @@ pub struct StoredWindow {
     pub active: bool,
 }
 
-/// A stored mute (API shape). A `node` mute silences one node (optionally one check via
-/// `metric_name`); a `group` mute silences every node under a folder group (recursive). Exactly
-/// one of `node_id` / `group_id` is set, per `scope_kind`.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct StoredMute {
-    pub id: Uuid,
-    pub scope_kind: MuteScope,
-    pub node_id: Option<Uuid>,
-    pub group_id: Option<Uuid>,
-    // Serialized as `metric_name` (matches the create body); the DB column stays `check_name`.
-    #[serde(rename = "metric_name")]
-    pub check_name: Option<String>,
-    pub until_at: String,
-    pub reason: Option<String>,
-}
-
-/// PostgreSQL-backed maintenance windows + mutes.
+/// PostgreSQL-backed maintenance windows and their exemptions.
 pub struct MaintenanceRepo {
     pool: PgPool,
 }
@@ -404,114 +375,10 @@ scope_predicate(6, "n.group_id"),
         Ok(res.rows_affected())
     }
 
-    /// Unexpired mutes, soonest-expiring first. Expired rows are dropped lazily on read
-    /// (they are inert either way — the notifier only loads unexpired ones).
-    pub async fn list_mutes(&self) -> anyhow::Result<Vec<StoredMute>> {
-        sqlx::query("DELETE FROM mutes WHERE until_at <= now()")
-            .execute(&self.pool)
-            .await?;
-        let rows = sqlx::query(
-            "SELECT id, scope_kind, node_id, group_id, check_name, until_at, reason FROM mutes \
-             WHERE until_at > now() ORDER BY until_at",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        rows.into_iter()
-            .map(|row| {
-                let until: DateTime<Utc> = row.try_get("until_at")?;
-                Ok(StoredMute {
-                    id: row.try_get("id")?,
-                    scope_kind: MuteScope::from_stored(&row.try_get::<String, _>("scope_kind")?),
-                    node_id: row.try_get("node_id")?,
-                    group_id: row.try_get("group_id")?,
-                    check_name: row.try_get("check_name")?,
-                    until_at: until.to_rfc3339(),
-                    reason: row.try_get("reason")?,
-                })
-            })
-            .collect()
-    }
-
-    /// Create a mute; returns its id. `scope_kind` is `"node"` (the default) or `"group"`. For a
-    /// group mute the whole node-set is silenced, so `check_name` is ignored.
-    pub async fn create_mute(
-        &self,
-        scope_kind: &str,
-        scope_id: Uuid,
-        check_name: Option<&str>,
-        until_at: DateTime<Utc>,
-        reason: Option<&str>,
-    ) -> anyhow::Result<Uuid> {
-        let id = Uuid::new_v4();
-        let group = scope_kind == "group";
-        let (node_id, group_id, check) = if group {
-            (None, Some(scope_id), None)
-        } else {
-            (Some(scope_id), None, check_name)
-        };
-        sqlx::query(
-            "INSERT INTO mutes (id, scope_kind, node_id, group_id, check_name, until_at, reason) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        )
-        .bind(id)
-        .bind(if group { "group" } else { "node" })
-        .bind(node_id)
-        .bind(group_id)
-        .bind(check)
-        .bind(until_at)
-        .bind(reason)
-        .execute(&self.pool)
-        .await?;
-        Ok(id)
-    }
-
-    /// Mute MANY nodes until one moment, in a single statement (ADR-124 Inc.11). Returns
-    /// `(requested, created)` with the same meaning as [`Self::create_windows_for_nodes`], and the
-    /// same `JOIN nodes` carrying the caller's scope into the write.
-    ///
-    /// `check_name` narrows every one of them to a single metric, exactly as the single-node form
-    /// does — it is validated at the API edge, because the value reaches a PromQL selector.
-    pub async fn create_mutes_for_nodes(
-        &self,
-        node_ids: &[Uuid],
-        check_name: Option<&str>,
-        until_at: DateTime<Utc>,
-        reason: Option<&str>,
-        scope: Option<&[Uuid]>,
-    ) -> anyhow::Result<(usize, u64)> {
-        let mut seen = std::collections::HashSet::new();
-        let ids: Vec<Uuid> = node_ids
-            .iter()
-            .copied()
-            .filter(|id| seen.insert(*id))
-            .collect();
-        if ids.is_empty() {
-            return Ok((0, 0));
-        }
-        let mute_ids: Vec<Uuid> = ids.iter().map(|_| Uuid::new_v4()).collect();
-        let res = sqlx::query(&format!(
-            "INSERT INTO mutes (id, scope_kind, node_id, group_id, check_name, until_at, reason) \
-             SELECT t.mute_id, 'node', n.id, NULL, $3, $4, $5 \
-               FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, mute_id) \
-               JOIN nodes n ON n.id = t.node_id \
-              WHERE {}",
-            scope_predicate(6, "n.group_id"),
-        ))
-        .bind(&ids)
-        .bind(&mute_ids)
-        .bind(check_name)
-        .bind(until_at)
-        .bind(reason)
-        .bind(scope)
-        .execute(&self.pool)
-        .await?;
-        Ok((ids.len(), res.rows_affected()))
-    }
-
     // ── Exemptions: one node released from a suppression it inherited (migration 0081) ──────
 
-    /// The nodes currently exempt from `kind`. Expired rows are dropped lazily on read — the same
-    /// shape as [`Self::list_mutes`], and for the same reason: they are inert either way.
+    /// The nodes currently exempt from `kind`. Expired rows are dropped lazily on read: they are
+    /// inert either way.
     pub async fn exempt_nodes(&self, kind: ExemptionKind) -> anyhow::Result<Vec<Uuid>> {
         sqlx::query("DELETE FROM suppression_exemptions WHERE until_at <= now()")
             .execute(&self.pool)
@@ -581,15 +448,6 @@ scope_predicate(6, "n.group_id"),
                 .bind(node)
                 .execute(&self.pool)
                 .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    /// Delete a mute. Returns whether a row was removed.
-    pub async fn delete_mute(&self, id: Uuid) -> anyhow::Result<bool> {
-        let res = sqlx::query("DELETE FROM mutes WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
         Ok(res.rows_affected() > 0)
     }
 }
@@ -737,24 +595,6 @@ pub(crate) fn inherited_maintenance_end(
         .max()
 }
 
-/// The mute counterpart: a group mute over a folder group containing this node.
-pub(crate) fn inherited_mute_end(
-    mutes: &[StoredMute],
-    facts: &CoverageFacts,
-) -> Option<DateTime<Utc>> {
-    mutes
-        .iter()
-        .filter(|m| match m.scope_kind {
-            // Names the node — same rule as a node-scoped window.
-            MuteScope::Node => false,
-            MuteScope::Group => m
-                .group_id
-                .is_some_and(|g| facts.containing_groups.contains(&g)),
-        })
-        .filter_map(|m| parse_ts(&m.until_at))
-        .max()
-}
-
 /// What a stored exemption is still entitled to, once the coverage in force has been re-derived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExemptionUpdate {
@@ -786,7 +626,7 @@ pub(crate) fn reconcile_exemption(
 ///
 /// An exemption is sized once, when it is granted, to the coverage covering the node at that
 /// instant — but coverage can stop sooner than it said it would: a window **ended early**,
-/// disabled or deleted, a mute lifted. Nothing re-derived the expiry, so the release outlived its
+/// disabled or deleted. Nothing re-derived the expiry, so the release outlived its
 /// reason. Two things went wrong then, and the second is the one that matters: the tree drew a
 /// "released" marker on a row nothing was suppressing, *and* the stale row stayed live in
 /// [`MaintenanceRepo::exempt_nodes`], so the **next** window over that group would have skipped
@@ -805,7 +645,6 @@ pub(crate) async fn reconcile_exemptions(
         return Ok(0);
     }
     let windows = maintenance.active_windows().await?;
-    let mutes = maintenance.list_mutes().await?;
     let edges = groups.edges().await?;
     let mut changed = 0;
     for row in rows {
@@ -822,7 +661,6 @@ pub(crate) async fn reconcile_exemptions(
         let facts = CoverageFacts::of(&node, &edges);
         let in_force = match row.kind {
             ExemptionKind::Maintenance => inherited_maintenance_end(&windows, &facts),
-            ExemptionKind::Mute => inherited_mute_end(&mutes, &facts),
         };
         match reconcile_exemption(stored_until, in_force) {
             ExemptionUpdate::Keep => {}
@@ -1019,17 +857,6 @@ mod tests {
     }
 
     #[test]
-    fn mute_scope_round_trips() {
-        assert_eq!(MuteScope::from_stored("group"), MuteScope::Group);
-        assert_eq!(MuteScope::from_stored("node"), MuteScope::Node);
-        assert_eq!(MuteScope::from_stored("bogus"), MuteScope::Node);
-        assert_eq!(
-            serde_json::to_value(MuteScope::Group).unwrap(),
-            serde_json::Value::String("group".to_owned())
-        );
-    }
-
-    #[test]
     fn no_active_scopes_means_no_maintenance() {
         let a = node(None, &["tokyo"]);
         assert!(covered(&[], &[a]).is_empty());
@@ -1037,19 +864,15 @@ mod tests {
 
     #[test]
     fn exemption_kind_round_trips() {
-        for (s, kind) in [
-            ("maintenance", ExemptionKind::Maintenance),
-            ("mute", ExemptionKind::Mute),
-        ] {
-            assert_eq!(ExemptionKind::from_stored(s), kind);
-            assert_eq!(kind.as_str(), s);
-            // The column token and the JSON tag come from two different mechanisms; a
-            // disagreement means rows this writes are rows it cannot read back.
-            assert_eq!(
-                serde_json::to_value(kind).unwrap(),
-                serde_json::Value::String(s.to_owned())
-            );
-        }
+        let (s, kind) = ("maintenance", ExemptionKind::Maintenance);
+        assert_eq!(ExemptionKind::from_stored(s), kind);
+        assert_eq!(kind.as_str(), s);
+        // The column token and the JSON tag come from two different mechanisms; a disagreement
+        // means rows this writes are rows it cannot read back.
+        assert_eq!(
+            serde_json::to_value(kind).unwrap(),
+            serde_json::Value::String(s.to_owned())
+        );
         assert_eq!(
             ExemptionKind::from_stored("bogus"),
             ExemptionKind::Maintenance
@@ -1113,18 +936,6 @@ mod tests {
         parse_ts(&format!("2026-08-12T{hour:02}:00:00Z")).expect("fixed timestamp parses")
     }
 
-    fn group_mute(group: Uuid, until: DateTime<Utc>) -> StoredMute {
-        StoredMute {
-            id: Uuid::new_v4(),
-            scope_kind: MuteScope::Group,
-            node_id: None,
-            group_id: Some(group),
-            check_name: None,
-            until_at: until.to_rfc3339(),
-            reason: None,
-        }
-    }
-
     #[test]
     fn a_window_that_names_the_node_is_never_inherited() {
         // Rule 1 of the exemption design, and the one with a visible failure mode: if a release
@@ -1186,31 +997,6 @@ mod tests {
         let f = facts(None, &[]);
         let windows = vec![(WindowScope::Node, Uuid::from_u128(3).to_string(), at(4))];
         assert!(inherited_maintenance_end(&windows, &f).is_none());
-    }
-
-    #[test]
-    fn only_a_group_mute_can_be_released_from() {
-        let group = Uuid::from_u128(1);
-        let f = facts(None, &[group]);
-        let node_mute = StoredMute {
-            scope_kind: MuteScope::Node,
-            node_id: Some(Uuid::from_u128(5)),
-            group_id: None,
-            ..group_mute(group, at(9))
-        };
-        // The node mute is later and is still ignored — it names the node.
-        assert_eq!(
-            inherited_mute_end(
-                &[
-                    node_mute.clone(),
-                    group_mute(group, at(3)),
-                    group_mute(Uuid::from_u128(2), at(23)),
-                ],
-                &f
-            ),
-            Some(at(3))
-        );
-        assert!(inherited_mute_end(&[node_mute], &f).is_none());
     }
 
     #[test]
@@ -1621,114 +1407,14 @@ mod tests {
         );
     }
 
-    /// A node mute and a group mute store different shapes, and the group one **drops the check
-    /// name it was handed**.
-    ///
-    /// 🚨 That is not tidiness. A group mute silences the whole node set; storing a per-check name
-    /// beside it would list back to the operator as "this group is muted for `icmp`", which is not
-    /// what the mute does. The writer decides it, so only running it can say whether it did.
-    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn a_group_mute_drops_the_check_name_a_node_mute_keeps(pool: sqlx::PgPool) {
-        let repo = MaintenanceRepo::new(pool.clone());
-        let until = Utc::now() + chrono::Duration::hours(1);
-        let node = Uuid::new_v4();
-        let group = Uuid::new_v4();
-
-        let per_check = repo
-            .create_mute("node", node, Some("icmp"), until, Some("cable work"))
-            .await
-            .expect("node mute");
-        let whole_group = repo
-            .create_mute("group", group, Some("icmp"), until, None)
-            .await
-            .expect("group mute");
-
-        let mutes = repo.list_mutes().await.expect("list");
-        assert_eq!(mutes.len(), 2);
-        let one = mutes.iter().find(|m| m.id == per_check).expect("node mute");
-        assert_eq!(one.scope_kind, MuteScope::Node);
-        assert_eq!(one.node_id, Some(node));
-        assert_eq!(one.group_id, None);
-        assert_eq!(one.check_name.as_deref(), Some("icmp"));
-        assert_eq!(one.reason.as_deref(), Some("cable work"));
-
-        let all = mutes
-            .iter()
-            .find(|m| m.id == whole_group)
-            .expect("group mute");
-        assert_eq!(all.scope_kind, MuteScope::Group);
-        assert_eq!(all.group_id, Some(group));
-        assert_eq!(
-            all.node_id, None,
-            "a group mute was also bound to a node, so it would silence twice over"
-        );
-        assert_eq!(
-            all.check_name, None,
-            "a group mute kept a check name — it silences every check, so this would list back to \
-             the operator as something the mute does not do"
-        );
-        assert_eq!(all.reason, None);
-    }
-
-    /// Expired mutes are dropped on read, and what is left comes back soonest-expiring first.
-    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn an_expired_mute_is_dropped_on_read_and_the_rest_are_soonest_first(pool: sqlx::PgPool) {
-        let repo = MaintenanceRepo::new(pool.clone());
-        let now = Utc::now();
-        let hour = chrono::Duration::hours(1);
-        repo.create_mute("node", Uuid::new_v4(), None, now - hour, None)
-            .await
-            .expect("expired");
-        let later = repo
-            .create_mute("node", Uuid::new_v4(), None, now + hour * 2, None)
-            .await
-            .expect("later");
-        let sooner = repo
-            .create_mute("node", Uuid::new_v4(), None, now + hour, None)
-            .await
-            .expect("sooner");
-        assert_eq!(pgtest::rows(&pool, "mutes").await, 3);
-
-        let mutes = repo.list_mutes().await.expect("list");
-        assert_eq!(
-            mutes.iter().map(|m| m.id).collect::<Vec<_>>(),
-            vec![sooner, later],
-            "mutes are not returned soonest-expiring first, or an expired one is still silencing"
-        );
-        assert_eq!(
-            pgtest::rows(&pool, "mutes").await,
-            2,
-            "the expired mute was filtered out of the answer but left in the table, so it grows \
-             without bound"
-        );
-
-        assert!(repo.delete_mute(sooner).await.expect("delete"));
-        assert_eq!(
-            repo.list_mutes()
-                .await
-                .expect("list")
-                .iter()
-                .map(|m| m.id)
-                .collect::<Vec<_>>(),
-            vec![later]
-        );
-        assert!(
-            !repo.delete_mute(sooner).await.expect("delete"),
-            "deleting a mute twice reported success twice"
-        );
-    }
-
-    /// Releasing a node twice **extends** its release rather than leaving two rows, and the two
-    /// exemption kinds are independent.
+    /// Releasing a node twice **extends** its release rather than leaving two rows.
     ///
     /// 🚨 The upsert is keyed on `(kind, node_id)`. Two rows for one node would give the reader an
     /// expiry to choose between, and whichever it picked would be right half the time — a node
     /// silently back under suppression while the operator's second release said otherwise.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn releasing_a_node_twice_extends_it_and_the_kinds_are_independent(pool: sqlx::PgPool) {
+    async fn releasing_a_node_twice_extends_it(pool: sqlx::PgPool) {
         use chrono::SubsecRound;
         let repo = MaintenanceRepo::new(pool.clone());
         // Truncated to what PostgreSQL stores: TIMESTAMPTZ is microsecond-resolution and the
@@ -1764,46 +1450,20 @@ mod tests {
             "the second release did not extend the first"
         );
 
-        // The same node released from the other kind is a separate row, and neither read sees the
-        // other's.
-        repo.set_exemption(ExemptionKind::Mute, node, now + hour)
-            .await
-            .expect("release from mute");
-        assert_eq!(pgtest::rows(&pool, "suppression_exemptions").await, 2);
-        assert_eq!(
-            repo.exempt_nodes(ExemptionKind::Maintenance)
-                .await
-                .expect("exempt"),
-            vec![node]
-        );
-        assert_eq!(
-            repo.exempt_nodes(ExemptionKind::Mute)
-                .await
-                .expect("exempt"),
-            vec![node]
-        );
-
         assert!(
-            repo.clear_exemption(ExemptionKind::Mute, node)
+            repo.clear_exemption(ExemptionKind::Maintenance, node)
                 .await
                 .expect("clear"),
             "clearing an exemption that exists reported that it did not"
         );
-        assert_eq!(
-            repo.exempt_nodes(ExemptionKind::Maintenance)
-                .await
-                .expect("exempt"),
-            vec![node],
-            "clearing one kind put the node back under the other"
-        );
         assert!(repo
-            .exempt_nodes(ExemptionKind::Mute)
+            .exempt_nodes(ExemptionKind::Maintenance)
             .await
             .expect("exempt")
             .is_empty());
         assert!(
             !repo
-                .clear_exemption(ExemptionKind::Mute, node)
+                .clear_exemption(ExemptionKind::Maintenance, node)
                 .await
                 .expect("clear"),
             "clearing an exemption twice reported success twice"

@@ -44,7 +44,6 @@ const SUBJECTS: Subject[] = [
   { path: '/nodes/collection/rules', read: '/api/v1/classification-rules', toolbar: true },
   { path: '/alerts/rules/events', read: '/api/v1/event-rules', toolbar: true },
   { path: '/settings/integrations/netbox', read: '/api/v1/netbox/servers', toolbar: false },
-  { path: '/alerts/mutes', read: '/api/v1/mutes', toolbar: true },
   { path: '/alerts/maintenance', read: '/api/v1/maintenance-windows', toolbar: true },
   { path: '/nodes/collection', read: '/api/v1/profiles', toolbar: true },
   { path: '/alerts/routing', read: '/api/v1/routing-rules', toolbar: true },

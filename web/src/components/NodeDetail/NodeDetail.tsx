@@ -50,7 +50,6 @@ import {
 import { SetParentModal } from '../SetParentModal/SetParentModal';
 import { ActionMenu, type ActionMenuItem } from '../ui/ActionMenu';
 import { AddMaintenanceWindowModal } from '../suppression/AddMaintenanceWindowModal';
-import { AddMuteModal } from '../suppression/AddMuteModal';
 import { SetPoolModal } from '../SetPoolModal/SetPoolModal';
 import { RediscoverModal } from '../NodeTree/RediscoverModal';
 import { NameFromDeviceModal } from '../NameFromDeviceModal/NameFromDeviceModal';
@@ -189,7 +188,6 @@ export function NodeDetail({
   // alike; the tree keeps its own for the selection and for folders.
   const [dialog, setDialog] = useState<NodeHeaderDialog | null>(null);
   const canMaintenance = useCan('manage_maintenance');
-  const canMute = useCan('ack_alerts');
   const pinsReady = usePinsStore((s) => s.status === 'ready');
   const pinned = usePinsStore((s) => s.nodeIds.has(nodeId));
   const setNodePinned = usePinsStore((s) => s.setNodePinned);
@@ -356,7 +354,7 @@ export function NodeDetail({
 
   const state = status?.state ?? 'unknown';
   const header = nodeHeaderActions(
-    { canConfig: canEdit, canMaintenance, canMute, pinsReady, inline: variant === 'inline' },
+    { canConfig: canEdit, canMaintenance, pinsReady, inline: variant === 'inline' },
     node,
     groups,
   );
@@ -487,7 +485,7 @@ export function NodeDetail({
             ))}
             {status && <StatePill state={state} />}
           </div>
-          {/* Four buttons and "More" (ADR-209 decision 8), the same set in the split and on the
+          {/* The primary buttons and "More" (ADR-209 decision 8), the same set in the split and on the
               page. Which ones, and in what order, is `nodeHeaderActions` — tested, and gated on the
               permission each action's handler checks (ADR-056). The tree's right-click menu stays
               as the shortcut. */}
@@ -615,14 +613,6 @@ export function NodeDetail({
       )}
       {dialog === 'maintenance' && (
         <AddMaintenanceWindowModal
-          groups={groups}
-          initialScope={self}
-          onClose={() => setDialog(null)}
-          onSaved={changed}
-        />
-      )}
-      {dialog === 'mute' && (
-        <AddMuteModal
           groups={groups}
           initialScope={self}
           onClose={() => setDialog(null)}

@@ -7,7 +7,7 @@
 //! burst dedup → node correlation (source IP → inventory, or the webhook source's node
 //! binding) → rule matching (substring/regex, compiled snapshot) → persist to the
 //! `events` table → raise/refresh/clear alerts through the existing [`AlertManager`] /
-//! [`Notifier`] / history pipeline (dedup, mutes, SSE all reused).
+//! [`Notifier`] / history pipeline (dedup, SSE all reused).
 //!
 //! **Event alerts are edge-triggered**: there is no `CheckState`/dwell — damping comes
 //! from the per-rule min-count/window gate, TTL refresh (a repeat match extends the

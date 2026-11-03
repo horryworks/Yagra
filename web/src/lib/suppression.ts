@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Pure helpers for the maintenance/mute "suppression" features shared by the All Nodes tree and
-// the management pages: the right-click target, quick-duration presets, and the suppression index
-// (which nodes/groups are currently under maintenance or muted, propagated down a targeted folder
-// group). Kept free of React so the index logic is unit-tested directly.
+// Pure helpers for the maintenance "suppression" feature shared by the All Nodes tree and the
+// management pages: the right-click target, quick-duration presets, and the suppression index
+// (which nodes/groups are currently under maintenance, propagated down a targeted folder group).
+// A maintenance window is the only way to silence alerts (ADR-234). Kept free of React so the
+// index logic is unit-tested directly.
 
 import { LIVENESS_METRIC } from './format';
 import { pushInto } from './mapBucket';
 import type {
-  Alert,
   MaintenanceWindow,
-  Mute,
   NodeGroup,
   NodeSummary,
   Permission,
@@ -23,41 +22,6 @@ export interface SuppressionTarget {
   name: string;
 }
 
-/** The mute an active alert maps onto: always its node, pre-filled with the metric it fired on. */
-export interface AlertMuteSeed {
-  target: SuppressionTarget;
-  /** Metric to pre-fill, or `undefined` for a whole-node mute. */
-  metric?: string;
-}
-
-/**
- * Which mute silences *this* alert — the seed for the per-alert Mute action on the triage screen.
- *
- * The metric is carried through **verbatim, including the `__liveness__` sentinel**, and that is
- * the whole point: a mute is stored by check *name*, and the backend re-derives its identity as
- * `check_id(node, name)` — the same v5 hash the alert's `check` already is (`alerts/rules.rs::check_id`).
- * Passing the alert's metric therefore produces a mute matching exactly the check the operator
- * clicked. Substituting the display text ("Reachability") or dropping the sentinel would silently
- * widen or miss the mute; rendering it readably is the *form's* job, not this function's.
- *
- * An alert with no captured metric (raised before migration 0036) has no check name to name, so it
- * seeds a whole-node mute — broader than the one alert, but the only thing that can be expressed.
- *
- * The node is passed in rather than read off `alert.node`, because that field is the alert's
- * *subject* and is only a node id when the subject is one (`lib/alertSubject`). A pool-coverage
- * alert has no node to mute; the caller decides that before offering the action.
- */
-export function muteTargetFromAlert(
-  alert: Alert,
-  nodeId: string,
-  nodeName: string,
-): AlertMuteSeed {
-  return {
-    target: { kind: 'node', id: nodeId, name: nodeName },
-    metric: alert.metric ? alert.metric : undefined,
-  };
-}
-
 /** Metric names to suggest where the operator types one by hand and nothing better is available.
  *  These are the series every node emits today — ICMP on all of them, `snmp_up` and sysUptime
  *  whenever SNMP is bound — so they cover the common case without pretending to be the catalogue.
@@ -65,8 +29,8 @@ export function muteTargetFromAlert(
  *  `LIVENESS_METRIC` leads the list and is not a series at all: it is the reachability *check*,
  *  and since ADR-075 the up/down alert comes from a rule on it.
  *
- *  ⚠️ **One reader left: the dashboard's metric-top widget.** This was shared because the
- *  alert-rule form and the mute form each carried an identical copy of it; both moved to
+ *  ⚠️ **One reader left: the dashboard's metric-top widget.** This was shared because two
+ *  forms each carried an identical copy of it; both moved to
  *  `MetricPicker` in ADR-075 Inc.4, which reads the deployment's real catalog over the API
  *  instead. The widget still has a free-text field, so it still needs a starting suggestion —
  *  moving it to the picker is a separate change (it ranks metrics, so it must also exclude
@@ -89,30 +53,29 @@ export const DURATION_PRESETS: { label: string; ms: number }[] = [
 /** Group/node ids currently affected, so both row kinds in the tree can show an icon. Maintenance
  *  also sets a node's rolled-up `state` to `maintenance` (the backend covers node/profile/tag/
  *  folder-group scopes), but `maintenanceNodes` lets the icon appear immediately for node- and
- *  folder-group-scoped windows without waiting on the next state refresh. Mutes never change state,
- *  so both nodes and groups are tracked for them.
+ *  folder-group-scoped windows without waiting on the next state refresh.
  *
- *  The `exempt*` sets are the negative half: a node an operator has released from a suppression it
- *  only inherited. Such a node is *removed* from `maintenanceNodes`/`muteNodes` — it is not
- *  suppressed — and listed here instead so the row can say so and offer to put it back. */
+ *  `exemptMaintenanceNodes` is the negative half: a node an operator has released from a window it
+ *  only inherited. Such a node is *removed* from `maintenanceNodes` — it is not suppressed — and
+ *  listed here instead so the row can say so and offer to put it back. */
 export interface SuppressionIndex {
   maintenanceNodes: Set<string>;
   maintenanceGroups: Set<string>;
-  muteNodes: Set<string>;
-  muteGroups: Set<string>;
   exemptMaintenanceNodes: Set<string>;
-  exemptMuteNodes: Set<string>;
 }
 
 export function emptySuppressionIndex(): SuppressionIndex {
   return {
     maintenanceNodes: new Set(),
     maintenanceGroups: new Set(),
-    muteNodes: new Set(),
-    muteGroups: new Set(),
     exemptMaintenanceNodes: new Set(),
-    exemptMuteNodes: new Set(),
   };
+}
+
+/** The releases that apply to a maintenance window. A list read from a core older than ADR-234
+ *  may still carry other kinds, which nothing here acts on. */
+function maintenanceExemptions(exemptions: SuppressionExemption[]): SuppressionExemption[] {
+  return exemptions.filter((e) => e.kind === 'maintenance');
 }
 
 /** The chain of folder groups **containing** `groupId` — itself and every group above it.
@@ -145,7 +108,7 @@ export function groupSubtree(groups: NodeGroup[], rootId: string): Set<string> {
 /** Index the folder list by parent id.
  *
  *  Split out for the reason the twin in `nodeTree.ts` is (ADR-133): {@link buildSuppressionIndex}
- *  walks one subtree **per active window and per active mute**, and rebuilding this on each walk
+ *  walks one subtree **per active window**, and rebuilding this on each walk
  *  made that O(windows × groups). It is rebuilt whenever `treeNodes` changes, which is once per
  *  arriving member batch — so at a thousand folders it was tens of thousands of wasted inserts
  *  while the tree filled in. */
@@ -203,14 +166,12 @@ function inForce(iso: string, now: number): boolean {
  */
 export function nextSuppressionExpiry(
   windows: MaintenanceWindow[],
-  mutes: Mute[],
   exemptions: SuppressionExemption[],
   now: number = Date.now(),
 ): number | null {
   const at = [
     ...windows.filter((w) => w.active).map((w) => w.ends_at),
-    ...mutes.map((m) => m.until_at),
-    ...exemptions.map((e) => e.until_at),
+    ...maintenanceExemptions(exemptions).map((e) => e.until_at),
   ]
     .map((iso) => Date.parse(iso))
     .filter((t) => !Number.isNaN(t) && t > now);
@@ -226,10 +187,10 @@ export const MAX_TIMER_DELAY_MS = 2_147_483_647;
  * A second past the expiry, so the row is gone from the server's answer rather than racing it.
  *
  * 🚨 **Capped, and the cap is what stops a refetch loop.** A delay above 2^31−1 ms (24.8 days)
- * overflows and the timer fires on the next tick. The caller's effect depends on the three lists,
- * each refetch hands it three fresh arrays, so an overflowing delay re-armed itself forever: three
- * GETs per round trip, from every open tab, for as long as the nearest expiry was a month away —
- * which a decommission window or a quarter-long mute is. Capped, the timer fires early once every
+ * overflows and the timer fires on the next tick. The caller's effect depends on the lists, each
+ * refetch hands it fresh arrays, so an overflowing delay re-armed itself forever: a GET per list
+ * per round trip, from every open tab, for as long as the nearest expiry was a month away — which
+ * a decommission window is. Capped, the timer fires early once every
  * 24.8 days, re-reads, and arms again.
  */
 export function suppressionRefreshDelayMs(expiresAt: number, now: number = Date.now()): number {
@@ -237,27 +198,24 @@ export function suppressionRefreshDelayMs(expiresAt: number, now: number = Date.
 }
 
 /**
- * Which nodes/groups are currently in maintenance or muted, for the All Nodes icons. A folder-group
+ * Which nodes/groups are currently in maintenance, for the All Nodes icons. A folder-group
  * target propagates down its subtree — the group, all descendant subgroups, and their member nodes
  * (decision: incl. subgroups). Only windows that are *active and not yet over at `now`* count, and
- * likewise mutes and exemptions — see {@link inForce}. Node/profile/tag-scoped windows aren't mapped
+ * likewise exemptions — see {@link inForce}. Node/profile/tag-scoped windows aren't mapped
  * onto tree rows here — those nodes surface through their `maintenance` state instead.
  */
 export function buildSuppressionIndex(
   windows: MaintenanceWindow[],
-  mutes: Mute[],
   groups: NodeGroup[],
   nodes: NodeSummary[],
   exemptions: SuppressionExemption[] = [],
   now: number = Date.now(),
 ): SuppressionIndex {
   const index = emptySuppressionIndex();
-  // Filtered once, so the second pass over each list below cannot disagree with the first.
+  // Filtered once, so the second pass over the list below cannot disagree with the first.
   const live = windows.filter((w) => w.active && inForce(w.ends_at, now));
-  const liveMutes = mutes.filter((m) => inForce(m.until_at, now));
-  for (const e of exemptions.filter((x) => inForce(x.until_at, now))) {
-    if (e.kind === 'maintenance') index.exemptMaintenanceNodes.add(e.node_id);
-    else index.exemptMuteNodes.add(e.node_id);
+  for (const e of maintenanceExemptions(exemptions).filter((x) => inForce(x.until_at, now))) {
+    index.exemptMaintenanceNodes.add(e.node_id);
   }
   const nodesByGroup = new Map<string, string[]>();
   for (const n of nodes) {
@@ -280,34 +238,22 @@ export function buildSuppressionIndex(
     }
   }
 
-  for (const m of liveMutes) {
-    if (m.scope_kind === 'group' && m.group_id) {
-      markSubtree(m.group_id, index.muteGroups, index.muteNodes);
-    } else if (m.node_id) {
-      index.muteNodes.add(m.node_id);
-    }
-  }
-
-  // Applied last, and only to the *inherited* marks — a window or mute that names the node is
-  // re-added below. This mirrors the server (`resolve_maintenance` / `load_mutes`): an exemption
+  // Applied last, and only to the *inherited* marks — a window that names the node is re-added
+  // below. This mirrors the server (`resolve_maintenance`): an exemption
   // cancels coverage the node merely belongs to, never coverage aimed at it. Doing it in the other
   // order would drop a deliberate node-scoped window off the row while the engine still applied
   // it, which is the one disagreement an operator would read as the icon lying.
   for (const nid of index.exemptMaintenanceNodes) index.maintenanceNodes.delete(nid);
-  for (const nid of index.exemptMuteNodes) index.muteNodes.delete(nid);
   for (const w of live) {
     if (w.scope_level === 'node') index.maintenanceNodes.add(w.scope_id);
-  }
-  for (const m of liveMutes) {
-    if (m.scope_kind !== 'group' && m.node_id) index.muteNodes.add(m.node_id);
   }
   return index;
 }
 
 /** Where a suppression on a row comes from, and therefore what can be done about it.
  *
- *  - `direct` — the row itself is the window's or mute's target, so the row *is* the thing to act
- *    on: end the window, or lift the mute.
+ *  - `direct` — the row itself is the window's target, so the row *is* the thing to act on: end
+ *    the window.
  *  - `inherited` — an ancestor folder group carries it. Ending it would release every sibling too,
  *    so a node offers a release for itself instead and a group offers nothing (see
  *    {@link causesFor}).
@@ -323,11 +269,10 @@ export type CauseSource = (typeof CAUSE_SOURCES)[number];
  *  `environment: 'node'` over `src/**\/*.test.ts` only, so a decision made inside a `.tsx` is a
  *  decision nothing tests (`testing.md`). */
 export interface SuppressionCause {
-  kind: 'maintenance' | 'mute';
   source: CauseSource;
-  /** The window/mute id. Present only for `direct` — the only source with a row to act on. */
+  /** The window id. Present only for `direct` — the only source with a row to act on. */
   id?: string;
-  /** The window's name, or the mute's target, for the heading line. Empty for `unattributed`. */
+  /** The window's name, for the heading line. Empty for `unattributed`. */
   title: string;
   /** i18n key + params for the "where does this come from" line. */
   labelKey: string;
@@ -342,19 +287,16 @@ export interface SuppressionCause {
 }
 
 /**
- * What the release panel asks the page to do. One union rather than four callbacks, so the page
- * answers with one exhaustive `switch` and adding a fifth action cannot be half-wired.
+ * What the release panel asks the page to do. One union rather than three callbacks, so the page
+ * answers with one exhaustive `switch` and adding a fourth action cannot be half-wired.
  *
- * Note the asymmetry between the two `direct` actions, and that it is deliberate: a **window** is
- * *ended* — the row survives as a record of the maintenance that actually happened, and reads as
- * `ended` on the Maintenance page — while a **mute** is deleted, because a mute records nothing
- * but its own existence.
+ * A window is *ended*, never deleted — the row survives as a record of the maintenance that
+ * actually happened, and reads as `ended` on the Maintenance page.
  */
 export type ReleaseAction =
   | { action: 'end-window'; windowId: string }
-  | { action: 'lift-mute'; muteId: string }
-  | { action: 'release-node'; nodeId: string; kind: 'maintenance' | 'mute' }
-  | { action: 'undo-release'; nodeId: string; kind: 'maintenance' | 'mute' };
+  | { action: 'release-node'; nodeId: string }
+  | { action: 'undo-release'; nodeId: string };
 
 /** i18n keys {@link causesFor} can produce, so `i18nEnumKeys.test.ts` can demand both locales
  *  carry them. A key built at runtime is missing from *both* locales when it is forgotten, so
@@ -382,7 +324,6 @@ export function causesFor(
   target: SuppressionTarget,
   ctx: {
     windows: MaintenanceWindow[];
-    mutes: Mute[];
     groups: NodeGroup[];
     /** The node behind a `node` target, when the tree has it loaded. Supplies the folder group the
      *  ancestor walk starts from and the rolled-up state that reveals an unattributed window. */
@@ -398,13 +339,11 @@ export function causesFor(
   const now = ctx.now ?? Date.now();
   // Anything already over explains nothing, however recently the page loaded it (see `inForce`).
   const windows = ctx.windows.filter((w) => w.active && inForce(w.ends_at, now));
-  const mutes = ctx.mutes.filter((m) => inForce(m.until_at, now));
-  const exemptions = (ctx.exemptions ?? []).filter((e) => inForce(e.until_at, now));
+  const exemptions = maintenanceExemptions(ctx.exemptions ?? []).filter((e) =>
+    inForce(e.until_at, now),
+  );
   const isGroup = target.kind === 'group';
-  const releasedFrom = (kind: 'maintenance' | 'mute') =>
-    !isGroup && exemptions.some((e) => e.node_id === target.id && e.kind === kind);
-  const maintReleased = releasedFrom('maintenance');
-  const muteReleased = releasedFrom('mute');
+  const maintReleased = !isGroup && exemptions.some((e) => e.node_id === target.id);
   // The folder groups that contain this row. A group row contains itself, so an ancestor window is
   // found the same way for both kinds; the `direct` test below is what tells them apart.
   const containers = groupContainers(groups, isGroup ? target.id : (node?.group_id ?? null));
@@ -417,7 +356,6 @@ export function causesFor(
       (isGroup && w.scope_level === 'group_id' && w.scope_id === target.id);
     if (direct) {
       out.push({
-        kind: 'maintenance',
         source: 'direct',
         id: w.id,
         title: w.name,
@@ -426,7 +364,6 @@ export function causesFor(
       });
     } else if (w.scope_level === 'group_id' && containers.includes(w.scope_id)) {
       out.push({
-        kind: 'maintenance',
         source: 'inherited',
         title: w.name,
         labelKey: 'tree.suppression.from.ancestor',
@@ -437,37 +374,10 @@ export function causesFor(
     }
   }
 
-  for (const m of mutes) {
-    const direct =
-      (!isGroup && m.scope_kind !== 'group' && m.node_id === target.id) ||
-      (isGroup && m.scope_kind === 'group' && m.group_id === target.id);
-    if (direct) {
-      out.push({
-        kind: 'mute',
-        source: 'direct',
-        id: m.id,
-        title: m.metric_name ?? '',
-        labelKey: isGroup ? 'tree.suppression.from.group' : 'tree.suppression.from.node',
-        endsAt: m.until_at,
-      });
-    } else if (m.scope_kind === 'group' && m.group_id && containers.includes(m.group_id)) {
-      out.push({
-        kind: 'mute',
-        source: 'inherited',
-        title: '',
-        labelKey: 'tree.suppression.from.ancestor',
-        labelParams: { name: groupName(m.group_id) },
-        endsAt: m.until_at,
-        released: muteReleased,
-      });
-    }
-  }
-
   // Only when nothing else explains it: the engine says this node is in maintenance and no window
   // the browser can see is responsible.
-  if (!isGroup && node?.state === 'maintenance' && !out.some((c) => c.kind === 'maintenance')) {
+  if (!isGroup && node?.state === 'maintenance' && out.length === 0) {
     out.push({
-      kind: 'maintenance',
       source: 'unattributed',
       title: '',
       labelKey: 'tree.suppression.from.elsewhere',
@@ -491,10 +401,9 @@ export function causesFor(
 export interface SuppressionPanelRow {
   /** React key. Stable within one render of one row; not an entity id. */
   key: string;
-  kind: 'maintenance' | 'mute';
-  /** i18n key for the block's heading — which of the four states this block reports. */
+  /** i18n key for the block's heading — which of the two states this block reports. */
   headKey: string;
-  /** The window's name (or the muted check), when there is one to show. */
+  /** The window's name, when there is one to show. */
   title: string;
   /** i18n key + params for the "where does this come from" line, when a cause explains it. */
   labelKey?: string;
@@ -514,34 +423,17 @@ export interface SuppressionPanelRow {
  *  key (`extensibility.md` §4); `i18nEnumKeys.test.ts` reads this list and demands both. */
 export const PANEL_LABEL_KEYS = [
   'tree.suppression.head.maintenance',
-  'tree.suppression.head.mute',
   'tree.suppression.head.releasedMaintenance',
-  'tree.suppression.head.releasedMute',
   'tree.suppression.act.endNow',
-  'tree.suppression.act.unmute',
   'tree.suppression.act.excludeNode',
-  'tree.suppression.act.unmuteNode',
   'tree.suppression.act.undoMaintenance',
-  'tree.suppression.act.undoMute',
   'tree.suppression.releaseOnAncestor',
 ] as const;
 
-const HEAD_KEY = {
-  maintenance: 'tree.suppression.head.maintenance',
-  mute: 'tree.suppression.head.mute',
-} as const;
-const RELEASED_HEAD_KEY = {
-  maintenance: 'tree.suppression.head.releasedMaintenance',
-  mute: 'tree.suppression.head.releasedMute',
-} as const;
-const UNDO_KEY = {
-  maintenance: 'tree.suppression.act.undoMaintenance',
-  mute: 'tree.suppression.act.undoMute',
-} as const;
-const EXCLUDE_KEY = {
-  maintenance: 'tree.suppression.act.excludeNode',
-  mute: 'tree.suppression.act.unmuteNode',
-} as const;
+const HEAD_KEY = 'tree.suppression.head.maintenance';
+const RELEASED_HEAD_KEY = 'tree.suppression.head.releasedMaintenance';
+const UNDO_KEY = 'tree.suppression.act.undoMaintenance';
+const EXCLUDE_KEY = 'tree.suppression.act.excludeNode';
 
 /** The control a single cause offers, given who is asking. */
 function actionFor(
@@ -551,32 +443,26 @@ function actionFor(
   if (cause.released) {
     return {
       action: {
-        action: { action: 'undo-release', nodeId: target.id, kind: cause.kind },
-        labelKey: UNDO_KEY[cause.kind],
+        action: { action: 'undo-release', nodeId: target.id },
+        labelKey: UNDO_KEY,
       },
     };
   }
   if (cause.source === 'direct' && cause.id) {
     // A window is ended, not deleted — the label says so, because the row it leaves behind on the
-    // Maintenance page is the difference. A mute has nothing to preserve, so it goes.
+    // Maintenance page is the difference.
     return {
-      action:
-        cause.kind === 'maintenance'
-          ? {
-              action: { action: 'end-window', windowId: cause.id },
-              labelKey: 'tree.suppression.act.endNow',
-            }
-          : {
-              action: { action: 'lift-mute', muteId: cause.id },
-              labelKey: 'tree.suppression.act.unmute',
-            },
+      action: {
+        action: { action: 'end-window', windowId: cause.id },
+        labelKey: 'tree.suppression.act.endNow',
+      },
     };
   }
   if (target.kind === 'node') {
     return {
       action: {
-        action: { action: 'release-node', nodeId: target.id, kind: cause.kind },
-        labelKey: EXCLUDE_KEY[cause.kind],
+        action: { action: 'release-node', nodeId: target.id },
+        labelKey: EXCLUDE_KEY,
       },
     };
   }
@@ -603,7 +489,6 @@ export function suppressionPanelRows(
   target: SuppressionTarget,
   ctx: {
     windows: MaintenanceWindow[];
-    mutes: Mute[];
     groups: NodeGroup[];
     node?: NodeSummary;
     exemptions?: SuppressionExemption[];
@@ -612,13 +497,12 @@ export function suppressionPanelRows(
 ): SuppressionPanelRow[] {
   const now = ctx.now ?? Date.now();
   const causes = causesFor(target, { ...ctx, now });
-  const explained = new Set<string>();
+  let explained = false;
   const rows: SuppressionPanelRow[] = causes.map((c, i) => {
-    if (c.released) explained.add(c.kind);
+    if (c.released) explained = true;
     return {
       key: `c${i}`,
-      kind: c.kind,
-      headKey: c.released ? RELEASED_HEAD_KEY[c.kind] : HEAD_KEY[c.kind],
+      headKey: c.released ? RELEASED_HEAD_KEY : HEAD_KEY,
       title: c.title,
       labelKey: c.labelKey,
       labelParams: c.labelParams,
@@ -627,36 +511,27 @@ export function suppressionPanelRows(
     };
   });
 
-  for (const e of ctx.exemptions ?? []) {
-    if (target.kind !== 'node' || e.node_id !== target.id || explained.has(e.kind)) continue;
+  for (const e of maintenanceExemptions(ctx.exemptions ?? [])) {
+    if (target.kind !== 'node' || e.node_id !== target.id || explained) continue;
     if (!inForce(e.until_at, now)) continue;
+    explained = true;
     rows.push({
-      key: `x-${e.kind}`,
-      kind: e.kind,
-      headKey: RELEASED_HEAD_KEY[e.kind],
+      key: 'x-maintenance',
+      headKey: RELEASED_HEAD_KEY,
       title: '',
       endsAt: e.until_at,
       action: {
-        action: { action: 'undo-release', nodeId: target.id, kind: e.kind },
-        labelKey: UNDO_KEY[e.kind],
+        action: { action: 'undo-release', nodeId: target.id },
+        labelKey: UNDO_KEY,
       },
     });
   }
   return rows;
 }
 
-/**
- * The privilege a release control needs, decided by what it releases.
- *
- * Mirrors `api/maintenance.rs`: everything about a **window** is `ManageMaintenance`
- * (`end_maintenance_window`, `set_node_maintenance_exemption`) and everything about a **mute** is
- * `AckAlerts` (`delete_mute`, `set_node_mute_exemption`). They resolve to the same roles today, so
- * asking for the right one buys nothing this week — it is what lets a future role hold one without
- * the other (`api-conventions.md`).
- */
-export function releasePermission(kind: 'maintenance' | 'mute'): Permission {
-  return kind === 'maintenance' ? 'manage_maintenance' : 'ack_alerts';
-}
+/** The privilege every release control needs: `api/maintenance.rs` guards ending a window and
+ *  setting a node's maintenance exemption with `ManageMaintenance`. */
+export const RELEASE_PERMISSION: Permission = 'manage_maintenance';
 
 /**
  * Drop the control from the blocks the caller may not act on, and **keep the block** (ADR-056).
@@ -673,61 +548,5 @@ export function releasableRows(
   rows: SuppressionPanelRow[],
   can: (perm: Permission) => boolean,
 ): SuppressionPanelRow[] {
-  return rows.map((r) =>
-    r.action && !can(releasePermission(r.kind)) ? { ...r, action: null } : r,
-  );
-}
-
-/** One node-level mute against one alert — core's `alerts/notify.rs::mute_matches`, written again
- *  because the active-alert rows draw "muted" from it (ADR-209 decision 3). A mute naming no metric
- *  covers the whole node; one naming a metric covers that metric's alerts, every port's included.
- *  An alert about something other than a node (`nodeId: null`, a poller pool) is never muted.
- *  ⚠️ Both sides run `lib/fixtures/muteMatch.cases.json` — change them together. */
-export function muteRuleCovers(
-  mute: { nodeId: string; metric: string | null },
-  alert: { nodeId: string | null; metric: string },
-): boolean {
-  if (alert.nodeId === null) return false;
-  return mute.nodeId === alert.nodeId && (mute.metric === null || mute.metric === alert.metric);
-}
-
-/**
- * The mute that silences this alert, or `null` — the one that lasts longest when several do.
- *
- * A group mute covers the nodes in that group and every group beneath it, unless the node was
- * released from it; a mute naming the node always counts. That is the expansion core's
- * `alerts/config.rs::load_mutes` does before {@link muteRuleCovers} runs, and the one
- * {@link buildSuppressionIndex} does for the tree. `groupId` is the alert node's group (`null`
- * when ungrouped); only an expired mute or exemption is ignored, as {@link inForce} decides.
- *
- * ⚠️ Only {@link muteRuleCovers} is pinned to core by the shared case table. This expansion is a
- * second copy of `load_mutes` that nothing compares — change the two together.
- */
-export function muteCovering(
-  alert: { nodeId: string | null; metric: string; groupId: string | null },
-  mutes: Mute[],
-  groups: NodeGroup[],
-  exemptions: SuppressionExemption[],
-  now: number = Date.now(),
-): Mute | null {
-  const nodeId = alert.nodeId;
-  if (nodeId === null) return null;
-  const released = exemptions.some(
-    (e) => e.kind === 'mute' && e.node_id === nodeId && inForce(e.until_at, now),
-  );
-  const containers = new Set(groupContainers(groups, alert.groupId));
-  let best: Mute | null = null;
-  for (const m of mutes) {
-    if (!inForce(m.until_at, now)) continue;
-    const target =
-      m.scope_kind === 'group'
-        ? !released && m.group_id && containers.has(m.group_id)
-          ? nodeId
-          : null
-        : (m.node_id ?? null);
-    if (target === null) continue;
-    if (!muteRuleCovers({ nodeId: target, metric: m.metric_name ?? null }, alert)) continue;
-    if (best === null || Date.parse(m.until_at) > Date.parse(best.until_at)) best = m;
-  }
-  return best;
+  return rows.map((r) => (r.action && !can(RELEASE_PERMISSION) ? { ...r, action: null } : r));
 }

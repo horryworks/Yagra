@@ -5,7 +5,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
-import { useOnConfigChange } from '../../lib/configChanges';
 import type { NodeGroup, ProfileSummary, ScopeLevel } from '../../types/api';
 import { interfaceScopeLabel } from '../../lib/interfaceScope';
 import { createNameBatcher, type NameBatcher } from './entityNameBatch';
@@ -40,9 +39,6 @@ export function useEntityNames() {
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [nodeNames, setNodeNames] = useState<Record<string, string>>({});
-  // The group each resolved node is filed in, from the same answer — the active-alert rows need it
-  // to tell whether a group-scoped mute covers a node (ADR-209 decision 3). `null` = ungrouped.
-  const [nodeGroups, setNodeGroups] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     api.listNodeGroups().then(setGroups).catch(() => undefined);
@@ -67,11 +63,6 @@ export function useEntityNames() {
           for (const e of entries) next[e.id] = e.name;
           return next;
         });
-        setNodeGroups((prev) => {
-          const next = { ...prev };
-          for (const e of entries) next[e.id] = e.group_id ?? null;
-          return next;
-        });
       },
     });
   }
@@ -85,24 +76,6 @@ export function useEntityNames() {
       return id;
     },
     [nodeNames],
-  );
-  // A node moved to another folder is a configuration change, and the folder it was answered with
-  // decides whether a group mute is drawn on its alerts. Drop the folders and let the batcher ask
-  // again: only an id someone asks about is re-sent — `nodeName` still holds its names, so only the
-  // active-alert rows' `nodeGroup` asks — and an id with no row is re-asked once per change.
-  useOnConfigChange(() => {
-    batcher.current?.forgetAll();
-    setNodeGroups({});
-  });
-  /** The group a node is filed in: `null` when it is ungrouped, `undefined` until its name has
-   *  resolved. Asks for the node exactly as {@link nodeName} does. */
-  const nodeGroup = useCallback(
-    (id: string): string | null | undefined => {
-      if (id in nodeGroups) return nodeGroups[id];
-      batcher.current?.request(id);
-      return undefined;
-    },
-    [nodeGroups],
   );
   const groupName = useCallback((id: string) => resolveName(groups, id), [groups]);
   const profileName = useCallback((id: string) => resolveName(profiles, id), [profiles]);
@@ -138,5 +111,5 @@ export function useEntityNames() {
     [nodeName, profileName, groupName],
   );
 
-  return { groups, profiles, nodeName, nodeGroup, groupName, profileName, scopeName };
+  return { groups, profiles, nodeName, groupName, profileName, scopeName };
 }

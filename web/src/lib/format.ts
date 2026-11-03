@@ -154,13 +154,13 @@ export function formatExactTime(iso: string): string {
   return formatWith('exact', 'sv-SE', DATE_TIME, new Date(iso)).replace('T', ' ');
 }
 
-/** A scheduled boundary — a maintenance window's start/end, a mute's expiry — in the browser's
+/** A scheduled boundary — a maintenance window's start/end, a release's expiry — in the browser's
  *  locale and the display zone, to the minute. Suppression is scheduled to the minute, so seconds would be
  *  noise on a row an operator scans.
  *
- *  Shared because the Maintenance page, the Mutes page and the inventory tree's release panel all
- *  render the same instants and had two byte-identical local copies between them; a third would
- *  have been the point where they started to disagree (`extensibility.md` §3). */
+ *  Shared because the Maintenance page and the inventory tree's release panel both render the
+ *  same instants and had byte-identical local copies between them; a third would have been the
+ *  point where they started to disagree (`extensibility.md` §3). */
 export function formatScheduleTime(iso: string): string {
   return formatWith(
     'schedule',

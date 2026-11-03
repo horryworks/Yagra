@@ -60,7 +60,7 @@ fn tick_at(elapsed: Duration) -> Duration {
 /// [`AlertSink::dispatch`] awaits the History insert **and** the notification, and ADR-104 measured
 /// one notification taking up to 31.5 seconds against a slow vendor (61.5 with a 429). Deleting a
 /// site's worth of nodes yields one resolution per open alert, so folding this into
-/// `alerts::config::run_alert_config_refresh` would park maintenance-window resolution, mute expiry
+/// `alerts::config::run_alert_config_refresh` would park maintenance-window resolution
 /// and the classifier reload behind a notification storm — the exact coupling ADR-104 removed.
 ///
 /// # Why leader-only

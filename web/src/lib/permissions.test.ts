@@ -10,13 +10,13 @@ import { readFileSync } from 'node:fs';
 import { sourceFiles } from '../testSupport/sources';
 import { join } from 'node:path';
 import { grants, permissionLabel } from './permissions';
-import { releasePermission, releasableRows, type SuppressionPanelRow } from './suppression';
+import { RELEASE_PERMISSION, releasableRows, type SuppressionPanelRow } from './suppression';
 import type { RoleMatrix } from '../types/api';
 
 const MATRIX: RoleMatrix = {
   permissions: [
     { key: 'view', label: 'View', description: 'View inventory.' },
-    { key: 'ack_alerts', label: 'Respond to incidents', description: 'Ack or mute.' },
+    { key: 'ack_alerts', label: 'Respond to incidents', description: 'Troubleshoot runs.' },
     { key: 'manage_maintenance', label: 'Manage maintenance', description: 'Windows.' },
     { key: 'manage_config', label: 'Manage configuration', description: 'Config.' },
   ],
@@ -69,25 +69,26 @@ describe('permissionLabel', () => {
 });
 
 describe('release actions follow what they release', () => {
-  const row = (kind: 'maintenance' | 'mute'): SuppressionPanelRow => ({
-    key: kind,
-    kind,
+  const row = (key: string): SuppressionPanelRow => ({
+    key,
     headKey: 'h',
     title: 'w',
     endsAt: '2026-01-01T00:00:00Z',
     action: { action: { action: 'end-window', windowId: 'w1' }, labelKey: 'l' },
   });
 
-  it('maps a window to maintenance and a mute to incident response', () => {
-    expect(releasePermission('maintenance')).toBe('manage_maintenance');
-    expect(releasePermission('mute')).toBe('ack_alerts');
+  it('asks for the permission that guards a maintenance window', () => {
+    expect(RELEASE_PERMISSION).toBe('manage_maintenance');
   });
 
-  it('removes only the control the caller may not use, and keeps the explanation', () => {
-    const can = (p: string) => p === 'manage_maintenance';
-    const out = releasableRows([row('maintenance'), row('mute')], (p) => can(p));
+  it('keeps the control for a caller who may release', () => {
+    const out = releasableRows([row('a')], (p) => p === 'manage_maintenance');
     expect(out[0].action).not.toBeNull();
-    expect(out[1].action).toBeNull();
+  });
+
+  it('removes the control from a caller who may not, and keeps the explanation', () => {
+    const out = releasableRows([row('a'), row('b')], (p) => p === 'ack_alerts');
+    expect(out.map((r) => r.action)).toEqual([null, null]);
     // The block itself survives — a viewer still has to be able to read why the node is silent.
     expect(out).toHaveLength(2);
     expect(out[1].title).toBe('w');

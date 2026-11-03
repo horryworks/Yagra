@@ -55,7 +55,6 @@ import { EventsPage } from './pages/EventsPage';
 import { EventRulesPage } from './pages/EventRulesPage';
 import { EventSourcesPage } from './pages/EventSourcesPage';
 import { MaintenancePage } from './pages/MaintenancePage';
-import { MutesPage } from './pages/MutesPage';
 
 const TopologyRoutes = lazy(() => import('./routeGroups/topology'));
 const TroubleshootRoutes = lazy(() => import('./routeGroups/troubleshoot'));
@@ -162,7 +161,9 @@ export function AppRoutes() {
         />
         <Route path="alerts/routing" element={<RoutingPage />} />
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
-        <Route path="alerts/mutes" element={<MutesPage />} />
+        {/* The mute list is gone (ADR-234): a maintenance window is the one way to silence
+            alerts, so a bookmark to the old list lands on the screen that replaced it. */}
+        <Route path="alerts/mutes" element={<MovedTo to="/alerts/maintenance" />} />
 
         {/* Events (ADR-055 Inc.2). The log itself and the webhook list stay statically imported —
             the log is on an operator's daily path, and both already were. Forwarding is the one

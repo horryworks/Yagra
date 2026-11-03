@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Who gets told — the delivery half of the alert module (ADR-083).
 //!
-//! Mutes, routing rules, template selection, and the four channels (Webhook / PagerDuty / JSM /
+//! Routing rules, template selection, and the four channels (Webhook / PagerDuty / JSM /
 //! Email) with their vendor wire formats and the SSRF guard. Takes a [`super::NotifyAction`] and
 //! turns it into an outbound request; **it names no engine type at all**, which is the property
 //! that made ADR-083's split provably behaviour-free and the one to preserve.
@@ -20,9 +20,7 @@ use yagra_alert::{
     Alert, DedupKey, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, Notification,
     NotifyChannel, NotifyError, ResolveSent, RetryPolicy, Subject,
 };
-use yagra_common::{
-    is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
-};
+use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, Direction, NotifyEvent, Severity};
 
 use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore, HoursPolicy};
 use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
@@ -31,7 +29,6 @@ use crate::alerts::notify_facts::{context_for, node_ids_for, AlertFactsSource};
 use crate::alerts::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
 
 use super::NotifyAction;
-use yagra_alert::rules::check_id;
 
 /// A Webhook [`NotifyChannel`]: POSTs the alert JSON to a configured URL.
 pub struct WebhookChannel {
@@ -934,67 +931,6 @@ impl NotifyChannel for MultiChannel {
     }
 }
 
-/// An unexpired mute, resolved for matching: the node plus the precomputed [`CheckId`]
-/// (mutes are stored by check *name*, but an [`Alert`] only carries the id — the v5 hash
-/// is recomputed here at load time). `check: None` mutes every check on the node.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveMute {
-    pub node: NodeId,
-    pub check: Option<CheckId>,
-    /// The stored check name verbatim, so a per-interface metric's alerts match too (ADR-076).
-    /// See [`mute_matches`] for why the id alone is not enough.
-    pub metric: Option<String>,
-}
-
-impl ActiveMute {
-    /// Build from a stored mute row (node uuid + optional check name).
-    #[must_use]
-    pub fn new(node: Uuid, check_name: Option<&str>) -> Self {
-        let node = NodeId::from(node);
-        Self {
-            node,
-            check: check_name.map(|name| check_id(node, name)),
-            metric: check_name.map(str::to_owned),
-        }
-    }
-}
-
-/// Whether an alert is covered by any active mute (separate fn for unit testing).
-///
-/// A mute names a node, so an alert with a non-node subject is never muted — a pool-coverage
-/// alert cannot be silenced from the UI in this increment. That is a gap, not a decision: giving
-/// a mute a pool target belongs with the rest of the scope-and-surface work (Increment 2).
-///
-/// # Why the metric is matched as well as the check id (ADR-076 decision 5)
-///
-/// A mute stores a *check name* and [`ActiveMute::new`] turns it into `check_id(node, name)` — the
-/// **node-level** id. Since ADR-076 a per-interface metric's alerts carry
-/// `interface_check_id(node, ifindex, name)` instead, so an id-only comparison would match none of
-/// them: the operator picks `if_oper_status` from the metric picker (ADR-075 decision 18 put the
-/// same picker on this form), saves, and the mute silently silences nothing. Matching the metric
-/// name too makes a node-level mute cover **every port's** alerts for that metric, which is what
-/// picking a per-interface metric on a node-scoped form plainly means.
-///
-/// ⚠️ Muting **one port** is still impossible: `api/maintenance.rs` validates `check_name` with
-/// [`yagra_common::is_valid_metric_name`], which cannot express the `metric@ifindex` form. Written
-/// down rather than worked around — the form has no port field to fill in either.
-#[must_use]
-fn mute_matches(mutes: &[ActiveMute], alert: &Alert) -> bool {
-    let Some(node) = alert.node() else {
-        return false;
-    };
-    mutes.iter().any(|m| {
-        m.node == node
-            && match (&m.metric, m.check) {
-                // A mute with no check name covers the whole node, as it always has.
-                (None, _) => true,
-                (Some(metric), check) => {
-                    check.is_some_and(|c| c == alert.check) || *metric == alert.metric
-                }
-            }
-    })
-}
-
 /// A channel's notification-template override plus the one thing rendering needs to know about
 /// the channel itself (ADR-039).
 ///
@@ -1035,7 +971,7 @@ struct BuiltChannel {
 ///
 /// **Immutable, and shared as an `Arc`** (ADR-104). Delivery clones the `Arc` and drops the lock
 /// guard before it awaits anything, so a wedged vendor endpoint cannot hold up the 30-second
-/// refresh that installs a new mute or a new channel. Replacing it is a whole-value swap:
+/// refresh that installs a new channel. Replacing it is a whole-value swap:
 /// see [`Notifier::install_routing`].
 struct Routing {
     /// Env-configured channels (`YAGRA_WEBHOOK_URL`/`YAGRA_SMTP_*`) — fire for *every* alert,
@@ -1157,12 +1093,11 @@ pub enum DefaultRouteKind {
 ///
 /// # Nothing here waits on delivery (ADR-104)
 ///
-/// [`Self::set_routing`] and [`Self::set_mutes`] are **not `async`**, and that is the guarantee
-/// rather than a coincidence: they cannot await, so "the config refresh is stuck behind a wedged
-/// vendor endpoint" is not a state this type can be in. Until ADR-104 both took the same mutex
-/// that [`Self::handle`] held across PagerDuty/JSM requests with retry and backoff — measured at
-/// up to 31.5 seconds per notification, or 61.5 with a 429 — so an operator muting a noisy node
-/// waited out the vendor before the mute applied.
+/// [`Self::set_routing`] is **not `async`**, and that is the guarantee rather than a coincidence:
+/// it cannot await, so "the config refresh is stuck behind a wedged vendor endpoint" is not a
+/// state this type can be in. Until ADR-104 it took the same mutex that [`Self::handle`] held
+/// across PagerDuty/JSM requests with retry and backoff — measured at up to 31.5 seconds per
+/// notification, or 61.5 with a 429 — so an operator's routing edit waited out the vendor.
 ///
 /// What is still serialized is one channel at a time, inside its own [`Dispatcher`], which is
 /// where the dedup and ordering guarantees live. See that type's doc.
@@ -1174,12 +1109,6 @@ pub struct Notifier {
     /// The routing snapshot. `std::sync::RwLock` deliberately: it is never held across an await,
     /// and making that impossible is the point.
     routing: RwLock<Arc<Routing>>,
-    /// Unexpired mutes — matching alerts are not delivered (UI/history unaffected).
-    ///
-    /// Held apart from [`Routing`] so that installing a mute does not clone the channel map:
-    /// mutes are re-resolved on every 30-second cycle because they expire, while channels change
-    /// only when an operator edits one.
-    mutes: RwLock<Arc<Vec<ActiveMute>>>,
     /// Resolves node names/group/profile for a template's context (ADR-039). `None` in skeleton
     /// mode and before startup wiring, in which case a template sees ids instead of names.
     facts: RwLock<Option<Arc<dyn AlertFactsSource>>>,
@@ -1281,7 +1210,6 @@ impl Notifier {
                 text: HashSet::new(),
                 kinds: HashMap::new(),
             })),
-            mutes: RwLock::new(Arc::new(Vec::new())),
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
             any_facts_channel: AtomicBool::new(false),
@@ -1420,7 +1348,7 @@ impl Notifier {
     }
 
     /// Replace the delivery-hours snapshot (refreshed alongside routing). Not `async`, for the
-    /// reason [`Self::set_mutes`] is not.
+    /// reason [`Self::set_routing`] is not.
     pub fn set_hours(&self, policy: HoursPolicy) {
         *self.hours.write().expect("notifier hours lock poisoned") = Arc::new(policy);
     }
@@ -1435,14 +1363,6 @@ impl Notifier {
             .read()
             .expect("notifier held lock poisoned")
             .clone()
-    }
-
-    /// Replace the unexpired-mute snapshot (refreshed alongside routing).
-    ///
-    /// **Not `async` since ADR-104** — see the type doc. This is the call an operator is waiting
-    /// on when they mute a noisy node.
-    pub fn set_mutes(&self, mutes: Vec<ActiveMute>) {
-        *self.mutes.write().expect("notifier mutes lock poisoned") = Arc::new(mutes);
     }
 
     /// The current routing snapshot. Clones one `Arc` and releases the lock — never held across
@@ -1499,8 +1419,8 @@ impl Notifier {
 
     /// Apply one notify action (deliver a fire, or resolve/clear a recovered alert).
     ///
-    /// **Holds no lock across delivery** (ADR-104): the routing snapshot and the mutes are each
-    /// one `Arc` clone taken before anything is awaited. What serializes is one channel at a time,
+    /// **Holds no lock across delivery** (ADR-104): the routing snapshot is one `Arc` clone taken
+    /// before anything is awaited. What serializes is one channel at a time,
     /// inside its own [`Dispatcher`].
     ///
     /// ⚠️ This still awaits its caller. A wedged vendor endpoint no longer blocks other channels,
@@ -1545,9 +1465,8 @@ impl Notifier {
         };
         match event {
             HeldEvent::Fire => {
-                // Neither of these would be delivered anyway, so there is nothing to hold.
-                let mutes = Arc::clone(&self.mutes.read().expect("notifier mutes lock poisoned"));
-                if alert.root_cause.is_some() || mute_matches(&mutes, alert) {
+                // A rolled-up fire would not be delivered anyway, so there is nothing to hold.
+                if alert.root_cause.is_some() {
                     return false;
                 }
             }
@@ -1641,7 +1560,7 @@ impl Notifier {
     /// Deliver one notify action now, whatever the hour - what [`Self::handle`] does once
     /// delivery hours have let it through, and what [`Self::release`] does in the morning.
     async fn deliver(&self, action: NotifyAction) {
-        // Resolving names is I/O, so it happens first. A muted or rolled-up alert pays for a
+        // Resolving names is I/O, so it happens first. A rolled-up alert pays for a
         // lookup it will not use, which the facts cache makes negligible and which is worth not
         // restructuring the suppression checks around.
         let facts = match &action {
@@ -1658,13 +1577,6 @@ impl Notifier {
                 // for the UI/history; only the duplicate notification is suppressed.
                 if let Some(root) = alert.root_cause {
                     tracing::debug!(subject = %alert.subject, %root, "suppressing downstream alert notification (rolled up under root cause)");
-                    return;
-                }
-                // Muted: the operator asked for silence on this node/check until the mute
-                // expires. The alert itself stays live in the UI/history.
-                let mutes = Arc::clone(&self.mutes.read().expect("notifier mutes lock poisoned"));
-                if mute_matches(&mutes, &alert) {
-                    tracing::debug!(subject = %alert.subject, "suppressing muted alert notification");
                     return;
                 }
                 if self.side_changed(&alert) {
@@ -1723,9 +1635,7 @@ impl Notifier {
                 }
                 // Deliver the resolve to the same channels the fire was routed to (same
                 // severity match) so lifecycle-aware channels (PagerDuty/JSM) close their
-                // incident; webhook/email keep their no-op default. Deliberately NOT
-                // mute-filtered: a mute placed after the fire must not leave a remote
-                // incident dangling open (vendor resolves are idempotent).
+                // incident; webhook/email keep their no-op default.
                 self.close(
                     &routing,
                     &alert,
@@ -2601,8 +2511,7 @@ mod template_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yagra_alert::rules::interface_check_id;
-    use yagra_common::NodeState;
+    use yagra_common::{NodeId, NodeState};
 
     #[tokio::test]
     async fn vendor_response_handles_success_failure_429_and_extra_ok() {
@@ -2925,186 +2834,6 @@ mod tests {
         assert!(!blocked("http://10.0.0.5/hook").await);
     }
 
-    /// A node-scoped mute silences every port's alerts for that metric (ADR-076 decision 5).
-    ///
-    /// Before this, `ActiveMute::new` built `check_id(node, name)` — the node-level id — so once
-    /// per-interface alerts carried a per-port id, a mute created from the metric picker matched
-    /// nothing at all. Silently: the operator saw the mute listed and kept being paged.
-    #[test]
-    fn a_node_mute_on_a_per_interface_metric_covers_every_port() {
-        use yagra_common::IfIndex;
-
-        let node = NodeId::new();
-        let mute = ActiveMute::new(node.as_uuid(), Some("if_in_util_pct"));
-
-        let port_alert = |idx: u32| Alert {
-            subject: Subject::Node(node),
-            check: interface_check_id(node, IfIndex(idx), "if_in_util_pct"),
-            severity: Severity::Critical,
-            state: NodeState::Critical,
-            at_unix_ms: 0,
-            root_cause: None,
-            flapping: false,
-            metric: "if_in_util_pct".to_owned(),
-            breach: None,
-            ifindex: Some(IfIndex(idx)),
-            row: None,
-            row_name: None,
-        };
-        assert!(mute_matches(std::slice::from_ref(&mute), &port_alert(7)));
-        assert!(mute_matches(std::slice::from_ref(&mute), &port_alert(48)));
-
-        // It must not spill onto a different metric on the same node.
-        let other = Alert {
-            metric: "icmp_rtt_ms".to_owned(),
-            check: check_id(node, "icmp_rtt_ms"),
-            ifindex: None,
-            ..port_alert(7)
-        };
-        assert!(!mute_matches(std::slice::from_ref(&mute), &other));
-
-        // Nor onto another node.
-        let elsewhere = Alert {
-            subject: Subject::Node(NodeId::new()),
-            ..port_alert(7)
-        };
-        assert!(!mute_matches(std::slice::from_ref(&mute), &elsewhere));
-
-        // A mute with no check name still covers the whole node, as it always did.
-        let whole_node = ActiveMute::new(node.as_uuid(), None);
-        assert!(mute_matches(
-            std::slice::from_ref(&whole_node),
-            &port_alert(7)
-        ));
-        assert!(mute_matches(std::slice::from_ref(&whole_node), &other));
-    }
-
-    /// The WebUI draws "muted" on an active alert's row from its own copy of this rule
-    /// (`web/src/lib/suppression.ts::muteRuleCovers`, ADR-209 decision 3). Both run
-    /// `web/src/lib/fixtures/muteMatch.cases.json`, so a change to one side that the other does not
-    /// make fails here or there -- change the two together, and add a case to the table, not here.
-    #[test]
-    fn mute_matches_answers_the_case_table_the_alert_rows_share() {
-        use yagra_common::IfIndex;
-
-        #[derive(serde::Deserialize)]
-        struct Side {
-            node: Option<String>,
-            metric: Option<String>,
-            #[serde(default)]
-            port: Option<u32>,
-        }
-        #[derive(serde::Deserialize)]
-        struct Case {
-            name: String,
-            mute: Side,
-            alert: Side,
-            covered: bool,
-        }
-        #[derive(serde::Deserialize)]
-        struct Table {
-            cases: Vec<Case>,
-        }
-        let table: Table = serde_json::from_str(include_str!(
-            "../../../../web/src/lib/fixtures/muteMatch.cases.json"
-        ))
-        .expect("the shared case table parses");
-        assert!(table.cases.len() >= 10, "{} cases", table.cases.len());
-
-        let (a, b) = (NodeId::new(), NodeId::new());
-        let node_of = |n: &str| match n {
-            "A" => a,
-            "B" => b,
-            other => panic!("unknown node {other:?} in the case table"),
-        };
-        let wrong: Vec<&str> = table
-            .cases
-            .iter()
-            .filter(|c| {
-                let mute = ActiveMute::new(
-                    node_of(c.mute.node.as_deref().expect("a mute names a node")).as_uuid(),
-                    c.mute.metric.as_deref(),
-                );
-                let metric = c.alert.metric.clone().expect("an alert carries a metric");
-                let (subject, check) = match c.alert.node.as_deref() {
-                    Some(n) => {
-                        let node = node_of(n);
-                        let check = match c.alert.port {
-                            Some(p) => interface_check_id(node, IfIndex(p), &metric),
-                            None => check_id(node, &metric),
-                        };
-                        (Subject::Node(node), check)
-                    }
-                    None => {
-                        let subject = Subject::Pool("site-a".to_owned());
-                        let check = yagra_alert::rules::subject_check_id(&subject, &metric);
-                        (subject, check)
-                    }
-                };
-                let alert = Alert {
-                    subject,
-                    check,
-                    severity: Severity::Critical,
-                    state: NodeState::Critical,
-                    at_unix_ms: 0,
-                    root_cause: None,
-                    flapping: false,
-                    metric,
-                    breach: None,
-                    ifindex: c.alert.port.map(IfIndex),
-                    row: None,
-                    row_name: None,
-                };
-                mute_matches(std::slice::from_ref(&mute), &alert) != c.covered
-            })
-            .map(|c| c.name.as_str())
-            .collect();
-        assert!(wrong.is_empty(), "{wrong:#?}");
-    }
-
-    #[test]
-    fn mute_matches_node_and_check() {
-        let node = NodeId::new();
-        let other = NodeId::new();
-        let alert = Alert {
-            subject: Subject::Node(node),
-            check: check_id(node, "icmp_rtt_ms"),
-            severity: Severity::Critical,
-            state: NodeState::Critical,
-            at_unix_ms: 0,
-            root_cause: None,
-            flapping: false,
-            metric: "icmp_rtt_ms".to_string(),
-            breach: None,
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-
-        // Whole-node mute matches any check on the node; another node's mute doesn't.
-        assert!(mute_matches(
-            &[ActiveMute::new(node.as_uuid(), None)],
-            &alert
-        ));
-        assert!(!mute_matches(
-            &[ActiveMute::new(other.as_uuid(), None)],
-            &alert
-        ));
-
-        // Check-scoped mute matches only that check name (ids recomputed from the name).
-        assert!(mute_matches(
-            &[ActiveMute::new(node.as_uuid(), Some("icmp_rtt_ms"))],
-            &alert
-        ));
-        assert!(!mute_matches(
-            &[ActiveMute::new(
-                node.as_uuid(),
-                Some("snmp_sys_uptime_ticks")
-            )],
-            &alert
-        ));
-    }
-
     #[test]
     fn a_node_dedup_string_is_unchanged_by_the_subject_split() {
         // The vendor-facing identity: PagerDuty's `dedup_key` and JSM's `alias`. A change here
@@ -3150,18 +2879,6 @@ mod tests {
             url.contains("tokyo%20dc%2F2"),
             "pool name not encoded: {url}"
         );
-    }
-
-    #[test]
-    fn a_pool_coverage_alert_cannot_be_muted_by_a_node_mute() {
-        // Documented gap rather than a decision — a mute names a node. Pinned so the behaviour is
-        // deliberate rather than discovered.
-        let alert = match mgr_alert() {
-            NotifyAction::Fire(a) => a,
-            other => panic!("expected a fire, got {other:?}"),
-        };
-        let mutes = vec![ActiveMute::new(Uuid::from_u128(1), None)];
-        assert!(!mute_matches(&mutes, &alert));
     }
 
     /// The delivery metrics say what their docs say (ADR-104 decision 4).
@@ -3216,7 +2933,8 @@ mod delivery_tests {
     use super::*;
     use std::sync::Mutex;
     use std::time::Duration;
-    use yagra_common::NodeState;
+    use yagra_alert::rules::check_id;
+    use yagra_common::{NodeId, NodeState};
 
     /// The whole suite has a deadline: if delivery starts waiting on the routing snapshot again —
     /// the defect ADR-104 removed — these fail on the clock instead of hanging a CI run forever.
@@ -3794,30 +3512,6 @@ mod delivery_tests {
     }
 
     #[tokio::test]
-    async fn a_muted_alert_is_delivered_nowhere_but_an_unmuted_one_still_is() {
-        let (dflt, a) = (log(), log());
-        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
-        let id_a = Uuid::from_u128(1);
-        n.install_routing(
-            vec![built(id_a, Recorder(a.clone()))],
-            vec![rule(id_a, None)],
-        );
-        let (muted, other) = (NodeId::new(), NodeId::new());
-        n.set_mutes(vec![ActiveMute::new(muted.as_uuid(), None)]);
-
-        n.handle(NotifyAction::Fire(alert(muted, Severity::Critical, None)))
-            .await;
-        assert_eq!(dflt.lock().unwrap().count("fire"), 0, "muted node");
-        assert_eq!(a.lock().unwrap().count("fire"), 0, "muted node");
-
-        // The accept side: the mute silences that node, not the notifier.
-        n.handle(NotifyAction::Fire(alert(other, Severity::Critical, None)))
-            .await;
-        assert_eq!(dflt.lock().unwrap().count("fire"), 1, "a different node");
-        assert_eq!(a.lock().unwrap().count("fire"), 1, "a different node");
-    }
-
-    #[tokio::test]
     async fn a_rolled_up_alert_does_not_page_but_its_roll_up_closes_the_incident() {
         let a = log();
         let n = Notifier::with_default(None);
@@ -3904,7 +3598,7 @@ mod delivery_tests {
     /// notification bound for a different channel still goes out.
     ///
     /// Before ADR-104 all three of these waited on the same mutex the wedged delivery held, so an
-    /// operator muting a noisy node waited out the vendor's whole retry budget first.
+    /// operator editing a channel waited out the vendor's whole retry budget first.
     #[tokio::test]
     async fn a_wedged_channel_blocks_neither_the_config_refresh_nor_another_channel() {
         let fire_gate = Arc::new(tokio::sync::Notify::new());
@@ -3955,7 +3649,6 @@ mod delivery_tests {
         );
 
         tokio::time::timeout(DEADLINE, async {
-            n.set_mutes(vec![ActiveMute::new(Uuid::from_u128(9), None)]);
             install(&n);
             n.handle(NotifyAction::Fire(alert(
                 NodeId::new(),
@@ -3965,7 +3658,7 @@ mod delivery_tests {
             .await;
         })
         .await
-        .expect("a wedged channel must not hold up mutes, routing, or another channel");
+        .expect("a wedged channel must not hold up routing or another channel");
 
         assert_eq!(
             b.lock().unwrap().count("fire"),

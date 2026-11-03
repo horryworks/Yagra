@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Unit tests for the two suppression screens' filter rows (no DOM — Vitest node env).
+// Unit tests for the maintenance screen's filter row (no DOM — Vitest node env).
 //
-// These used to test `matchesWindow` / `matchesMute`, two hand-written row predicates. ADR-053
-// Inc.5 replaced both with column specs run through the shared `buildPredicate`, so what is tested
-// here is what each column reads off a row — the only per-screen judgement left. Every property the
-// old tests pinned still has a test below; three of them (the boundary, the null metric, the
-// lazy name resolution) are the ones that were actually load-bearing.
+// These used to test `matchesWindow`, a hand-written row predicate. ADR-053 Inc.5 replaced it with
+// column specs run through the shared `buildPredicate`, so what is tested here is what each column
+// reads off a row — the only per-screen judgement left.
 
 import { describe, expect, it, vi } from 'vitest';
-import type { MaintenanceWindow, Mute } from '../types/api';
-import { muteFilters, muteIsExpired, MUTE_STATES, windowFilters } from './suppressionFilters';
+import type { MaintenanceWindow } from '../types/api';
+import { windowFilters } from './suppressionFilters';
 import { MAINTENANCE_STATUSES } from './maintenanceStatus';
 import { specColumns, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -31,19 +29,8 @@ const win = (over: Partial<MaintenanceWindow> = {}): MaintenanceWindow => ({
   ...over,
 });
 
-const mute = (over: Partial<Mute> = {}): Mute => ({
-  id: 'm1',
-  scope_kind: 'node',
-  node_id: 'n1',
-  group_id: null,
-  metric_name: 'icmp_rtt_ms',
-  reason: 'noisy link',
-  until_at: iso(HOUR),
-  ...over,
-});
-
 const label = () => 'rtr-01';
-const t = ((k: string) => k) as unknown as Parameters<typeof muteFilters>[0];
+const t = ((k: string) => k) as unknown as Parameters<typeof windowFilters>[0];
 
 /** A contains-condition, encoded the way a filter cell stores one. */
 const term = (s: string) => encodeCondition({ term: s, mode: 'contains', not: false });
@@ -112,64 +99,6 @@ describe('the maintenance filter row', () => {
     keeps(spied, win(), { status: 'active' });
     expect(spy).not.toHaveBeenCalled();
     keeps(spied, win(), { scope: term('rtr') });
-    expect(spy).toHaveBeenCalled();
-  });
-});
-
-describe('muteIsExpired', () => {
-  it('treats the exact boundary as expired, like the server does', () => {
-    // The server prunes on `until_at <= now()`; a `<` here would put a mute expiring exactly now on
-    // the opposite side of the boundary from the server that is about to delete it.
-    expect(muteIsExpired({ until_at: iso(0) }, NOW)).toBe(true);
-    expect(muteIsExpired({ until_at: iso(1) }, NOW)).toBe(false);
-    expect(muteIsExpired({ until_at: iso(-1) }, NOW)).toBe(true);
-  });
-});
-
-describe('the mutes filter row', () => {
-  const specs = muteFilters(t, label, NOW);
-
-  it('shows everything when nothing is set', () => {
-    expect(keeps(specs, mute(), {})).toBe(true);
-  });
-
-  it('splits active from expired, and each excludes the other', () => {
-    const live = mute();
-    const dead = mute({ until_at: iso(-HOUR) });
-    expect(keeps(specs, live, { until: 'active' })).toBe(true);
-    expect(keeps(specs, dead, { until: 'active' })).toBe(false);
-    expect(keeps(specs, dead, { until: 'expired' })).toBe(true);
-    expect(keeps(specs, live, { until: 'expired' })).toBe(false);
-    expect(MUTE_STATES).toEqual(['active', 'expired']);
-  });
-
-  it('separates the target, the metric and the reason', () => {
-    expect(keeps(specs, mute(), { target: term('RTR-01') })).toBe(true);
-    expect(keeps(specs, mute(), { metric: term('icmp') })).toBe(true);
-    expect(keeps(specs, mute(), { reason: term('noisy') })).toBe(true);
-    // …and each one only answers about its own column, which the single search box could not.
-    expect(keeps(specs, mute(), { reason: term('icmp') })).toBe(false);
-    expect(keeps(specs, mute(), { metric: term('noisy') })).toBe(false);
-  });
-
-  it('ANDs the columns, so two conditions narrow rather than widen', () => {
-    expect(keeps(specs, mute(), { metric: term('icmp'), reason: term('noisy') })).toBe(true);
-    expect(keeps(specs, mute(), { metric: term('icmp'), reason: term('quiet') })).toBe(false);
-  });
-
-  it('survives a mute with no metric — the "all metrics" case', () => {
-    // `metric_name` is null for a node-wide mute, and a filter must not turn that into a crash.
-    const all = mute({ metric_name: null });
-    expect(keeps(specs, all, { reason: term('noisy') })).toBe(true);
-    expect(keeps(specs, all, { metric: term('icmp') })).toBe(false);
-  });
-
-  it('never resolves a target name unless that column is narrowing', () => {
-    const spy = vi.fn(label);
-    const spied = muteFilters(t, spy, NOW);
-    keeps(spied, mute(), { until: 'active' });
-    expect(spy).not.toHaveBeenCalled();
-    keeps(spied, mute(), { target: term('rtr') });
     expect(spy).toHaveBeenCalled();
   });
 });

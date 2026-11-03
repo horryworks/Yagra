@@ -537,7 +537,10 @@ mod tests {
             ("POST /api/v1/nodes", Some(AuditAction::Post)),
             ("PUT /api/v1/users/1", Some(AuditAction::Put)),
             ("PATCH /api/v1/nodes/1", Some(AuditAction::Patch)),
-            ("DELETE /api/v1/mutes/1", Some(AuditAction::Delete)),
+            (
+                "DELETE /api/v1/maintenance-windows/1",
+                Some(AuditAction::Delete),
+            ),
             ("auth.login", Some(AuditAction::Login)),
             // The three the WebUI's `=== 'auth.login'` equality used to miss entirely.
             ("auth.login.ldap", Some(AuditAction::Login)),

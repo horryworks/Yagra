@@ -987,8 +987,8 @@ pub fn check_id(node: NodeId, name: &str) -> CheckId {
 /// namespaces apart: a node renders as a bare UUID, a pool as `pool:<name>`.
 //
 // The discriminating prefix has to sit on the *subject* side, never the name side: `name` is
-// operator-authored free text on the mute path (`mutes.check_name`) and is any metric a poller
-// emits on the threshold path, so a prefix there would be forgeable. A `NodeId` renders as a bare
+// any metric a poller emits on the threshold path (and was operator-authored free text on the mute
+// path until ADR-234 removed it), so a prefix there would be forgeable. A `NodeId` renders as a bare
 // hyphenated UUID and contains no `:`, so no node can impersonate a pool or vice versa.
 pub fn subject_check_id(subject: &Subject, name: &str) -> CheckId {
     CheckId::from(Uuid::new_v5(
@@ -1039,8 +1039,8 @@ pub(super) fn resolve_key<'a>(
 ///
 /// # Why the port goes on the *name* side, when [`subject_check_id`]'s doc forbids a prefix there
 ///
-/// That rule is about *forgeable* prefixes: the name is operator-authored on the mute path and is
-/// any metric a poller emits on the threshold path, so a caller-supplied `pool:`-style prefix could
+/// That rule is about *forgeable* prefixes: the name is any metric a poller emits on the
+/// threshold path, so a caller-supplied `pool:`-style prefix could
 /// impersonate another subject. `@` cannot do that. [`yagra_common::is_valid_metric_name`] admits
 /// only `[a-zA-Z_:][a-zA-Z0-9_:]*`, and it is enforced at **both** edges a name can enter from —
 /// the API (operator input) and the TSDB write path (poller-supplied sample names) — so no metric

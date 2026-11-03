@@ -33,8 +33,8 @@ const caps = (over: Partial<MenuCapabilities> = {}): MenuCapabilities => ({
 
 describe('which right-click menus have anything in them', () => {
   it('opens a group menu for an operator who may only suppress', () => {
-    // 🚨 THE REGRESSION. `canEdit` is `ManageConfig`; maintenance and mute are `ManageMaintenance`
-    // and `AckAlerts`, which an operator holds. Gating the whole menu on `canEdit` removed it
+    // 🚨 THE REGRESSION. `canEdit` is `ManageConfig`; maintenance is `ManageMaintenance`,
+    // which an operator holds. Gating the whole menu on `canEdit` removed it
     // entirely for every operator — and read as deliberate, because an admin still saw it.
     expect(groupMenuHasItems(caps({ canSuppress: true }))).toBe(true);
     expect(groupMenuHasItems(caps({ canAddNode: true }))).toBe(true);
@@ -76,11 +76,8 @@ describe('hasSuppression', () => {
   const idx = (over: Partial<Record<keyof SuppressionIndex, Set<string>>> = {}) =>
     ({
       maintenanceNodes: new Set<string>(),
-      muteNodes: new Set<string>(),
       maintenanceGroups: new Set<string>(),
-      muteGroups: new Set<string>(),
       exemptMaintenanceNodes: new Set<string>(),
-      exemptMuteNodes: new Set<string>(),
       ...over,
     }) as SuppressionIndex;
 
@@ -98,19 +95,16 @@ describe('hasSuppression', () => {
     expect(hasSuppression(undefined, group)).toBe(false);
   });
 
-  it('counts a window or a mute, on either kind of row', () => {
+  it('counts a window, on either kind of row', () => {
     expect(hasSuppression(idx({ maintenanceNodes: new Set(['n1']) }), node)).toBe(true);
-    expect(hasSuppression(idx({ muteNodes: new Set(['n1']) }), node)).toBe(true);
     expect(hasSuppression(idx({ maintenanceGroups: new Set(['g1']) }), group)).toBe(true);
-    expect(hasSuppression(idx({ muteGroups: new Set(['g1']) }), group)).toBe(true);
   });
 
   it('counts an EXEMPT node too — a release still has to be explainable', () => {
     // "Why did this stop being silent" is the same question as "why is it silent", and the panel is
-    // the only place either is answered. Dropping the exempt sets would make the released marker
+    // the only place either is answered. Dropping the exempt set would make the released marker
     // open an empty panel.
     expect(hasSuppression(idx({ exemptMaintenanceNodes: new Set(['n1']) }), node)).toBe(true);
-    expect(hasSuppression(idx({ exemptMuteNodes: new Set(['n1']) }), node)).toBe(true);
   });
 
   it('accepts the engine’s rolled-up state as one more reason, for a node only', () => {
@@ -271,7 +265,7 @@ describe('nodeMoveItems', () => {
 
 describe('nodeActionItems', () => {
   // 🚨 ADR-124 Inc.9. Move and Delete each carried their own copy of this rule, and the actions
-  // with no copy at all — pool, maintenance, mute, Poll now — kept acting on one row while sitting
+  // with no copy at all — pool, maintenance, Poll now — kept acting on one row while sitting
   // in a menu headed "Move 20 selected…". One function now, so a new batch-aware action cannot
   // quietly answer differently.
   it('gives the set to a row inside it, and the row to one outside', () => {

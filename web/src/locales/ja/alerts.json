@@ -4,13 +4,10 @@
     "emptyFiltered": "この絞り込みに一致するアクティブなアラートがありません。",
     "noNodes": "監視しているノードがありません。",
     "searchPlaceholder": "ノードまたはメトリクスを検索…",
-    "searchLabel": "ノード / メトリクス",
-    "mute": "ミュート",
-    "muteHint": "このノードのこのチェックをミュート"
+    "searchLabel": "ノード / メトリクス"
   },
   "row": {
     "flapping": "フラッピング",
-    "mutedUntil": "ミュート中（{{until}} まで）",
     "poolSubject": "ポーラープール「{{pool}}」",
     "configRemoteSubject": "config のバックアップの Git の送り先",
     "merakiOrgSubject": "Meraki 組織「{{org}}」",
@@ -84,7 +81,7 @@
   },
   "watch": {
     "silenced": "黙らせ中 {{count}} 件",
-    "maintenance": "保守中 {{count}} 台",
+    "maintenance": "メンテナンス中 {{count}} 台",
     "notWatched": "見ていない {{count}} 台"
   }
 }

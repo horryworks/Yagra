@@ -600,7 +600,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let meraki_inventory = Arc::new(yagra_meraki::inventory::MerakiInventoryRepo::new(
         repo.pool(),
     ));
-    // Shared group repo: maintenance/mute folder-group scopes and the analysis runner all expand a
+    // Shared group repo: maintenance folder-group scopes and the analysis runner all expand a
     // group to its subtree, AdminState serves group CRUD, and a Meraki import reads the folders'
     // IP ranges — one hierarchy, read in several places.
     let group_repo = Arc::new(groups::GroupRepo::new(repo.pool()));
@@ -730,10 +730,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         group_repo.clone(),
     )));
 
-    // Notification routing + mutes priming: load the DB channels/rules into the notifier now (env
+    // Notification routing priming: load the DB channels/rules into the notifier now (env
     // channels stay always-on). The periodic refresh loop is leader-only (`leader_work`).
     alerts::config::load_routing(&notifier, &notifications).await;
-    alerts::config::load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
     notifier.set_held_store(delivery_hours.clone());
     alerts::config::load_hours(
         &notifier,
@@ -756,7 +755,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // so a standby never fails the live leader's in-flight jobs; `analysis_repo` is held for it. The
     // runner itself serves the API on all cores.
     let analysis_repo = Arc::new(analysis::AnalysisRepo::new(repo.pool()));
-    // `group_repo` is created earlier (shared with maintenance/mute scope resolution); `events_repo`,
+    // `group_repo` is created earlier (shared with maintenance scope resolution); `events_repo`,
     // `flows` (None when the flow tier is off), and `ipasn` are shared with the API/ingest paths.
     let analysis = Arc::new(analysis::AnalysisRunner::new(
         analysis_repo.clone(),
@@ -1701,7 +1700,6 @@ impl LeaderTasks {
             run_routing_refresh(
                 self.notifier.clone(),
                 self.notifications.clone(),
-                self.maintenance.clone(),
                 self.repo.clone(),
                 self.groups.clone(),
                 self.delivery_hours.clone(),
@@ -2337,13 +2335,12 @@ async fn run_endpoint_discovery(stores: EndpointSweepStores) {
     }
 }
 
-/// Leader-only loop: reload notification routing (DB channels/rules) + mutes into the notifier every
-/// 30s so edits take effect without a restart (env channels stay always-on; expired mutes drop out).
+/// Leader-only loop: reload notification routing (DB channels/rules) and delivery hours into the
+/// notifier every 30s so edits take effect without a restart (env channels stay always-on).
 /// Runs until the shutdown token drops it. Spawned in `leader_work` (see `run_live`).
 async fn run_routing_refresh(
     notifier: Arc<Notifier>,
     notifications: Arc<NotificationRepo>,
-    maintenance: Arc<MaintenanceRepo>,
     repo: Arc<NodeRepo>,
     group_repo: Arc<groups::GroupRepo>,
     delivery_hours: Arc<alerts::delivery_hours::DeliveryHoursRepo>,
@@ -2352,7 +2349,6 @@ async fn run_routing_refresh(
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
         alerts::config::load_routing(&notifier, &notifications).await;
-        alerts::config::load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
         alerts::config::load_hours(&notifier, &delivery_hours, &repo, &group_repo, &mut hours)
             .await;
     }

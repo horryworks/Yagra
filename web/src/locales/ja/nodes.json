@@ -202,7 +202,6 @@
     "searchNodes": "検索を実行できませんでした。一覧が空でも、一致するものが無いという意味ではありません。",
     "loadNode": "ノードの読み込みに失敗しました",
     "setMaintenance": "メンテナンスの設定に失敗しました",
-    "mute": "ミュートに失敗しました",
     "release": "抑止の変更に失敗しました",
     "setPool": "ポーラープールの設定に失敗しました",
     "addUrlMonitor": "URL 監視の追加に失敗しました",
@@ -233,8 +232,7 @@
     "prefixDescTooLong": "{{prefix}} の呼び名が長すぎます（最大 200 文字）。",
     "savePrefixes": "IP レンジを保存できませんでした",
     "setPoolPartial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。",
-    "setMaintenancePartial": "{{requested}} 台のうち {{created}} 台にメンテナンス窓を開きました。残りは削除済みか、スコープの外です。",
-    "mutePartial": "{{requested}} 台のうち {{created}} 台をミュートしました。残りは削除済みか、スコープの外です。"
+    "setMaintenancePartial": "{{requested}} 台のうち {{created}} 台にメンテナンス窓を開きました。残りは削除済みか、スコープの外です。"
   },
   "maintenanceWindowName": "メンテナンス — {{name}}",
   "detail": {
@@ -252,7 +250,6 @@
     "pollDispatched_one": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
     "pollDispatched_other": "ポーリングを要求しました — チェック {{count}} 件を送信しました。",
     "maintenance": "メンテナンス…",
-    "mute": "ミュート…",
     "more": "その他",
     "pool": "ポーラープール…",
     "rediscover": "再検出…",
@@ -806,14 +803,10 @@
   "tree": {
     "suppression": {
       "markMaint": "メンテナンス中 — クリックで詳細",
-      "markMute": "ミュート中 — クリックで詳細",
       "markReleasedMaint": "メンテナンス対象から除外中 — クリックで戻す",
-      "markReleasedMute": "ミュート対象から除外中 — クリックで戻す",
       "head": {
         "maintenance": "メンテナンス中",
-        "mute": "ミュート中",
-        "releasedMaintenance": "メンテナンス対象から除外中",
-        "releasedMute": "ミュート対象から除外中"
+        "releasedMaintenance": "メンテナンス対象から除外中"
       },
       "from": {
         "node": "このノード",
@@ -823,19 +816,15 @@
       },
       "until": "{{time}} まで",
       "act": {
-        "open": "メンテナンス / ミュートを解除…",
+        "open": "メンテナンスを解除…",
         "endNow": "メンテナンスを今すぐ終了",
-        "unmute": "ミュート解除",
         "excludeNode": "このノードをメンテナンス対象から外す",
-        "unmuteNode": "このノードをミュート対象から外す",
-        "undoMaintenance": "メンテナンス対象に戻す",
-        "undoMute": "ミュート対象に戻す"
+        "undoMaintenance": "メンテナンス対象に戻す"
       },
       "releaseOnAncestor": "グループ「{{name}}」側で解除してください",
       "none": "現在この行を抑止しているものはありません。"
     },
     "maintenance": "メンテナンス",
-    "mute": "ミュート",
     "custom": "カスタム…",
     "editMoveGroup": "グループを編集 / 移動",
     "moveToGroup": "グループへ移動…",
@@ -886,7 +875,6 @@
     "menuRoot": "ツリーの操作",
     "poolSelected": "ポーラープール — 選択した {{count}} 件",
     "maintenanceSelected": "メンテナンス — 選択した {{count}} 件",
-    "muteSelected": "ミュート — 選択した {{count}} 件",
     "pollNow": "今すぐポーリング",
     "pollNodeNamed": "「{{name}}」を今すぐポーリング",
     "pollSelected": "選択した {{count}} 件を今すぐポーリング",
@@ -1195,7 +1183,6 @@
     "pool": "ポーラープール…",
     "more": "その他…",
     "maintenance": "メンテナンス…",
-    "mute": "ミュート…",
     "pollNow": "今すぐポーリング",
     "nameFromDevice": "名前を sysName に合わせる"
   },

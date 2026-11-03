@@ -64,7 +64,7 @@ import { readSources, SRC } from './testSupport/sources';
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
-  alerts: [930, 535], // - the ack filter, its hint and the acked pill (ADR-233, 2026-11-03)
+  alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
   alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
   auth: [79, 43],
   common: [806, 438], // + watch.nothingPolled, the shell state sentence when no poller is live (ADR-227, 2026-11-02)
@@ -72,8 +72,8 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
-  nav: [2687, 1230], // - "who acknowledged it" from the History description (ADR-233, 2026-11-03)
-  nodes: [16287, 9286], // + rules.empty, the Alert rules tab's empty state (ADR-229, 2026-11-03)
+  nav: [2634, 1206], // - the mute list menu item and its description (ADR-234, 2026-11-03)
+  nodes: [16107, 9167], // - every mute entry in the tree, its panel and the selection bar (ADR-234, 2026-11-03)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],
@@ -84,7 +84,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-tls': [1592, 857],
   'settings-tokens': [812, 442],
   'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
-  suppression: [866, 571],
+  suppression: [514, 333], // - the mute list page and the add-mute dialog (ADR-234, 2026-11-03)
   system: [14178, 7939], // the sweep limit field's out-of-range error (ADR-219, 2026-10-28)
   topology: [3104, 1758], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   troubleshoot: [3370, 1768], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)

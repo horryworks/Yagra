@@ -158,7 +158,6 @@ describe('nav IA', () => {
       '/alerts/rules',
       '/alerts/routing',
       '/alerts/maintenance',
-      '/alerts/mutes',
     ]);
   });
 

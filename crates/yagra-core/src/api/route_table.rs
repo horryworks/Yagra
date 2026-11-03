@@ -64,7 +64,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scoping {
     /// Addresses one node — or one stored row that names a node or a folder group as its target
-    /// (a mute, a maintenance window). Takes `VisibleNode` (a `:node_id` path param) or checks the
+    /// (a maintenance window). Takes `VisibleNode` (a `:node_id` path param) or checks the
     /// id it was handed against the caller's scope.
     ///
     /// Out of scope answers `404`, never `403` — see `extract::VisibleNode`.
@@ -1023,22 +1023,6 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("GET", "/api/v1/monitoring-gaps", INFRA, Tool("get_system_health")),
     (
         "GET",
-        "/api/v1/mutes",
-        PostFiltered,
-        Tool("list_suppressions"),
-    ),
-    ("POST", "/api/v1/mutes", NodeScoped, NO_MCP_WRITE),
-    (
-        "POST",
-        "/api/v1/mutes/bulk",
-        // `GroupFiltered` for the reason `/maintenance-windows/bulk` is: it names a set of nodes
-        // and the scope becomes a predicate in the write (ADR-124 Inc.11).
-        GroupFiltered,
-        NO_MCP_WRITE,
-    ),
-    ("DELETE", "/api/v1/mutes/:id", NodeScoped, NO_MCP_WRITE),
-    (
-        "GET",
         "/api/v1/netbox/servers",
         // Deployment-wide integration configuration, exactly like `meraki/orgs`: a NetBox server
         // is not node data, so there is no per-node slice to filter to.
@@ -1440,12 +1424,6 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/nodes/:node_id/maintenance-exemption",
-        NodeScoped,
-        NO_MCP_WRITE,
-    ),
-    (
-        "PUT",
-        "/api/v1/nodes/:node_id/mute-exemption",
         NodeScoped,
         NO_MCP_WRITE,
     ),
@@ -2239,7 +2217,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/suppression-exemptions",
         // Each row names one node, so the rows are read and filtered afterwards — the same shape as
-        // the window and mute lists it belongs beside.
+        // the window list it belongs beside.
         PostFiltered,
         // Folded into the existing tool rather than given its own: "what is currently suppressing
         // alerts" and "which node has been taken out of that" are one question, and a model that

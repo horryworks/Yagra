@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Choosing a metric for an alert rule or a mute (ADR-075 Inc.4).
+// Choosing a metric for an alert rule (ADR-075 Inc.4).
 //
 // It replaces a free-text box whose only help was a five-entry `datalist`, against a catalog of
 // eighty-eight. Three things it has to do that a `<select>` could not:

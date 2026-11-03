@@ -32,7 +32,7 @@ use std::time::Duration;
 use uuid::Uuid;
 use yagra_common::NodeId;
 
-use super::{ActiveMute, AlertConfig, AlertManager, NodeMeta, Notifier};
+use super::{AlertConfig, AlertManager, NodeMeta, Notifier};
 use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::thresholds::ThresholdStore;
@@ -477,69 +477,6 @@ pub(crate) async fn load_alert_config(
     ))
 }
 
-/// Load the unexpired mutes into the notifier (check ids recomputed from names here). A
-/// group-scoped mute is expanded to one per-node entry across the folder-group subtree (recursive,
-/// ADR-022), so the notifier's per-node matching is unchanged; the expansion re-runs each refresh
-/// so membership changes are honored. Failures degrade to the existing snapshot (warn).
-pub(crate) async fn load_mutes(
-    notifier: &Notifier,
-    maintenance: &MaintenanceRepo,
-    repo: &NodeRepo,
-    groups: &groups::GroupRepo,
-) {
-    let mutes = match maintenance.list_mutes().await {
-        Ok(mutes) => mutes,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to load mutes");
-            return;
-        }
-    };
-    let mut active: Vec<ActiveMute> = Vec::new();
-    let mut group_roots: Vec<Uuid> = Vec::new();
-    for m in &mutes {
-        match m.scope_kind {
-            maintenance::MuteScope::Node => {
-                if let Some(node_id) = m.node_id {
-                    active.push(ActiveMute::new(node_id, m.check_name.as_deref()));
-                }
-            }
-            maintenance::MuteScope::Group => {
-                if let Some(group_id) = m.group_id {
-                    group_roots.push(group_id);
-                }
-            }
-        }
-    }
-    if !group_roots.is_empty() {
-        match groups.edges().await {
-            Ok(edges) => {
-                let mut group_ids: Vec<Uuid> = Vec::new();
-                for root in group_roots {
-                    group_ids.extend(groups::group_subtree(&edges, root));
-                }
-                match repo.nodes_in_groups(&group_ids).await {
-                    // A group mute silences the whole node (check=None) — and, being inherited
-                    // rather than named, is the half a release can cancel. The node mutes pushed
-                    // above are deliberately not filtered: a mute naming this node always applies.
-                    Ok(node_ids) => {
-                        let exempt =
-                            exempt_nodes(maintenance, maintenance::ExemptionKind::Mute).await;
-                        active.extend(
-                            node_ids
-                                .into_iter()
-                                .filter(|n| !exempt.contains(&yagra_common::NodeId::from(*n)))
-                                .map(|n| ActiveMute::new(n, None)),
-                        );
-                    }
-                    Err(e) => tracing::warn!(error = %e, "failed to resolve group mute nodes"),
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "failed to load group edges for mutes"),
-        }
-    }
-    notifier.set_mutes(active);
-}
-
 /// What [`load_hours`] last built from, so an unchanged deployment does not re-read every node
 /// every 30 seconds: the config generation (bumped by any folder, label, node or schedule write),
 /// the schedules and the default zone.
@@ -647,7 +584,7 @@ pub(crate) async fn run_alert_config_refresh(
     // time-dependent, so re-resolve them each cycle over the cached node list, and only swap the
     // live config when the base or the in-maintenance set actually changed.
     // Built once: it is four `Arc` clones and the same handles this loop already holds. The loop
-    // keeps the individual handles too, because maintenance and mute resolution ask questions
+    // keeps the individual handles too, because maintenance resolution asks questions
     // that are not part of the config base.
     let sources = LiveConfigSources {
         repo: repo.clone(),

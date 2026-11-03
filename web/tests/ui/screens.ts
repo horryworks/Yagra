@@ -191,7 +191,6 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/alerts/rules/events': MARKER,
   '/events/webhooks': MARKER,
   '/alerts/maintenance': MARKER,
-  '/alerts/mutes': MARKER,
   '/troubleshoot': {
     kind: 'none',
     why: 'The tool catalog comes from the client-side registry, not the API. The only served data on it is the run counters, which are numbers.',

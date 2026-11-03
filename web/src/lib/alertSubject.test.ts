@@ -33,7 +33,7 @@ describe('alertSubject', () => {
   });
 
   it('gates the node actions on a resolvable node, which is what the page checks', () => {
-    // Mute names a node and RCA takes a node id, so both fail server-side for a pool subject.
+    // RCA takes a node id, so it fails server-side for a pool subject.
     // `ActiveAlertsPage` gates on `subjectNodeId(a) === null` — it needs the id anyway, so this
     // asserts the predicate the page actually uses rather than a second one alongside it.
     expect(subjectNodeId({ node: NODE, subject_kind: 'node' })).not.toBeNull();
@@ -57,7 +57,7 @@ describe('a Meraki organization as an alert’s subject (ADR-164 決定 18)', ()
 
   it('is never taken for a node — the if-chain this replaced let a third kind fall through to one', () => {
     // Falling through put `meraki_org:<id>` into `EntityName` as a node that cannot be found, and
-    // offered Mute and Explain on it: both take a node id and could only have been refused.
+    // offered Explain on it: it takes a node id and could only have been refused.
     expect(subjectNodeId(alert)).toBeNull();
     expect(rootCause({ ...alert, root_cause: null })).toEqual({ kind: 'none' });
   });

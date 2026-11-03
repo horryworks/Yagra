@@ -2024,7 +2024,7 @@ impl AlertManager {
     /// (ADR-076 decision 3).
     ///
     /// A thin seam onto [`Self::process_check`] rather than a second engine: dwell, flap damping,
-    /// dependency suppression, dedup, mutes and the SSE broadcast are the *same code* the poll path
+    /// dependency suppression, dedup and the SSE broadcast are the *same code* the poll path
     /// runs. A copy would be a second place alert quality is decided, and the copy is the one that
     /// gets a fix late.
     ///

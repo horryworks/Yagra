@@ -75,7 +75,7 @@ import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { ActionMenu } from '../ui/ActionMenu';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
-import { WrenchIcon, BellIcon, BellOffIcon, PinIcon, ConfigFileIcon } from '../ui/icons';
+import { WrenchIcon, PinIcon, ConfigFileIcon } from '../ui/icons';
 import { nothingPinned, type PinnedView } from '../../lib/pins';
 import type { BackupMark } from '../../lib/configBackupMarks';
 import { HealthBar } from '../HealthBar/HealthBar';
@@ -321,10 +321,10 @@ interface Props {
     groupId: string,
     dest: { parentId: string | null; before?: string; after?: string },
   ) => void;
-  /** Which nodes/groups are currently in maintenance or muted (drives the per-row markers). */
+  /** Which nodes/groups are currently in maintenance (drives the per-row markers). */
   suppression?: SuppressionIndex;
-  /** What the release panel shows for a row — resolved by the page, which holds the window, mute
-   *  and exemption lists. Omit and the markers stay decorative, as they were before the panel. */
+  /** What the release panel shows for a row — resolved by the page, which holds the window and
+   *  exemption lists. Omit and the markers stay decorative, as they were before the panel. */
   suppressionRows?: (target: SuppressionTarget, node?: NodeSummary) => SuppressionPanelRow[];
   /** Act on a suppression from the panel or the context menu. One callback over a union so the
    *  page answers with a single exhaustive switch. Omit to hide every release control. */
@@ -335,8 +335,6 @@ interface Props {
    *  🚨 **The target is an `ActionTarget` since ADR-124 Inc.11**: it was a single row, so a preset
    *  pressed with a dozen nodes selected covered exactly one of them. */
   onSetMaintenance?: (target: ActionTarget, durationMs: number | null) => void;
-  /** Right-click → mute a node/group. `durationMs`/`null` as for `onSetMaintenance`. */
-  onSetMute?: (target: ActionTarget, durationMs: number | null) => void;
   /** Pools offered by the right-click poll-pool chips (`GET /api/v1/pools`). */
   pools?: PoolOption[];
   /** Right-click → assign a node, a folder, or the whole working set to a poll-pool. A pool name
@@ -435,7 +433,6 @@ export function NodeTree({
   suppressionRows,
   onRelease,
   onSetMaintenance,
-  onSetMute,
   pools,
   onSetPool,
   onRunDiscovery,
@@ -669,8 +666,8 @@ export function NodeTree({
   // Whether a right-click on each row kind would produce a menu with anything in it.
   //
   // 🚨 **These used to be one `if (!canEdit) return;`**, and that shipped an operator a tree with
-  // no context menu at all — `canEdit` is `ManageConfig`, while the maintenance and mute entries
-  // inside the menu are `ManageMaintenance` and `AckAlerts`, which an operator holds (ADR-057).
+  // no context menu at all — `canEdit` is `ManageConfig`, while the maintenance entries inside
+  // the menu are `ManageMaintenance`, which an operator holds (ADR-057).
   // Closing a mixed menu on its strictest member takes the looser items with it, silently. It read
   // as deliberate because it was *consistent*: an admin saw the menu, so nothing looked broken.
   //
@@ -678,25 +675,23 @@ export function NodeTree({
   // menu always opens. The other two are conditional, because an empty menu is worse than none.
   const caps: MenuCapabilities = {
     canEdit,
-    canSuppress: !!onSetMaintenance || !!onSetMute,
+    canSuppress: !!onSetMaintenance,
     canAddNode: !!onAddNode,
     canPin: !!onTogglePin,
     canShowOnMap: !!onShowGroupOnMap || !!onShowRootOnMap,
   };
 
-  // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
-  // the dashed-outline variant for a node released from a suppression it inherited. Each is a
+  // The maintenance marker (a wrench) shown on a row when active, plus the dashed-outline variant
+  // for a node released from a window it inherited. Each is a
   // button: clicking one opens the panel below, which is the only place in the UI that answers
   // "why is this row silent".
   const suppressionMarks = (m: {
     target: SuppressionTarget;
     node?: NodeSummary;
     maint: boolean;
-    muted: boolean;
     releasedMaint?: boolean;
-    releasedMute?: boolean;
   }): React.ReactNode => {
-    if (!m.maint && !m.muted && !m.releasedMaint && !m.releasedMute) return null;
+    if (!m.maint && !m.releasedMaint) return null;
     const open = (e: React.MouseEvent) => {
       e.preventDefault();
       // Without this the document-level closer installed below runs in the same click and shuts
@@ -712,14 +707,8 @@ export function NodeTree({
     return (
       <span className="ntree-supp">
         {m.maint && mark('maint', t('tree.suppression.markMaint'), <WrenchIcon />)}
-        {m.muted && mark('mute', t('tree.suppression.markMute'), <BellOffIcon />)}
         {m.releasedMaint &&
           mark('maint released', t('tree.suppression.markReleasedMaint'), <WrenchIcon />)}
-        {/* A plain bell, not a struck-through bell-off: the mute glyph is *already* a negation, so
-            negating it again gave two icons that differ by one faint diagonal at 16px and were
-            reported as indistinguishable. Un-slashing says "this node rings again" outright. */}
-        {m.releasedMute &&
-          mark('mute released', t('tree.suppression.markReleasedMute'), <BellIcon />)}
       </span>
     );
   };
@@ -760,9 +749,8 @@ export function NodeTree({
                   </div>
                 )}
                 {/* Not gated on `canEdit`: that is ManageConfig (editing the inventory), and
-                    ending a window or lifting a mute is not. The page decides — it withholds
-                    `onRelease` entirely when the caller may release neither kind, and strips the
-                    action from the blocks of the kind they may not (`releasableRows`). */}
+                    ending a window is not. The page decides — it strips the action from every
+                    block when the caller may not release (`releasableRows`). */}
                 {onRelease && control && (
                   <div className="ntree-supp-act">
                     <button type="button" onClick={() => act(control.action)}>
@@ -781,7 +769,7 @@ export function NodeTree({
     );
   };
 
-  // The Maintenance/Mute quick-duration section appended to a row's context menu. A preset fires
+  // The Maintenance quick-duration section appended to a row's context menu. A preset fires
   // immediately (now + length); "Custom…" opens the full create form prefilled with the scope.
   //
   // Releasing is *not* a fourth chip beside them. It switches this menu to the panel at the same
@@ -802,7 +790,7 @@ export function NodeTree({
     node: NodeSummary | undefined,
     at: { x: number; y: number },
   ): React.ReactNode => {
-    if (!onSetMaintenance && !onSetMute) return null;
+    if (!onSetMaintenance) return null;
     const many = target.kind === 'nodes';
     const count = targetNodeCount(target);
     const row = (
@@ -844,7 +832,6 @@ export function NodeTree({
         <div className="ntree-menu-sep" />
         {onSetMaintenance &&
           row(t('tree.maintenance'), t('tree.maintenanceSelected', { count }), onSetMaintenance)}
-        {onSetMute && row(t('tree.mute'), t('tree.muteSelected', { count }), onSetMute)}
         {/* ⚠️ Asks about `rowTarget`, never `target`: the presets above may be acting on the
             batch, but a release is about what is suppressing *this* row and names it. */}
         {onRelease && hasSuppression(suppression, rowTarget, node) && (
@@ -1329,7 +1316,6 @@ export function NodeTree({
         {suppressionMarks({
           target: { kind: 'group', id: group.id, name: group.name },
           maint: !!suppression?.maintenanceGroups.has(group.id),
-          muted: !!suppression?.muteGroups.has(group.id),
         })}
       </div>
     );
@@ -1468,9 +1454,7 @@ export function NodeTree({
           maint:
             !!suppression?.maintenanceNodes.has(node.id) ||
             (node.state === 'maintenance' && !suppression?.exemptMaintenanceNodes.has(node.id)),
-          muted: !!suppression?.muteNodes.has(node.id),
           releasedMaint: !!suppression?.exemptMaintenanceNodes.has(node.id),
-          releasedMute: !!suppression?.exemptMuteNodes.has(node.id),
         })}
       </div>
     );

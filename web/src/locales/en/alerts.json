@@ -4,13 +4,10 @@
     "emptyFiltered": "No active alerts match these filters.",
     "noNodes": "No nodes are being monitored.",
     "searchPlaceholder": "Search node or metric…",
-    "searchLabel": "Node or metric",
-    "mute": "Mute",
-    "muteHint": "Mute this check on this node"
+    "searchLabel": "Node or metric"
   },
   "row": {
     "flapping": "flapping",
-    "mutedUntil": "muted until {{until}}",
     "poolSubject": "Poller pool “{{pool}}”",
     "configRemoteSubject": "Config backup Git destination",
     "merakiOrgSubject": "Meraki organization “{{org}}”",

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Which actions the node detail header draws, and where (ADR-209 decision 8): four buttons the
+// Which actions the node detail header draws, and where (ADR-209 decision 8): the buttons the
 // operator reaches for most, and the rest behind "More ▾". The same set in the split pane and on
 // the full page — before this, Move appeared only in the pane and Delete only on the page, and
-// maintenance, mute, pool, Rediscover and "name from device" only in the tree's right-click menu.
+// maintenance, pool, Rediscover and "name from device" only in the tree's right-click menu.
 //
 // Pure, so the gating is tested: Vitest does not run a `.tsx`. The permissions are the ones each
 // action's handler checks (ADR-056), the same the tree's menu is gated on.
@@ -12,7 +12,7 @@ import { deviceNameOffer } from './nodeEditForm';
 import type { NodeDetail, NodeGroup } from '../../types/api';
 
 /** Always-visible buttons, in this order. */
-export const NODE_HEADER_PRIMARY = ['edit', 'maintenance', 'mute', 'pollNow'] as const;
+export const NODE_HEADER_PRIMARY = ['edit', 'maintenance', 'pollNow'] as const;
 export type NodeHeaderPrimary = (typeof NODE_HEADER_PRIMARY)[number];
 
 /** "More ▾", in this order. `delete` is last, in the danger colour, because it cannot be undone. */
@@ -35,7 +35,7 @@ export type NodeHeaderMore = (typeof NODE_HEADER_MORE)[number];
  *  renaming a key there fails to compile here rather than leaving a dialog nothing opens. */
 export type NodeHeaderDialog = Extract<
   NodeHeaderPrimary | NodeHeaderMore,
-  'maintenance' | 'mute' | 'pool' | 'rediscover' | 'nameFromDevice' | 'move' | 'moveByPrefix'
+  'maintenance' | 'pool' | 'rediscover' | 'nameFromDevice' | 'move' | 'moveByPrefix'
 >;
 
 export interface NodeHeaderCaps {
@@ -43,8 +43,6 @@ export interface NodeHeaderCaps {
   canConfig: boolean;
   /** `manage_maintenance`. */
   canMaintenance: boolean;
-  /** `ack_alerts` — what a mute needs. */
-  canMute: boolean;
   /** The account's pins have loaded; until then a pin would press into nothing. */
   pinsReady: boolean;
   /** The split pane, which can open the node's own page; the page cannot open itself. */
@@ -59,7 +57,6 @@ export function nodeHeaderActions(
   const primaryShown: Record<NodeHeaderPrimary, boolean> = {
     edit: caps.canConfig,
     maintenance: caps.canMaintenance,
-    mute: caps.canMute,
     pollNow: caps.canConfig,
   };
   const device = node.kind === 'device';

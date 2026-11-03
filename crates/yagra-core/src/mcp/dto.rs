@@ -708,7 +708,7 @@ impl NodeGroupDto {
     }
 }
 
-/// What is currently suppressing alerts: planned maintenance windows and reactive mutes.
+/// What is currently suppressing alerts: planned maintenance windows.
 ///
 /// Every array in one result rather than a `kind` parameter, because "is the fleet quiet or is it
 /// silenced" is one question — the same reasoning `get_neighbors` uses for current + history. The
@@ -720,7 +720,6 @@ impl NodeGroupDto {
 #[derive(Debug, Clone, Serialize)]
 pub struct SuppressionsDto {
     pub maintenance_windows: Vec<crate::alerts::maintenance::StoredWindow>,
-    pub mutes: Vec<crate::alerts::maintenance::StoredMute>,
     pub exemptions: Vec<crate::alerts::maintenance::StoredExemption>,
     /// Notifications kept back because their node is outside its delivery hours (ADR-226). The
     /// alerts themselves are open and visible; only the page is waiting.
@@ -1610,15 +1609,6 @@ mod tests {
                 ends_at: "1970-01-01T01:00:00Z".to_owned(),
                 enabled: true,
                 active: false,
-            }],
-            mutes: vec![crate::alerts::maintenance::StoredMute {
-                id: uuid::Uuid::new_v4(),
-                scope_kind: crate::alerts::maintenance::MuteScope::Node,
-                node_id: Some(node.id.0),
-                group_id: None,
-                check_name: Some("icmp_rtt_ms".to_owned()),
-                until_at: "1970-01-01T02:00:00Z".to_owned(),
-                reason: Some("known noisy link".to_owned()),
             }],
             exemptions: vec![crate::alerts::maintenance::StoredExemption {
                 id: uuid::Uuid::new_v4(),

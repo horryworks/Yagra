@@ -12,11 +12,10 @@ const watch = (over: Partial<FleetWatch> = {}): FleetWatch => ({
 });
 
 describe('isSilenced', () => {
-  it('counts a muted row and a row held under a root cause, and nothing else', () => {
-    expect(isSilenced({ root_cause: null }, true)).toBe(true);
-    expect(isSilenced({ root_cause: 'n-1' }, false)).toBe(true);
-    expect(isSilenced({ root_cause: null }, false)).toBe(false);
-    expect(isSilenced({}, false)).toBe(false);
+  it('counts a row held under a root cause, and nothing else', () => {
+    expect(isSilenced({ root_cause: 'n-1' })).toBe(true);
+    expect(isSilenced({ root_cause: null })).toBe(false);
+    expect(isSilenced({})).toBe(false);
   });
 });
 

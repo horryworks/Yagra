@@ -28,6 +28,8 @@ const MOVES: { from: string; to: string; what: string }[] = [
   { from: '/nodes/mib', to: '/nodes/collection/mib', what: 'the MIB repository' },
   { from: '/nodes/reclassify', to: '/nodes/collection/reclassify', what: 'reclassify' },
   { from: '/alerts/event-rules', to: '/alerts/rules/events', what: 'event rules' },
+  // ADR-234: the mute list is gone; a maintenance window is the one way to silence alerts.
+  { from: '/alerts/mutes', to: '/alerts/maintenance', what: 'maintenance windows' },
 ];
 
 for (const { from, to, what } of MOVES) {

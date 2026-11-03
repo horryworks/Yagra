@@ -38,7 +38,6 @@ import type {
   FleetGroupSummary,
   FleetSummary,
   MaintenanceWindow,
-  Mute,
   NodeGroup,
   NodeSummary,
   PoolOption,
@@ -121,7 +120,6 @@ import { RediscoverModal } from '../components/NodeTree/RediscoverModal';
 import { NameFromDeviceModal } from '../components/NameFromDeviceModal/NameFromDeviceModal';
 import { SetPoolModal } from '../components/SetPoolModal/SetPoolModal';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
-import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
 import {
   groupDeletionImpact,
@@ -146,12 +144,11 @@ const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
 export function NodesPage() {
   const { t } = useTranslation('nodes');
   const navigate = useNavigate();
-  // Three permissions, not one signed-in flag: editing the inventory is ManageConfig, opening a
-  // maintenance window is ManageMaintenance and muting is AckAlerts (`api/maintenance.rs`). They
-  // were all `authed`, so a Viewer was offered every one of them (ADR-056 Inc.2).
+  // Two permissions, not one signed-in flag: editing the inventory is ManageConfig and opening a
+  // maintenance window is ManageMaintenance (`api/maintenance.rs`). They were both `authed`, so a
+  // Viewer was offered every one of them (ADR-056 Inc.2).
   const canConfig = useCan('manage_config');
   const canMaintenance = useCan('manage_maintenance');
-  const canAck = useCan('ack_alerts');
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   // Server-side rollups: per-group direct counts drive the tree's group-row health bars (correct
   // over the whole fleet even before members load, A-1/A-3); the fleet summary drives the header
@@ -370,16 +367,14 @@ export function NodesPage() {
    *  again: a remount reset its scroll and closed the Interfaces dock (ADR-203). */
   const [detailNonce, setDetailNonce] = useState(0);
 
-  // Suppression: active maintenance windows + mutes drive the per-row icons; the right-click
-  // "Custom…" path opens a prefilled create modal (preset durations POST directly).
+  // Suppression: active maintenance windows drive the per-row icons; the right-click "Custom…"
+  // path opens a prefilled create modal (preset durations POST directly).
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
-  const [mutes, setMutes] = useState<Mute[]>([]);
-  // Nodes an operator has released from a suppression they only inherited. Loaded with the two
-  // lists above because a released node is *not* suppressed — the tree needs all three to draw the
-  // markers correctly, and the release panel needs them to offer the undo.
+  // Nodes an operator has released from a window they only inherited. Loaded with the list above
+  // because a released node is *not* suppressed — the tree needs both to draw the markers
+  // correctly, and the release panel needs them to offer the undo.
   const [exemptions, setExemptions] = useState<SuppressionExemption[]>([]);
   const [maintenanceTarget, setMaintenanceTarget] = useState<ActionTarget | null>(null);
-  const [muteTarget, setMuteTarget] = useState<ActionTarget | null>(null);
   // Poll-pool assignment from the tree's right-click chips (ADR-009/020). `pools` feeds the chips;
   // `poolTarget` holds the target whose "Custom…" dialog is open.
   const [pools, setPools] = useState<PoolOption[]>([]);
@@ -580,8 +575,8 @@ export function NodesPage() {
   }, [treeNodes, live]);
 
   const suppression = useMemo(
-    () => buildSuppressionIndex(windows, mutes, groups, treeNodes, exemptions),
-    [windows, mutes, groups, treeNodes, exemptions],
+    () => buildSuppressionIndex(windows, groups, treeNodes, exemptions),
+    [windows, groups, treeNodes, exemptions],
   );
 
   // Load the group skeleton + server rollups (fast at any fleet size). Members load lazily below.
@@ -667,12 +662,11 @@ export function NodesPage() {
     refetchSearch();
   }, [resyncs, refreshRollups, refreshMembers, refetchSearch]);
 
-  // Active maintenance windows + mutes for the per-row suppression icons. Refetched after any
-  // maintenance/mute action from the tree so the icons update immediately (node `maintenance`
-  // state catches up on the engine's next ~30s refresh).
+  // Active maintenance windows for the per-row suppression icons. Refetched after any maintenance
+  // action from the tree so the icons update immediately (node `maintenance` state catches up on
+  // the engine's next ~30s refresh).
   const reloadSuppression = useCallback(() => {
     api.listMaintenanceWindows().then(setWindows).catch(() => undefined);
-    api.listMutes().then(setMutes).catch(() => undefined);
     api.listSuppressionExemptions().then(setExemptions).catch(() => undefined);
   }, []);
 
@@ -680,22 +674,22 @@ export function NodesPage() {
     reloadSuppression();
   }, [reloadSuppression]);
 
-  // …and again the moment the next one runs out. Without this the three lists were fetched on
-  // mount and after an action and never again, so a tab left open kept drawing the wrench and the
-  // bell for windows that had ended hours earlier. A timer on the earliest expiry costs nothing
+  // …and again the moment the next one runs out. Without this the lists were fetched on mount and
+  // after an action and never again, so a tab left open kept drawing the wrench for windows that
+  // had ended hours earlier. A timer on the earliest expiry costs nothing
   // while nothing is expiring — and it schedules only instants still ahead, so a server whose
   // clock disagrees cannot turn this into a refetch loop. `buildSuppressionIndex` already ignores
   // anything past, so a late or failed refetch leaves the markers correct, not stale.
   // ⚠️ The delay comes from `suppressionRefreshDelayMs`, never from a subtraction here: an expiry
   // more than 24.8 days out overflows `setTimeout`, and that WAS a refetch loop.
   useEffect(() => {
-    const at = nextSuppressionExpiry(windows, mutes, exemptions);
+    const at = nextSuppressionExpiry(windows, exemptions);
     if (at === null) return undefined;
     const h = setTimeout(reloadSuppression, suppressionRefreshDelayMs(at));
     return () => clearTimeout(h);
-  }, [windows, mutes, exemptions, reloadSuppression]);
+  }, [windows, exemptions, reloadSuppression]);
 
-  // Right-click → maintenance/mute. A preset duration POSTs now → now+duration immediately; the
+  // Right-click → maintenance. A preset duration POSTs now → now+duration immediately; the
   // "Custom…" item (durationMs === null) opens the full create form prefilled with the scope.
   const scopeError = (e: unknown, fallback: string) => setError(errMsg(e, fallback));
 
@@ -770,44 +764,16 @@ export function NodesPage() {
       .catch((e: unknown) => scopeError(e, t('err.setMaintenance')));
   };
 
-  const setMute = (target: ActionTarget, durationMs: number | null) => {
-    if (durationMs === null) {
-      setMuteTarget(target);
-      return;
-    }
-    if (target.kind === 'nodes') {
-      api
-        .createMutes({
-          node_ids: targetNodeIds(target),
-          until: new Date(Date.now() + durationMs).toISOString(),
-        })
-        .then(async (r) => {
-          clearChecked();
-          await reloadSuppression();
-          if (r.created < r.requested) setError(t('err.mutePartial', { ...r }));
-        })
-        .catch((e: unknown) => scopeError(e, t('err.mute')));
-      return;
-    }
-    api
-      .createMute({
-        scope_kind: target.kind === 'group' ? 'group' : 'node',
-        scope_id: target.id,
-        until: new Date(Date.now() + durationMs).toISOString(),
-      })
-      .then(reloadSuppression)
-      .catch((e: unknown) => scopeError(e, t('err.mute')));
-  };
-
-  // What the release panel shows for a tree row. Resolved here because this page holds the window,
-  // mute and exemption lists; the tree renders the answer and owns none of the data (its header
+  // What the release panel shows for a tree row. Resolved here because this page holds the window
+  // and exemption lists; the tree renders the answer and owns none of the data (its header
   // comment). The exemptions are what stop a released node being offered a release it already has.
   const suppressionRows = useCallback(
     (target: SuppressionTarget, node?: NodeSummary) =>
-      releasableRows(suppressionPanelRows(target, { windows, mutes, groups, node, exemptions }), (p) =>
-        p === 'manage_maintenance' ? canMaintenance : canAck,
+      releasableRows(
+        suppressionPanelRows(target, { windows, groups, node, exemptions }),
+        (p) => p === 'manage_maintenance' && canMaintenance,
       ),
-    [windows, mutes, groups, exemptions, canMaintenance, canAck],
+    [windows, groups, exemptions, canMaintenance],
   );
 
   // Right-click / marker click → release. One exhaustive switch, so a new `ReleaseAction` cannot
@@ -819,16 +785,10 @@ export function NodesPage() {
       switch (a.action) {
         case 'end-window':
           return api.endMaintenanceWindow(a.windowId);
-        case 'lift-mute':
-          return api.deleteMute(a.muteId);
         case 'release-node':
-          return a.kind === 'maintenance'
-            ? api.setNodeMaintenanceExemption(a.nodeId, true)
-            : api.setNodeMuteExemption(a.nodeId, true);
+          return api.setNodeMaintenanceExemption(a.nodeId, true);
         case 'undo-release':
-          return a.kind === 'maintenance'
-            ? api.setNodeMaintenanceExemption(a.nodeId, false)
-            : api.setNodeMuteExemption(a.nodeId, false);
+          return api.setNodeMaintenanceExemption(a.nodeId, false);
       }
     })();
     call.then(reloadSuppression).catch((e: unknown) => scopeError(e, t('err.release')));
@@ -911,8 +871,8 @@ export function NodesPage() {
   /** The working set's less-common verbs, for the selection bar's "More…" menu.
    *
    *  ⚠️ Each entry is gated on the permission **its own handler's `Require*` checks**, never on
-   *  `canConfig` for the lot (ADR-056): the pool write is `ManageConfig`, while the suppression
-   *  writes are `ManageMaintenance` and `AckAlerts`, which an Operator holds separately. Gating the
+   *  `canConfig` for the lot (ADR-056): the pool write is `ManageConfig`, while the maintenance
+   *  write is `ManageMaintenance`, which an Operator holds separately. Gating the
    *  menu on its strictest member is the mistake that once removed the tree's whole context menu.
    *  The menu itself is not rendered when nothing survives. */
   const selectionMenuItems = useMemo(() => {
@@ -946,15 +906,8 @@ export function NodesPage() {
         onSelect: () => setMaintenanceTarget({ kind: 'nodes', nodes }),
       });
     }
-    if (canAck) {
-      items.push({
-        key: 'mute',
-        label: t('select.mute'),
-        onSelect: () => setMuteTarget({ kind: 'nodes', nodes }),
-      });
-    }
     return items;
-  }, [checked, canConfig, canMaintenance, canAck, pollNodes, t]);
+  }, [checked, canConfig, canMaintenance, pollNodes, t]);
 
   // Once loaded, validate the URL selection: keep it if the entity still exists; otherwise fall
   // back to the first problem node (warning/critical/unreachable), else clear it. The fallback is
@@ -1426,13 +1379,13 @@ export function NodesPage() {
             onDeleteChecked={canConfig ? () => setDeletingNodes([...checked.values()]) : undefined}
             checked={checked}
             anchorId={anchorId}
-            // ⚠️ Ctrl / Shift marking is offered for any of the three permissions, not just
+            // ⚠️ Ctrl / Shift marking is offered for either permission, not just
             // `canConfig` — since Inc.11 an operator who may only suppress still has batch verbs
             // to reach, and gating the *selection* on the strictest of them would hide them all.
             onPollNodes={canConfig ? pollNodes : undefined}
             onNameFromDevice={canConfig ? setNaming : undefined}
             onCheckedChange={
-              canConfig || canMaintenance || canAck
+              canConfig || canMaintenance
                 ? (next, anchor) => {
                     setChecked(next);
                     setAnchorId(anchor);
@@ -1455,9 +1408,8 @@ export function NodesPage() {
             onSortGroupChildren={sortGroupChildren}
             suppression={suppression}
             suppressionRows={suppressionRows}
-            onRelease={canMaintenance || canAck ? release : undefined}
+            onRelease={canMaintenance ? release : undefined}
             onSetMaintenance={canMaintenance ? setMaintenance : undefined}
-            onSetMute={canAck ? setMute : undefined}
             pools={pools}
             onSetPool={canConfig ? setPool : undefined}
             onRunDiscovery={
@@ -1495,11 +1447,11 @@ export function NodesPage() {
               🚨 **Do not "fix" that by writing `scrollTop`** the way
               `NodeDetail/InterfacesTab.tsx`'s `keepSelectedInView` does. Scrolling the tree for the
               operator is precisely what Inc.5 exists to stop. */}
-          {/* ⚠️ The bar itself opens for **any** of the three permissions, and each control
+          {/* ⚠️ The bar itself opens for **either** permission, and each control
               inside it is gated on its own (ADR-056). It was `canConfig` alone, so an operator
               who may silence a fleet but not reshape it had no bar at all — and since Inc.11 the
               bar is where the batch suppression lives. */}
-          {(canConfig || canMaintenance || canAck) && checked.size > 0 && (
+          {(canConfig || canMaintenance) && checked.size > 0 && (
             <div className="nodes-selbar">
               <span className="nodes-selbar-count">
                 {t('select.count', { count: checked.size })}
@@ -1847,17 +1799,6 @@ export function NodesPage() {
           onClose={() => setMaintenanceTarget(null)}
           onSaved={() => {
             if (maintenanceTarget.kind === 'nodes') clearChecked();
-            void reloadSuppression();
-          }}
-        />
-      )}
-      {muteTarget && (
-        <AddMuteModal
-          groups={groups}
-          initialScope={muteTarget}
-          onClose={() => setMuteTarget(null)}
-          onSaved={() => {
-            if (muteTarget.kind === 'nodes') clearChecked();
             void reloadSuppression();
           }}
         />

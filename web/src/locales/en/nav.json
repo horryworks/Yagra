@@ -40,7 +40,6 @@
     "rules": "Threshold rules",
     "routing": "Notification delivery",
     "maintenance": "Maintenance windows",
-    "mutes": "Mutes",
     "alertRules": "Alert rules"
   },
   "events": {
@@ -89,7 +88,6 @@
     "eventsWebhooks": "Senders authorized to POST events to Yagra over HTTP",
     "eventsForwarding": "Relay syslog, traps and flow to collectors or BigQuery",
     "alertsMaintenance": "Planned work — node enters maintenance, excluded from SLA",
-    "alertsMutes": "Silence notifications only — state and SLA unaffected",
     "topologyDependency": "Manage parent → child dependency links",
     "troubleshootRuns": "Background analysis jobs and their reports",
     "troubleshootFindings": "What the analyses have found, across every run",

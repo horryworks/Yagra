@@ -3,8 +3,7 @@
 //
 // 🚨 **This is the rule that shipped an operator a tree with no context menu at all.** It was one
 // `if (!canEdit) return;` on the row's `onContextMenu`, and `canEdit` is `ManageConfig` — while the
-// maintenance and mute entries inside that menu are `ManageMaintenance` and `AckAlerts`, which an
-// operator holds (ADR-057). Closing a mixed menu on its strictest member takes the looser items
+// maintenance entries inside that menu are `ManageMaintenance`, which an operator holds (ADR-057). Closing a mixed menu on its strictest member takes the looser items
 // with it, silently, and it read as deliberate because it was *consistent*: an admin saw the menu,
 // so nothing looked broken (`ui-conventions.md`, "never gate a mixed menu on its strictest member").
 //
@@ -19,7 +18,7 @@ import type { NodeGroup, NodeSummary } from '../../types/api';
 export interface MenuCapabilities {
   /** `ManageConfig`: reshaping the folder tree (add/edit/delete a group, move a node). */
   canEdit: boolean;
-  /** Either suppression control is available — `ManageMaintenance` or `AckAlerts`. */
+  /** The maintenance control is available — `ManageMaintenance`. */
   canSuppress: boolean;
   /** The "add a monitoring node here" item is wired. */
   canAddNode: boolean;
@@ -101,16 +100,10 @@ export function hasSuppression(
   target: SuppressionTarget,
   node?: NodeSummary,
 ): boolean {
-  if (target.kind === 'group') {
-    return (
-      !!suppression?.maintenanceGroups.has(target.id) || !!suppression?.muteGroups.has(target.id)
-    );
-  }
+  if (target.kind === 'group') return !!suppression?.maintenanceGroups.has(target.id);
   return (
     !!suppression?.maintenanceNodes.has(target.id) ||
-    !!suppression?.muteNodes.has(target.id) ||
     !!suppression?.exemptMaintenanceNodes.has(target.id) ||
-    !!suppression?.exemptMuteNodes.has(target.id) ||
     node?.state === 'maintenance'
   );
 }
@@ -145,7 +138,7 @@ export function canMoveByPrefix(groups: readonly NodeGroup[], canEdit: boolean):
  * What an action on a node row acts on: that row, or the whole working set.
  *
  * 🚨 **One shape for every batch-aware action** (ADR-124 Inc.9). Move and Delete each had their
- * own near-identical answer to this, and the actions that had *neither* — pool, maintenance, mute,
+ * own near-identical answer to this, and the actions that had *neither* — pool, maintenance,
  * Poll now — were the ones that silently kept acting on one row while sitting in a menu headed
  * "Move 20 selected…". A new batch-aware action reads this rather than growing a third copy.
  */

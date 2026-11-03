@@ -58,7 +58,7 @@
 //! * **`user_pins`** — which nodes and folders one account keeps within reach of its tree
 //!   (ADR-146). Personal for the same reason as `user_preferences`, and keyed to accounts the
 //!   bundle does not carry either.
-//! * **`maintenance_windows` / `mutes`** — bounded-in-time operational state, not configuration.
+//! * **`maintenance_windows`** — bounded-in-time operational state, not configuration.
 //! * **The four retention windows of `app_settings`** — retention is a policy of the *target*
 //!   deployment (its disks, its compliance window), and lowering one deletes data. An import is not
 //!   where an operator expects a deletion policy to change under them. `default_poll_interval_secs`

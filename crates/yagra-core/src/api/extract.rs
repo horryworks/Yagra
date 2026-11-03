@@ -239,8 +239,8 @@ impl RequiredPermission for ManageSystemPerm {
     const PERMISSION: Permission = Permission::ManageSystem;
 }
 
-/// Acknowledge, mute, or snooze alerts — an operational reaction to something happening now,
-/// rather than a configuration change.
+/// React to an alert now — close an event alert, run a Troubleshoot analysis or an RCA. An
+/// operational reaction rather than a configuration change; the name predates ADR-233/234.
 pub struct AckAlertsPerm;
 impl RequiredPermission for AckAlertsPerm {
     const PERMISSION: Permission = Permission::AckAlerts;
@@ -298,7 +298,7 @@ pub type RequireManageUsers = Require<ManageUsersPerm>;
 pub type RequireManageConfig = Require<ManageConfigPerm>;
 /// Write-gated on the deployment itself, and on anything that leaves it.
 pub type RequireManageSystem = Require<ManageSystemPerm>;
-/// Gated on alert acknowledgement / muting.
+/// Gated on reacting to an alert now (see [`AckAlertsPerm`]).
 pub type RequireAckAlerts = Require<AckAlertsPerm>;
 /// Gated on maintenance-window management.
 pub type RequireManageMaintenance = Require<ManageMaintenancePerm>;

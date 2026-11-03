@@ -409,7 +409,6 @@ test('a maintenance preset covers the whole selection, not the row that was clic
   const menu = page.getByRole('menu');
   await expect(menu).toBeVisible();
   await expect(menu).toContainText('Maintenance — 3 selected');
-  await expect(menu).toContainText('Mute — 3 selected');
   await menu.getByRole('button', { name: '4h', exact: true }).first().click();
 
   await expect.poll(() => seen.length).toBe(1);
@@ -417,16 +416,18 @@ test('a maintenance preset covers the whole selection, not the row that was clic
   await expect(page.locator('.ntree-row.checked')).toHaveCount(0);
 });
 
-test('a mute preset on a lone row still writes the single-node mute', async ({ page }) => {
+test('a maintenance preset on a lone row still writes the single-node window', async ({
+  page,
+}) => {
   // The other half: one row keeps the single write, so the batch route does not become the only
-  // way to mute one node.
+  // way to put one node into maintenance.
   const bulk: unknown[] = [];
   const single: unknown[] = [];
-  await page.route('**/api/v1/mutes/bulk', async (route) => {
+  await page.route('**/api/v1/maintenance-windows/bulk', async (route) => {
     bulk.push(route.request().postDataJSON());
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
-  await page.route('**/api/v1/mutes', async (route) => {
+  await page.route('**/api/v1/maintenance-windows', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
     single.push(route.request().postDataJSON());
     await route.fulfill({
@@ -442,10 +443,9 @@ test('a mute preset on a lone row still writes the single-node mute', async ({ p
   await rows.nth(1).click({ button: 'right' });
   const menu = page.getByRole('menu');
   await expect(menu).toBeVisible();
-  await expect(menu).toContainText('Mute');
+  await expect(menu).toContainText('Maintenance');
   await expect(menu).not.toContainText('selected');
-  // Two sections carry a "1h" chip; the mute one is the second.
-  await menu.getByRole('button', { name: '1h', exact: true }).nth(1).click();
+  await menu.getByRole('button', { name: '1h', exact: true }).first().click();
 
   await expect.poll(() => single.length).toBe(1);
   expect(bulk, 'a lone row went through the batch endpoint').toHaveLength(0);

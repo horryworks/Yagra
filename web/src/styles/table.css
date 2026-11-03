@@ -1,5 +1,5 @@
 /* Data-table standard v2 — the one table look, reused on every list screen (credentials,
-   audit, users, mutes, thresholds, maintenance, routing, MIB, profiles, templates, …).
+   audit, users, thresholds, maintenance, routing, MIB, profiles, templates, …).
 
    Replaces the older two looks (the ALL-CAPS zebra `.ytable` and the flat `.crud-list` rows)
    with one polished, dense, accessible standard. Built strictly on the tokens in tokens.css —

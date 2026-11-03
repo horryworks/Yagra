@@ -1,29 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Maintenance windows and mutes — the two ways an operator says "do not alert me about this".
+//! Maintenance windows — the one way an operator says "do not alert me about this".
 //!
-//! They carry different permissions: a **window** is planned configuration
-//! (`ManageMaintenance`), a **mute** is an operational reaction to something happening right now
-//! (`AckAlerts`, the same permission as acknowledging an alert). Both currently resolve to
-//! `Role::Operator` and up, so the distinction buys nothing *today* — it exists so a future role
-//! can be given one without the other, which is only possible if the endpoints ask for the right
-//! one now.
+//! A window is planned configuration (`ManageMaintenance`). Yagra used to have a second way, the
+//! mute, which silenced only the notification; ADR-234 removed it, so a window is the whole answer.
 //!
-//! Both suppress alerting, so both are load-bearing for the "no notification floods" goal — and
-//! both are therefore validated hard at the edge. The shared piece is [`window_bounds`]: a window
-//! that ends before it starts, or a mute already in the past, silences nothing while looking to the
-//! operator like it worked. That is a worse failure than a rejection.
+//! A window suppresses alerting, so it is load-bearing for the "no notification floods" goal — and
+//! therefore validated hard at the edge. A window that ends before it starts silences nothing
+//! while looking to the operator like it worked, which is a worse failure than a rejection
+//! ([`window_bounds`]).
 
-use super::extract::{
-    Admin, RequireAckAlerts, RequireManageMaintenance, RequireView, Scoped, VisibleNode,
-};
+use super::extract::{Admin, RequireManageMaintenance, RequireView, Scoped, VisibleNode};
 use super::scope::ScopeTarget;
 use super::util::CreatedId;
-use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
-use crate::alerts::maintenance::{inherited_maintenance_end, inherited_mute_end, CoverageFacts};
+use super::{parse_rfc3339, ApiError, ApiResult, ApiState};
+use crate::alerts::maintenance::{inherited_maintenance_end, CoverageFacts};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -40,17 +34,12 @@ use uuid::Uuid;
     set_maintenance_window_enabled,
     end_maintenance_window,
     delete_maintenance_window,
-    list_mutes,
-    create_mute,
-    create_mutes_bulk,
-    delete_mute,
     list_suppression_exemptions,
-    set_node_maintenance_exemption,
-    set_node_mute_exemption
+    set_node_maintenance_exemption
 ))]
 pub(super) struct Doc;
 
-/// The maintenance + mute routes, merged into `/api/v1` by [`super::router`].
+/// The maintenance routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route(
@@ -71,20 +60,12 @@ pub(crate) fn routes() -> Router<ApiState> {
             "/api/v1/maintenance-windows/bulk",
             post(create_maintenance_windows_bulk),
         )
-        .route("/api/v1/mutes", get(list_mutes).post(create_mute))
-        .route("/api/v1/mutes/bulk", post(create_mutes_bulk))
-        .route("/api/v1/mutes/:id", delete(delete_mute))
-        // Suppression exemptions. The two writes hang off `/nodes/:node_id/…` because that is what
-        // they address — and it is what earns them the `VisibleNode` extractor — but they belong to
-        // this domain, not `api/nodes.rs`: what they mean is defined by windows and mutes, and the
-        // permission each asks for is the one its suppression kind asks for.
+        // Suppression exemptions. The write hangs off `/nodes/:node_id/…` because that is what it
+        // addresses — and it is what earns it the `VisibleNode` extractor — but it belongs to this
+        // domain, not `api/nodes.rs`: what it means is defined by windows.
         .route(
             "/api/v1/nodes/:node_id/maintenance-exemption",
             put(set_node_maintenance_exemption),
-        )
-        .route(
-            "/api/v1/nodes/:node_id/mute-exemption",
-            put(set_node_mute_exemption),
         )
         .route(
             "/api/v1/suppression-exemptions",
@@ -101,8 +82,6 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// scoped or not — can silence the entire fleet through the ordinary CRUD surface, and the list
 /// stays the answer to "what may an operator create", which is what the error message promises.
 const WINDOW_SCOPE_LEVELS: [&str; 3] = ["profile", "node", "group_id"];
-/// The scope kinds a mute may target.
-const MUTE_SCOPE_KINDS: [&str; 2] = ["node", "group"];
 
 /// Ceiling on one bulk suppression request (ADR-124 Inc.11).
 ///
@@ -147,11 +126,10 @@ pub(crate) fn check_order(starts: DateTime<Utc>, ends: DateTime<Utc>) -> Result<
 
 /// A window's target, as [`ScopeTarget`].
 ///
-/// ⚠️ **Exhaustive over [`WindowScope`], and deliberately not shared with [`mute_target`].** A
-/// window's folder group is `FolderGroup` (`group_id`); a mute's `Group` **is** the folder group
-/// (`group`). A stored window row with the old `group` token (the label scope ADR-229 removed)
-/// reads back as `Profile` and so stays unbounded here — a converter keyed on the string would read
-/// it as a folder id. Only the decision is shared; the reading is per row type.
+/// ⚠️ **Exhaustive over [`WindowScope`].** A window's folder group is `FolderGroup` (`group_id`). A
+/// stored window row with the old `group` token (the label scope ADR-229 removed) reads back as
+/// `Profile` and so stays unbounded here — a converter keyed on the string would read it as a
+/// folder id.
 fn window_target(w: &crate::alerts::maintenance::StoredWindow) -> ScopeTarget {
     use crate::alerts::maintenance::WindowScope;
     match w.level {
@@ -168,19 +146,6 @@ fn window_target(w: &crate::alerts::maintenance::StoredWindow) -> ScopeTarget {
         // A device class is an open-ended node set. `System` joins it for the same reason and the
         // strongest version of it: it names the whole fleet, so no group scope narrows it.
         WindowScope::Profile | WindowScope::System => ScopeTarget::Unbounded,
-    }
-}
-
-/// A mute's target. `StoredMute` keeps the id in a column per kind, so there is nothing to parse.
-fn mute_target(m: &crate::alerts::maintenance::StoredMute) -> ScopeTarget {
-    use crate::alerts::maintenance::MuteScope;
-    match m.scope_kind {
-        MuteScope::Node => m.node_id.map_or(ScopeTarget::Unbounded, |n| {
-            ScopeTarget::Node(yagra_common::NodeId::from(n))
-        }),
-        MuteScope::Group => m
-            .group_id
-            .map_or(ScopeTarget::Unbounded, ScopeTarget::Group),
     }
 }
 
@@ -219,35 +184,9 @@ async fn require_visible_window(
     }
 }
 
-/// The mute counterpart of [`require_visible_window`].
-async fn require_visible_mute(
-    st: &ApiState,
-    scope: &super::scope::NodeScope,
-    admin: &super::AdminState,
-    id: Uuid,
-) -> Result<(), ApiError> {
-    if scope.is_all() {
-        return Ok(());
-    }
-    let mutes = admin.maintenance.list_mutes().await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "resolve mute scope", "failed to load mutes")
-    })?;
-    let visible = mutes
-        .iter()
-        .any(|m| m.id == id && scope.allows_target(st, mute_target(m)));
-    if visible {
-        Ok(())
-    } else {
-        Err(ApiError::not_found(
-            "mute_not_found",
-            format!("no mute {id}"),
-        ))
-    }
-}
-
 /// Confirm `scope_id` names an existing folder group.
 ///
-/// A window or mute pointing at a group that does not exist silences nothing — same failure mode as
+/// A window pointing at a group that does not exist silences nothing — same failure mode as
 /// a backwards window, so it is rejected rather than stored.
 async fn validate_group_scope(admin: &super::AdminState, scope_id: &str) -> Result<(), ApiError> {
     let gid = Uuid::parse_str(scope_id.trim()).map_err(|_| {
@@ -361,8 +300,8 @@ async fn create_maintenance_window(
     if body.scope_level == "group_id" {
         validate_group_scope(&admin, &body.scope_id).await?;
     }
-    // Same reasoning as `create_mute`: `ManageMaintenance` is an operator permission, so a scoped
-    // caller must not open a window over something outside their scope. The `profile` level names a
+    // A window names its target in the body, and `ManageMaintenance` is an operator permission, so
+    // a scoped caller must not open a window over something outside their scope. The `profile` level names a
     // *class* of node rather than one — it is refused outright for a scoped caller, because there
     // is no way to open one that is honestly bounded by their scope.
     if !scope.is_all() {
@@ -426,8 +365,7 @@ pub(super) struct BulkWindow {
     ends_at: String,
 }
 
-/// What a bulk suppression write actually did. Shared by the window and the mute form: they answer
-/// the same question and a second shape would be two names for one fact.
+/// What a bulk maintenance write actually did.
 #[derive(Serialize, utoipa::ToSchema)]
 pub(super) struct BulkSuppressionResult {
     /// Distinct node ids the request named, after de-duplication.
@@ -504,87 +442,6 @@ async fn create_maintenance_windows_bulk(
     // The audit middleware records method and path only, so without this the log says that someone
     // suppressed something and never how much (the bulk move and bulk clear do the same).
     tracing::info!(requested, created, "bulk maintenance window");
-    Ok(Json(BulkSuppressionResult { requested, created }))
-}
-
-/// Mute each of many nodes until one moment.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct BulkMute {
-    node_ids: Vec<Uuid>,
-    until: String,
-    #[serde(default)]
-    metric_name: Option<String>,
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-/// Mute many nodes at once (ADR-124 Inc.11) — the mute twin of the bulk window above, and a
-/// separate route because it asks for a different permission: muting is `AckAlerts`, opening a
-/// window is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them
-/// for both.
-#[utoipa::path(
-    post, path = "/api/v1/mutes/bulk", tag = "maintenance",
-    request_body = BulkMute,
-    responses(
-        (status = 200, description = "How many mutes were created", body = BulkSuppressionResult),
-        (status = 400, description = "An unparseable or past `until`, an illegal metric name, or more ids than one request may carry", body = super::error::ErrorBody),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks AckAlerts", body = super::error::ErrorBody),
-        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn create_mutes_bulk(
-    _perm: RequireAckAlerts,
-    Scoped(scope): Scoped,
-    admin: Admin,
-    Json(body): Json<BulkMute>,
-) -> ApiResult<Json<BulkSuppressionResult>> {
-    if body.node_ids.len() > SUPPRESSION_BATCH_MAX {
-        return Err(ApiError::bad_request(
-            "too_many_nodes",
-            format!(
-                "at most {SUPPRESSION_BATCH_MAX} nodes may be muted in one request, got {}",
-                body.node_ids.len()
-            ),
-        ));
-    }
-    let check = body
-        .metric_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|c| !c.is_empty());
-    if let Some(check) = check {
-        // The metric name reaches a PromQL selector, so it is parsed at the edge rather than
-        // interpolated (security.md) — the same check the single-node form makes.
-        if !is_valid_metric_name(check) {
-            return Err(ApiError::bad_request(
-                "invalid_mute",
-                "metric_name must be a valid metric name (or omitted for the whole node)",
-            ));
-        }
-    }
-    let until = super::util::ts_required(&body.until, "until", "invalid_mute")?;
-    // A mute that has already expired silences nothing while reading as success.
-    if until <= Utc::now() {
-        return Err(ApiError::bad_request(
-            "invalid_mute",
-            "until must be in the future",
-        ));
-    }
-    let (requested, created) = admin
-        .maintenance
-        .create_mutes_for_nodes(
-            &body.node_ids,
-            check,
-            until,
-            body.reason.as_deref(),
-            scope.group_filter(),
-        )
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "create mutes", "failed to create mutes")
-        })?;
-    tracing::info!(requested, created, "bulk mute");
     Ok(Json(BulkSuppressionResult { requested, created }))
 }
 
@@ -806,187 +663,24 @@ async fn clear_ended_maintenance_windows(
     Ok(Json(ClearedWindows { deleted }))
 }
 
-// ── Mutes (reactive; AckAlerts) ──────────────────────────────────────────────
-
-#[utoipa::path(
-    get, path = "/api/v1/mutes", tag = "maintenance",
-    responses(
-        (status = 200, description = "Every mute", body = Vec<crate::alerts::maintenance::StoredMute>),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
-        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn list_mutes(
-    _perm: RequireView,
-    Scoped(scope): Scoped,
-    State(st): State<ApiState>,
-    admin: Admin,
-) -> ApiResult<Json<Vec<crate::alerts::maintenance::StoredMute>>> {
-    Ok(Json(visible_mutes(&st, &scope, &admin).await?))
-}
-
-/// The mutes `scope` may see — the [`visible_windows`] rule over [`mute_target`].
-pub(crate) async fn visible_mutes(
-    st: &ApiState,
-    scope: &super::scope::NodeScope,
-    admin: &super::AdminState,
-) -> Result<Vec<crate::alerts::maintenance::StoredMute>, ApiError> {
-    let mutes =
-        admin.maintenance.list_mutes().await.map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "list mutes", "failed to list mutes")
-        })?;
-    Ok(mutes
-        .into_iter()
-        .filter(|m| scope.allows_target(st, mute_target(m)))
-        .collect())
-}
-
-/// Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or
-/// `group` (silence every node under a folder group, recursive — `metric_name` is ignored);
-/// `scope_id` is the node/group UUID. `until` is RFC 3339.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct CreateMute {
-    scope_kind: String,
-    scope_id: Uuid,
-    metric_name: Option<String>,
-    until: String,
-    reason: Option<String>,
-}
-
-#[utoipa::path(
-    post, path = "/api/v1/mutes", tag = "maintenance",
-    request_body = CreateMute,
-    responses(
-        (status = 201, description = "Mute created", body = CreatedId),
-        (status = 400, description = "An unknown scope_kind, an invalid metric_name, or an `until` that is not RFC 3339 or is already in the past", body = super::error::ErrorBody),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
-        (status = 404, description = "A group scope naming a group that does not exist", body = super::error::ErrorBody),
-        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn create_mute(
-    _perm: RequireAckAlerts,
-    Scoped(scope): Scoped,
-    State(st): State<ApiState>,
-    admin: Admin,
-    Json(body): Json<CreateMute>,
-) -> ApiResult<(StatusCode, Json<CreatedId>)> {
-    if !MUTE_SCOPE_KINDS.contains(&body.scope_kind.as_str()) {
-        return Err(ApiError::bad_request(
-            "invalid_mute",
-            format!("scope_kind must be {}", MUTE_SCOPE_KINDS.join("|")),
-        ));
-    }
-    let group = body.scope_kind == "group";
-    // A mute names its target in the body, and `AckAlerts` is a permission a *scoped* operator
-    // holds — so the target has to be checked here or a scoped operator could silence the fleet.
-    // A group mute reaches every node beneath the group, hence the stricter group check.
-    if group {
-        super::scope::require_visible_group(&scope, body.scope_id)?;
-    } else {
-        super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(body.scope_id))?;
-    }
-    // A group mute silences the whole node-set, so a per-metric mute only applies to a node scope.
-    let check = if group {
-        None
-    } else {
-        body.metric_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|c| !c.is_empty())
-    };
-    if let Some(check) = check {
-        // The metric name reaches a PromQL selector, so it is parsed at the edge rather than
-        // interpolated (security.md).
-        if !is_valid_metric_name(check) {
-            return Err(ApiError::bad_request(
-                "invalid_mute",
-                "metric_name must be a valid metric name (or omitted for the whole node)",
-            ));
-        }
-    }
-    if group {
-        validate_group_scope(&admin, &body.scope_id.to_string()).await?;
-    }
-    let until = super::util::ts_required(&body.until, "until", "invalid_mute")?;
-    // A mute that has already expired silences nothing while reading as success — the same trap as
-    // a backwards window.
-    if until <= Utc::now() {
-        return Err(ApiError::bad_request(
-            "invalid_mute",
-            "until must be in the future",
-        ));
-    }
-    let id = admin
-        .maintenance
-        .create_mute(
-            &body.scope_kind,
-            body.scope_id,
-            check,
-            until,
-            body.reason.as_deref(),
-        )
-        .await
-        .map_err(|e| ApiError::from_internal(e.as_ref(), "create mute", "failed to create mute"))?;
-    Ok((StatusCode::CREATED, Json(CreatedId { id })))
-}
-
-#[utoipa::path(
-    delete, path = "/api/v1/mutes/{id}", tag = "maintenance",
-    params(("id" = Uuid, Path, description = "Mute id")),
-    responses(
-        (status = 204, description = "Mute deleted"),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
-        (status = 404, description = "No such mute", body = super::error::ErrorBody),
-        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn delete_mute(
-    _perm: RequireAckAlerts,
-    Scoped(scope): Scoped,
-    State(st): State<ApiState>,
-    admin: Admin,
-    Path(id): Path<Uuid>,
-) -> ApiResult<StatusCode> {
-    // Lifting a mute makes the fleet page again — the inverse of creating one, and checked the same
-    // way. `create_mute` already validates its target; this closes the other half.
-    require_visible_mute(&st, &scope, &admin, id).await?;
-    let found =
-        admin.maintenance.delete_mute(id).await.map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "delete mute", "failed to delete mute")
-        })?;
-    if found {
-        reconcile_after_coverage_change(&admin).await;
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found(
-            "mute_not_found",
-            format!("no mute {id}"),
-        ))
-    }
-}
-
 // ── Exemptions: releasing one node from a suppression it inherited (migration 0081) ──────────
 //
-// A window or mute that *names* a row can simply be ended or deleted, and the inventory tree does
-// exactly that. Coverage a node merely inherits — from its folder group, its profile, a tag, the
-// fleet-wide upgrade window, or a group mute — cannot be, because the row belongs to everyone else
+// A window that *names* a node can simply be ended or deleted, and the inventory tree does exactly
+// that. Coverage a node merely inherits — from its folder group, its profile, or the fleet-wide
+// upgrade window — cannot be, because the row belongs to everyone else
 // under it too. An exemption is the carve-out, and it exists only for that case.
 //
 // Two rules make it safe to hand to an operator, and both are enforced here rather than in the
 // browser:
 //
 //  1. **It never cancels coverage that names the node.** `crate::alerts::maintenance::scope_covers`'
-//     `WindowScope::Node` arm and a `MuteScope::Node` mute are excluded below, so an operator can
+//     `WindowScope::Node` arm is excluded below, so an operator can
 //     still put a released node into maintenance deliberately.
 //  2. **It expires with the coverage it was carved out of.** The expiry is computed *here* from
 //     what is actually in force, never supplied by the client — an exemption that outlived its
 //     window would silently exclude the node from the next one, which is the monitoring blind spot
 //     this feature must not create. Computing it once is not enough, because coverage can stop
-//     sooner than it said it would: ending, disabling or deleting a window, and lifting a mute,
+//     sooner than it said it would: ending, disabling or deleting a window
 //     each re-derive every release through `crate::alerts::maintenance::reconcile_exemptions`, which is
 //     also run on the refresh cycle so no future path can reopen that hole by forgetting to call
 //     it.
@@ -1020,7 +714,7 @@ async fn coverage_facts(
 
 /// Re-derive every release against the coverage that is left, after this request removed some.
 ///
-/// Best-effort on purpose: the window or mute is already gone, so failing the request would report
+/// Best-effort on purpose: the window is already gone, so failing the request would report
 /// a change that happened as one that did not. The 30s refresh cycle runs the same reconcile, so
 /// the worst case of a failure here is that the operator's markers lag by one cycle. Called inline
 /// anyway because the screen that just ended the window is the screen looking at those markers.
@@ -1045,8 +739,8 @@ fn nothing_inherited(kind: &str) -> ApiError {
     ApiError::bad_request(
         "not_suppressed",
         format!(
-            "this node inherits no {kind} suppression right now; a window or mute naming the node \
-             is ended or lifted directly instead"
+            "this node inherits no {kind} suppression right now; a window naming the node is \
+             ended directly instead"
         ),
     )
 }
@@ -1119,63 +813,6 @@ async fn set_node_maintenance_exemption(
 }
 
 #[utoipa::path(
-    put, path = "/api/v1/nodes/{node_id}/mute-exemption", tag = "maintenance",
-    params(("node_id" = Uuid, Path, description = "Node id")),
-    request_body = ExemptionBody,
-    responses(
-        (status = 204, description = "Node released from, or returned to, an inherited group mute"),
-        (status = 400, description = "The node inherits no mute right now (`not_suppressed`)", body = super::error::ErrorBody),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
-        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn set_node_mute_exemption(
-    // ⚠️ `AckAlerts`, not `ManageMaintenance`. The two resolve to Operator-and-up today so this
-    // buys nothing yet; it is what lets a future role hold one without the other, and it is why
-    // these are two endpoints rather than one taking a `kind`.
-    _perm: RequireAckAlerts,
-    _visible: VisibleNode,
-    admin: Admin,
-    Path(node_id): Path<Uuid>,
-    Json(body): Json<ExemptionBody>,
-) -> ApiResult<StatusCode> {
-    use crate::alerts::maintenance::ExemptionKind;
-    if !body.exempt {
-        admin
-            .maintenance
-            .clear_exemption(ExemptionKind::Mute, node_id)
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "clear mute exemption",
-                    "failed to return the node to the mute",
-                )
-            })?;
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    let facts = coverage_facts(&admin, node_id).await?;
-    let mutes = admin.maintenance.list_mutes().await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "load mutes for release", "failed to load mutes")
-    })?;
-    let until = inherited_mute_end(&mutes, &facts).ok_or_else(|| nothing_inherited("mute"))?;
-    admin
-        .maintenance
-        .set_exemption(ExemptionKind::Mute, node_id, until)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "set mute exemption",
-                "failed to release the node from the mute",
-            )
-        })?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[utoipa::path(
     get, path = "/api/v1/suppression-exemptions", tag = "maintenance",
     responses(
         (status = 200, description = "Every unexpired exemption", body = Vec<crate::alerts::maintenance::StoredExemption>),
@@ -1194,7 +831,7 @@ async fn list_suppression_exemptions(
 }
 
 /// The exemptions `scope` may see. Each row names one node, so this is the same post-filter the
-/// window and mute lists use — and the seam the MCP tool reads, so neither surface can show a row
+/// window list uses — and the seam the MCP tool reads, so neither surface can show a row
 /// the other would hide.
 pub(crate) async fn visible_exemptions(
     st: &ApiState,
@@ -1241,7 +878,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::alerts::maintenance::{StoredMute, StoredWindow};
+    use crate::alerts::maintenance::StoredWindow;
     use crate::api::tests_support::{private_state, public_state, status_with};
     use yagra_common::{Principal, Role, Scope};
 
@@ -1314,38 +951,17 @@ mod tests {
         }
     }
 
-    fn mute(
-        kind: crate::alerts::maintenance::MuteScope,
-        node: Option<Uuid>,
-        group: Option<Uuid>,
-    ) -> StoredMute {
-        StoredMute {
-            id: Uuid::new_v4(),
-            scope_kind: kind,
-            node_id: node,
-            group_id: group,
-            check_name: None,
-            until_at: "2026-08-02T00:00:00Z".to_owned(),
-            reason: None,
-        }
-    }
-
     #[test]
     fn a_windows_old_label_row_is_never_read_as_a_folder_group() {
         // A window row stored with the `group` token (the label scope ADR-229 removed) holds a
-        // label, while a mute's `group` holds a folder-group id. A helper keyed on the text would
-        // parse the label as a folder id and hand a scoped caller a window it cannot see.
-        use crate::alerts::maintenance::{MuteScope, WindowScope};
+        // label. A helper keyed on the text would parse the label as a folder id and hand a scoped
+        // caller a window it cannot see.
+        use crate::alerts::maintenance::WindowScope;
         let g = Uuid::from_u128(42);
         assert_eq!(
             window_target(&window(WindowScope::from_stored("group"), &g.to_string())),
             ScopeTarget::Unbounded,
             "an old label window is not a folder group"
-        );
-        assert_eq!(
-            mute_target(&mute(MuteScope::Group, None, Some(g))),
-            ScopeTarget::Group(g),
-            "a mute's `group` IS the folder group"
         );
 
         // And the folder-group case a window does have is spelled differently.
@@ -1364,19 +980,10 @@ mod tests {
         // Fail-closed: a row whose target cannot be read is treated as unbounded, so only an
         // unrestricted caller sees it. The inversion — defaulting to some node id — would expose
         // the row to whoever happened to hold that node.
-        use crate::alerts::maintenance::{MuteScope, WindowScope};
+        use crate::alerts::maintenance::WindowScope;
         assert_eq!(
             window_target(&window(WindowScope::Node, "not-a-uuid")),
             ScopeTarget::Unbounded
-        );
-        assert_eq!(
-            mute_target(&mute(MuteScope::Node, None, None)),
-            ScopeTarget::Unbounded
-        );
-        assert_eq!(
-            mute_target(&mute(MuteScope::Group, Some(Uuid::new_v4()), None)),
-            ScopeTarget::Unbounded,
-            "a group mute reads group_id; a stray node_id must not stand in for it"
         );
     }
 
@@ -1409,7 +1016,7 @@ mod tests {
     async fn suppression_writes_stay_closed_on_a_public_dashboard() {
         // Silencing alerts is exactly what an anonymous visitor must not be able to do, however
         // open the dashboard's reads are.
-        for path in ["/api/v1/maintenance-windows", "/api/v1/mutes"] {
+        for path in ["/api/v1/maintenance-windows"] {
             assert_eq!(
                 status_of(public_state(), "POST", path, None).await,
                 StatusCode::UNAUTHORIZED,
@@ -1458,13 +1065,10 @@ mod tests {
         assert_eq!(nothing_inherited("maintenance").code(), "not_suppressed");
     }
 
-    /// The two exemption paths, and the node path they hang off.
-    fn exemption_paths() -> [String; 2] {
+    /// The exemption path, and the node path it hangs off.
+    fn exemption_paths() -> [String; 1] {
         let n = Uuid::from_u128(11);
-        [
-            format!("/api/v1/nodes/{n}/maintenance-exemption"),
-            format!("/api/v1/nodes/{n}/mute-exemption"),
-        ]
+        [format!("/api/v1/nodes/{n}/maintenance-exemption")]
     }
 
     #[tokio::test]
@@ -1493,8 +1097,8 @@ mod tests {
             );
         }
 
-        // An operator holds both `ManageMaintenance` and `AckAlerts` today, so both endpoints get
-        // past the permission and stop at availability — which also pins the extractor order.
+        // An operator holds `ManageMaintenance`, so the endpoint gets past the permission and stops
+        // at availability — which also pins the extractor order.
         let op = st.sessions.issue(
             Uuid::new_v4(),
             Principal::new(Role::Operator, Scope::All),
@@ -1537,7 +1141,7 @@ mod tests {
             Principal::new(Role::Viewer, Scope::All),
             "viewer1",
         );
-        for path in ["/api/v1/maintenance-windows", "/api/v1/mutes"] {
+        for path in ["/api/v1/maintenance-windows"] {
             assert_eq!(
                 status_of(st.clone(), "POST", path, Some(&token)).await,
                 StatusCode::FORBIDDEN,
@@ -1564,9 +1168,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_operator_passes_both_guards_and_stops_at_availability() {
-        // `AckAlerts` and `ManageMaintenance` both resolve to Operator-and-up today, so this pins
-        // that both endpoints ask for a permission an operator actually holds — and that having
-        // passed the guard, the caller learns availability (503), which the anonymous caller above
+        // `ManageMaintenance` resolves to Operator-and-up, so this pins that the endpoint asks for a
+        // permission an operator actually holds — and that having passed the guard, the caller learns availability (503), which the anonymous caller above
         // deliberately does not.
         let st = private_state();
         let token = st.sessions.issue(
@@ -1574,7 +1177,7 @@ mod tests {
             Principal::new(Role::Operator, Scope::All),
             "op1",
         );
-        for path in ["/api/v1/mutes", "/api/v1/maintenance-windows"] {
+        for path in ["/api/v1/maintenance-windows"] {
             assert_eq!(
                 status_of(st.clone(), "POST", path, Some(&token)).await,
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1689,45 +1292,7 @@ mod tests {
         assert_eq!(body["error"]["code"], "invalid_window", "{body}");
     }
 
-    /// The mute twin: one mute per node, the scope held, and a past `until` refused.
-    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn a_bulk_mute_covers_each_node_it_may_see(pool: sqlx::PgPool) {
-        use crate::api::tests_support::{live_state, scoped_token, send};
-        let st = live_state(pool.clone()).await;
-        let mine = yagra_base::pgtest::group(&pool, "mine").await;
-        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
-        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(mine)).await;
-        let hidden = yagra_base::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
-        let tok = scoped_token(&st, &[mine]);
-
-        let (status, body) = send(
-            &st,
-            "POST",
-            "/api/v1/mutes/bulk",
-            &tok,
-            Some(serde_json::json!({ "node_ids": [a, hidden], "until": "2030-01-01T00:00:00Z" })),
-        )
-        .await;
-        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        assert_eq!(body["requested"], 2, "{body}");
-        assert_eq!(body["created"], 1, "the scope did not hold: {body}");
-        assert_eq!(yagra_base::pgtest::rows(&pool, "mutes").await, 1);
-
-        // A mute that has already expired silences nothing while reading as success.
-        let (status, body) = send(
-            &st,
-            "POST",
-            "/api/v1/mutes/bulk",
-            &tok,
-            Some(serde_json::json!({ "node_ids": [a], "until": "2020-01-01T00:00:00Z" })),
-        )
-        .await;
-        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["error"]["code"], "invalid_mute", "{body}");
-    }
-
-    /// A Viewer holds neither permission, so both bulk routes refuse before touching the store.
+    /// A Viewer does not hold `ManageMaintenance`, so the bulk route refuses before touching the store.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_viewer_cannot_suppress_a_batch(pool: sqlx::PgPool) {
@@ -1736,19 +1301,13 @@ mod tests {
         let viewer = token(&st, yagra_common::Role::Viewer);
         let node = yagra_base::pgtest::node(&pool, "a", 1, None).await;
 
-        for (path, body) in [
-            (
-                "/api/v1/maintenance-windows/bulk",
-                serde_json::json!({
-                    "node_ids": [node], "name": "n",
-                    "starts_at": "2030-01-01T00:00:00Z", "ends_at": "2030-01-01T02:00:00Z",
-                }),
-            ),
-            (
-                "/api/v1/mutes/bulk",
-                serde_json::json!({ "node_ids": [node], "until": "2030-01-01T00:00:00Z" }),
-            ),
-        ] {
+        for (path, body) in [(
+            "/api/v1/maintenance-windows/bulk",
+            serde_json::json!({
+                "node_ids": [node], "name": "n",
+                "starts_at": "2030-01-01T00:00:00Z", "ends_at": "2030-01-01T02:00:00Z",
+            }),
+        )] {
             let (status, out) = send(&st, "POST", path, &viewer, Some(body)).await;
             assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{path}: {out}");
         }
@@ -1756,6 +1315,5 @@ mod tests {
             yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
             0
         );
-        assert_eq!(yagra_base::pgtest::rows(&pool, "mutes").await, 0);
     }
 }

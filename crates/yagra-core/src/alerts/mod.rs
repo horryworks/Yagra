@@ -22,9 +22,6 @@
 //!   [`AlertConfig`]) observe `Maintenance` instead of their real state, so no alert can
 //!   fire during the window and existing alerts resolve (after the usual dwell). When the
 //!   window ends the real state flows again and surviving problems re-commit.
-//! - **Mutes** — the [`Notifier`] skips delivery for alerts matching an unexpired mute
-//!   (one node, optionally one check). The alert still fires for the UI/history — a mute
-//!   only silences the page.
 //!
 //! # Layout (ADR-083, ADR-202 Inc.4)
 //!
@@ -37,7 +34,7 @@
 //! | [`yagra_alert::rules`] | *which* threshold applies to this (node, port, metric), and what a check is called |
 //! | [`yagra_alert::engine`] | *has anything changed*: dwell, flapping, suppression, maintenance, SSE |
 //! | [`yagra_alert::reported`] | *is anyone still reporting* a node Yagra never polls itself — a wireless AP — and when an `ok` nobody confirms stops being shown as one (ADR-064 Inc.G) |
-//! | [`notify`] | *who gets told*: mutes, routing, the four channels, the vendor wire formats |
+//! | [`notify`] | *who gets told*: routing, the four channels, the vendor wire formats |
 //!
 //! Since ADR-202 Inc.4 the first three are a crate of their own, built and tested without core:
 //! the engine is in-memory and reaches no store. What stays here is everything that does — the
@@ -83,7 +80,7 @@ pub(crate) use yagra_alert::engine::AlertManager;
 // second name on it, which is the drift this split exists to remove.
 pub(crate) use notify::{
     builtin_body_template_for, builtin_for_kind, builtin_subject_template_for, dedup_string,
-    ActiveMute, Notifier,
+    Notifier,
 };
 pub(crate) use yagra_alert::rules::{check_id, AlertConfig, MerakiOrgScope, NodeMeta, LIVENESS};
 

@@ -165,8 +165,8 @@ code,
    write (ADR-124). Bounded height so a batch of two hundred does not push the control that makes
    the change off the bottom of the dialog — the control is the point, the list is confirmation.
 
-   🚨 It was `.movenode-list` in MoveNodeModal.css, and Inc.10/11 gave it three more users (the
-   pool, maintenance and mute dialogs). Four copies of one bounded scroller is the §3 trap, and the
+   🚨 It was `.movenode-list` in MoveNodeModal.css, and Inc.10/11 gave it more users (the pool and
+   maintenance dialogs). Several copies of one bounded scroller is the §3 trap, and the
    one that would have drifted first is the height. */
 .form-targets {
   max-height: 140px;

@@ -252,7 +252,7 @@ pub(crate) async fn report(
 
 /// A run's target, as [`ScopeTarget`] — exhaustive over [`ScopeKind`].
 ///
-/// A run is an artefact that *names its own scope*, exactly like a mute or a maintenance window, so
+/// A run is an artefact that *names its own scope*, exactly like a maintenance window, so
 /// the visibility decision is the shared one in `api/scope.rs`. Only this reading is local, because
 /// only this module knows what its own columns mean (see the warning on [`ScopeTarget`]).
 ///

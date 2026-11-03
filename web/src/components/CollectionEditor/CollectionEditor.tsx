@@ -131,8 +131,8 @@ export function CollectionEditor({
            would put a scrollbar between the two. `.ytable-scroll` is `max-height: 520px` — content
            height until it isn't — which is the shape a stacked block needs. `styles/table.css`
            documents this markup as the v2 standard, so it is a sanctioned form, not a hand-roll.
-           The trigger for migrating is stated on `MutesPage`: needing the ADR-053 filter row, which
-           cannot coexist with a hand-rolled grid. This list does not — the largest metric set holds
+           The trigger for migrating is needing the ADR-053 filter row, which cannot coexist with
+           a hand-rolled grid. This list does not — the largest metric set holds
            11 metrics and the average is 3.4 (measured; see the note under the table). */
         <div className="ytable ce-table">
           <div className="ytable-head">

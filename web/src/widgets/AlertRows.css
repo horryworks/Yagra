@@ -79,8 +79,8 @@
   padding: 0 5px;
 }
 
-/* "Muted until …" (ADR-209 decision 3): a small outlined mark, as a link to the mute list. Neutral
-   (not a status color) — a mute is not a node state. */
+/* "Held until …" (ADR-226 decision 11): a small outlined mark, as a link to the delivery hours.
+   Neutral (not a status color) — a held page is not a node state. */
 .alertrow-muted {
   font-size: var(--font-xs);
   color: var(--text-secondary);
@@ -115,7 +115,7 @@
 }
 
 /* Mobile (ADR-027): the single fixed-height row would overflow ~390px, so wrap it into a stacked
-   card — line 1: severity dot + node + age (right); line 2: the check; line 3: cause/flap/muted;
+   card — line 1: severity dot + node + age (right); line 2: the check; line 3: cause/flap/held;
    line 4: actions. `order` reshuffles the DOM (which puts time before the descriptive bits) into
    reading order. CSS-only; desktop is untouched. */
 html[data-viewport='mobile'] .alertrow {

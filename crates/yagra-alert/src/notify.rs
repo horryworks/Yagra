@@ -297,7 +297,7 @@ impl DispatchReport {
 /// 🚨 **The scope of that lock is one channel and must stay one channel.** Until ADR-104 the
 /// serialization came from a mutex over the whole routing snapshot in `yagra-core`, so a wedged
 /// vendor endpoint held up every other channel, every other caller, and the 30-second config
-/// refresh that applies a mute. Holding it here instead buys the same guarantee for a hundredth of
+/// refresh that applies a routing edit. Holding it here instead buys the same guarantee for a hundredth of
 /// the blast radius. Do not "optimize" this into claim-then-deliver with a `std` mutex: releasing
 /// the lock across the request is exactly what lets a resolve overtake the fire it resolves.
 pub struct Dispatcher<C: NotifyChannel> {

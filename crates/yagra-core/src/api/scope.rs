@@ -212,14 +212,14 @@ impl NodeScope {
 
 /// What a stored row that carries **its own** scope points at.
 ///
-/// Maintenance windows, mutes and analysis runs all persist "what this row is about" as a kind plus
-/// an id, and all three then need the same question answered: may a caller with this group scope see
+/// Maintenance windows and analysis runs both persist "what this row is about" as a kind plus an
+/// id, and both then need the same question answered: may a caller with this group scope see
 /// it? That decision is here, once ([`NodeScope::allows_target`]).
 ///
 /// ⚠️ **The mapping from a row's columns to this type stays in the row's own module, exhaustively
 /// over that module's enum, and must not be shared.** The spellings genuinely disagree — a
-/// maintenance window's folder group is `group_id`, while a mute's `group` **is** the folder group,
-/// and a window row left over with the old `group` token (the label scope ADR-229 removed) holds a
+/// maintenance window's folder group is `group_id`, while an analysis run's `group` **is** the
+/// folder group, and a window row left over with the old `group` token (the label scope ADR-229 removed) holds a
 /// label. A converter keyed on the serialized string would read that label as a folder id and hand
 /// a scoped caller somebody else's window. What is shared here is only the *decision*, never the
 /// reading.
@@ -265,7 +265,7 @@ impl NodeScope {
 /// Reject a node id taken from a **request body** that the caller cannot see.
 ///
 /// The path-param case has its own extractor ([`super::extract::VisibleNode`]); this is for the
-/// operator actions that name their target in the body — mute, maintenance, RCA, analysis.
+/// operator actions that name their target in the body — maintenance, RCA, analysis.
 /// Those need it as much as the reads do, and for a reason that is easy to miss: they are gated on
 /// `AckAlerts`/`ManageMaintenance`, which a **scoped operator holds**, and a 200-vs-404 difference
 /// on an action would answer questions about a node the caller cannot see. A write oracle is
@@ -310,7 +310,7 @@ pub fn require_visible_subject(
 /// Reject a folder group the caller may not act on.
 ///
 /// Stricter than [`NodeScope::allows_group_row`] on purpose: a breadcrumb ancestor may be *named*
-/// so the inventory tree has a spine, but acting on it — a group-wide mute or maintenance window —
+/// so the inventory tree has a spine, but acting on it — a group-wide maintenance window —
 /// would reach every node beneath it, including the ones outside the scope. Only a group whose
 /// membership the caller can actually see qualifies.
 pub fn require_visible_group(scope: &NodeScope, group: Uuid) -> Result<(), ApiError> {
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn group_scope_expands_to_the_whole_subtree() {
         // Reuses `group_subtree` rather than reimplementing the walk — a second copy of the
-        // descent rule is how a scope and a group mute come to disagree about the same tree.
+        // descent rule is how a scope and a group window come to disagree about the same tree.
         let s = expand(&tree(), &[ids(1)]);
         let mut visible = s.visible.clone();
         visible.sort();

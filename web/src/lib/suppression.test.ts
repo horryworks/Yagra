@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type {
-  Alert,
   MaintenanceWindow,
-  Mute,
   NodeGroup,
   NodeSummary,
   SuppressionExemption,
@@ -14,9 +12,6 @@ import {
   causesFor,
   groupContainers,
   groupSubtree,
-  muteCovering,
-  muteRuleCovers,
-  muteTargetFromAlert,
   MAX_TIMER_DELAY_MS,
   nextSuppressionExpiry,
   suppressionRefreshDelayMs,
@@ -24,8 +19,6 @@ import {
   suppressionPanelRows,
   type SuppressionPanelRow,
 } from './suppression';
-import { LIVENESS_METRIC } from './format';
-import muteCases from './fixtures/muteMatch.cases.json';
 
 // Tree: tokyo ⊃ edge ⊃ (n2); tokyo also holds n1. osaka is a separate top-level group with n3.
 const groups: NodeGroup[] = [
@@ -67,58 +60,6 @@ const window = (over: Partial<MaintenanceWindow>): MaintenanceWindow => ({
   ...over,
 });
 
-const mute = (over: Partial<Mute>): Mute => ({
-  id: 'm',
-  scope_kind: 'node',
-  node_id: 'n1',
-  group_id: null,
-  metric_name: null,
-  until_at: FUTURE,
-  reason: null,
-  ...over,
-});
-
-const alert = (over: Partial<Alert>): Alert => ({
-  node: 'n1',
-  subject_kind: 'node',
-  check: 'c1',
-  metric: 'icmp_rtt_ms',
-  severity: 'critical',
-  state: 'critical',
-  flapping: false,
-  at_unix_ms: 0,
-  ...over,
-});
-
-describe('muteTargetFromAlert', () => {
-  it('targets the node it is given, named for display', () => {
-    // The node is a parameter, not `alert.node`: that field is the alert's *subject* and is only
-    // a node id when the subject is one. The caller resolves it via `lib/alertSubject`.
-    const seed = muteTargetFromAlert(alert({ node: 'n2' }), 'n2', 'core-sw-01');
-    expect(seed.target).toEqual({ kind: 'node', id: 'n2', name: 'core-sw-01' });
-  });
-
-  it('pre-fills the metric so the mute matches exactly the check that fired', () => {
-    expect(muteTargetFromAlert(alert({ metric: 'huawei_cpu_usage' }), 'n1', 'n').metric).toBe(
-      'huawei_cpu_usage',
-    );
-  });
-
-  // Load-bearing: the backend re-derives a mute's identity as check_id(node, name), the same v5
-  // hash the alert's `check` is. Substituting the display text ("Reachability") — or dropping the
-  // sentinel and falling back to a whole-node mute — would silence something other than what the
-  // operator clicked. The form renders it readably; the seed must stay verbatim.
-  it('carries the liveness sentinel through verbatim, not its display text', () => {
-    expect(muteTargetFromAlert(alert({ metric: LIVENESS_METRIC }), 'n1', 'n').metric).toBe(
-      LIVENESS_METRIC,
-    );
-  });
-
-  it('seeds a whole-node mute when the alert captured no metric (pre-migration-0036 row)', () => {
-    expect(muteTargetFromAlert(alert({ metric: '' }), 'n1', 'n').metric).toBeUndefined();
-  });
-});
-
 describe('groupSubtree', () => {
   it('includes the root and all descendants', () => {
     expect([...groupSubtree(groups, 'tokyo')].sort()).toEqual(['edge', 'tokyo']);
@@ -130,7 +71,7 @@ describe('groupSubtree', () => {
 
 describe('buildSuppressionIndex', () => {
   it('marks a node-scoped maintenance window on the node only', () => {
-    const idx = buildSuppressionIndex([window({ scope_level: 'node', scope_id: 'n1' })], [], groups, nodes);
+    const idx = buildSuppressionIndex([window({ scope_level: 'node', scope_id: 'n1' })], groups, nodes);
     expect(idx.maintenanceNodes.has('n1')).toBe(true);
     expect(idx.maintenanceNodes.has('n2')).toBe(false);
     expect(idx.maintenanceGroups.size).toBe(0);
@@ -139,7 +80,6 @@ describe('buildSuppressionIndex', () => {
   it('propagates a folder-group maintenance window down the subtree (groups + member nodes)', () => {
     const idx = buildSuppressionIndex(
       [window({ scope_level: 'group_id', scope_id: 'tokyo' })],
-      [],
       groups,
       nodes,
     );
@@ -153,7 +93,6 @@ describe('buildSuppressionIndex', () => {
   it('ignores an inactive maintenance window', () => {
     const idx = buildSuppressionIndex(
       [window({ scope_level: 'group_id', scope_id: 'tokyo', active: false })],
-      [],
       groups,
       nodes,
     );
@@ -164,7 +103,6 @@ describe('buildSuppressionIndex', () => {
   it('does not map profile windows onto tree rows (those surface via node state)', () => {
     const idx = buildSuppressionIndex(
       [window({ scope_level: 'profile', scope_id: 'p1' })],
-      [],
       groups,
       nodes,
     );
@@ -172,21 +110,6 @@ describe('buildSuppressionIndex', () => {
     expect(idx.maintenanceGroups.size).toBe(0);
   });
 
-  it('marks a node mute on the node, and a group mute down the subtree', () => {
-    const idx = buildSuppressionIndex(
-      [],
-      [
-        mute({ scope_kind: 'node', node_id: 'n3', group_id: null }),
-        mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
-      ],
-      groups,
-      nodes,
-    );
-    expect(idx.muteNodes.has('n3')).toBe(true);
-    expect([...idx.muteGroups].sort()).toEqual(['edge', 'tokyo']);
-    expect(idx.muteNodes.has('n1')).toBe(true);
-    expect(idx.muteNodes.has('n2')).toBe(true);
-  });
 });
 
 const exemption = (over: Partial<SuppressionExemption>): SuppressionExemption => ({
@@ -230,7 +153,6 @@ describe('buildSuppressionIndex with exemptions', () => {
   it('takes a released node out of the inherited marks but leaves its siblings', () => {
     const idx = buildSuppressionIndex(
       [window({ scope_level: 'group_id', scope_id: 'tokyo' })],
-      [],
       groups,
       nodes,
       [exemption({ node_id: 'n2' })],
@@ -250,7 +172,6 @@ describe('buildSuppressionIndex with exemptions', () => {
         window({ scope_level: 'group_id', scope_id: 'tokyo' }),
         window({ id: 'w2', scope_level: 'node', scope_id: 'n2' }),
       ],
-      [],
       groups,
       nodes,
       [exemption({ node_id: 'n2' })],
@@ -258,34 +179,6 @@ describe('buildSuppressionIndex with exemptions', () => {
     expect(idx.maintenanceNodes.has('n2')).toBe(true);
   });
 
-  it('keeps the two kinds apart', () => {
-    const idx = buildSuppressionIndex(
-      [window({ scope_level: 'group_id', scope_id: 'tokyo' })],
-      [mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'tokyo' })],
-      groups,
-      nodes,
-      [exemption({ node_id: 'n2', kind: 'mute' })],
-    );
-    // Released from the group mute only — still in the group's maintenance window.
-    expect(idx.muteNodes.has('n2')).toBe(false);
-    expect(idx.maintenanceNodes.has('n2')).toBe(true);
-    expect(idx.exemptMuteNodes.has('n2')).toBe(true);
-    expect(idx.exemptMaintenanceNodes.size).toBe(0);
-  });
-
-  it('a node mute still applies to a node released from its group mute', () => {
-    const idx = buildSuppressionIndex(
-      [],
-      [
-        mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
-        mute({ id: 'm3', scope_kind: 'node', node_id: 'n2', group_id: null }),
-      ],
-      groups,
-      nodes,
-      [exemption({ node_id: 'n2', kind: 'mute' })],
-    );
-    expect(idx.muteNodes.has('n2')).toBe(true);
-  });
 });
 
 describe('causesFor', () => {
@@ -294,9 +187,8 @@ describe('causesFor', () => {
 
   it('calls a window that names the node direct, and carries its id so it can be ended', () => {
     const w = window({ id: 'w1', name: 'sw upgrade', scope_level: 'node', scope_id: 'n2' });
-    const [cause] = causesFor(nodeTarget, { windows: [w], mutes: [], groups });
+    const [cause] = causesFor(nodeTarget, { windows: [w], groups });
     expect(cause).toMatchObject({
-      kind: 'maintenance',
       source: 'direct',
       id: 'w1',
       title: 'sw upgrade',
@@ -309,7 +201,6 @@ describe('causesFor', () => {
     const w = window({ id: 'w1', scope_level: 'group_id', scope_id: 'tokyo' });
     const [cause] = causesFor(nodeTarget, {
       windows: [w],
-      mutes: [],
       groups,
       node: node('n2', 'edge'),
     });
@@ -322,7 +213,7 @@ describe('causesFor', () => {
   it("reads a group's own window as direct and its parent's as inherited", () => {
     const own = window({ id: 'own', scope_level: 'group_id', scope_id: 'edge' });
     const above = window({ id: 'above', scope_level: 'group_id', scope_id: 'tokyo' });
-    const causes = causesFor(groupTarget, { windows: [own, above], mutes: [], groups });
+    const causes = causesFor(groupTarget, { windows: [own, above], groups });
     expect(causes.map((c) => [c.id, c.source])).toEqual([
       ['own', 'direct'],
       [undefined, 'inherited'],
@@ -335,7 +226,6 @@ describe('causesFor', () => {
   it('reports an unexplained maintenance state rather than an empty panel', () => {
     const causes = causesFor(nodeTarget, {
       windows: [],
-      mutes: [],
       groups,
       node: { ...node('n2', 'edge'), state: 'maintenance' },
     });
@@ -351,7 +241,6 @@ describe('causesFor', () => {
     const w = window({ scope_level: 'node', scope_id: 'n2' });
     const causes = causesFor(nodeTarget, {
       windows: [w],
-      mutes: [],
       groups,
       node: { ...node('n2', 'edge'), state: 'maintenance' },
     });
@@ -364,28 +253,10 @@ describe('causesFor', () => {
         window({ id: 'off', scope_level: 'group_id', scope_id: 'tokyo', active: false }),
         window({ id: 'elsewhere', scope_level: 'group_id', scope_id: 'osaka' }),
       ],
-      mutes: [mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'osaka' })],
       groups,
       node: node('n2', 'edge'),
     });
     expect(causes).toEqual([]);
-  });
-
-  it('separates a node mute from an inherited group mute', () => {
-    const causes = causesFor(nodeTarget, {
-      windows: [],
-      mutes: [
-        mute({ id: 'own', scope_kind: 'node', node_id: 'n2', metric_name: 'icmp_rtt_ms' }),
-        mute({ id: 'up', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
-      ],
-      groups,
-      node: node('n2', 'edge'),
-    });
-    expect(causes.map((c) => [c.source, c.id])).toEqual([
-      ['direct', 'own'],
-      ['inherited', undefined],
-    ]);
-    expect(causes[0].title).toBe('icmp_rtt_ms');
   });
 
   // A key built at runtime is missing from *both* locales when forgotten, so parity passes and the
@@ -396,21 +267,15 @@ describe('causesFor', () => {
         window({ id: 'a', scope_level: 'node', scope_id: 'n2' }),
         window({ id: 'b', scope_level: 'group_id', scope_id: 'tokyo' }),
       ],
-      mutes: [
-        mute({ id: 'c', scope_kind: 'node', node_id: 'n2' }),
-        mute({ id: 'd', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
-      ],
       groups,
       node: node('n2', 'edge'),
     });
     const groupCauses = causesFor(groupTarget, {
       windows: [window({ id: 'e', scope_level: 'group_id', scope_id: 'edge' })],
-      mutes: [],
       groups,
     });
     const unexplained = causesFor(nodeTarget, {
       windows: [],
-      mutes: [],
       groups,
       node: { ...node('n2', 'edge'), state: 'maintenance' },
     });
@@ -427,30 +292,38 @@ describe('suppressionPanelRows', () => {
   const groupWindow = window({ id: 'w1', name: 'DC1 planned', scope_level: 'group_id', scope_id: 'tokyo' });
   const n2 = node('n2', 'edge');
 
-  it('offers to end a window that names the row, and to lift a mute that does', () => {
+  it('offers to end a window that names the row', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [window({ id: 'w', scope_level: 'node', scope_id: 'n2' })],
-      mutes: [mute({ id: 'm', scope_kind: 'node', node_id: 'n2' })],
       groups,
       node: n2,
     });
     expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
       ['tree.suppression.head.maintenance', 'tree.suppression.act.endNow'],
-      ['tree.suppression.head.mute', 'tree.suppression.act.unmute'],
     ]);
     expect(rows[0].action?.action).toEqual({ action: 'end-window', windowId: 'w' });
-    expect(rows[1].action?.action).toEqual({ action: 'lift-mute', muteId: 'm' });
+  });
+
+  // Exemptions of any other kind come only from a core older than ADR-234; they release nothing a
+  // window covers, so the panel must neither honour them nor offer to undo them.
+  it('ignores a release that is not from maintenance', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [groupWindow],
+      groups,
+      node: n2,
+      exemptions: [{ ...exemption({ node_id: 'n2' }), kind: 'other' } as unknown as SuppressionExemption],
+    });
+    expect(rows.map((r) => r.headKey)).toEqual(['tree.suppression.head.maintenance']);
   });
 
   it('offers a node its own way out of coverage it only inherits', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [groupWindow],
-      mutes: [],
       groups,
       node: n2,
     });
     expect(rows[0].action).toEqual({
-      action: { action: 'release-node', nodeId: 'n2', kind: 'maintenance' },
+      action: { action: 'release-node', nodeId: 'n2' },
       labelKey: 'tree.suppression.act.excludeNode',
     });
   });
@@ -461,7 +334,6 @@ describe('suppressionPanelRows', () => {
   it('shows a released node one block, and the only action is putting it back', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [groupWindow],
-      mutes: [],
       groups,
       node: n2,
       exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
@@ -469,7 +341,7 @@ describe('suppressionPanelRows', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].headKey).toBe('tree.suppression.head.releasedMaintenance');
     expect(rows[0].action).toEqual({
-      action: { action: 'undo-release', nodeId: 'n2', kind: 'maintenance' },
+      action: { action: 'undo-release', nodeId: 'n2' },
       labelKey: 'tree.suppression.act.undoMaintenance',
     });
   });
@@ -479,7 +351,6 @@ describe('suppressionPanelRows', () => {
   it('keeps the window a release was carved out of on screen', () => {
     const [row] = suppressionPanelRows(nodeTarget, {
       windows: [groupWindow],
-      mutes: [],
       groups,
       node: n2,
       exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
@@ -495,7 +366,6 @@ describe('suppressionPanelRows', () => {
   it('still reports a window that names a released node as suppressing it', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [window({ id: 'own', scope_level: 'node', scope_id: 'n2' }), groupWindow],
-      mutes: [],
       groups,
       node: n2,
       exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
@@ -503,20 +373,6 @@ describe('suppressionPanelRows', () => {
     expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
       ['tree.suppression.head.maintenance', 'tree.suppression.act.endNow'],
       ['tree.suppression.head.releasedMaintenance', 'tree.suppression.act.undoMaintenance'],
-    ]);
-  });
-
-  it('releases the two kinds independently', () => {
-    const rows = suppressionPanelRows(nodeTarget, {
-      windows: [groupWindow],
-      mutes: [mute({ id: 'gm', scope_kind: 'group', node_id: null, group_id: 'tokyo' })],
-      groups,
-      node: n2,
-      exemptions: [exemption({ node_id: 'n2', kind: 'mute' })],
-    });
-    expect(rows.map((r) => [r.kind, r.headKey, r.action?.labelKey])).toEqual([
-      ['maintenance', 'tree.suppression.head.maintenance', 'tree.suppression.act.excludeNode'],
-      ['mute', 'tree.suppression.head.releasedMute', 'tree.suppression.act.undoMute'],
     ]);
   });
 
@@ -528,7 +384,6 @@ describe('suppressionPanelRows', () => {
   it('can still undo a release nothing explains', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [],
-      mutes: [],
       groups,
       node: n2,
       exemptions: [exemption({ node_id: 'n2', kind: 'maintenance', until_at: FUTURE })],
@@ -542,7 +397,6 @@ describe('suppressionPanelRows', () => {
   it('gives a group covered from above a note instead of a button', () => {
     const [row] = suppressionPanelRows(groupTarget, {
       windows: [groupWindow],
-      mutes: [],
       groups,
     });
     expect(row.action).toBeNull();
@@ -551,7 +405,7 @@ describe('suppressionPanelRows', () => {
   });
 
   it('is empty when nothing suppresses the row', () => {
-    expect(suppressionPanelRows(nodeTarget, { windows: [], mutes: [], groups, node: n2 })).toEqual(
+    expect(suppressionPanelRows(nodeTarget, { windows: [], groups, node: n2 })).toEqual(
       [],
     );
   });
@@ -563,24 +417,16 @@ describe('suppressionPanelRows', () => {
     const cases: SuppressionPanelRow[][] = [
       suppressionPanelRows(nodeTarget, {
         windows: [window({ id: 'own', scope_level: 'node', scope_id: 'n2' }), groupWindow],
-        mutes: [
-          mute({ id: 'own', scope_kind: 'node', node_id: 'n2' }),
-          mute({ id: 'gm', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
-        ],
         groups,
         node: n2,
       }),
       suppressionPanelRows(nodeTarget, {
         windows: [groupWindow],
-        mutes: [mute({ id: 'gm', scope_kind: 'group', node_id: null, group_id: 'tokyo' })],
         groups,
         node: n2,
-        exemptions: [
-          exemption({ node_id: 'n2', kind: 'maintenance' }),
-          exemption({ id: 'x2', node_id: 'n2', kind: 'mute' }),
-        ],
+        exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
       }),
-      suppressionPanelRows(groupTarget, { windows: [groupWindow], mutes: [], groups }),
+      suppressionPanelRows(groupTarget, { windows: [groupWindow], groups }),
     ];
     const produced = new Set(
       cases
@@ -601,24 +447,22 @@ describe('suppression expires on the clock, not on the payload', () => {
 
   it('drops a window whose end has passed, even though the payload still says active', () => {
     const w = window({ scope_level: 'group_id', scope_id: 'tokyo', ends_at: ended, active: true });
-    const idx = buildSuppressionIndex([w], [], groups, nodes, [], T0);
+    const idx = buildSuppressionIndex([w], groups, nodes, [], T0);
     expect(idx.maintenanceGroups.size).toBe(0);
     expect(idx.maintenanceNodes.size).toBe(0);
     // Still in force one hour earlier — it is the clock doing this, not the window being ignored.
-    const before = buildSuppressionIndex([w], [], groups, nodes, [], Date.parse(ended) - 1);
+    const before = buildSuppressionIndex([w], groups, nodes, [], Date.parse(ended) - 1);
     expect(before.maintenanceNodes.has('n2')).toBe(true);
   });
 
-  it('drops an expired mute and an expired release', () => {
+  it('drops an expired release', () => {
     const idx = buildSuppressionIndex(
       [],
-      [mute({ scope_kind: 'group', node_id: null, group_id: 'tokyo', until_at: ended })],
       groups,
       nodes,
       [exemption({ node_id: 'n2', until_at: ended })],
       T0,
     );
-    expect(idx.muteNodes.size).toBe(0);
     expect(idx.exemptMaintenanceNodes.size).toBe(0);
   });
 
@@ -627,7 +471,6 @@ describe('suppression expires on the clock, not on the payload', () => {
     // when they will not, which is the worse of the two mistakes.
     const idx = buildSuppressionIndex(
       [window({ scope_level: 'group_id', scope_id: 'tokyo', ends_at: 'not a date' })],
-      [],
       groups,
       nodes,
       [],
@@ -641,8 +484,7 @@ describe('suppression expires on the clock, not on the payload', () => {
       { kind: 'node', id: 'n2', name: 'n2' },
       {
         windows: [window({ scope_level: 'group_id', scope_id: 'tokyo', ends_at: ended })],
-        mutes: [],
-        groups,
+          groups,
         node: node('n2', 'edge'),
         now: T0,
       },
@@ -655,8 +497,7 @@ describe('suppression expires on the clock, not on the payload', () => {
       { kind: 'node', id: 'n2', name: 'n2' },
       {
         windows: [],
-        mutes: [],
-        groups,
+          groups,
         node: node('n2', 'edge'),
         exemptions: [exemption({ node_id: 'n2', until_at: ended })],
         now: T0,
@@ -670,23 +511,21 @@ describe('nextSuppressionExpiry', () => {
   const T0 = Date.parse('2026-08-12T06:00:00Z');
   const at = (iso: string) => Date.parse(iso);
 
-  it('is the earliest expiry still ahead, across all three lists', () => {
+  it('is the earliest expiry still ahead, across both lists', () => {
     expect(
       nextSuppressionExpiry(
         [window({ ends_at: '2026-08-12T09:00:00Z' })],
-        [mute({ until_at: '2026-08-12T07:30:00Z' })],
         [exemption({ until_at: '2026-08-12T08:00:00Z' })],
         T0,
       ),
-    ).toBe(at('2026-08-12T07:30:00Z'));
+    ).toBe(at('2026-08-12T08:00:00Z'));
   });
 
   it('ignores what is already past, so a clock the server disagrees with cannot start a refetch loop', () => {
     expect(
       nextSuppressionExpiry(
         [window({ ends_at: '2026-08-12T05:00:00Z' })],
-        [mute({ until_at: '2026-08-12T05:59:00Z' })],
-        [],
+        [exemption({ until_at: '2026-08-12T05:59:00Z' })],
         T0,
       ),
     ).toBeNull();
@@ -694,12 +533,12 @@ describe('nextSuppressionExpiry', () => {
 
   it('ignores an inactive window — it is not marking anything to begin with', () => {
     expect(
-      nextSuppressionExpiry([window({ active: false, ends_at: '2026-08-12T07:00:00Z' })], [], [], T0),
+      nextSuppressionExpiry([window({ active: false, ends_at: '2026-08-12T07:00:00Z' })], [], T0),
     ).toBeNull();
   });
 
   it('is null when there is nothing to wait for', () => {
-    expect(nextSuppressionExpiry([], [], [], T0)).toBeNull();
+    expect(nextSuppressionExpiry([], [], T0)).toBeNull();
   });
 });
 
@@ -714,7 +553,7 @@ describe('suppressionRefreshDelayMs', () => {
   });
 
   it('never exceeds what setTimeout can hold, or the timer fires at once and re-arms forever', () => {
-    // A quarter-long mute: 90 days is 7.776e9 ms, which as a signed 32-bit integer is not 90 days.
+    // A quarter-long window: 90 days is 7.776e9 ms, which as a signed 32-bit integer is not 90 days.
     const delay = suppressionRefreshDelayMs(T0 + 90 * DAY, T0);
     expect(delay).toBe(MAX_TIMER_DELAY_MS);
     expect(delay).toBeLessThanOrEqual(2 ** 31 - 1);
@@ -724,81 +563,5 @@ describe('suppressionRefreshDelayMs', () => {
 
   it('is never negative when the expiry has just passed', () => {
     expect(suppressionRefreshDelayMs(T0 - 5, T0)).toBe(1000);
-  });
-});
-
-// The same table core's `alerts/notify.rs` runs against `mute_matches` (ADR-209 decision 3): a
-// disagreement fails on one side or the other. Add a case to the JSON, never only here.
-describe('muteRuleCovers answers the case table core shares', () => {
-  it('has the cases', () => {
-    expect(muteCases.cases.length).toBeGreaterThanOrEqual(10);
-  });
-  for (const c of muteCases.cases) {
-    it(c.name, () => {
-      expect(
-        muteRuleCovers(
-          { nodeId: c.mute.node, metric: c.mute.metric },
-          { nodeId: c.alert.node, metric: c.alert.metric },
-        ),
-      ).toBe(c.covered);
-    });
-  }
-});
-
-describe('muteCovering', () => {
-  const on = (over: Partial<{ nodeId: string | null; metric: string; groupId: string | null }>) => ({
-    nodeId: 'n2',
-    metric: 'icmp_rtt_ms',
-    groupId: 'edge',
-    ...over,
-  });
-
-  it('finds a mute naming the node', () => {
-    const m = mute({ node_id: 'n2' });
-    expect(muteCovering(on({}), [m], groups, [])).toBe(m);
-  });
-
-  it('finds a group mute from any group above the node', () => {
-    const m = mute({ scope_kind: 'group', node_id: null, group_id: 'tokyo' });
-    expect(muteCovering(on({}), [m], groups, [])).toBe(m);
-  });
-
-  it('ignores a group mute on a group the node is not in', () => {
-    const m = mute({ scope_kind: 'group', node_id: null, group_id: 'osaka' });
-    expect(muteCovering(on({}), [m], groups, [])).toBeNull();
-  });
-
-  it('ignores a group mute the node was released from, but not one naming it', () => {
-    const viaGroup = mute({ id: 'g', scope_kind: 'group', node_id: null, group_id: 'tokyo' });
-    const direct = mute({ id: 'd', node_id: 'n2' });
-    const released = [exemption({ node_id: 'n2', kind: 'mute' })];
-    expect(muteCovering(on({}), [viaGroup], groups, released)).toBeNull();
-    expect(muteCovering(on({}), [viaGroup, direct], groups, released)).toBe(direct);
-  });
-
-  it('ignores an expired mute', () => {
-    const m = mute({ node_id: 'n2', until_at: '2026-01-01T00:00:00Z' });
-    expect(muteCovering(on({}), [m], groups, [], Date.parse('2026-06-01T00:00:00Z'))).toBeNull();
-  });
-
-  it('ignores a mute on another metric', () => {
-    const m = mute({ node_id: 'n2', metric_name: 'snmp_up' });
-    expect(muteCovering(on({}), [m], groups, [])).toBeNull();
-  });
-
-  it('picks the one that lasts longest', () => {
-    const short = mute({ id: 's', node_id: 'n2', until_at: '2099-01-01T00:00:00Z' });
-    const long = mute({ id: 'l', node_id: 'n2', until_at: '2099-06-01T00:00:00Z' });
-    expect(muteCovering(on({}), [short, long], groups, [])).toBe(long);
-  });
-
-  it('never covers an alert about something other than a node', () => {
-    const m = mute({ node_id: 'n2' });
-    expect(muteCovering(on({ nodeId: null }), [m], groups, [])).toBeNull();
-  });
-
-  it('covers an ungrouped node only through a mute naming it', () => {
-    const viaGroup = mute({ scope_kind: 'group', node_id: null, group_id: 'tokyo' });
-    expect(muteCovering(on({ groupId: null }), [viaGroup], groups, [])).toBeNull();
   });
 });

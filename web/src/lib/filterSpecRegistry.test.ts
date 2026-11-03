@@ -60,7 +60,7 @@ import { siteRowFilters, SUBNET_FILTER_PREFIX, subnetRowFilters } from '../pages
 import { overlapFilters } from '../pages/subnetOverlaps';
 import { channelFilters, routingRuleFilters } from '../pages/routingFilters';
 import { DELIVERY_FILTER_PREFIX, deliveryFilters } from '../pages/deliveryLogQuery';
-import { muteFilters, windowFilters } from '../pages/suppressionFilters';
+import { windowFilters } from '../pages/suppressionFilters';
 import { thresholdFilters } from '../pages/thresholdQuery';
 import { userFilters } from '../pages/userFilters';
 import {
@@ -262,11 +262,6 @@ const REGISTRY: readonly Entry[] = [
   },
   {
     module: 'pages/suppressionFilters.ts',
-    name: 'muteFilters',
-    build: () => specColumns(muteFilters(t, none, 0)),
-  },
-  {
-    module: 'pages/suppressionFilters.ts',
     name: 'windowFilters',
     build: () => specColumns(windowFilters(t, none, 0)),
   },
@@ -452,7 +447,6 @@ const ROUTES: readonly Route[] = [
     tables: [{ entries: ['eventRuleFilters'], prefix: '' }],
   },
   { path: '/alerts/maintenance', own: [], tables: [{ entries: ['windowFilters'], prefix: '' }] },
-  { path: '/alerts/mutes', own: [], tables: [{ entries: ['muteFilters'], prefix: '' }] },
   {
     path: '/dashboard/reports',
     own: ['tab'],

@@ -202,7 +202,6 @@
     "searchNodes": "The search could not be run. An empty list here does not mean nothing matches.",
     "loadNode": "failed to load node",
     "setMaintenance": "failed to set maintenance",
-    "mute": "failed to mute",
     "release": "failed to change the suppression",
     "setPool": "failed to set poller pool",
     "addUrlMonitor": "failed to add URL monitor",
@@ -233,8 +232,7 @@
     "prefixDescTooLong": "The description for {{prefix}} is too long (200 characters at most).",
     "savePrefixes": "Failed to save the IP ranges",
     "setPoolPartial": "Set the pool on {{applied}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
-    "setMaintenancePartial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
-    "mutePartial": "Muted {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
+    "setMaintenancePartial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
   },
   "maintenanceWindowName": "Maintenance — {{name}}",
   "detail": {
@@ -252,7 +250,6 @@
     "pollDispatched_one": "Poll requested — {{count}} check dispatched.",
     "pollDispatched_other": "Poll requested — {{count}} checks dispatched.",
     "maintenance": "Maintenance…",
-    "mute": "Mute…",
     "more": "More",
     "pool": "Poller pool…",
     "rediscover": "Rediscover…",
@@ -810,14 +807,10 @@
   "tree": {
     "suppression": {
       "markMaint": "In maintenance — click for details",
-      "markMute": "Muted — click for details",
       "markReleasedMaint": "Released from maintenance — click to put it back",
-      "markReleasedMute": "Released from the mute — click to put it back",
       "head": {
         "maintenance": "In maintenance",
-        "mute": "Muted",
-        "releasedMaintenance": "Released from maintenance",
-        "releasedMute": "Released from the mute"
+        "releasedMaintenance": "Released from maintenance"
       },
       "from": {
         "node": "This node",
@@ -827,19 +820,15 @@
       },
       "until": "until {{time}}",
       "act": {
-        "open": "Release maintenance / mute…",
+        "open": "Release maintenance…",
         "endNow": "End maintenance now",
-        "unmute": "Unmute",
         "excludeNode": "Take this node out of maintenance",
-        "unmuteNode": "Unmute this node",
-        "undoMaintenance": "Put back in maintenance",
-        "undoMute": "Mute again"
+        "undoMaintenance": "Put back in maintenance"
       },
       "releaseOnAncestor": "Release it on group \"{{name}}\"",
       "none": "Nothing is suppressing this any more."
     },
     "maintenance": "Maintenance",
-    "mute": "Mute",
     "custom": "Custom…",
     "editMoveGroup": "Edit / move group",
     "moveToGroup": "Move to group…",
@@ -890,7 +879,6 @@
     "menuRoot": "Tree actions",
     "poolSelected": "Poller pool — {{count}} selected",
     "maintenanceSelected": "Maintenance — {{count}} selected",
-    "muteSelected": "Mute — {{count}} selected",
     "pollNow": "Poll now",
     "pollNodeNamed": "Poll \"{{name}}\" now",
     "pollSelected": "Poll {{count}} selected now",
@@ -1205,7 +1193,6 @@
     "pool": "Poller pool…",
     "more": "More…",
     "maintenance": "Maintenance…",
-    "mute": "Mute…",
     "pollNow": "Poll now",
     "nameFromDevice": "Name from device"
   },

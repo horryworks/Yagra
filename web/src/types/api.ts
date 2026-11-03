@@ -1025,21 +1025,15 @@ export type SameDeviceMatch = components['schemas']['SameDeviceMatch'];
  *  so the collection editor can pick by name. */
 export type MibCatalogEntry = components['schemas']['MibEntry'];
 
-// ── Maintenance & mutes ─────────────────────────────────────────────────────────────────────────
+// ── Maintenance ─────────────────────────────────────────────────────────────────────────────────
 
 /** A maintenance window (`GET /api/v1/maintenance-windows`, Rust `StoredWindow`). Nodes covered by
  *  an active window observe `maintenance` — no alerts fire, existing ones resolve. Scoped like
  *  thresholds; times are RFC 3339. `active` = covers "now". */
 export type MaintenanceWindow = components['schemas']['StoredWindow'];
 
-/** A mute (`GET /api/v1/mutes`, Rust `StoredMute`): notifications are silenced until `until_at`
- *  — the alert still shows in the UI/history. A `node` mute targets one node (optionally one
- *  `metric_name`); a `group` mute targets every node under a folder group (recursive). Exactly
- *  one of `node_id` / `group_id` is set, per `scope_kind`. */
-export type Mute = components['schemas']['StoredMute'];
-
 /** A node released from a suppression it only *inherited* (`GET /api/v1/suppression-exemptions`,
- *  Rust `StoredExemption`). Its group's window or mute still stands for everyone else; this node
+ *  Rust `StoredExemption`). Its group's window still stands for everyone else; this node
  *  alerts normally until `until_at`, which the server sizes to the coverage it was carved out of.
  *
  *  ⚠️ Not `Node.suppression_opt_out`, which is about derived *dependency* suppression (ADR-043). */

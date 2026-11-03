@@ -534,11 +534,6 @@ describe('api client', () => {
     expect(url).toBe('/api/v1/nodes/n1/maintenance-exemption');
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body as string)).toEqual({ exempt: true });
-
-    await api.setNodeMuteExemption('n1', false);
-    const [muteUrl, muteInit] = spy.mock.calls[1];
-    expect(muteUrl).toBe('/api/v1/nodes/n1/mute-exemption');
-    expect(JSON.parse(muteInit.body as string)).toEqual({ exempt: false });
   });
 
   it('replaces a profile’s templates with a PUT body', async () => {
@@ -643,55 +638,6 @@ describe('api client', () => {
     expect(url).toBe('/api/v1/maintenance-windows/w1');
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body)).toEqual({ enabled: false });
-  });
-
-  it('creates a node mute, omitting the optional check/reason when empty', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'm1' }) } as Response);
-    globalThis.fetch = spy;
-    await api.createMute({
-      scope_kind: 'node',
-      scope_id: 'n1',
-      until: '2026-06-12T02:00:00.000Z',
-    });
-    const [url, init] = spy.mock.calls[0];
-    expect(url).toBe('/api/v1/mutes');
-    expect(JSON.parse(init.body)).toEqual({
-      scope_kind: 'node',
-      scope_id: 'n1',
-      until: '2026-06-12T02:00:00.000Z',
-    });
-  });
-
-  it('creates a folder-group mute', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'm2' }) } as Response);
-    globalThis.fetch = spy;
-    await api.createMute({
-      scope_kind: 'group',
-      scope_id: 'g1',
-      until: '2026-06-12T02:00:00.000Z',
-    });
-    const [url, init] = spy.mock.calls[0];
-    expect(url).toBe('/api/v1/mutes');
-    expect(JSON.parse(init.body)).toEqual({
-      scope_kind: 'group',
-      scope_id: 'g1',
-      until: '2026-06-12T02:00:00.000Z',
-    });
-  });
-
-  it('lifts a mute via DELETE', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 204, json: async () => undefined } as Response);
-    globalThis.fetch = spy;
-    await api.deleteMute('m1');
-    const [url, init] = spy.mock.calls[0];
-    expect(url).toBe('/api/v1/mutes/m1');
-    expect(init.method).toBe('DELETE');
   });
 
   it('builds the audit path with limit and the before cursor', async () => {

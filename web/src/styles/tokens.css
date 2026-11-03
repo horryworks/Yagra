@@ -63,21 +63,17 @@
   --role-operator: var(--series-1); /* blue */
   --role-viewer: var(--series-3); /* teal */
 
-  /* ---- suppression (categorical) — "a maintenance window / a mute is in force on this row",
-     shown as the filled marker chips in the All nodes tree.
+  /* ---- suppression (categorical) — "a maintenance window is in force on this row", shown as the
+     filled marker chip in the All nodes tree.
 
-     Not a node state, so they do not live on the status channel: a muted node's own dot is usually
-     critical (that is why someone muted it), and a node in maintenance already carries
-     --status-maintenance there. §1.3 reserves --status-up / --status-warning for network state, so
-     borrowing that green and amber here would put two contradictory vocabularies on one row.
-     Values of their own rather than a series alias, because neither hue exists in the series
-     palette and inventing series entries for a non-graph dimension is the same borrowing mistake
-     one level down.
+     Not a node state, so it does not live on the status channel: a node in maintenance already
+     carries --status-maintenance there. A value of its own rather than a series alias, because the
+     hue does not exist in the series palette and inventing a series entry for a non-graph
+     dimension is the same borrowing mistake one level down.
 
      The maintenance blue is deliberately lighter and more cyan than --status-maintenance: the dot
      and the chip sit inches apart on the same row and should read as related, not identical. ---- */
   --supp-maintenance: #2c94c8; /* sky blue — between light blue and blue */
-  --supp-mute: #b59a2b; /* mustard — yellow */
 
   /* ---- search-match highlight (ADR-053 Inc.2e) ----
      Deliberately NOT the accent and NOT a status colour: an accent-coloured run of text inside a
@@ -355,7 +351,6 @@
   --series-6: #8bac56;
 
   --supp-maintenance: #5cb8e0;
-  --supp-mute: #d4bb4a;
 
   /* The pin's yellow at full brightness — a 16px stroke, not a fill, so it cannot blind. */
   --pin-color: #f5c518;

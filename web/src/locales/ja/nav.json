@@ -40,7 +40,6 @@
     "rules": "しきい値ルール",
     "routing": "通知の配信",
     "maintenance": "メンテナンスウィンドウ",
-    "mutes": "ミュート",
     "alertRules": "アラートルール"
   },
   "events": {
@@ -89,7 +88,6 @@
     "eventsWebhooks": "HTTP でイベントを送ってくる、許可済みの送信元",
     "eventsForwarding": "受信データを外部コレクタや BigQuery へ送出",
     "alertsMaintenance": "計画作業 — ノードをメンテナンス状態にして SLA から除外",
-    "alertsMutes": "通知だけを止める — 状態と SLA はそのまま",
     "topologyDependency": "上流ノード → 下流ノードのリンクを管理",
     "troubleshootRuns": "バックグラウンドで動く分析ジョブとそのレポート",
     "troubleshootFindings": "これまでの全実行で見つかった検出結果",

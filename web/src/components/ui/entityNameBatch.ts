@@ -48,8 +48,6 @@ export const NAME_MAX_ATTEMPTS = 3;
 export interface NameEntry {
   id: string;
   name: string;
-  /** The node's group, when the endpoint says (`node-names` always does). */
-  group_id?: string | null;
 }
 
 export interface NameBatchDeps {
@@ -65,10 +63,6 @@ export interface NameBatchDeps {
 export interface NameBatcher {
   /** Ask for `id`'s name. Idempotent, cheap, and safe to call during render. */
   request: (id: string) => void;
-  /** Forget which ids were asked for, so the next `request` for any of them asks again. For a
-   *  caller that dropped what it was answered (a node's folder, after a configuration change);
-   *  the retry budget starts over with it. */
-  forgetAll: () => void;
 }
 
 export function createNameBatcher(deps: NameBatchDeps): NameBatcher {
@@ -119,10 +113,6 @@ export function createNameBatcher(deps: NameBatchDeps): NameBatcher {
       if (scheduled) return;
       scheduled = true;
       deps.schedule(flush);
-    },
-    forgetAll() {
-      requested.clear();
-      attempts.clear();
     },
   };
 }

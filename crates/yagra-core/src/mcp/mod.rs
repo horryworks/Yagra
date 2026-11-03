@@ -66,8 +66,8 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     flows, and passive events (syslog/traps/webhooks), and run on-demand Troubleshoot analyses \
     (anomaly/correlation/capacity/flap). Two write tools act on the monitoring system — \
     open a maintenance window (open_maintenance) or trigger an immediate poll (poll_now); each \
-    needs an authorized token and is audited. Acknowledgement is read-only here: an alert's acked \
-    state is mirrored in from an external incident tool. There are still no \
+    needs an authorized token and is audited. Yagra records no acknowledgement and no mute: a \
+    maintenance window is the one way to silence alerts. There are still no \
     tools that configure or change network devices, or change Yagra's own configuration. Start with \
     get_fleet_summary, then drill in with list_nodes / get_node_status / get_active_alerts / \
     query_metrics / search_events. Metric names differ per device, so call list_node_metrics before \
@@ -85,8 +85,8 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     get_analysis_findings), and run_rca to have a configured LLM explain one incident. Before \
     trusting any of the above, check get_system_health — if a poller is offline or a store is \
     unreachable, missing data means missing collection rather than a healthy quiet, and its \
-    monitoring_gaps section names the windows where that was true. get_audit says who changed or \
-    acknowledged what. To see how Yagra itself is set up — thresholds, event_rules, \
+    monitoring_gaps section names the windows where that was true. get_audit says who changed \
+    what. To see how Yagra itself is set up — thresholds, event_rules, \
     notification_channels, routing_rules, notification_default_route, delivery_hours, profiles, \
     node_collection, forward_destinations, \
     report_definitions and the deployment settings — use get_config; its `kind` argument selects \

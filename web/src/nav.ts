@@ -251,12 +251,6 @@ export const NAV: NavSection[] = [
             path: '/alerts/maintenance',
             implemented: true,
           },
-          {
-            labelKey: 'alerts.mutes',
-            descKey: 'descriptions.alertsMutes',
-            path: '/alerts/mutes',
-            implemented: true,
-          },
         ],
       },
     ],

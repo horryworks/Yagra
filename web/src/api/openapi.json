@@ -10513,273 +10513,6 @@
         }
       }
     },
-    "/api/v1/mutes": {
-      "get": {
-        "tags": [
-          "maintenance"
-        ],
-        "operationId": "list_mutes",
-        "responses": {
-          "200": {
-            "description": "Every mute",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/StoredMute"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the View permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "maintenance"
-        ],
-        "operationId": "create_mute",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateMute"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Mute created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatedId"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "An unknown scope_kind, an invalid metric_name, or an `until` that is not RFC 3339 or is already in the past",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the AckAlerts permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "A group scope naming a group that does not exist",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/mutes/bulk": {
-      "post": {
-        "tags": [
-          "maintenance"
-        ],
-        "summary": "Mute many nodes at once (ADR-124 Inc.11) — the mute twin of the bulk window above, and a\nseparate route because it asks for a different permission: muting is `AckAlerts`, opening a\nwindow is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them\nfor both.",
-        "operationId": "create_mutes_bulk",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BulkMute"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "How many mutes were created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BulkSuppressionResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "An unparseable or past `until`, an illegal metric name, or more ids than one request may carry",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks AckAlerts",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/mutes/{id}": {
-      "delete": {
-        "tags": [
-          "maintenance"
-        ],
-        "operationId": "delete_mute",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Mute id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Mute deleted"
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the AckAlerts permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such mute",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/netbox/servers": {
       "get": {
         "tags": [
@@ -16706,91 +16439,6 @@
           },
           "403": {
             "description": "Role lacks the read permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/nodes/{node_id}/mute-exemption": {
-      "put": {
-        "tags": [
-          "maintenance"
-        ],
-        "operationId": "set_node_mute_exemption",
-        "parameters": [
-          {
-            "name": "node_id",
-            "in": "path",
-            "description": "Node id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ExemptionBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Node released from, or returned to, an inherited group mute"
-          },
-          "400": {
-            "description": "The node inherits no mute right now (`not_suppressed`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the AckAlerts permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such node",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -29393,38 +29041,6 @@
           }
         }
       },
-      "BulkMute": {
-        "type": "object",
-        "description": "Mute each of many nodes until one moment.",
-        "required": [
-          "node_ids",
-          "until"
-        ],
-        "properties": {
-          "metric_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "node_ids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "until": {
-            "type": "string"
-          }
-        }
-      },
       "BulkNodeDelete": {
         "type": "object",
         "description": "The nodes to delete.",
@@ -29598,7 +29214,7 @@
       },
       "BulkSuppressionResult": {
         "type": "object",
-        "description": "What a bulk suppression write actually did. Shared by the window and the mute form: they answer\nthe same question and a second shape would be two names for one fact.",
+        "description": "What a bulk maintenance write actually did.",
         "required": [
           "requested",
           "created"
@@ -31806,39 +31422,6 @@
               "string",
               "null"
             ]
-          }
-        }
-      },
-      "CreateMute": {
-        "type": "object",
-        "description": "Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or\n`group` (silence every node under a folder group, recursive — `metric_name` is ignored);\n`scope_id` is the node/group UUID. `until` is RFC 3339.",
-        "required": [
-          "scope_kind",
-          "scope_id",
-          "until"
-        ],
-        "properties": {
-          "metric_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "scope_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "scope_kind": {
-            "type": "string"
-          },
-          "until": {
-            "type": "string"
           }
         }
       },
@@ -34382,10 +33965,9 @@
       },
       "ExemptionKind": {
         "type": "string",
-        "description": "Which kind of suppression a node has been released from.\n\n⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived\ndependency* suppression (ADR-043). This is about maintenance windows and mutes, and the two must\nnot be wired to each other.",
+        "description": "Which kind of suppression a node has been released from.\n\n⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived\ndependency* suppression (ADR-043). This is about maintenance windows, and the two must not be\nwired to each other.\n\nOne variant since ADR-234 removed mutes; it stays an enum because it is the stored `kind`\ncolumn and the `kind` field of the API shape.",
         "enum": [
-          "maintenance",
-          "mute"
+          "maintenance"
         ]
       },
       "ExpectedStatus": {
@@ -39288,14 +38870,6 @@
             "description": "Ids whose address falls inside no visible folder's range."
           }
         }
-      },
-      "MuteScope": {
-        "type": "string",
-        "description": "Whether a mute targets a single node or a whole folder group (recursive).",
-        "enum": [
-          "node",
-          "group"
-        ]
       },
       "NameFromDeviceBody": {
         "type": "object",
@@ -46915,53 +46489,6 @@
           "until_at": {
             "type": "string",
             "description": "RFC 3339. Server-computed from the coverage in force when the release was made."
-          }
-        }
-      },
-      "StoredMute": {
-        "type": "object",
-        "description": "A stored mute (API shape). A `node` mute silences one node (optionally one check via\n`metric_name`); a `group` mute silences every node under a folder group (recursive). Exactly\none of `node_id` / `group_id` is set, per `scope_kind`.",
-        "required": [
-          "id",
-          "scope_kind",
-          "until_at"
-        ],
-        "properties": {
-          "group_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "metric_name": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "node_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "scope_kind": {
-            "$ref": "#/components/schemas/MuteScope"
-          },
-          "until_at": {
-            "type": "string"
           }
         }
       },

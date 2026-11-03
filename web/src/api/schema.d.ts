@@ -2179,60 +2179,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/mutes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["list_mutes"];
-        put?: never;
-        post: operations["create_mute"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/mutes/bulk": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Mute many nodes at once (ADR-124 Inc.11) — the mute twin of the bulk window above, and a
-         *     separate route because it asks for a different permission: muting is `AckAlerts`, opening a
-         *     window is `ManageMaintenance`. Folding the two into one endpoint would mean picking one of them
-         *     for both.
-         */
-        post: operations["create_mutes_bulk"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/mutes/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete: operations["delete_mute"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/netbox/servers": {
         parameters: {
             query?: never;
@@ -3331,22 +3277,6 @@ export interface paths {
         };
         get: operations["get_node_metric_range"];
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/nodes/{node_id}/mute-exemption": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: operations["set_node_mute_exemption"];
         post?: never;
         delete?: never;
         options?: never;
@@ -6579,13 +6509,6 @@ export interface components {
             /** @description Distinct ids the request named, after de-duplication. */
             requested: number;
         };
-        /** @description Mute each of many nodes until one moment. */
-        BulkMute: {
-            metric_name?: string | null;
-            node_ids: string[];
-            reason?: string | null;
-            until: string;
-        };
         /** @description The nodes to delete. */
         BulkNodeDelete: {
             node_ids: string[];
@@ -6670,10 +6593,7 @@ export interface components {
             /** @description Distinct ids the request named, after de-duplication. */
             requested: number;
         };
-        /**
-         * @description What a bulk suppression write actually did. Shared by the window and the mute form: they answer
-         *     the same question and a second shape would be two names for one fact.
-         */
+        /** @description What a bulk maintenance write actually did. */
         BulkSuppressionResult: {
             /**
              * Format: int64
@@ -7693,19 +7613,6 @@ export interface components {
             metric_name: string;
             oid: string;
             vendor?: string | null;
-        };
-        /**
-         * @description Create-mute body. `scope_kind` is `node` (silence one node, optionally one `metric_name`) or
-         *     `group` (silence every node under a folder group, recursive — `metric_name` is ignored);
-         *     `scope_id` is the node/group UUID. `until` is RFC 3339.
-         */
-        CreateMute: {
-            metric_name?: string | null;
-            reason?: string | null;
-            /** Format: uuid */
-            scope_id: string;
-            scope_kind: string;
-            until: string;
         };
         CreateNetboxServerReq: {
             /**
@@ -8797,11 +8704,14 @@ export interface components {
          * @description Which kind of suppression a node has been released from.
          *
          *     ⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived
-         *     dependency* suppression (ADR-043). This is about maintenance windows and mutes, and the two must
-         *     not be wired to each other.
+         *     dependency* suppression (ADR-043). This is about maintenance windows, and the two must not be
+         *     wired to each other.
+         *
+         *     One variant since ADR-234 removed mutes; it stays an enum because it is the stored `kind`
+         *     column and the `kind` field of the API shape.
          * @enum {string}
          */
-        ExemptionKind: "maintenance" | "mute";
+        ExemptionKind: "maintenance";
         /**
          * @description Which HTTP status codes count as "up". Serialized as a tagged object (the `expected_status`
          *     JSONB column), e.g. `{"kind":"two_xx"}` / `{"kind":"exact","codes":[200,204]}`.
@@ -11323,11 +11233,6 @@ export interface components {
             /** @description Ids whose address falls inside no visible folder's range. */
             unmatched: string[];
         };
-        /**
-         * @description Whether a mute targets a single node or a whole folder group (recursive).
-         * @enum {string}
-         */
-        MuteScope: "node" | "group";
         /** @description The renames a person accepted. */
         NameFromDeviceBody: {
             changes: components["schemas"]["NameFromDeviceChange"][];
@@ -15011,23 +14916,6 @@ export interface components {
             /** Format: uuid */
             node_id: string;
             /** @description RFC 3339. Server-computed from the coverage in force when the release was made. */
-            until_at: string;
-        };
-        /**
-         * @description A stored mute (API shape). A `node` mute silences one node (optionally one check via
-         *     `metric_name`); a `group` mute silences every node under a folder group (recursive). Exactly
-         *     one of `node_id` / `group_id` is set, per `scope_kind`.
-         */
-        StoredMute: {
-            /** Format: uuid */
-            group_id?: string | null;
-            /** Format: uuid */
-            id: string;
-            metric_name?: string | null;
-            /** Format: uuid */
-            node_id?: string | null;
-            reason?: string | null;
-            scope_kind: components["schemas"]["MuteScope"];
             until_at: string;
         };
         /** @description A stored threshold rule with its scope and id (id is for the API; the engine ignores it). */
@@ -24621,239 +24509,6 @@ export interface operations {
             };
         };
     };
-    list_mutes: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Every mute */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StoredMute"][];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the View permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    create_mute: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CreateMute"];
-            };
-        };
-        responses: {
-            /** @description Mute created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreatedId"];
-                };
-            };
-            /** @description An unknown scope_kind, an invalid metric_name, or an `until` that is not RFC 3339 or is already in the past */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the AckAlerts permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description A group scope naming a group that does not exist */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    create_mutes_bulk: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BulkMute"];
-            };
-        };
-        responses: {
-            /** @description How many mutes were created */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BulkSuppressionResult"];
-                };
-            };
-            /** @description An unparseable or past `until`, an illegal metric name, or more ids than one request may carry */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks AckAlerts */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    delete_mute: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Mute id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Mute deleted */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the AckAlerts permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such mute */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     list_netbox_servers: {
         parameters: {
             query?: never;
@@ -29387,76 +29042,6 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    set_node_mute_exemption: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Node id */
-                node_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExemptionBody"];
-            };
-        };
-        responses: {
-            /** @description Node released from, or returned to, an inherited group mute */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The node inherits no mute right now (`not_suppressed`) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the AckAlerts permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such node */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };

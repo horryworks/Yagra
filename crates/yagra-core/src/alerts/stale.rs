@@ -281,7 +281,7 @@ async fn sweep_once(
 /// The same reason `deleted` is: [`AlertSink::dispatch`] awaits the History insert **and** the
 /// notification, and ADR-104 measured one notification taking up to 31.5 seconds against a slow
 /// vendor. Folding this into `alerts::config::run_alert_config_refresh` would park maintenance-
-/// window resolution, mute expiry and the classifier reload behind a notification storm.
+/// window resolution and the classifier reload behind a notification storm.
 ///
 /// # Why leader-only
 ///

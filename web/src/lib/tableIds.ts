@@ -40,7 +40,6 @@ export const TABLE_IDS = [
   'alerts.eventRules',
   'alerts.history',
   'alerts.maintenance',
-  'alerts.mutes',
   'alerts.nodeEventRules',
   'alerts.nodeRules',
   'alerts.thresholds',
