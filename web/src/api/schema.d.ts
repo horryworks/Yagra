@@ -8728,6 +8728,11 @@ export interface components {
         EventRuleBody: {
             clear_pattern?: string | null;
             enabled?: boolean;
+            /**
+             * Format: uuid
+             * @description A folder: the rule applies to every node in it and below it. Not together with `node_id`.
+             */
+            group_id?: string | null;
             match_kind: string;
             /** Format: int32 */
             min_count?: number | null;
@@ -8748,6 +8753,11 @@ export interface components {
         EventRuleRow: {
             clear_pattern?: string | null;
             enabled: boolean;
+            /**
+             * Format: uuid
+             * @description A folder target (ADR-232); absent in a bundle written before it.
+             */
+            group_id?: string | null;
             /** Format: uuid */
             id: string;
             match_kind: string;
@@ -15046,6 +15056,12 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             enabled: boolean;
+            /**
+             * Format: uuid
+             * @description A folder: the rule applies to every node in it and in the folders below it (ADR-232).
+             *     Never set together with `node_id`; neither set means every node.
+             */
+            group_id?: string | null;
             /** Format: uuid */
             id: string;
             match_kind: components["schemas"]["EventMatchKind"];
@@ -20909,14 +20925,20 @@ export interface operations {
     };
     list_event_rules: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Keep only the rules that reach this node: rules on every node, on one of the node's
+                 *     folders, and on the node itself.
+                 */
+                node_id?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Every stored event rule */
+            /** @description The stored event rules, or with `node_id` the ones that reach that node */
             200: {
                 headers: {
                     [name: string]: unknown;

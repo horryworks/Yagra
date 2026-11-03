@@ -27,6 +27,7 @@ const MOVES: { from: string; to: string; what: string }[] = [
   { from: '/nodes/collection-templates', to: '/nodes/collection/metric-sets', what: 'metric sets' },
   { from: '/nodes/mib', to: '/nodes/collection/mib', what: 'the MIB repository' },
   { from: '/nodes/reclassify', to: '/nodes/collection/reclassify', what: 'reclassify' },
+  { from: '/alerts/event-rules', to: '/alerts/rules/events', what: 'event rules' },
 ];
 
 for (const { from, to, what } of MOVES) {
@@ -47,6 +48,19 @@ test('a collection tab is a path, and the menu item stays lit on every tab', asy
   await tabs.getByRole('tab', { name: 'MIB repository' }).click({ timeout: 15_000 });
   await expect(page).toHaveURL(/\/nodes\/collection\/mib$/);
   await expect(page.getByRole('link', { name: 'Collection setup' }).first()).toHaveClass(/active/);
+});
+
+test('the event rules are a tab of Alert rules, and say how their rules combine', async ({
+  page,
+}) => {
+  await page.goto('/alerts/rules');
+  await expect(page.locator('.alert-rules-how')).toHaveText('Narrowest target wins', {
+    timeout: 15_000,
+  });
+  await page.getByRole('tab', { name: 'Events', exact: true }).click();
+  await expect(page).toHaveURL(/\/alerts\/rules\/events$/);
+  await expect(page.locator('.alert-rules-how')).toHaveText('Every match applies');
+  await expect(page.getByRole('link', { name: 'Alert rules' }).first()).toHaveClass(/active/);
 });
 
 test('?add=1 opens the new-profile dialog and leaves the URL clean', async ({ page }) => {

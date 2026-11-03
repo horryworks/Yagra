@@ -68,7 +68,9 @@ pub use engine::{EventEngine, SourceBinding};
 pub use ingest::{consume_events, run_event_action_writer, run_persist_writer, run_ttl_sweeper};
 pub use repo::EventRepo;
 #[allow(unused_imports)]
-pub use rules::{compile_matcher, compile_regex, CompiledRule, Matcher};
+pub use rules::{
+    compile_matcher, compile_regex, rules_for_node, targets_node, CompiledRule, Matcher,
+};
 pub use sql::{EventSearchSemantics, TextCond};
 // The event query, read from the other side of the mirror: `logstore.rs` implements the same
 // predicate in LogsQL and asserts against these rather than restating them.
@@ -154,6 +156,9 @@ pub struct StoredEventRule {
     pub source_kind: Option<String>,
     pub source_id: Option<Uuid>,
     pub node_id: Option<Uuid>,
+    /// A folder: the rule applies to every node in it and in the folders below it (ADR-232).
+    /// Never set together with `node_id`; neither set means every node.
+    pub group_id: Option<Uuid>,
     pub match_kind: EventMatchKind,
     pub pattern: String,
     pub clear_pattern: Option<String>,
@@ -172,6 +177,7 @@ pub struct RuleParams<'a> {
     pub source_kind: Option<&'a str>,
     pub source_id: Option<Uuid>,
     pub node_id: Option<Uuid>,
+    pub group_id: Option<Uuid>,
     pub match_kind: &'a str,
     pub pattern: &'a str,
     pub clear_pattern: Option<&'a str>,

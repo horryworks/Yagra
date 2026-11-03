@@ -10,7 +10,24 @@ import {
   type EventSource,
   type Severity,
 } from '../types/api';
-import { PageHeader } from '../components/ui/PageHeader';
+import { Tabs } from '../components/ui/Tabs';
+import { GroupPicker } from '../components/ui/GroupPicker';
+import { NodePicker } from '../components/NodePicker/NodePicker';
+import { useEntityNames } from '../components/ui/entityNames';
+import { groupOptions } from '../lib/nodeTree';
+import { useSearchParams } from 'react-router-dom';
+import {
+  EVENT_TARGET_KINDS,
+  EVENT_TARGET_TABS,
+  eventRuleViewFrom,
+  eventTargetId,
+  eventTargetOf,
+  inEventRuleView,
+  targetFields,
+  writeEventRuleView,
+  type EventRuleView,
+  type EventTargetKind,
+} from './eventRuleView';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -52,6 +69,19 @@ export function EventRulesPage() {
   const [error, setError] = useState<string | null>(null);
 
   const rules = useLoad(() => api.listEventRules(), [], { initial: [] as EventRule[] });
+  const { groupName, nodeName, groups } = useEntityNames();
+  const folderItems = useMemo(() => groupOptions(groups), [groups]);
+  // The target tab and the chosen folder or node live in the URL, as on the threshold tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = useMemo(() => eventRuleViewFrom(searchParams), [searchParams]);
+  const setView = useCallback(
+    (next: EventRuleView) => {
+      const params = new URLSearchParams(searchParams);
+      writeEventRuleView(params, next);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
   const { data: sources, reload: sourcesReload } = useLoad(() => api.listEventSources(), [], {
     initial: [] as EventSource[],
   });
@@ -71,6 +101,17 @@ export function EventRulesPage() {
 
   const columns = useMemo<Column<EventRule>[]>(() => {
     const scopeLabel = (r: EventRule) => r.source_kind ?? t('eventRules.any');
+    const targetLabel = (r: EventRule) => {
+      const id = eventTargetId(r);
+      switch (eventTargetOf(r)) {
+        case 'global':
+          return t('eventRules.tabs.global');
+        case 'folder':
+          return `${t('eventRules.tabs.folder')}: ${id ? groupName(id) : ''}`;
+        case 'node':
+          return `${t('eventRules.tabs.node')}: ${id ? nodeName(id) : ''}`;
+      }
+    };
     const specs = eventRuleFilters(t, SEVERITIES, scopeLabel);
     const cols: Column<EventRule>[] = [
       { key: 'name', header: t('eventRules.cols.name'), width: '1.4fr', render: (r) => <ClippedText text={r.name} /> },
@@ -104,6 +145,12 @@ export function EventRulesPage() {
             )}
           </span>
         ),
+      },
+      {
+        key: 'target',
+        header: t('eventRules.cols.target'),
+        width: '1fr',
+        render: (r) => <ClippedText text={targetLabel(r)} />,
       },
       {
         key: 'scope',
@@ -161,22 +208,47 @@ export function EventRulesPage() {
     // `toggleEnabled` is rebuilt every render; listing it would rebuild the columns on every
     // keystroke elsewhere and re-run the predicate for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, canConfig]);
+  }, [t, canConfig, groupName, nodeName]);
 
-  const filtering = useClientFilters(columns, rows);
+  const viewRows = useMemo(() => rows.filter((r) => inEventRuleView(r, view)), [rows, view]);
+  const filtering = useClientFilters(columns, viewRows);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
   const sorting = useClientSort(columns, filtering.shown);
 
   return (
     <div>
-      <PageHeader title={t('nav:alerts.eventRules')} />
+      <Tabs
+        tabs={EVENT_TARGET_TABS.map((key) => ({ key, label: t(`eventRules.tabs.${key}`) }))}
+        active={view.tab}
+        onChange={(tab) => setView({ tab, target: null })}
+      />
+      {(view.tab === 'folder' || view.tab === 'node') && (
+        <div className="eventrules-target">
+          <span className="muted">{t(`eventRules.tabs.${view.tab}`)}</span>
+          {view.tab === 'folder' ? (
+            <GroupPicker
+              options={folderItems}
+              value={view.target ?? ''}
+              emptyOption={t('eventRules.target.any')}
+              onChange={(id) => setView({ ...view, target: id || null })}
+            />
+          ) : (
+            <NodePicker
+              value={view.target}
+              valueLabel={view.target ? nodeName(view.target) : undefined}
+              placeholder={t('eventRules.target.any')}
+              onChange={(n) => setView({ ...view, target: n?.id ?? null })}
+            />
+          )}
+        </div>
+      )}
       <LoadGate load={rules} permission="manage_config">
         <ListToolbar
           list={filtering}
           labels={columnLabels(columns)}
           count={{
             shown: shown.length,
-            total: rows.length,
+            total: viewRows.length,
             noun: (n) => t('common:noun.rule', { count: n }),
           }}
         >
@@ -204,6 +276,7 @@ export function EventRulesPage() {
       {adding && (
         <RuleModal
           mode="add"
+          start={view}
           sources={sources}
           onClose={() => setAdding(false)}
           onDone={() => {
@@ -249,17 +322,28 @@ const NUMBER_FIELD_LABEL_KEY = {
 function RuleModal({
   mode,
   rule,
+  start,
   sources,
   onClose,
   onDone,
 }: {
   mode: 'add' | 'edit';
   rule?: EventRule;
+  /** The tab the dialog was opened from: a new rule starts on its target. */
+  start?: EventRuleView;
   sources: EventSource[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
+  const { nodeName, groups } = useEntityNames();
+  const folderItems = useMemo(() => groupOptions(groups), [groups]);
+  const [targetKind, setTargetKind] = useState<EventTargetKind>(
+    rule ? eventTargetOf(rule) : start && start.tab !== 'all' ? start.tab : 'global',
+  );
+  const [targetId, setTargetId] = useState<string>(
+    rule ? (eventTargetId(rule) ?? '') : (start?.target ?? ''),
+  );
   const [name, setName] = useState(rule?.name ?? '');
   // `match_kind` is a `String` on the wire too; the DB CHECK admits only these two.
   const [matchKind, setMatchKind] = useState<'substring' | 'regex'>(
@@ -286,7 +370,10 @@ function RuleModal({
     min_count: minCount,
     window_secs: windowSecs,
   });
-  const valid = name.trim() !== '' && pattern.trim() !== '' && numberProblem === null;
+  // A folder or node target needs one chosen: sent empty, it would be a rule on every node.
+  const targetChosen = targetKind === 'global' || targetId !== '';
+  const valid =
+    name.trim() !== '' && pattern.trim() !== '' && numberProblem === null && targetChosen;
 
   const runTest = () => {
     setTestResult(null);
@@ -313,7 +400,7 @@ function RuleModal({
       enabled,
       source_kind: sourceKind ? (sourceKind as EventRuleInput['source_kind']) : null,
       source_id: sourceId || null,
-      node_id: null,
+      ...targetFields(targetKind, targetId),
       match_kind: matchKind,
       pattern,
       clear_pattern: clearPattern.trim() || null,
@@ -395,6 +482,49 @@ function RuleModal({
           value={clearPattern}
           onChange={(e) => setClearPattern(e.target.value)}
         />
+      </div>
+      <div className="modal-field-row">
+        <div className="modal-field">
+          <label className="modal-field-label" htmlFor="event-rule-target">
+            {t('eventRules.modal.target')}
+          </label>
+          <Select
+            id="event-rule-target"
+            value={targetKind}
+            onChange={(e) => {
+              setTargetKind(e.target.value as EventTargetKind);
+              setTargetId('');
+            }}
+          >
+            {EVENT_TARGET_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {t(`eventRules.tabs.${k}`)}
+              </option>
+            ))}
+          </Select>
+        </div>
+        {targetKind !== 'global' && (
+          <div className="modal-field">
+            <label className="modal-field-label">
+              {t(`eventRules.tabs.${targetKind}`)} <RequiredMark />
+            </label>
+            {targetKind === 'folder' ? (
+              <GroupPicker
+                options={folderItems}
+                value={targetId}
+                emptyOption={t('eventRules.modal.pickTarget')}
+                onChange={(id) => setTargetId(id)}
+              />
+            ) : (
+              <NodePicker
+                value={targetId || null}
+                valueLabel={targetId ? nodeName(targetId) : undefined}
+                placeholder={t('eventRules.modal.pickTarget')}
+                onChange={(n) => setTargetId(n?.id ?? '')}
+              />
+            )}
+          </div>
+        )}
       </div>
       <div className="modal-field-row">
         <div className="modal-field">

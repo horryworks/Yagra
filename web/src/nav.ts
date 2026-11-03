@@ -228,25 +228,16 @@ export const NAV: NavSection[] = [
       {
         labelKey: 'groups.configure',
         items: [
+          // The two ways an alert comes into existence, as the two tabs of one item (ADR-232).
+          // They used to be two items side by side, and nothing on either screen said that their
+          // rules combine differently. Event rules stay under Alerts, not Events: they PRODUCE
+          // alerts (ADR-055, "options not taken").
           {
-            labelKey: 'alerts.rules',
-            descKey: 'descriptions.alertsRules',
+            labelKey: 'alerts.alertRules',
+            descKey: 'descriptions.alertsAlertRules',
             path: '/alerts/rules',
             implemented: true,
-          },
-          // Event alert rules stays under Alerts, not Events. It is a thing that PRODUCES alerts,
-          // and splitting the two rule screens across two tabs would be the same mistake this
-          // increment is fixing, one level up (ADR-055, "options not taken").
-          //
-          // ⚠️ It sits directly under Metric alert rules, and the pairing is the point: the two
-          // ways an alert can come into existence, side by side, named the same way. Routing used
-          // to be wedged between them, which broke the pair and put "where alerts go" before the
-          // second way of making one (R7 — the order is the order of the work).
-          {
-            labelKey: 'alerts.eventRules',
-            descKey: 'descriptions.alertsEventRules',
-            path: '/alerts/event-rules',
-            implemented: true,
+            ownsSubpaths: true,
           },
           {
             labelKey: 'alerts.routing',

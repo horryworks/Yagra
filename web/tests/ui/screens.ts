@@ -68,6 +68,8 @@ export const EXTRA_SCREENS: Screen[] = [
   { path: '/nodes/collection/metric-sets', label: 'nodes.collection.metricSets' },
   { path: '/nodes/collection/mib', label: 'nodes.collection.mib' },
   { path: '/nodes/collection/reclassify', label: 'nodes.collection.reclassify' },
+  // The event tab of Alerts ▸ Alert rules (ADR-232); the threshold tab is the hub's own path.
+  { path: '/alerts/rules/events', label: 'alerts.alertRules.events' },
   { path: '/login', label: 'login' },
 ];
 
@@ -186,7 +188,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/events': MARKER,
   '/alerts/rules': MARKER,
   '/alerts/routing': MARKER,
-  '/alerts/event-rules': MARKER,
+  '/alerts/rules/events': MARKER,
   '/events/webhooks': MARKER,
   '/alerts/maintenance': MARKER,
   '/alerts/mutes': MARKER,

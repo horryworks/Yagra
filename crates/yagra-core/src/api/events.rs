@@ -21,7 +21,7 @@ use super::extract::{bearer, Admin, Events, Leader, RequireManageConfig};
 use super::util::CreatedId;
 use super::{AdminState, ApiState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -411,10 +411,19 @@ async fn delete_event_source(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct EventRuleQuery {
+    /// Keep only the rules that reach this node: rules on every node, on one of the node's
+    /// folders, and on the node itself.
+    node_id: Option<Uuid>,
+}
+
 #[utoipa::path(
     get, path = "/api/v1/event-rules", tag = "events",
+    params(EventRuleQuery),
     responses(
-        (status = 200, description = "Every stored event rule", body = Vec<crate::events::StoredEventRule>),
+        (status = 200, description = "The stored event rules, or with `node_id` the ones that reach that node", body = Vec<crate::events::StoredEventRule>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -422,12 +431,21 @@ async fn delete_event_source(
 )]
 async fn list_event_rules(
     _guard: RequireManageConfig,
+    State(st): State<ApiState>,
     admin: Admin,
+    Query(q): Query<EventRuleQuery>,
 ) -> ApiResult<Json<Vec<crate::events::StoredEventRule>>> {
     let rules = admin.events.list_rules().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list event rules", "failed to list event rules")
     })?;
-    Ok(Json(rules))
+    Ok(Json(match q.node_id {
+        Some(node) => crate::events::rules_for_node(
+            rules,
+            node,
+            st.alerts.node_folder_chain(node.into()).as_deref(),
+        ),
+        None => rules,
+    }))
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -441,6 +459,9 @@ pub(super) struct EventRuleBody {
     source_id: Option<Uuid>,
     #[serde(default)]
     node_id: Option<Uuid>,
+    /// A folder: the rule applies to every node in it and below it. Not together with `node_id`.
+    #[serde(default)]
+    group_id: Option<Uuid>,
     match_kind: String,
     pattern: String,
     #[serde(default)]
@@ -482,6 +503,9 @@ fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams
         crate::events::compile_matcher(&body.match_kind, clear)
             .map_err(|e| bad(format!("clear_pattern: {e}")))?;
     }
+    if body.node_id.is_some() && body.group_id.is_some() {
+        return Err(bad("a rule targets a node or a folder, not both".to_owned()));
+    }
     if yagra_common::Severity::from_token(&body.severity).is_none() {
         let allowed =
             super::util::token_list(yagra_common::Severity::ALL.iter().map(|s| s.as_str()));
@@ -512,6 +536,7 @@ fn validate_event_rule(body: &EventRuleBody) -> Result<crate::events::RuleParams
         source_kind: body.source_kind.as_deref(),
         source_id: body.source_id,
         node_id: body.node_id,
+        group_id: body.group_id,
         match_kind: &body.match_kind,
         pattern: &body.pattern,
         clear_pattern: body.clear_pattern.as_deref(),
@@ -859,6 +884,7 @@ mod tests {
             source_kind: None,
             source_id: None,
             node_id: None,
+            group_id: None,
             match_kind: "regex".to_owned(),
             pattern: pattern.to_owned(),
             clear_pattern: clear.map(str::to_owned),
@@ -872,6 +898,20 @@ mod tests {
         // The clear pattern is compiled too — it is what stops the alert, so a broken one leaves
         // the alert stuck open.
         assert!(validate_event_rule(&rule("ok", Some("[unclosed"))).is_err());
+
+        // A rule names one target (ADR-232): a node and a folder at once is refused at the edge,
+        // before the CHECK would answer it with a 500.
+        let mut both = rule("link.*down", None);
+        both.node_id = Some(Uuid::new_v4());
+        both.group_id = Some(Uuid::new_v4());
+        assert!(validate_event_rule(&both).is_err());
+        both.node_id = None;
+        assert_eq!(
+            validate_event_rule(&both)
+                .expect("a folder alone is fine")
+                .group_id,
+            both.group_id
+        );
 
         // The numeric bounds mirror the DB CHECKs, so a value the database would reject is a 400
         // here rather than a 500 from the insert.

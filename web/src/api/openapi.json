@@ -5522,9 +5522,21 @@
           "events"
         ],
         "operationId": "list_event_rules",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "query",
+            "description": "Keep only the rules that reach this node: rules on every node, on one of the node's\nfolders, and on the node itself.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Every stored event rule",
+            "description": "The stored event rules, or with `node_id` the ones that reach that node",
             "content": {
               "application/json": {
                 "schema": {
@@ -34203,6 +34215,14 @@
           "enabled": {
             "type": "boolean"
           },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A folder: the rule applies to every node in it and below it. Not together with `node_id`."
+          },
           "match_kind": {
             "type": "string"
           },
@@ -34281,6 +34301,14 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A folder target (ADR-232); absent in a bundle written before it."
           },
           "id": {
             "type": "string",
@@ -47031,6 +47059,14 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "A folder: the rule applies to every node in it and in the folders below it (ADR-232).\nNever set together with `node_id`; neither set means every node."
           },
           "id": {
             "type": "string",

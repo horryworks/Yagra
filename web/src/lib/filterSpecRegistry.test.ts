@@ -82,6 +82,7 @@ import { GROUP_MAP_SEARCH_KEY } from '../components/TopologyMap/topologyLevel';
 import { CHANNEL_FILTER_PREFIX, ROUTING_RULE_FILTER_PREFIX } from '../pages/routingFilters';
 import { CANDIDATE_FILTER_PREFIX, ENDPOINT_FILTER_PREFIX } from '../pages/discoveryFilters';
 import { REPORT_TABLE_PREFIX } from '../reports/reportListFilters';
+import { EVENT_VIEW_KEYS } from '../pages/eventRuleView';
 
 const t = ((k: string) => k) as unknown as TFunction;
 const none = () => '';
@@ -445,7 +446,11 @@ const ROUTES: readonly Route[] = [
       },
     ],
   },
-  { path: '/alerts/event-rules', own: [], tables: [{ entries: ['eventRuleFilters'], prefix: '' }] },
+  {
+    path: '/alerts/rules/events',
+    own: [EVENT_VIEW_KEYS.tab, EVENT_VIEW_KEYS.target],
+    tables: [{ entries: ['eventRuleFilters'], prefix: '' }],
+  },
   { path: '/alerts/maintenance', own: [], tables: [{ entries: ['windowFilters'], prefix: '' }] },
   { path: '/alerts/mutes', own: [], tables: [{ entries: ['muteFilters'], prefix: '' }] },
   {

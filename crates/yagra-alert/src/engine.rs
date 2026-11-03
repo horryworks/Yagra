@@ -1842,6 +1842,19 @@ impl AlertManager {
             .and_then(|m| m.folder_group)
     }
 
+    /// The node's folder and every folder above it, nearest first, per the config snapshot — what
+    /// a folder-targeted event rule matches against (ADR-232). `None` for a node the snapshot has
+    /// never seen; the caller then applies no folder rule to it, which narrows rather than widens.
+    #[must_use]
+    pub fn node_folder_chain(&self, node: NodeId) -> Option<Vec<Uuid>> {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .node_meta
+            .get(&node)
+            .map(|m| m.folder_chain.clone())
+    }
+
     /// Whether any node of Meraki organization `org` sits in one of `visible` — the group-scope
     /// question for that organization's collect alert (`api/scope.rs::allows_subject`, ADR-164
     /// decision 18).

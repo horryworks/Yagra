@@ -357,8 +357,8 @@ impl ConfigBundleRepo {
 
         let mut event_rules = Vec::new();
         for row in sqlx::query(
-            "SELECT id, name, enabled, source_kind, source_id, node_id, match_kind, pattern, \
-                    clear_pattern, severity, ttl_secs, min_count, window_secs \
+            "SELECT id, name, enabled, source_kind, source_id, node_id, group_id, match_kind, \
+                    pattern, clear_pattern, severity, ttl_secs, min_count, window_secs \
              FROM event_rules ORDER BY name",
         )
         .fetch_all(&mut *conn)
@@ -376,6 +376,7 @@ impl ConfigBundleRepo {
                 source_kind: row.try_get("source_kind")?,
                 source_id: row.try_get("source_id")?,
                 node_id: row.try_get("node_id")?,
+                group_id: row.try_get("group_id")?,
                 match_kind: row.try_get("match_kind")?,
                 pattern: row.try_get("pattern")?,
                 clear_pattern: row.try_get("clear_pattern")?,

@@ -33,7 +33,7 @@ const SCREENS: Record<string, string> = {
   'pages/AuthSettingsPage.tsx': '/settings/auth',
   'pages/ClassificationRulesPage.tsx': '/nodes/collection/rules',
   'pages/CredentialsPage.tsx': '/nodes/credentials',
-  'pages/EventRulesPage.tsx': '/alerts/event-rules',
+  'pages/EventRulesPage.tsx': '/alerts/rules/events',
   'pages/EventSourcesPage.tsx': '/events/webhooks',
   'pages/ForwardingPage.tsx': '/events/forwarding',
   'pages/MaintenancePage.tsx': '/alerts/maintenance',

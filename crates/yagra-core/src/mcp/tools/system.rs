@@ -872,7 +872,9 @@ impl YagraMcp {
         description = "Read Yagra's own configuration — what it is set up to monitor, alert on, \
                        notify and forward, and how. `kind` is one of: **alerting/notification** — \
                        thresholds (the metric alert rules; `limit` 1–500, narrowed by `search` / \
-                       `scope_level` / `direction` / `scope_id`), event_rules, event_sources, \
+                       `scope_level` / `direction` / `scope_id`), event_rules (with `node_id`, only the \
+                       rules that reach that node: every-node rules, rules on its folders, and \
+                       rules on the node itself), event_sources, \
                        notification_channels, routing_rules, notification_default_route (the \
                        route set by the core's environment, which every alert is sent to whatever \
                        the routing rules say: whether it is configured and which kinds of channel \
@@ -1051,7 +1053,17 @@ impl YagraMcp {
                 }
             }
             ConfigKind::EventRules => match a.events.list_rules().await {
-                Ok(rules) => ok_json(TOOL, &rules),
+                Ok(rules) => match p.node_id {
+                    Some(node) => ok_json(
+                        TOOL,
+                        &crate::events::rules_for_node(
+                            rules,
+                            node,
+                            self.state.alerts.node_folder_chain(node.into()).as_deref(),
+                        ),
+                    ),
+                    None => ok_json(TOOL, &rules),
+                },
                 Err(e) => tool_error(TOOL, "list event rules", &e),
             },
             ConfigKind::EventSources => match a.events.list_sources().await {

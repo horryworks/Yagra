@@ -296,6 +296,7 @@ impl EventEngine {
     fn plan(&self, msg: &EventMsg, source: Option<Uuid>, node: Uuid, now_ms: i64) -> Planned {
         let node_id = NodeId::from(node);
         let in_maintenance = self.alerts.in_maintenance(node_id, now_ms);
+        let chain = self.alerts.node_folder_chain(node_id);
         let snap = self.snapshot.read().expect("snapshot rwlock poisoned");
         let mut runtime = self.runtime.lock().expect("runtime mutex poisoned");
         let mut planned = Planned::default();
@@ -324,7 +325,7 @@ impl EventEngine {
         for rule in snap
             .rules
             .iter()
-            .filter(|r| r.applies(msg.kind, source, node))
+            .filter(|r| r.applies(msg.kind, source, node, chain.as_deref()))
         {
             let fire_hit = rule.matcher.matches(&haystack);
             let clear_hit = rule

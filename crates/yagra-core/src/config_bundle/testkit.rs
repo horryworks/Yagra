@@ -255,6 +255,7 @@ pub(super) fn full_bundle() -> ConfigBundle {
             source_kind: Some("syslog".to_owned()),
             source_id: Some(source),
             node_id: None,
+            group_id: None,
             match_kind: "substring".to_owned(),
             pattern: "LINK-3-UPDOWN".to_owned(),
             clear_pattern: Some("LINK-3-UP".to_owned()),

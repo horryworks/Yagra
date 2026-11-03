@@ -1,0 +1,20 @@
+/* Alerts ▸ Alert rules (ADR-232): the tab bar with, at its right end, how the tab's rules combine. */
+.alert-rules-tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.alert-rules-tabs > .ui-tabs {
+  flex: 1;
+  min-width: 0;
+}
+.alert-rules-how {
+  flex: none;
+  padding: 2px 10px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}

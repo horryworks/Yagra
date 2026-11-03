@@ -571,9 +571,10 @@
       "name": "Name",
       "severity": "Severity",
       "pattern": "Pattern",
-      "scope": "Scope",
+      "scope": "Source",
       "status": "Status",
-      "actions": "Actions"
+      "actions": "Actions",
+      "target": "Target"
     },
     "empty": "No event rules",
     "emptyMatch": "No rules match",
@@ -610,7 +611,9 @@
       "add": "Add rule",
       "patternCase": {
         "info": "Matching is case-sensitive. In a regex, start with (?i) to ignore case."
-      }
+      },
+      "target": "Target",
+      "pickTarget": "Pick one"
     },
     "test": {
       "error": "error: {{msg}}",
@@ -631,6 +634,19 @@
     "filter": {
       "allSeverities": "All severities",
       "allStatuses": "Enabled and disabled"
+    },
+    "tabs": {
+      "all": "All",
+      "global": "All nodes",
+      "folder": "Folder",
+      "node": "Node"
+    },
+    "target": {
+      "any": "Any"
+    },
+    "check": {
+      "title": "Event rules",
+      "empty": "No event rule reaches this node."
     }
   },
   "eventSources": {
@@ -724,6 +740,16 @@
       "update": "Could not update the delivery hours.",
       "delete": "Could not delete the delivery hours.",
       "zone": "Could not set the default time zone."
+    }
+  },
+  "alertRules": {
+    "tabs": {
+      "thresholds": "Thresholds",
+      "events": "Events"
+    },
+    "how": {
+      "thresholds": "Narrowest target wins",
+      "events": "Every match applies"
     }
   }
 }

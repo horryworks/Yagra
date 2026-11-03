@@ -42,7 +42,7 @@ const SUBJECTS: Subject[] = [
     refused: /Managing users requires an admin account/,
   },
   { path: '/nodes/collection/rules', read: '/api/v1/classification-rules', toolbar: true },
-  { path: '/alerts/event-rules', read: '/api/v1/event-rules', toolbar: true },
+  { path: '/alerts/rules/events', read: '/api/v1/event-rules', toolbar: true },
   { path: '/settings/integrations/netbox', read: '/api/v1/netbox/servers', toolbar: false },
   { path: '/alerts/mutes', read: '/api/v1/mutes', toolbar: true },
   { path: '/alerts/maintenance', read: '/api/v1/maintenance-windows', toolbar: true },

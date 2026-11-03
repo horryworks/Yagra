@@ -13,6 +13,7 @@
 ### Breaking changes
 
 - **A label no longer decides any alert.** Threshold rules scoped to a node label (`scope_level: group`) and maintenance windows scoped to one are removed, and the upgrade deletes any that exist. A label stays on nodes and folders as a description that rides on notifications, for routing in PagerDuty and Jira Service Management. A rule now reaches a node through all nodes, its profile, a folder, the node itself or one of its ports. Creating either with `scope_level: group` is `400`. A configuration bundle exported from an older deployment still imports; its label-scoped rules are skipped and counted.
+- **After this upgrade, going back to an earlier core needs a restore from backup.** An event rule can now target a folder (migration `0166`); a core older than 0.3.67 would read a folder rule as a rule on every node and fire it fleet-wide, so the upgrade page no longer offers to go back past it.
 
 ### New Features
 
@@ -25,6 +26,7 @@
 - `GET/POST /api/v1/delivery-hours`, `PUT/DELETE /api/v1/delivery-hours/{id}`, `PUT /api/v1/delivery-hours/default-time-zone` (ManageSystem; an unknown zone is `400 invalid_time_zone`), `GET /api/v1/held-notifications` (View, narrowed to what the caller may see), `PUT /api/v1/node-groups/{id}/time-zone` (ManageConfig; `409 time_zone_from_netbox` while NetBox sets it). Folders now carry `time_zone`, `netbox_time_zone` and `effective_time_zone`. `get_config` takes `kind=delivery_hours`.
 - **A quiet alert list says what it is not seeing.** Above Alerts ▸ Active alerts, numbers appear when they are above zero: **Silenced** (rows a mute or an upstream outage is holding back — press it to see only those), **In maintenance** (nodes) and **Not watched** (nodes whose poller pool has no live poller, or that have reported nothing for 10 minutes). When no node you can see is being polled at all, every screen says so at the top, with a link to Settings ▸ Pollers — at once, while the pool's alert still waits its five minutes before it pages.
 - `GET /api/v1/fleet/watch` (View, counted over the nodes the caller may see) returns `no_live_poller`, `no_recent_data`, `pool_polled` and `pollers_known` (`false` on an HA standby, where poller liveness is not known). `get_fleet_summary` takes `kind=watch` for the same counts.
+- **An event rule can target a folder.** Its target is now All nodes, a Folder (every node in it and below it) or a Node; the source kind and the webhook source stay separate. `POST/PUT /api/v1/event-rules` take `group_id` (not together with `node_id`, which is `400 invalid_rule`), and `GET /api/v1/event-rules?node_id=` answers only the rules that reach that node. The MCP tool `get_config(kind=event_rules)` takes the same `node_id`. Configuration bundles carry the folder.
 
 ### Improvements
 
@@ -33,6 +35,11 @@
 - **A node's Interfaces sort by any column.** Press a header to order the ports by it, again to reverse, a third time to go back to the device's own port numbering (the order the tab opens in); the order is kept in the URL beside the filters. The ⓘ on IP addresses, Neighbors and Duplex and the notes inside the IP addresses and Media filters are gone.
 - **Topology opens on the Geo map.** It is now the first item in the Topology menu, and pressing the Topology tab lands there; Dependencies follows it.
 - **Nodes ▸ Collection setup gathers the five screens that shape what is collected.** Classification rules, Device profiles, Metric sets, MIB repository and Reclassify are now tabs of one page, in the order one uses the other, and the menu shows one item for them instead of a group of six; an ordinary device needs only a credential and the node itself. Credentials moved into the Inventory group. The old addresses (`/nodes/profiles`, `/nodes/classification-rules`, `/nodes/collection-templates`, `/nodes/mib`, `/nodes/reclassify`) redirect to the new tabs and keep their query. A folder's node list names each node's device profile and marks the generic one, and a node's Overview offers **Make a profile for this device** when it is on it. `GET /api/v1/nodes` (and the MCP `list_nodes` tool) carry `profile_id`; `GET /api/v1/profiles` carries `fallback`, true on the profile a device falls back to when no classification rule recognised it.
+- **Alerts ▸ Alert rules holds both ways an alert is made.** Threshold rules and event rules are the two tabs of one menu item, and beside the tabs a chip says how that tab's rules combine: *Narrowest target wins* for thresholds, *Every match applies* for events. The event tab has the same target tabs as the threshold tab, and **Check a node** lists the event rules that reach the node under its threshold rules. `/alerts/event-rules` now opens `/alerts/rules/events`, keeping its query.
+
+### Bug Fixes
+
+- **Editing an event rule kept to one node no longer turns it into a rule on every node.** The dialog sent no node on save; it now keeps the rule's target.
 
 ## v0.3.66 — See each node's availability on its Overview, switch config backups on and off from the list, and stop re-paging a device that comes back
 

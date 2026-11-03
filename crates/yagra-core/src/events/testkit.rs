@@ -28,6 +28,7 @@ pub(super) fn stored_rule(pattern: &str, severity: &str) -> StoredEventRule {
         source_kind: None,
         source_id: None,
         node_id: None,
+        group_id: None,
         match_kind: EventMatchKind::Substring,
         pattern: pattern.into(),
         clear_pattern: None,

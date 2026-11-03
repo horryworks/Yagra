@@ -566,9 +566,10 @@
       "name": "名前",
       "severity": "重大度",
       "pattern": "パターン",
-      "scope": "スコープ",
+      "scope": "受信元",
       "status": "状態",
-      "actions": "操作"
+      "actions": "操作",
+      "target": "対象"
     },
     "empty": "イベントルールがありません",
     "emptyMatch": "一致するルールがありません",
@@ -605,7 +606,9 @@
       "add": "ルールを追加",
       "patternCase": {
         "info": "照合は大文字と小文字を区別します。正規表現なら先頭に (?i) を付けると区別しません。"
-      }
+      },
+      "target": "対象",
+      "pickTarget": "選ぶ"
     },
     "test": {
       "error": "エラー: {{msg}}",
@@ -626,6 +629,19 @@
     "filter": {
       "allSeverities": "すべての重大度",
       "allStatuses": "有効・無効を問わない"
+    },
+    "tabs": {
+      "all": "すべて",
+      "global": "全ノード",
+      "folder": "フォルダ",
+      "node": "ノード"
+    },
+    "target": {
+      "any": "すべて"
+    },
+    "check": {
+      "title": "イベントルール",
+      "empty": "このノードに当たるイベントルールはありません。"
     }
   },
   "eventSources": {
@@ -719,6 +735,16 @@
       "update": "配信時間を更新できませんでした。",
       "delete": "配信時間を削除できませんでした。",
       "zone": "既定のタイムゾーンを設定できませんでした。"
+    }
+  },
+  "alertRules": {
+    "tabs": {
+      "thresholds": "しきい値",
+      "events": "イベント"
+    },
+    "how": {
+      "thresholds": "狭い対象が勝つ",
+      "events": "当たれば全部効く"
     }
   }
 }

@@ -381,11 +381,12 @@ pub(super) async fn write<'a>(
             c.skipped += 1;
             continue;
         }
-        // Both references are *narrowing*: NULL means "any source" / "any node". Dropping a
+        // Every reference is *narrowing*: NULL means "any source" / "any node". Dropping a
         // dangling one would widen the rule to the whole fleet, so the rule is skipped instead.
         let source_missing = r.source_id.is_some_and(|id| !source_ids.contains(&id));
         let node_missing = r.node_id.is_some_and(|id| !node_ids.contains(&id));
-        if source_missing || node_missing {
+        let group_missing = r.group_id.is_some_and(|id| !group_ids.contains(&id));
+        if source_missing || node_missing || group_missing {
             notes.add("event_rules", NoteCode::SkippedMissingReference, None);
             c.skipped += 1;
             continue;
@@ -393,15 +394,15 @@ pub(super) async fn write<'a>(
         sqlx::query(
             "INSERT INTO event_rules (id, name, enabled, source_kind, source_id, node_id, \
                                           match_kind, pattern, clear_pattern, severity, ttl_secs, \
-                                          min_count, window_secs) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                                          min_count, window_secs, group_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
                  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, enabled = EXCLUDED.enabled, \
                      source_kind = EXCLUDED.source_kind, source_id = EXCLUDED.source_id, \
                      node_id = EXCLUDED.node_id, match_kind = EXCLUDED.match_kind, \
                      pattern = EXCLUDED.pattern, clear_pattern = EXCLUDED.clear_pattern, \
                      severity = EXCLUDED.severity, ttl_secs = EXCLUDED.ttl_secs, \
                      min_count = EXCLUDED.min_count, window_secs = EXCLUDED.window_secs, \
-                     updated_at = now()",
+                     group_id = EXCLUDED.group_id, updated_at = now()",
         )
         .bind(r.id)
         .bind(&r.name)
@@ -416,6 +417,7 @@ pub(super) async fn write<'a>(
         .bind(r.ttl_secs)
         .bind(r.min_count)
         .bind(r.window_secs)
+        .bind(r.group_id)
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, r.id);

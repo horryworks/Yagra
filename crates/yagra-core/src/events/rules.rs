@@ -66,6 +66,40 @@ pub fn compile_regex(pattern: &str) -> Result<Matcher, String> {
     compile_matcher("regex", pattern)
 }
 
+/// Whether a rule's target covers `node` (ADR-232): no target is every node, a node target is that
+/// node, a folder target is every node whose folder chain (`chain`, nearest first) holds it.
+///
+/// `chain` is `None` for a node the alert config has not seen yet, and a folder rule then does not
+/// apply: an unknown position narrows, never widens. Shared by the matcher and by the
+/// "which rules reach this node" list, so the two cannot disagree.
+#[must_use]
+pub fn targets_node(
+    rule_node: Option<Uuid>,
+    rule_group: Option<Uuid>,
+    node: Uuid,
+    chain: Option<&[Uuid]>,
+) -> bool {
+    match (rule_node, rule_group) {
+        (Some(n), _) => n == node,
+        (None, Some(g)) => chain.is_some_and(|c| c.contains(&g)),
+        (None, None) => true,
+    }
+}
+
+/// The stored rules that reach `node` — every-node rules, rules on one of its folders, and rules on
+/// the node itself (`GET /api/v1/event-rules?node_id=`, and MCP's `get_config`).
+#[must_use]
+pub fn rules_for_node(
+    rules: Vec<StoredEventRule>,
+    node: Uuid,
+    chain: Option<&[Uuid]>,
+) -> Vec<StoredEventRule> {
+    rules
+        .into_iter()
+        .filter(|r| targets_node(r.node_id, r.group_id, node, chain))
+        .collect()
+}
+
 /// A rule compiled for the hot path.
 #[derive(Debug, Clone)]
 pub struct CompiledRule {
@@ -74,6 +108,7 @@ pub struct CompiledRule {
     source_kind: Option<EventKind>,
     source_id: Option<Uuid>,
     node_id: Option<Uuid>,
+    group_id: Option<Uuid>,
     pub(super) matcher: Matcher,
     pub(super) clear_matcher: Option<Matcher>,
     pub severity: Severity,
@@ -83,11 +118,18 @@ pub struct CompiledRule {
 }
 
 impl CompiledRule {
-    /// Whether this rule applies to an event of `kind` from `source_id` on `node`.
-    pub(super) fn applies(&self, kind: EventKind, source: Option<Uuid>, node: Uuid) -> bool {
+    /// Whether this rule applies to an event of `kind` from `source_id` on `node`, whose folder
+    /// chain is `chain` (see [`targets_node`]).
+    pub(super) fn applies(
+        &self,
+        kind: EventKind,
+        source: Option<Uuid>,
+        node: Uuid,
+        chain: Option<&[Uuid]>,
+    ) -> bool {
         self.source_kind.is_none_or(|k| k == kind)
             && self.source_id.is_none_or(|s| Some(s) == source)
-            && self.node_id.is_none_or(|n| n == node)
+            && targets_node(self.node_id, self.group_id, node, chain)
     }
 }
 
@@ -126,6 +168,7 @@ pub(super) fn compile_rule(stored: &StoredEventRule) -> Option<CompiledRule> {
         source_kind,
         source_id: stored.source_id,
         node_id: stored.node_id,
+        group_id: stored.group_id,
         matcher,
         clear_matcher,
         severity: stored.severity,
@@ -171,16 +214,76 @@ mod tests {
         stored.node_id = Some(node);
         let rule = compile_rule(&stored).unwrap();
 
-        assert!(rule.applies(EventKind::Syslog, None, node));
-        assert!(!rule.applies(EventKind::Trap, None, node));
-        assert!(!rule.applies(EventKind::Syslog, None, other_node));
+        assert!(rule.applies(EventKind::Syslog, None, node, None));
+        assert!(!rule.applies(EventKind::Trap, None, node, None));
+        assert!(!rule.applies(EventKind::Syslog, None, other_node, None));
 
         let mut stored = stored_rule("x", "warning");
         stored.source_id = Some(source);
         let rule = compile_rule(&stored).unwrap();
-        assert!(rule.applies(EventKind::Webhook, Some(source), node));
-        assert!(!rule.applies(EventKind::Webhook, Some(Uuid::new_v4()), node));
-        assert!(!rule.applies(EventKind::Webhook, None, node));
+        assert!(rule.applies(EventKind::Webhook, Some(source), node, None));
+        assert!(!rule.applies(EventKind::Webhook, Some(Uuid::new_v4()), node, None));
+        assert!(!rule.applies(EventKind::Webhook, None, node, None));
+    }
+
+    #[test]
+    fn a_folder_rule_reaches_the_nodes_under_that_folder_and_no_others() {
+        let (node, outer, inner, elsewhere) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let chain = [inner, outer];
+        let mut stored = stored_rule("x", "warning");
+        stored.group_id = Some(outer);
+        let rule = compile_rule(&stored).unwrap();
+
+        assert!(rule.applies(EventKind::Syslog, None, node, Some(&chain)));
+        assert!(!rule.applies(EventKind::Syslog, None, node, Some(&[elsewhere])));
+        assert!(!rule.applies(EventKind::Syslog, None, node, Some(&[])));
+        // A node the alert config has not seen yet: its folder is unknown, so a folder rule must
+        // not reach it — narrowing, never widening.
+        assert!(!rule.applies(EventKind::Syslog, None, node, None));
+        // A rule with no target still reaches that node.
+        let every = compile_rule(&stored_rule("x", "warning")).unwrap();
+        assert!(every.applies(EventKind::Syslog, None, node, None));
+    }
+
+    #[test]
+    fn the_rules_for_a_node_are_every_node_its_folders_and_itself() {
+        let (node, other, folder, other_folder) = (
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let rule = |name: &str, node_id: Option<Uuid>, group_id: Option<Uuid>| {
+            let mut r = stored_rule("x", "warning");
+            r.name = name.into();
+            r.node_id = node_id;
+            r.group_id = group_id;
+            r
+        };
+        let all = vec![
+            rule("every", None, None),
+            rule("folder", None, Some(folder)),
+            rule("node", Some(node), None),
+            rule("other folder", None, Some(other_folder)),
+            rule("other node", Some(other), None),
+        ];
+        let names = |rules: Vec<StoredEventRule>| -> Vec<String> {
+            rules.into_iter().map(|r| r.name).collect()
+        };
+        assert_eq!(
+            names(rules_for_node(all.clone(), node, Some(&[folder]))),
+            ["every", "folder", "node"]
+        );
+        assert_eq!(
+            names(rules_for_node(all, node, None)),
+            ["every", "node"],
+            "an unknown folder position keeps the folder rules out"
+        );
     }
 
     #[test]
@@ -210,7 +313,7 @@ mod tests {
         let rule = compile_rule(&stored).expect("a kind-less rule still compiles");
         let node = Uuid::new_v4();
         for kind in EventKind::ALL {
-            assert!(rule.applies(kind, None, node));
+            assert!(rule.applies(kind, None, node, None));
         }
     }
 }

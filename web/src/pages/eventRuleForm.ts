@@ -18,6 +18,7 @@ export function ruleToInput(r: EventRule): EventRuleInput {
     source_kind: r.source_kind,
     source_id: r.source_id,
     node_id: r.node_id,
+    group_id: r.group_id,
     match_kind: r.match_kind,
     pattern: r.pattern,
     clear_pattern: r.clear_pattern,

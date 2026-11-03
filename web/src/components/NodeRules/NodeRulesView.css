@@ -36,3 +36,18 @@ html[data-viewport='mobile'] .nd-rules-table {
   min-height: 0;
   padding: 0 var(--space-2);
 }
+
+/* The event rules that reach the node, under the threshold rules (ADR-232). Shorter: it is a
+   plain list with no rows to open. */
+.nd-rules-events {
+  margin-top: var(--space-4);
+}
+.nd-rules-heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+}
+.nd-rules-table-short {
+  height: 30vh;
+  min-height: 180px;
+}

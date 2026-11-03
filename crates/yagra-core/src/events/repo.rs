@@ -165,8 +165,8 @@ impl EventRepo {
 
     pub async fn list_rules(&self) -> anyhow::Result<Vec<StoredEventRule>> {
         let rows = sqlx::query(
-            "SELECT id, name, enabled, source_kind, source_id, node_id, match_kind, pattern, \
-                    clear_pattern, severity, ttl_secs, min_count, window_secs, created_at \
+            "SELECT id, name, enabled, source_kind, source_id, node_id, group_id, match_kind, \
+                    pattern, clear_pattern, severity, ttl_secs, min_count, window_secs, created_at \
              FROM event_rules ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -180,6 +180,7 @@ impl EventRepo {
                     source_kind: row.try_get("source_kind")?,
                     source_id: row.try_get("source_id")?,
                     node_id: row.try_get("node_id")?,
+                    group_id: row.try_get("group_id")?,
                     match_kind: EventMatchKind::from_stored(row.try_get("match_kind")?),
                     pattern: row.try_get("pattern")?,
                     clear_pattern: row.try_get("clear_pattern")?,
@@ -197,8 +198,9 @@ impl EventRepo {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO event_rules (id, name, enabled, source_kind, source_id, node_id, \
-             match_kind, pattern, clear_pattern, severity, ttl_secs, min_count, window_secs) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+             match_kind, pattern, clear_pattern, severity, ttl_secs, min_count, window_secs, \
+             group_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(id)
         .bind(p.name)
@@ -213,6 +215,7 @@ impl EventRepo {
         .bind(p.ttl_secs)
         .bind(p.min_count)
         .bind(p.window_secs)
+        .bind(p.group_id)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -222,7 +225,8 @@ impl EventRepo {
         let res = sqlx::query(
             "UPDATE event_rules SET name = $2, enabled = $3, source_kind = $4, source_id = $5, \
              node_id = $6, match_kind = $7, pattern = $8, clear_pattern = $9, severity = $10, \
-             ttl_secs = $11, min_count = $12, window_secs = $13, updated_at = now() \
+             ttl_secs = $11, min_count = $12, window_secs = $13, group_id = $14, \
+             updated_at = now() \
              WHERE id = $1",
         )
         .bind(id)
@@ -238,6 +242,7 @@ impl EventRepo {
         .bind(p.ttl_secs)
         .bind(p.min_count)
         .bind(p.window_secs)
+        .bind(p.group_id)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -903,6 +908,7 @@ mod tests {
             source_kind: Some("syslog"),
             source_id: None,
             node_id: None,
+            group_id: None,
             match_kind: "substring",
             pattern,
             clear_pattern: Some("link up"),
@@ -1037,6 +1043,42 @@ mod tests {
         assert!(!repo.update_rule(Uuid::new_v4(), &edited).await.unwrap());
         assert!(repo.delete_rule(id).await.unwrap());
         assert!(!repo.delete_rule(id).await.unwrap());
+    }
+
+    /// A folder target (ADR-232) is stored and read back, a rule cannot name a node and a folder at
+    /// once, and deleting the folder deletes its rules rather than widening them to every node.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_rule_is_stored_and_goes_with_its_folder(pool: sqlx::PgPool) {
+        let repo = EventRepo::new(pool.clone());
+        let folder = yagra_base::pgtest::group(&pool, "site-a").await;
+        let node = yagra_base::pgtest::node(&pool, "rtr-1", 11, Some(folder)).await;
+
+        let mut on_folder = rule_params("psu", "PSU");
+        on_folder.group_id = Some(folder);
+        let id = repo.create_rule(&on_folder).await.unwrap();
+        let listed = repo.list_rules().await.unwrap();
+        let made = listed.iter().find(|r| r.id == id).expect("rule listed");
+        assert_eq!(made.group_id, Some(folder));
+        assert_eq!(made.node_id, None);
+
+        let mut both = rule_params("both", "X");
+        both.group_id = Some(folder);
+        both.node_id = Some(node);
+        assert!(
+            repo.create_rule(&both).await.is_err(),
+            "the CHECK refuses a rule with two targets"
+        );
+
+        sqlx::query("DELETE FROM node_groups WHERE id = $1")
+            .bind(folder)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            !repo.list_rules().await.unwrap().iter().any(|r| r.id == id),
+            "the folder's rule went with it instead of becoming a rule on every node"
+        );
     }
 
     /// A batch is written, and the filter reads back exactly the rows it names.

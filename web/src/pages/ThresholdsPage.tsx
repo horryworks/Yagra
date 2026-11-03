@@ -34,7 +34,6 @@ import { ThresholdModal } from '../components/ThresholdModal/ThresholdModal';
 import { RuleBounds } from '../components/ThresholdModal/RuleBounds';
 import { splitInterfaceScopeId } from '../lib/interfaceScope';
 import { overriddenRows } from './thresholdOverrides';
-import { PageHeader } from '../components/ui/PageHeader';
 import { EmptyState } from '../components/ui/EmptyState';
 import { InfoPress } from '../components/ui/InfoTip';
 import { Card } from '../components/ui/Card';
@@ -64,6 +63,7 @@ import { Select } from '../components/ui/Field';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { NodeRulesView } from '../components/NodeRules/NodeRulesView';
+import { NodeEventRulesView } from '../components/NodeRules/NodeEventRulesView';
 import { groupOptions } from '../lib/nodeTree';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
@@ -415,11 +415,6 @@ export function ThresholdsPage() {
 
   return (
     <div>
-      <PageHeader
-        title={t('nav:alerts.rules')}
-        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.rules') }]}
-      />
-
       {/* Deleting the reachability rule is allowed — it is an ordinary row — and it switches off
           node-down paging for the whole fleet. Saying so where it happened is the alternative to
           making that one row undeletable, which would make it a different kind of row. The way
@@ -459,6 +454,7 @@ export function ThresholdsPage() {
             </button>
           </div>
           {view.check && <NodeRulesView nodeId={view.check} />}
+          {view.check && <NodeEventRulesView nodeId={view.check} />}
         </>
       ) : (
       <>

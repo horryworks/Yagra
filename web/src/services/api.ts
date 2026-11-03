@@ -2537,8 +2537,10 @@ export const api = {
   deleteEventSource: (id: string): Promise<void> =>
     apiDelete('/api/v1/event-sources/{id}', { path: { id } }),
 
-  /** Event match rules (substring/regex → alert). */
-  listEventRules: (): Promise<EventRule[]> => apiGet('/api/v1/event-rules'),
+  /** Event match rules (substring/regex → alert). With a node, only the rules that reach it: on
+   *  every node, on one of its folders, or on the node itself (ADR-232). */
+  listEventRules: (nodeId?: string): Promise<EventRule[]> =>
+    apiGet('/api/v1/event-rules', { query: { node_id: nodeId } }),
 
   /** Create an event rule. */
   createEventRule: (body: EventRuleInput): Promise<{ id: string }> =>

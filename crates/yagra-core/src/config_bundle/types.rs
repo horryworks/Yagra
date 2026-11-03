@@ -385,6 +385,9 @@ pub struct EventRuleRow {
     pub source_id: Option<Uuid>,
     #[serde(default)]
     pub node_id: Option<Uuid>,
+    /// A folder target (ADR-232); absent in a bundle written before it.
+    #[serde(default)]
+    pub group_id: Option<Uuid>,
     pub match_kind: String,
     pub pattern: String,
     #[serde(default)]

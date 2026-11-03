@@ -41,6 +41,7 @@ export const TABLE_IDS = [
   'alerts.history',
   'alerts.maintenance',
   'alerts.mutes',
+  'alerts.nodeEventRules',
   'alerts.nodeRules',
   'alerts.thresholds',
   // Nodes / monitoring configuration

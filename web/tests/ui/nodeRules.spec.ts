@@ -9,6 +9,7 @@
 // a level tab writes the URL and brings its target picker.
 
 import { expect, test } from '../support/app';
+import type { Page } from '@playwright/test';
 import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 
@@ -96,7 +97,8 @@ test('a metric row shows the rule in force, the rule it beat, and starts a rule 
 
 test('a level tab narrows the list in the URL and brings its target picker', async ({ page }) => {
   await page.goto('/alerts/rules');
-  const tabs = page.getByRole('tablist');
+  // The level tabs, not the hub's Thresholds / Events above them (ADR-232).
+  const tabs = levelTabs(page);
   await expect(tabs).toBeVisible({ timeout: 15_000 });
   await expect(tabs.getByRole('tab', { name: 'All', exact: true })).toHaveAttribute(
     'aria-selected',
@@ -115,7 +117,20 @@ test('Check a node opens a picker, and All rules goes back to the list', async (
   await page.goto('/alerts/rules');
   await page.getByRole('button', { name: 'Check a node' }).click({ timeout: 15_000 });
   await expect(page.locator('.thresholds-check-head')).toBeVisible();
-  await expect(page.getByRole('tablist')).toHaveCount(0);
+  await expect(levelTabs(page)).toHaveCount(0);
   await page.getByRole('button', { name: 'All rules' }).click();
-  await expect(page.getByRole('tablist')).toBeVisible();
+  await expect(levelTabs(page)).toBeVisible();
 });
+
+test('checking a node lists the event rules that reach it too', async ({ page }) => {
+  await page.goto(`/alerts/rules?check=${NODE_ID}`);
+  await expect(page.getByRole('heading', { name: 'Event rules' })).toBeVisible({
+    timeout: 15_000,
+  });
+});
+
+function levelTabs(page: Page) {
+  return page
+    .getByRole('tablist')
+    .filter({ has: page.getByRole('tab', { name: 'Profile', exact: true }) });
+}

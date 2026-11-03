@@ -39,9 +39,9 @@
     "history": "History",
     "rules": "Threshold rules",
     "routing": "Notification delivery",
-    "eventRules": "Event alert rules",
     "maintenance": "Maintenance windows",
-    "mutes": "Mutes"
+    "mutes": "Mutes",
+    "alertRules": "Alert rules"
   },
   "events": {
     "all": "Events",
@@ -84,9 +84,7 @@
   "descriptions": {
     "nodesCredentials": "Credentials Yagra uses to reach monitored devices",
     "nodesCollectionSetup": "Tune what is collected from devices the built-ins do not fit",
-    "alertsRules": "Active monitoring — thresholds on the metrics Yagra polls",
     "alertsRouting": "Channels and rules that deliver alert notifications",
-    "alertsEventRules": "Passive monitoring — patterns matched against the events on the Events tab",
     "eventsAll": "Passive monitoring — syslog, SNMP traps and webhook events as they arrive",
     "eventsWebhooks": "Senders authorized to POST events to Yagra over HTTP",
     "eventsForwarding": "Relay syslog, traps and flow to collectors or BigQuery",
@@ -125,7 +123,8 @@
     "settingsRoles": "What each role is allowed to do, privilege by privilege",
     "settingsAuth": "Sign-in sources — local passwords, an external identity provider, LDAP",
     "settingsAudit": "Who changed or acknowledged what, and when",
-    "dashboardPublic": "The one board people can see without signing in"
+    "dashboardPublic": "The one board people can see without signing in",
+    "alertsAlertRules": "Thresholds on polled metrics and patterns on received events"
   },
   "shell": {
     "home": "Home",

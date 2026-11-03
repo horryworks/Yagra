@@ -148,15 +148,14 @@ describe('nav IA', () => {
     expect(last.items.map((i) => [i.path, i.ownsSubpaths])).toEqual([['/nodes/collection', true]]);
   });
 
-  it('keeps the two alert-rule screens adjacent, ahead of what happens after one fires', () => {
-    // The pair is the point: the two ways an alert comes into existence, side by side and named the
-    // same way. Notification delivery used to sit between them. Order = order of the work (R7):
-    // decide what fires → decide who hears → decide when to stay quiet.
+  it('puts the alert rules first, ahead of what happens after one fires', () => {
+    // The two ways an alert comes into existence are one item with two tabs since ADR-232; before,
+    // they were two items side by side. Order = order of the work (R7): decide what fires →
+    // decide who hears → decide when to stay quiet.
     const alerts = NAV.find((s) => s.key === 'alerts')!;
     const configure = alerts.groups.find((g) => g.labelKey === 'groups.configure')!;
     expect(configure.items.map((i) => i.path)).toEqual([
       '/alerts/rules',
-      '/alerts/event-rules',
       '/alerts/routing',
       '/alerts/maintenance',
       '/alerts/mutes',

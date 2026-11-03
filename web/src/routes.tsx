@@ -39,6 +39,8 @@ import { MissingPrefixesPage } from './pages/MissingPrefixesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { MibRepositoryPage } from './pages/MibRepositoryPage';
 import { CollectionSetupPage } from './pages/CollectionSetupPage';
+import { AlertRulesPage } from './pages/AlertRulesPage';
+import { alertRuleTabPath, EVENT_RULES_MOVED_FROM } from './pages/alertRules';
 import {
   COLLECTION_MOVED_FROM,
   COLLECTION_TABS,
@@ -149,9 +151,16 @@ export function AppRoutes() {
         {/* Alerts */}
         <Route path="alerts" element={<ActiveAlertsPage />} />
         <Route path="alerts/history" element={<HistoryPage />} />
-        <Route path="alerts/rules" element={<ThresholdsPage />} />
+        {/* Alert rules: thresholds and event rules as path tabs of one page (ADR-232). */}
+        <Route path="alerts/rules" element={<AlertRulesPage />}>
+          <Route index element={<ThresholdsPage />} />
+          <Route path="events" element={<EventRulesPage />} />
+        </Route>
+        <Route
+          path={EVENT_RULES_MOVED_FROM.slice(1)}
+          element={<MovedTo to={alertRuleTabPath('events')} />}
+        />
         <Route path="alerts/routing" element={<RoutingPage />} />
-        <Route path="alerts/event-rules" element={<EventRulesPage />} />
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
         <Route path="alerts/mutes" element={<MutesPage />} />
 

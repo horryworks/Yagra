@@ -28,6 +28,7 @@ import { ListToolbar } from '../../../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../../../lib/listToolbar';
 import { Donut, type DonutSegment } from '../../../dashboard/primitives/Donut';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
+import { alertRuleTabPath } from '../../../pages/alertRules';
 import { Select } from '../../../components/ui/Field';
 import { isAnyFiltered } from '../../../lib/columnFilter';
 import { useFilterParams } from '../../../lib/useFilterParams';
@@ -137,7 +138,7 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
         header: t('report.rule_gap.cols.action'),
         width: '120px',
         render: () => (
-          <Link className="ts-linkbtn" to="/alerts/event-rules">
+          <Link className="ts-linkbtn" to={alertRuleTabPath('events')}>
             {t('report.rule_gap.writeRule')}
           </Link>
         ),
@@ -204,7 +205,7 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
               <span className="mono">{fmtCount(countOf(f))}</span>
             </div>
             <div className="mono tsr-card-sig">{sigOf(f)}</div>
-            <Link className="ts-linkbtn" to="/alerts/event-rules">
+            <Link className="ts-linkbtn" to={alertRuleTabPath('events')}>
               {t('report.rule_gap.writeRule')}
             </Link>
           </div>
