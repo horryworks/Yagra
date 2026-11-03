@@ -122,6 +122,15 @@
   outline-offset: -1px;
 }
 
+/* While customizing, a body that scrolls stops above the resize grip. A classic (non-overlay)
+   scrollbar is painted over the grip's corner, so on a card whose content overflowed the grip was
+   still there and still draggable, but drawn underneath the scrollbar's down arrow — nobody could
+   find it. 20px is the grip (18px) plus its 2px inset. The phone hides the grip and keeps the body
+   whole (the 720px block below). */
+.mydash-cell.is-editing .card-body {
+  margin-bottom: 20px;
+}
+
 .mydash-cell.is-dragging {
   /* The dragged tile floats above its neighbours. */
   z-index: 2;
@@ -217,6 +226,9 @@
   .widgetframe-resize {
     opacity: 1; /* always visible — nothing to reveal on hover */
   }
+  .mydash-cell.is-editing .card-body {
+    margin-bottom: calc(var(--touch-target) + 2px);
+  }
 }
 
 /* On a phone the board collapses to one full-width column with natural heights (MyDashboardPage.css
@@ -226,6 +238,9 @@
 @media (max-width: 720px) {
   .widgetframe-resize {
     display: none;
+  }
+  .mydash-cell.is-editing .card-body {
+    margin-bottom: 0;
   }
 }
 /* Heading (ADR-071): the widget type, then the operator's name beside it. The two are styled apart

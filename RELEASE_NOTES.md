@@ -43,6 +43,7 @@
 
 ### Bug Fixes
 
+- **A dashboard card's resize grip is no longer hidden under its scrollbar.** While customizing, a card whose content scrolled drew its scrollbar over the grip in the bottom-right corner, so the card looked impossible to resize. The scrolling area now ends above the grip.
 - **Editing an event rule kept to one node no longer turns it into a rule on every node.** The dialog sent no node on save; it now keeps the rule's target.
 
 ## v0.3.66 — See each node's availability on its Overview, switch config backups on and off from the list, and stop re-paging a device that comes back
