@@ -246,6 +246,7 @@ export function MaintenancePage() {
     <div>
       <PageHeader
         title={t('nav:alerts.maintenance')}
+        writePermission="manage_maintenance"
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.maintenance') }]}
       />
 

@@ -67,7 +67,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
   alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
   auth: [79, 43],
-  common: [806, 438], // + watch.nothingPolled, the shell state sentence when no poller is live (ADR-227, 2026-11-02)
+  common: [871, 473], // + viewOnly.info, what a hidden write control needs and who you are (ADR-235, 2026-11-03)
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
@@ -158,7 +158,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 // tip 27 (Inc.33): the set-parent dialog said what an upstream does under the field, the same
 // sentence whatever the operator chose.
 // press 16 (ADR-228): the Interfaces headers sort when pressed, so their three ⓘ went.
-const INFO_COUNT = { tip: 27, press: 16 };
+const INFO_COUNT = { tip: 27, press: 17 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked

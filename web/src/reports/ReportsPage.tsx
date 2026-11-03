@@ -328,6 +328,7 @@ export function ReportsPage() {
     <div className="page-fill">
       <PageHeader
         title={t('nav:dashboard.reports')}
+        writePermission="manage_config"
         trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.reports') }]}
       />
 

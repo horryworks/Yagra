@@ -260,6 +260,7 @@ export function ConfigBackupsPage() {
     <div>
       <PageHeader
         title={t('nav:nodes.configBackups')}
+        writePermission="manage_config"
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.configBackups') }]}
       />
       {sched && schedule.data && (

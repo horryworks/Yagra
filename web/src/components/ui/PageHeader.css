@@ -16,6 +16,17 @@
   font-weight: var(--weight-medium);
 }
 
+.pageheader-titlerow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pageheader-viewonly {
+  flex: none;
+}
+
 .pageheader-note {
   margin: 4px 0 0;
   font-size: var(--font-sm);
@@ -43,6 +54,7 @@ html[data-viewport='mobile'] .pageheader-row > div:first-child {
 }
 
 html[data-viewport='mobile'] .pageheader-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

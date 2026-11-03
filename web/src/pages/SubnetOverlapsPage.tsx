@@ -345,6 +345,7 @@ export function SubnetOverlapsPage() {
     <div>
       <PageHeader
         title={t('nav:nodes.subnetOverlaps')}
+        writePermission="manage_config"
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.subnetOverlaps') }]}
       />
 

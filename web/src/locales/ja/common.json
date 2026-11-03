@@ -14,6 +14,10 @@
     "forbidden": "この画面を見る権限がありません。必要な場合は管理者に依頼してください。",
     "forbiddenPermission": "この画面には「{{permission}}」の権限が必要です。必要な場合は管理者に依頼してください。"
   },
+  "viewOnly": {
+    "label": "閲覧のみ",
+    "info": "ここでの追加と変更には「{{permission}}」の権限が要ります。あなたのロールは {{role}} です。"
+  },
   "copy": {
     "copied": "コピーしました",
     "copyId": "ID をコピー",

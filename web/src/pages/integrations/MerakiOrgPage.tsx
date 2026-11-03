@@ -504,6 +504,7 @@ export function MerakiOrgPage() {
     <div className="meraki-orgpage">
       <PageHeader
         title={org?.name ?? t('meraki.name')}
+        writePermission="manage_config"
         trail={[
           { label: t('nav:sections.settings') },
           { label: t('nav:settings.integrations'), to: '/settings/integrations' },

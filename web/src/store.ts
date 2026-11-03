@@ -6,7 +6,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { severityRank } from './lib/format';
-import { grants, permissionLabel } from './lib/permissions';
+import { grants, permissionLabel, roleLabel } from './lib/permissions';
 import { getToken, type ClientConfig } from './services/api';
 import type { Viewer } from './dashboard/layoutAccess';
 import type { Alert, Permission, RoleMatrix, Scope, UserKind } from './types/api';
@@ -134,6 +134,22 @@ export function useScope(): Scope | null {
  */
 export function usePermissionLabel(perm: Permission): string {
   return useAuthStore((s) => permissionLabel(s.roleMatrix, perm));
+}
+
+/**
+ * Whether the caller is signed in, the role matrix has arrived, and it does NOT grant `perm` — the
+ * one state in which a screen's write controls are hidden from someone who can read it (ADR-235).
+ * False while resolving, so "View only" never flashes up before the matrix lands.
+ */
+export function useLacks(perm: Permission): boolean {
+  return useAuthStore(
+    (s) => s.authed && s.roleMatrix != null && s.role != null && !grants(s.roleMatrix, s.role, perm),
+  );
+}
+
+/** The current principal's role, named by the server's catalogue. */
+export function useRoleLabel(): string {
+  return useAuthStore((s) => (s.role ? roleLabel(s.roleMatrix, s.role) : ''));
 }
 
 // Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces

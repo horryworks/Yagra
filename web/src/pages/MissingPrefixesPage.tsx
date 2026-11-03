@@ -474,6 +474,7 @@ export function MissingPrefixesPage() {
     <div>
       <PageHeader
         title={t('nav:nodes.missingPrefixes')}
+        writePermission="manage_config"
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.missingPrefixes') }]}
       />
 

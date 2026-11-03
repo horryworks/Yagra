@@ -130,6 +130,7 @@ export function ActiveAlertsPage() {
     <div>
       <PageHeader
         title={t('nav:alerts.active')}
+        writePermission="ack_alerts"
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.active') }]}
       />
       {/* No `Card` around the list: the data-table standard is header → toolbar → rows, and this

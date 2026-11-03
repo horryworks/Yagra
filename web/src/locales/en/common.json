@@ -14,6 +14,10 @@
     "forbidden": "You don't have permission to view this. Ask an administrator if you need access.",
     "forbiddenPermission": "This screen needs the “{{permission}}” privilege. Ask an administrator if you need access."
   },
+  "viewOnly": {
+    "label": "View only",
+    "info": "Adding and changing things here needs the “{{permission}}” privilege. You are signed in as {{role}}."
+  },
   "copy": {
     "copied": "Copied",
     "copyId": "Copy id",

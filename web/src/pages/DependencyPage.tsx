@@ -277,6 +277,7 @@ export function DependencyPage() {
     <div className="page-fill">
       <PageHeader
         title={t('nav:topology.dependency')}
+        writePermission="manage_config"
         trail={[{ label: t('nav:sections.topology') }, { label: t('nav:topology.dependency') }]}
       />
 

@@ -1147,6 +1147,7 @@ export function NodesPage() {
     <div className={selected ? 'page-fill nodes-detail-active' : 'page-fill'}>
       <PageHeader
         title={t('nav:nodes.all')}
+        writePermission="manage_config"
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all') }]}
         note={
           <>

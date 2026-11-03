@@ -49,3 +49,8 @@ export function grants(matrix: RoleMatrix | null, role: string | null, perm: Per
 export function permissionLabel(matrix: RoleMatrix | null, perm: Permission): string {
   return matrix?.permissions.find((p) => p.key === perm)?.label ?? perm;
 }
+
+/** The server's name for a role ("Viewer"), from the same catalogue; falls back to the key. */
+export function roleLabel(matrix: RoleMatrix | null, role: string): string {
+  return matrix?.roles.find((r) => r.key === role)?.label ?? role;
+}

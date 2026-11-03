@@ -777,6 +777,7 @@ export function MerakiIntegrationPage() {
     <div>
       <PageHeader
         title={t('meraki.name')}
+        writePermission="manage_config"
         trail={[
           { label: t('nav:sections.settings') },
           { label: t('nav:settings.integrations'), to: '/settings/integrations' },

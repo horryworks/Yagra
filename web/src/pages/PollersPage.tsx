@@ -1765,6 +1765,7 @@ export function PollersPage() {
     <div>
       <PageHeader
         title={t('nav:settings.pollers')}
+        writePermission="manage_system"
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.pollers') }]}
       />
 

@@ -193,6 +193,7 @@ export function ScheduledPage() {
     <div className="page-fill">
       <PageHeader
         title={t('nav:troubleshoot.scheduled')}
+        writePermission="ack_alerts"
         trail={[
           { label: t('nav:sections.troubleshoot'), to: '/troubleshoot' },
           { label: t('nav:troubleshoot.scheduled') },

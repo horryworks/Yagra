@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { sourceFiles } from '../testSupport/sources';
 import { join } from 'node:path';
-import { grants, permissionLabel } from './permissions';
+import { grants, permissionLabel, roleLabel } from './permissions';
 import { RELEASE_PERMISSION, releasableRows, type SuppressionPanelRow } from './suppression';
 import type { RoleMatrix } from '../types/api';
 
@@ -65,6 +65,17 @@ describe('permissionLabel', () => {
 
   it('falls back to the key before the matrix arrives', () => {
     expect(permissionLabel(null, 'manage_config')).toBe('manage_config');
+  });
+});
+
+describe('roleLabel', () => {
+  it('names the role from the server catalogue', () => {
+    expect(roleLabel(MATRIX, 'viewer')).toBe('Viewer');
+  });
+
+  it('falls back to the key for a role the catalogue does not list', () => {
+    expect(roleLabel(null, 'operator')).toBe('operator');
+    expect(roleLabel(MATRIX, 'auditor')).toBe('auditor');
   });
 });
 

@@ -517,6 +517,7 @@ export function NetboxIntegrationPage() {
     <div>
       <PageHeader
         title={t('netbox.name')}
+        writePermission="manage_config"
         trail={[
           { label: t('nav:sections.settings') },
           { label: t('nav:settings.integrations'), to: '/settings/integrations' },
