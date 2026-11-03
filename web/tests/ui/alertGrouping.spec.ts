@@ -11,7 +11,8 @@ test('each grouping level reads on one line', async ({ page }) => {
   const buttons = group.getByRole('button');
   await expect(buttons).toHaveCount(4);
   // The mock reports a node down, so every label carries a count.
-  await expect(buttons.nth(1)).toContainText('·');
+  // The count says what it counts: the notifications that level would send now.
+  await expect(buttons.nth(1)).toContainText('notifies');
   for (const b of await buttons.all()) {
     const box = await b.evaluate((el) => {
       const line = parseFloat(getComputedStyle(el).lineHeight) || 16;

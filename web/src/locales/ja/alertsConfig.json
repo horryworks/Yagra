@@ -757,7 +757,7 @@
       "links": "線から読めるもの",
       "site": "拠点ごと"
     },
-    "levelWithCount": "{{level}} · {{count}}",
+    "levelWithCount": "{{level}}（通知 {{count}} 件）",
     "now": "いま応答なし {{down}} 台 → 通知 {{count}} 件",
     "nowNone": "いま応答のないノードはありません。",
     "folders": "フォルダごとの段",

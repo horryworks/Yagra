@@ -763,7 +763,7 @@
       "links": "From links",
       "site": "Whole site"
     },
-    "levelWithCount": "{{level}} · {{count}}",
+    "levelWithCount": "{{level}} · notifies {{count}}",
     "now": "{{down}} down now → {{count}} notifications",
     "nowNone": "Nothing is down now.",
     "folders": "Folder levels",
