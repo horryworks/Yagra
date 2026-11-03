@@ -207,20 +207,20 @@ export const NAV: NavSection[] = [
     labelKey: 'sections.topology',
     // The network map is not a menu item since ADR-191: it draws one folder at a time and is
     // opened from the Nodes tree, a node's detail page or a Geo map pin. Its route and title stay.
-    path: '/topology/dependency',
+    path: '/topology/geo',
     groups: [
       {
         items: [
           {
-            labelKey: 'topology.dependency',
-            descKey: 'descriptions.topologyDependency',
-            path: '/topology/dependency',
-            implemented: true,
-          },
-          {
             labelKey: 'topology.geo',
             descKey: 'descriptions.topologyGeo',
             path: '/topology/geo',
+            implemented: true,
+          },
+          {
+            labelKey: 'topology.dependency',
+            descKey: 'descriptions.topologyDependency',
+            path: '/topology/dependency',
             implemented: true,
           },
         ],

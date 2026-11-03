@@ -31,6 +31,7 @@
 - **一覧の絞り込みは列の見出しから開くようになり、フィルタ行はなくなりました。** 絞り込める列には、名前の横に小さなじょうごがあります。押すと、これまで行にあったのと同じ絞り込みが開きます。効いている条件は表の上にチップ（*Oper: Up ✕*）で並びます。表に操作の行が増えることはなくなり、それを開いていた **Filter** ボタンもなくしました。見出しのない一覧（Alerts ▸ Active alerts、Settings ▸ Users、Troubleshoot ▸ Runs、ノードの Flow タブ）は、ツールバーのじょうご 1 つから全部の絞り込みを開きます。スマホの **Filter** ボタンとシートは今までどおりです。
 - **ブラウザが行を全部持っている一覧は、どの列でも並び替えられます。** 設定の一覧（Pollers・Notification delivery・Event rules・Maintenance・Mutes・Forwarding・Reports・Scheduled analyses・Classification rules・Dependencies・Missing prefixes・Subnet overlaps、ノードの Neighbors と AP など）で見出しを押すと、その列で並びます。もう一度押すと逆になり、3 回目で元の並びに戻ります。矢印は、並べている列にだけ出ます。開いたときの並びは今までどおりで、選んだ並びは URL に残ります。サーバーがページ送りする一覧（Events・History・Audit）は、まだ並び替えられません。
 - **ノードの Interfaces はどの列でも並び替えられます。** 見出しを押すとその列で並び、もう一度押すと逆に、3 回目で機器のポート番号の順（開いたときの並び）に戻ります。並び順は絞り込みと一緒に URL に残ります。IP addresses・Neighbors・Duplex の ⓘ と、IP addresses・Media の絞り込みの説明文はなくしました。
+- **Topology は Geo map から開きます。** Topology のメニューの先頭を Geo map にし、Topology タブを押すとそこに着きます。Dependencies はその次です。
 
 ## v0.3.66 — ノードごとの稼働状況を概要タブで見られる。Config backups の一覧からオン・オフできる。戻った機器を通知し直さない
 
