@@ -20,7 +20,6 @@ import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TextInput, Select } from '../components/ui/Field';
-import { ChipInput } from '../components/ui/ChipInput';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import { rowActionsWidth } from '../lib/rowActions';
@@ -95,14 +94,11 @@ export function DeliveryHoursSection({
       },
       {
         key: 'appliesTo',
-        sortValue: (s) => [...s.group_ids.map(groupName), ...s.labels].join(', ') || null,
+        sortValue: (s) => s.group_ids.map(groupName).join(', ') || null,
         header: t('deliveryHours.cols.appliesTo'),
         width: '1.4fr',
         render: (s) => (
-          <ClippedText
-            className="muted"
-            text={[...s.group_ids.map(groupName), ...s.labels].join(', ')}
-          />
+          <ClippedText className="muted" text={s.group_ids.map(groupName).join(', ')} />
         ),
       },
       {
@@ -383,14 +379,6 @@ function ScheduleModal({
             if (id) setDraft({ ...draft, groupIds: [...draft.groupIds, id] });
             setPicking('');
           }}
-        />
-      </div>
-      <div className="modal-field">
-        <span className="modal-field-label">{t('deliveryHours.modal.labels')}</span>
-        <ChipInput
-          value={draft.labels}
-          onChange={(next) => setDraft({ ...draft, labels: next })}
-          inputLabel={t('deliveryHours.modal.labels')}
         />
       </div>
       <FormError form={form} />

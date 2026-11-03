@@ -588,25 +588,19 @@ pub(crate) async fn load_hours(
     if cache.key.as_ref() == Some(&key) {
         return;
     }
-    let (nodes, tag_rows, folders) = match (
-        repo.list_nodes().await,
-        groups.tag_rows().await,
-        groups.time_zone_rows().await,
-    ) {
-        (Ok(n), Ok(t), Ok(f)) => (n, t, f),
-        (n, t, f) => {
-            let e = [n.err(), t.err(), f.err()].into_iter().flatten().next();
+    let (nodes, folders) = match (repo.list_nodes().await, groups.time_zone_rows().await) {
+        (Ok(n), Ok(f)) => (n, f),
+        (n, f) => {
+            let e = [n.err(), f.err()].into_iter().flatten().next();
             tracing::warn!(error = ?e, "failed to resolve delivery hours");
             return;
         }
     };
-    let tags = crate::inventory::tagres::TagResolver::build(tag_rows);
     let targets: Vec<NodeTarget> = nodes
         .iter()
         .map(|n| NodeTarget {
             id: n.id,
             group: n.group.map(|g| g.as_uuid()),
-            labels: tags.effective_set(n),
         })
         .collect();
     let zone = yagra_base::wall_clock::zone_or_utc(key.2.as_deref());

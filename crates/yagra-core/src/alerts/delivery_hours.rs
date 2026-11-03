@@ -7,8 +7,8 @@
 //!   read in the local time of the node an alert is about. A schedule carries no zone of its own,
 //!   so one "weekdays 08:30-17:20" serves a site in Tokyo and one in New York (decision 3).
 //! - **Which nodes it applies to, and in which zone** ([`build_policy`], [`HoursPolicy`]): a node is
-//!   covered by a schedule naming a folder above it or a label it carries (decision 4), and its
-//!   zone is the nearest folder's, else the deployment's default (decision 5). A node no schedule
+//!   covered by a schedule naming a folder above it (decision 4; a label never decides it, ADR-229
+//!   decision 9), and its zone is the nearest folder's, else the deployment's default (decision 5). A node no schedule
 //!   covers is always open, so a deployment with no schedule behaves exactly as before.
 //! - **The notifications held while a node is closed** ([`DeliveryHoursRepo`] as a [`HeldStore`]),
 //!   kept in PostgreSQL so a restart does not lose the morning's deliveries (decision 7).
@@ -40,8 +40,6 @@ pub struct DeliverySchedule {
     pub end_minute: u16,
     /// Folders it applies to, each with everything beneath it.
     pub group_ids: Vec<Uuid>,
-    /// Labels it applies to, inherited from folders as every label is (ADR-135).
-    pub labels: Vec<String>,
 }
 
 /// What [`DeliveryHoursRepo::create`] and [`DeliveryHoursRepo::update`] write: a schedule without
@@ -54,7 +52,6 @@ pub struct ScheduleFields<'a> {
     pub start_minute: u16,
     pub end_minute: u16,
     pub group_ids: &'a [Uuid],
-    pub labels: &'a [String],
 }
 
 /// A schedule's span, ready to be asked about one local time.
@@ -174,12 +171,11 @@ impl HoursPolicy {
     }
 }
 
-/// One node as [`build_policy`] needs it: where it is filed and every label it effectively carries.
+/// One node as [`build_policy`] needs it: where it is filed.
 #[derive(Debug, Clone)]
 pub struct NodeTarget {
     pub id: NodeId,
     pub group: Option<Uuid>,
-    pub labels: BTreeSet<String>,
 }
 
 /// Which nodes each enabled schedule covers, and the zone each covered node keeps time in.
@@ -202,7 +198,7 @@ pub fn build_policy(
     }
     let edges: Vec<(Uuid, Option<Uuid>)> = folders.iter().map(|(id, p, _)| (*id, *p)).collect();
     // Per schedule, every folder it reaches: the named ones and everything beneath them.
-    let reach: Vec<(Window, HashSet<Uuid>, &[String])> = enabled
+    let reach: Vec<(Window, HashSet<Uuid>)> = enabled
         .iter()
         .map(|s| {
             let folders: HashSet<Uuid> = s
@@ -210,7 +206,7 @@ pub fn build_policy(
                 .iter()
                 .flat_map(|g| yagra_base::groups::group_subtree(&edges, *g))
                 .collect();
-            (Window::of(s), folders, s.labels.as_slice())
+            (Window::of(s), folders)
         })
         .collect();
     let zones = yagra_base::groups::resolve_nearest_ancestor(folders.iter().cloned());
@@ -218,11 +214,8 @@ pub fn build_policy(
     for node in nodes {
         let windows: Vec<Window> = reach
             .iter()
-            .filter(|(_, folders, labels)| {
-                node.group.is_some_and(|g| folders.contains(&g))
-                    || labels.iter().any(|l| node.labels.contains(l))
-            })
-            .map(|(w, _, _)| *w)
+            .filter(|(_, folders)| node.group.is_some_and(|g| folders.contains(&g)))
+            .map(|(w, _)| *w)
             .collect();
         if windows.is_empty() {
             continue;
@@ -299,7 +292,7 @@ impl DeliveryHoursRepo {
     /// Every schedule, by name.
     pub async fn list(&self) -> anyhow::Result<Vec<DeliverySchedule>> {
         let rows = sqlx::query(
-            "SELECT id, name, enabled, days, start_minute, end_minute, group_ids, labels \
+            "SELECT id, name, enabled, days, start_minute, end_minute, group_ids \
              FROM delivery_hours ORDER BY name, id",
         )
         .fetch_all(&self.pool)
@@ -320,7 +313,6 @@ impl DeliveryHoursRepo {
                     start_minute: u16::try_from(start).unwrap_or(0),
                     end_minute: u16::try_from(end).unwrap_or(0),
                     group_ids: row.try_get("group_ids")?,
-                    labels: row.try_get("labels")?,
                 })
             })
             .collect()
@@ -331,8 +323,8 @@ impl DeliveryHoursRepo {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO delivery_hours \
-               (id, name, enabled, days, start_minute, end_minute, group_ids, labels) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+               (id, name, enabled, days, start_minute, end_minute, group_ids) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(id)
         .bind(f.name)
@@ -341,7 +333,6 @@ impl DeliveryHoursRepo {
         .bind(i16::try_from(f.start_minute)?)
         .bind(i16::try_from(f.end_minute)?)
         .bind(f.group_ids)
-        .bind(f.labels)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -351,7 +342,7 @@ impl DeliveryHoursRepo {
     pub async fn update(&self, id: Uuid, f: &ScheduleFields<'_>) -> anyhow::Result<bool> {
         let res = sqlx::query(
             "UPDATE delivery_hours SET name = $2, enabled = $3, days = $4, start_minute = $5, \
-                    end_minute = $6, group_ids = $7, labels = $8 \
+                    end_minute = $6, group_ids = $7 \
              WHERE id = $1",
         )
         .bind(id)
@@ -361,7 +352,6 @@ impl DeliveryHoursRepo {
         .bind(i16::try_from(f.start_minute)?)
         .bind(i16::try_from(f.end_minute)?)
         .bind(f.group_ids)
-        .bind(f.labels)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -588,7 +578,6 @@ mod tests {
             start_minute: start,
             end_minute: end,
             group_ids: Vec::new(),
-            labels: Vec::new(),
         }
     }
 
@@ -680,35 +669,37 @@ mod tests {
         assert!(hours.is_open(Utc.with_ymd_and_hms(2026, 12, 7, 13, 30, 0).unwrap()));
     }
 
-    fn node(n: u128, group: Option<u128>, labels: &[&str]) -> NodeTarget {
+    fn node(n: u128, group: Option<u128>) -> NodeTarget {
         NodeTarget {
             id: NodeId::from(Uuid::from_u128(n)),
             group: group.map(Uuid::from_u128),
-            labels: labels.iter().map(|l| (*l).to_owned()).collect(),
         }
     }
 
     #[test]
-    fn a_schedule_covers_its_folders_subtree_and_its_labels_and_nothing_else() {
+    fn a_schedule_covers_its_folders_subtree_and_nothing_else() {
         let site = Uuid::from_u128(10);
         let floor = Uuid::from_u128(11);
         let other = Uuid::from_u128(12);
+        let unnamed = Uuid::from_u128(13);
         let folders = vec![
             (site, None, Some("Asia/Tokyo".to_owned())),
             (floor, Some(site), None),
             (other, None, None),
+            (unnamed, None, None),
         ];
-        let mut by_folder = schedule(WEEKDAYS, OPEN, CLOSE);
-        by_folder.group_ids = vec![site];
-        let mut by_label = schedule(WEEKDAYS, OPEN, CLOSE);
-        by_label.labels = vec!["office-hours".to_owned()];
+        let mut by_site = schedule(WEEKDAYS, OPEN, CLOSE);
+        by_site.group_ids = vec![site];
+        let mut by_other = schedule(WEEKDAYS, OPEN, CLOSE);
+        by_other.group_ids = vec![other];
         let nodes = vec![
-            node(1, Some(10), &[]),
-            node(2, Some(11), &[]),
-            node(3, Some(12), &["office-hours"]),
-            node(4, Some(12), &[]),
+            node(1, Some(10)),
+            node(2, Some(11)),
+            node(3, Some(12)),
+            node(4, Some(13)),
+            node(5, None),
         ];
-        let policy = build_policy(&[by_folder, by_label], &nodes, &folders, Tz::UTC);
+        let policy = build_policy(&[by_site, by_other], &nodes, &folders, Tz::UTC);
         let covered = |n: u128| policy.nodes.get(&NodeId::from(Uuid::from_u128(n)));
         assert_eq!(covered(1).map(|h| h.zone), Some(tokyo()));
         assert_eq!(
@@ -723,8 +714,9 @@ mod tests {
         );
         assert!(
             covered(4).is_none(),
-            "nothing names node 4, so it is always open"
+            "nothing names node 4's folder, so it is always open"
         );
+        assert!(covered(5).is_none(), "an unfiled node is always open");
         let anytime = Utc.with_ymd_and_hms(2026, 11, 7, 3, 0, 0).unwrap();
         assert!(policy.is_open(Some(NodeId::from(Uuid::from_u128(4))), anytime));
         assert!(
@@ -735,12 +727,14 @@ mod tests {
 
     #[test]
     fn two_schedules_on_one_node_open_it_when_either_is_open() {
+        let site = Uuid::from_u128(10);
+        let folders = vec![(site, None, None)];
         let mut day = schedule(WEEKDAYS, OPEN, CLOSE);
-        day.labels = vec!["a".to_owned()];
+        day.group_ids = vec![site];
         let mut weekend = schedule(&[6, 7], 0, 0);
-        weekend.labels = vec!["b".to_owned()];
-        let nodes = vec![node(1, None, &["a", "b"])];
-        let policy = build_policy(&[day, weekend], &nodes, &[], Tz::UTC);
+        weekend.group_ids = vec![site];
+        let nodes = vec![node(1, Some(10))];
+        let policy = build_policy(&[day, weekend], &nodes, &folders, Tz::UTC);
         let saturday_3am = Utc.with_ymd_and_hms(2026, 11, 7, 3, 0, 0).unwrap();
         assert!(policy.is_open(Some(NodeId::from(Uuid::from_u128(1))), saturday_3am));
         let monday_3am = Utc.with_ymd_and_hms(2026, 11, 9, 3, 0, 0).unwrap();
@@ -749,10 +743,11 @@ mod tests {
 
     #[test]
     fn a_switched_off_schedule_covers_nothing() {
+        let site = Uuid::from_u128(10);
         let mut s = schedule(WEEKDAYS, OPEN, CLOSE);
         s.enabled = false;
-        s.labels = vec!["a".to_owned()];
-        let policy = build_policy(&[s], &[node(1, None, &["a"])], &[], Tz::UTC);
+        s.group_ids = vec![site];
+        let policy = build_policy(&[s], &[node(1, Some(10))], &[(site, None, None)], Tz::UTC);
         assert!(policy.is_empty());
     }
 

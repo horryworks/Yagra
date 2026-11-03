@@ -3355,6 +3355,7 @@ mod delivery_tests {
         let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
         let held = Arc::new(MemHeld::default());
         n.set_held_store(held.clone());
+        let office = Uuid::from_u128(0x0ff1ce);
         let schedule = DeliverySchedule {
             id: Uuid::nil(),
             name: "office".to_owned(),
@@ -3362,18 +3363,16 @@ mod delivery_tests {
             days: vec![1, 2, 3, 4, 5],
             start_minute: 8 * 60 + 30,
             end_minute: 17 * 60 + 20,
-            group_ids: Vec::new(),
-            labels: vec!["office".to_owned()],
+            group_ids: vec![office],
         };
         let target = NodeTarget {
             id: node,
-            group: None,
-            labels: ["office".to_owned()].into_iter().collect(),
+            group: Some(office),
         };
         n.set_hours(build_policy(
             &[schedule],
             &[target],
-            &[],
+            &[(office, None, None)],
             yagra_base::wall_clock::Tz::UTC,
         ));
         (n, dflt, held)

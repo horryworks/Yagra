@@ -43,12 +43,12 @@ describe('delivery hours', () => {
   });
 
   it('refuses what the server refuses, before sending', () => {
-    const ok = { ...scheduleDraftFrom(), name: 'office', labels: ['office'] };
+    const ok = { ...scheduleDraftFrom(), name: 'office', groupIds: ['g1'] };
     expect('body' in scheduleBodyFrom(ok, true)).toBe(true);
     expect(scheduleBodyFrom({ ...ok, name: ' ' }, true)).toEqual({ error: 'name' });
     expect(scheduleBodyFrom({ ...ok, days: [] }, true)).toEqual({ error: 'days' });
     expect(scheduleBodyFrom({ ...ok, end: '25:00' }, true)).toEqual({ error: 'time' });
-    expect(scheduleBodyFrom({ ...ok, labels: [' '] }, true)).toEqual({ error: 'target' });
+    expect(scheduleBodyFrom({ ...ok, groupIds: [] }, true)).toEqual({ error: 'target' });
     const r = scheduleBodyFrom({ ...ok, days: [5, 1] }, false);
     expect('body' in r && r.body.days).toEqual([1, 5]);
     expect('body' in r && r.body.enabled).toBe(false);

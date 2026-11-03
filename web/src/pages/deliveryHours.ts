@@ -57,7 +57,6 @@ export interface ScheduleDraft {
   start: string;
   end: string;
   groupIds: string[];
-  labels: string[];
 }
 
 export function scheduleDraftFrom(s?: DeliverySchedule): ScheduleDraft {
@@ -67,7 +66,6 @@ export function scheduleDraftFrom(s?: DeliverySchedule): ScheduleDraft {
     start: minutesToTime(s?.start_minute ?? 8 * 60 + 30),
     end: minutesToTime(s?.end_minute ?? 17 * 60 + 20),
     groupIds: s ? [...s.group_ids] : [],
-    labels: s ? [...s.labels] : [],
   };
 }
 
@@ -88,7 +86,6 @@ export function scheduleBodyFrom(
         start_minute: number;
         end_minute: number;
         group_ids: string[];
-        labels: string[];
       };
     }
   | { error: DraftError } {
@@ -98,8 +95,7 @@ export function scheduleBodyFrom(
   const start = timeToMinutes(d.start);
   const end = timeToMinutes(d.end);
   if (start === null || end === null) return { error: 'time' };
-  const labels = d.labels.map((l) => l.trim()).filter((l) => l !== '');
-  if (d.groupIds.length === 0 && labels.length === 0) return { error: 'target' };
+  if (d.groupIds.length === 0) return { error: 'target' };
   return {
     body: {
       name,
@@ -108,7 +104,6 @@ export function scheduleBodyFrom(
       start_minute: start,
       end_minute: end,
       group_ids: d.groupIds,
-      labels,
     },
   };
 }

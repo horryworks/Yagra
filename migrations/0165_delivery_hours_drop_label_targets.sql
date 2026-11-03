@@ -1,0 +1,11 @@
+-- 0165_delivery_hours_drop_label_targets — a delivery-hours schedule no longer targets labels
+-- (ADR-229 decision 9). It applies to folders only.
+--
+-- The labels a schedule named are emptied. The column stays: an older core still reads and
+-- writes it, and keeping it is what lets that core boot. A schedule that named only labels is
+-- kept, covering nothing, so its name and hours are not deleted behind the operator's back.
+--
+-- reversible: empties one column the new core no longer reads. An older core reads the table
+-- unchanged and boots on it, so no `schema_compat` floor is owed. A rollback does not bring the
+-- labels back; the pre-upgrade backup holds them.
+UPDATE delivery_hours SET labels = '{}' WHERE cardinality(labels) > 0;

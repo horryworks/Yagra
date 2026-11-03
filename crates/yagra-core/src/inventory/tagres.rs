@@ -157,13 +157,6 @@ impl TagResolver {
         out
     }
 
-    /// The same answer as a set, for the callers that only ask "does it carry X" — the threshold
-    /// scope and the maintenance-window scope.
-    #[must_use]
-    pub fn effective_set(&self, node: &Node) -> BTreeSet<String> {
-        self.effective(node).into_iter().collect()
-    }
-
     /// The effective labels of a node the resolver cannot see as a [`Node`] — the notification
     /// path, which reads a narrower row. Same fold, same ordering, same cap.
     #[must_use]

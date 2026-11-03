@@ -872,7 +872,7 @@ impl YagraMcp {
                        the routing rules say: whether it is configured and which kinds of channel \
                        — webhook, email — it sends to, never where), delivery_hours (the \
                        schedules outside which notifications are held: weekdays, start and end \
-                       in minutes after local midnight, the folders and labels each applies to, \
+                       in minutes after local midnight, the folders each applies to, \
                        and the default time zone); **collection** — profiles, \
                        profile_templates (needs `profile_id`), collection_templates, \
                        template_items (needs `template_id`), node_collection (one node's collected \

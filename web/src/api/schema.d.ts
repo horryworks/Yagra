@@ -8117,8 +8117,6 @@ export interface components {
             group_ids: string[];
             /** Format: uuid */
             id: string;
-            /** @description Labels it applies to, inherited from folders as every label is (ADR-135). */
-            labels: string[];
             name: string;
             /**
              * Format: int32
@@ -14604,8 +14602,11 @@ export interface components {
             enabled?: boolean;
             /** Format: int32 */
             end_minute: number;
+            /**
+             * @description The folders it applies to, each with everything beneath it. At least one. A label is
+             *     never a target (ADR-229 decision 9).
+             */
             group_ids?: string[];
-            labels?: string[];
             name: string;
             /** Format: int32 */
             start_minute: number;
@@ -20002,7 +20003,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description Empty name, no weekday, a time outside the day, or no folder or label */
+            /** @description Empty name, no weekday, a time outside the day, or no folder */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20121,7 +20122,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Empty name, no weekday, a time outside the day, or no folder or label */
+            /** @description Empty name, no weekday, a time outside the day, or no folder */
             400: {
                 headers: {
                     [name: string]: unknown;

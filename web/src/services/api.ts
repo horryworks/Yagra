@@ -639,7 +639,6 @@ type DeliveryHoursBody = {
   start_minute: number;
   end_minute: number;
   group_ids: string[];
-  labels: string[];
 };
 
 export const api = {

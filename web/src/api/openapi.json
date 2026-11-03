@@ -4408,7 +4408,7 @@
             }
           },
           "400": {
-            "description": "Empty name, no weekday, a time outside the day, or no folder or label",
+            "description": "Empty name, no weekday, a time outside the day, or no folder",
             "content": {
               "application/json": {
                 "schema": {
@@ -4546,7 +4546,7 @@
             "description": "Schedule replaced"
           },
           "400": {
-            "description": "Empty name, no weekday, a time outside the day, or no folder or label",
+            "description": "Empty name, no weekday, a time outside the day, or no folder",
             "content": {
               "application/json": {
                 "schema": {
@@ -32767,8 +32767,7 @@
           "days",
           "start_minute",
           "end_minute",
-          "group_ids",
-          "labels"
+          "group_ids"
         ],
         "properties": {
           "days": {
@@ -32800,13 +32799,6 @@
           "id": {
             "type": "string",
             "format": "uuid"
-          },
-          "labels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Labels it applies to, inherited from folders as every label is (ADR-135)."
           },
           "name": {
             "type": "string"
@@ -46166,13 +46158,8 @@
             "items": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          "labels": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
+            },
+            "description": "The folders it applies to, each with everything beneath it. At least one. A label is\nnever a target (ADR-229 decision 9)."
           },
           "name": {
             "type": "string"

@@ -109,23 +109,23 @@ pub(super) struct ScheduleBody {
     days: Vec<u8>,
     start_minute: u16,
     end_minute: u16,
+    /// The folders it applies to, each with everything beneath it. At least one. A label is
+    /// never a target (ADR-229 decision 9).
     #[serde(default)]
     group_ids: Vec<Uuid>,
-    #[serde(default)]
-    labels: Vec<String>,
 }
 
 const fn enabled_by_default() -> bool {
     true
 }
 
-/// The most labels or folders one schedule may name — far beyond any real use, and a bound on
+/// The most folders one schedule may name — far beyond any real use, and a bound on
 /// what one request can make every refresh iterate.
 const MAX_TARGETS: usize = 200;
 
 impl ScheduleBody {
     /// The checks a schedule passes before it is stored, shared by create and replace.
-    fn fields(&self) -> ApiResult<(String, Vec<String>)> {
+    fn fields(&self) -> ApiResult<String> {
         let bad = |msg: &str| ApiError::bad_request("invalid_delivery_hours", msg.to_owned());
         let name = self.name.trim();
         if name.is_empty() {
@@ -139,21 +139,13 @@ impl ScheduleBody {
         if self.start_minute > 1439 || self.end_minute > 1439 {
             return Err(bad("start_minute and end_minute must be 0..1439"));
         }
-        let labels: Vec<String> = self
-            .labels
-            .iter()
-            .map(|l| l.trim().to_owned())
-            .filter(|l| !l.is_empty())
-            .collect();
-        if self.group_ids.is_empty() && labels.is_empty() {
-            return Err(bad(
-                "name at least one folder or label to apply the hours to",
-            ));
+        if self.group_ids.is_empty() {
+            return Err(bad("name at least one folder to apply the hours to"));
         }
-        if self.group_ids.len() > MAX_TARGETS || labels.len() > MAX_TARGETS {
-            return Err(bad("too many folders or labels"));
+        if self.group_ids.len() > MAX_TARGETS {
+            return Err(bad("too many folders"));
         }
-        Ok((name.to_owned(), labels))
+        Ok(name.to_owned())
     }
 }
 
@@ -162,7 +154,7 @@ impl ScheduleBody {
     request_body = ScheduleBody,
     responses(
         (status = 201, description = "Schedule created", body = CreatedId),
-        (status = 400, description = "Empty name, no weekday, a time outside the day, or no folder or label", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name, no weekday, a time outside the day, or no folder", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -173,7 +165,7 @@ async fn create_delivery_hours(
     admin: Admin,
     Json(body): Json<ScheduleBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
-    let (name, labels) = body.fields()?;
+    let name = body.fields()?;
     let id = admin
         .delivery_hours
         .create(&ScheduleFields {
@@ -183,7 +175,6 @@ async fn create_delivery_hours(
             start_minute: body.start_minute,
             end_minute: body.end_minute,
             group_ids: &body.group_ids,
-            labels: &labels,
         })
         .await
         .map_err(|e| {
@@ -202,7 +193,7 @@ async fn create_delivery_hours(
     request_body = ScheduleBody,
     responses(
         (status = 204, description = "Schedule replaced"),
-        (status = 400, description = "Empty name, no weekday, a time outside the day, or no folder or label", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name, no weekday, a time outside the day, or no folder", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such schedule", body = super::error::ErrorBody),
@@ -215,7 +206,7 @@ async fn update_delivery_hours(
     Path(id): Path<Uuid>,
     Json(body): Json<ScheduleBody>,
 ) -> ApiResult<StatusCode> {
-    let (name, labels) = body.fields()?;
+    let name = body.fields()?;
     let fields = ScheduleFields {
         name: &name,
         enabled: body.enabled,
@@ -223,7 +214,6 @@ async fn update_delivery_hours(
         start_minute: body.start_minute,
         end_minute: body.end_minute,
         group_ids: &body.group_ids,
-        labels: &labels,
     };
     match admin.delivery_hours.update(id, &fields).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
@@ -378,35 +368,31 @@ mod tests {
     use axum::http::StatusCode;
     use yagra_common::Role;
 
-    fn body(days: &[u8], labels: &[&str]) -> ScheduleBody {
+    fn body(days: &[u8], folders: u128) -> ScheduleBody {
         ScheduleBody {
             name: "office".to_owned(),
             enabled: true,
             days: days.to_vec(),
             start_minute: 510,
             end_minute: 1040,
-            group_ids: Vec::new(),
-            labels: labels.iter().map(|l| (*l).to_owned()).collect(),
+            group_ids: (1..=folders).map(Uuid::from_u128).collect(),
         }
     }
 
     #[test]
     fn a_schedule_must_name_a_day_a_time_in_the_day_and_a_target() {
-        assert!(body(&[1, 2, 3, 4, 5], &["office"]).fields().is_ok());
+        assert!(body(&[1, 2, 3, 4, 5], 1).fields().is_ok());
+        assert!(body(&[], 1).fields().is_err(), "no weekday holds forever");
+        assert!(body(&[8], 1).fields().is_err());
         assert!(
-            body(&[], &["office"]).fields().is_err(),
-            "no weekday holds forever"
-        );
-        assert!(body(&[8], &["office"]).fields().is_err());
-        assert!(
-            body(&[1], &[]).fields().is_err(),
+            body(&[1], 0).fields().is_err(),
             "a schedule naming nothing does nothing"
         );
         assert!(
-            body(&[1], &["  "]).fields().is_err(),
-            "a blank label names nothing"
+            body(&[1], MAX_TARGETS as u128 + 1).fields().is_err(),
+            "too many folders"
         );
-        let mut late = body(&[1], &["office"]);
+        let mut late = body(&[1], 1);
         late.end_minute = 1440;
         assert!(late.fields().is_err());
     }
@@ -437,7 +423,7 @@ mod tests {
             &admin,
             Some(serde_json::json!({
                 "name": "office", "days": [1, 2, 3, 4, 5],
-                "start_minute": 510, "end_minute": 1040, "labels": ["office"]
+                "start_minute": 510, "end_minute": 1040, "group_ids": ["00000000-0000-0000-0000-000000000001"]
             })),
         )
         .await;
@@ -451,7 +437,7 @@ mod tests {
             &admin,
             Some(serde_json::json!({
                 "name": "office", "enabled": false, "days": [1],
-                "start_minute": 0, "end_minute": 0, "labels": ["office"]
+                "start_minute": 0, "end_minute": 0, "group_ids": ["00000000-0000-0000-0000-000000000001"]
             })),
         )
         .await;
