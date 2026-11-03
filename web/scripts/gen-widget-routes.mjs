@@ -43,7 +43,13 @@ for (let i = 0; i < marks.length; i++) {
   const reads = /^    reads: (\[[^\]]*\]),$|^    reads: (\[[\s\S]*?\]),$/m.exec(body);
   if (!reads) throw new Error(`widget '${marks[i].type}' has no reads declaration`);
   const routes = [...(reads[1] ?? reads[2]).matchAll(/'([^']+)'/g)].map((x) => x[1]);
-  if (routes.length === 0) throw new Error(`widget '${marks[i].type}' declares an empty reads list`);
+  // An empty list is accepted only when the source spells it `[]`: anything else that parsed to no
+  // routes is this regex failing, not a widget that reads nothing. Whether a widget may read nothing
+  // is `widgetRoutes.test.ts`'s READS_NOTHING, which names each one with its reason (ADR-237).
+  const literal = (reads[1] ?? reads[2]).replace(/\s/g, '');
+  if (routes.length === 0 && literal !== '[]') {
+    throw new Error(`widget '${marks[i].type}' declares a reads list with no parsable route`);
+  }
   for (const r of routes) {
     if (!/^(GET|POST) \/api\/v1\//.test(r)) {
       throw new Error(`widget '${marks[i].type}' declares a malformed route: ${r}`);

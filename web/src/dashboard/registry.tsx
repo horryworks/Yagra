@@ -80,6 +80,7 @@ import {
   FlowTopTalkersWidget,
   FlowTrendWidget,
 } from './widgets/flow';
+import { WorldClockSettings, WorldClockWidget } from './widgets/general';
 import './widgets/widgets.css';
 
 // Section order is the registry array order (catalogBySection preserves it). Values are i18n keys
@@ -94,6 +95,7 @@ const SECTION = {
   events: 'registry.sections.events',
   flow: 'registry.sections.flow',
   monitoring: 'registry.sections.monitoring',
+  general: 'registry.sections.general',
 } as const;
 
 // `title` / `blurb` hold i18n keys (namespace `dashboard`), resolved where the definition is
@@ -758,6 +760,23 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/audit'],
     Component: AuditWidget,
+  },
+  {
+    // Reads no API at all (ADR-237): the time is the browser's clock through `Intl`, so `reads` is
+    // the one empty list in the catalog and a public board holding it opens nothing. Which zones,
+    // and how the time is written, are set once rather than flipped while reading, so both sit
+    // behind the gear and the header stays the title.
+    type: 'world-clock',
+    title: 'registry.widgets.world-clock.title',
+    section: SECTION.general,
+    blurb: 'registry.widgets.world-clock.blurb',
+    backing: 'live',
+    defaultSpan: 4,
+    allowedSpans: [4, 6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
+    reads: [],
+    Component: WorldClockWidget,
+    Settings: WorldClockSettings,
   },
 ];
 

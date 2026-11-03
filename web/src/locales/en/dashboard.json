@@ -88,7 +88,8 @@
       "capacity": "Capacity & traffic",
       "monitoring": "Monitoring health",
       "events": "Passive events",
-      "flow": "Traffic flow"
+      "flow": "Traffic flow",
+      "general": "General"
     },
     "widgets": {
       "status-summary": {
@@ -286,6 +287,10 @@
       "vpn-sessions": {
         "title": "VPN sessions",
         "blurb": "Up to six VPN devices you pick: connections now and over time."
+      },
+      "world-clock": {
+        "title": "World clock",
+        "blurb": "Digital clocks for several time zones, side by side"
       }
     }
   },
@@ -538,6 +543,30 @@
       "counter": "{{metric}} is a counter. Ranking its stored value would rank how long each node has been up, not how busy it is.",
       "empty": "No node is reporting {{metric}}. The name has to match exactly — a node's Collection tab lists the ones it has.",
       "choose": "Choose a metric"
+    },
+    "worldClock": {
+      "zones": "Time zones",
+      "count": "{{n}} / {{max}}",
+      "local": "Local",
+      "labelAria": "Display name",
+      "addAria": "Time zone to add",
+      "format": "Format",
+      "h24": "24-hour",
+      "h12": "12-hour",
+      "seconds": "Seconds",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "remove": "Remove",
+      "yesterday": "Yesterday",
+      "tomorrow": "Tomorrow",
+      "day": "Daytime",
+      "night": "Night",
+      "none": "No time zones.",
+      "choose": "Add time zones",
+      "error": {
+        "unknown": "Unknown time zone",
+        "duplicate": "Already on this card"
+      }
     }
   },
   "primitives": {

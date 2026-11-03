@@ -201,3 +201,34 @@ export function scheduleZone(stored: string | null | undefined, isNew: boolean):
   if (isNew) return displayTimeZone();
   return stored || 'UTC';
 }
+
+/** The spelling `Intl` gives `name` (any casing, any alias it accepts), or `null` when this runtime
+ *  does not know it. ⚠️ An alias may resolve to an older spelling: Chromium answers
+ *  `Asia/Calcutta` for `Asia/Kolkata` (ADR-237). */
+export function canonicalTimeZone(name: string): string | null {
+  if (!name) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: name }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+const shortDateCache = new Map<string, Intl.DateTimeFormat>();
+
+/** The month, day and weekday of `ms` in `tz`, in `locale` — the line under a world-clock face
+ *  (ADR-237). Every other date on a screen is in the display zone; this one names its own. */
+export function zoneDateText(ms: number, tz: string, locale: string): string {
+  const key = `${locale}|${tz}`;
+  let f = shortDateCache.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(locale, {
+      timeZone: tz,
+      month: 'numeric',
+      day: 'numeric',
+      weekday: 'short',
+    });
+    shortDateCache.set(key, f);
+  }
+  return f.format(new Date(ms));
+}

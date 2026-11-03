@@ -104,7 +104,13 @@ describe('widget registry', () => {
   // here by name. A new widget with a subject picker fails this test until someone decides.
 
   /** Every widget whose settings choose a subject. Deliberately spelled out, not counted. */
-  const WITH_SETTINGS = ['metric-chart', 'metric-top', 'interface-traffic', 'vpn-sessions'];
+  const WITH_SETTINGS = [
+    'metric-chart',
+    'metric-top',
+    'interface-traffic',
+    'vpn-sessions',
+    'world-clock',
+  ];
 
   it('gives a ⚙ panel to exactly the widgets that choose a subject', () => {
     const withSettings = REGISTRY.filter((d) => d.Settings).map((d) => d.type);

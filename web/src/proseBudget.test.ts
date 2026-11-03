@@ -68,7 +68,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
   auth: [79, 43],
   common: [871, 473], // + viewOnly.info, what a hidden write control needs and who you are (ADR-235, 2026-11-03)
-  dashboard: [6229, 3448],
+  dashboard: [6280, 3469],
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)

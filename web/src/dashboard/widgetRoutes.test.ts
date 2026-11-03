@@ -30,14 +30,27 @@ function servedRoutes(): Set<string> {
 }
 
 describe('widget route declarations', () => {
-  it('every widget declares at least one route it reads', () => {
-    // Required by the type, so this cannot fail at runtime — it fails at `tsc`. Asserted anyway
-    // because the type could be relaxed to optional by someone who reads the field as
-    // documentation, and an optional one defaults to "declares nothing", which is indistinguishable
-    // from a widget that genuinely reads nothing.
+  /** The widgets that genuinely read nothing, by name and with the reason. An empty `reads` is
+   *  otherwise indistinguishable from a widget nobody thought about, so the answer has to be
+   *  written here rather than inferred from the empty list. */
+  const READS_NOTHING: Record<string, string> = {
+    'world-clock': 'the time is the browser clock through Intl; no route is fetched (ADR-237)',
+  };
+
+  it('every widget declares at least one route it reads, or says why it reads none', () => {
+    // Required by the type, so the field cannot be missing — it fails at `tsc`. The empty list is
+    // what has to be answered for: it opens nothing on the public board, which is correct only for a
+    // widget that really fetches nothing.
     for (const def of REGISTRY) {
-      expect(def.reads.length, `${def.type} declares no routes`).toBeGreaterThan(0);
+      if (def.type in READS_NOTHING) {
+        expect(def.reads, `${def.type} is listed as reading nothing`).toEqual([]);
+      } else {
+        expect(def.reads.length, `${def.type} declares no routes`).toBeGreaterThan(0);
+      }
     }
+    // Both ways: a listed type that left the catalog is a stale reason.
+    const types = new Set(REGISTRY.map((d) => d.type));
+    expect(Object.keys(READS_NOTHING).filter((t) => !types.has(t))).toEqual([]);
     expect(REGISTRY.length).toBeGreaterThanOrEqual(40);
   });
 

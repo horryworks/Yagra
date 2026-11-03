@@ -515,3 +515,248 @@ html[data-viewport='mobile'] .vpnsess-rm {
   width: 40px;
   height: 40px;
 }
+
+/* World clock (ADR-237). The card lays itself out by its own width: one row per zone when narrow,
+   tiles when wide, one large face when it holds a single zone. A container query rather than the
+   cell's span, so the phone's single column and a 4-wide desktop card read the same way. */
+.mydash-cell .card-body > .wclock {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wclock {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+}
+
+.wclock-zones {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wclock-zone {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px 0;
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.wclock-zone:first-child {
+  border-top: 0;
+}
+
+.wclock-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wclock-label {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wclock-meta {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wclock-shift {
+  color: var(--accent-color);
+  font-weight: 500;
+}
+
+.wclock-time {
+  font-family: var(--font-family);
+  font-size: var(--font-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.wclock-zone.is-night .wclock-time {
+  color: var(--text-secondary);
+}
+
+.wclock-sec {
+  margin-left: 1px;
+  color: var(--text-tertiary);
+  font-size: 0.6em;
+}
+
+.wclock-ampm {
+  margin-left: 3px;
+  color: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: 0.5em;
+  font-weight: 500;
+}
+
+.wclock-ico {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.wclock-ico svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wclock-ico.is-day {
+  color: var(--status-warning);
+}
+
+.wclock-ico.is-night {
+  color: var(--series-1);
+}
+
+@container (min-width: 440px) {
+  .wclock-zones {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: var(--space-2);
+  }
+
+  .wclock-zone {
+    grid-template-columns: minmax(0, 1fr) 16px;
+    grid-template-areas:
+      'name ico'
+      'time time';
+    row-gap: 2px;
+    padding: var(--space-2) 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+  }
+
+  .wclock-zone .wclock-ico {
+    grid-area: ico;
+    justify-self: end;
+  }
+
+  .wclock-zone .wclock-name {
+    grid-area: name;
+  }
+
+  .wclock-zone .wclock-time {
+    grid-area: time;
+    font-size: calc(var(--font-base) * 2);
+  }
+}
+
+.wclock-solo {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  text-align: center;
+}
+
+.wclock-solo .wclock-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.wclock-solo .wclock-time {
+  font-size: clamp(calc(var(--font-base) * 2), 15cqi, calc(var(--font-base) * 4));
+  line-height: 1.05;
+}
+
+/* The settings panel, inside the frame's popover. */
+.wclock-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 320px;
+  max-width: 100%;
+}
+
+.wclock-settings-head {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.wclock-count {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wclock-zonelist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wclock-zonerow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px auto auto auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.wclock-labelinput {
+  min-width: 0;
+}
+
+.wclock-tz {
+  overflow: hidden;
+  padding-inline: var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wclock-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.wclock-addrow {
+  display: flex;
+  gap: 6px;
+}
+
+.wclock-addinput {
+  flex: 1;
+  min-width: 0;
+}
+
+.wclock-format {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.wclock-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

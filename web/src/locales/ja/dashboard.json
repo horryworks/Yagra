@@ -88,7 +88,8 @@
       "capacity": "キャパシティとトラフィック",
       "monitoring": "監視ヘルス",
       "events": "パッシブ監視",
-      "flow": "フロー監視"
+      "flow": "フロー監視",
+      "general": "汎用"
     },
     "widgets": {
       "status-summary": {
@@ -286,6 +287,10 @@
       "vpn-sessions": {
         "title": "VPN セッション",
         "blurb": "選んだ VPN 装置を最大 6 台、いまつながっている数と推移を表示します。"
+      },
+      "world-clock": {
+        "title": "世界時計",
+        "blurb": "複数のタイムゾーンの時刻をデジタルで並べる"
       }
     }
   },
@@ -534,6 +539,30 @@
       "counter": "{{metric}} はカウンタです。保存値を順位付けすると、負荷ではなく稼働時間の長さが上位に並びます。",
       "empty": "{{metric}} を報告しているノードはありません。名前は完全一致です。各ノードの「収集」タブでそのノードのメトリクス名を確認できます。",
       "choose": "メトリクスを選ぶ"
+    },
+    "worldClock": {
+      "zones": "タイムゾーン",
+      "count": "{{n}} / {{max}}",
+      "local": "ローカル",
+      "labelAria": "表示名",
+      "addAria": "追加するタイムゾーン",
+      "format": "表示",
+      "h24": "24 時間",
+      "h12": "12 時間",
+      "seconds": "秒",
+      "moveUp": "上へ",
+      "moveDown": "下へ",
+      "remove": "削除",
+      "yesterday": "前日",
+      "tomorrow": "翌日",
+      "day": "昼",
+      "night": "夜",
+      "none": "タイムゾーンがありません。",
+      "choose": "タイムゾーンを追加",
+      "error": {
+        "unknown": "見つからないタイムゾーンです",
+        "duplicate": "このカードに追加済みです"
+      }
     }
   },
   "primitives": {
