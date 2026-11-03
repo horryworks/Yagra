@@ -21,7 +21,7 @@
 //!   reaches past it for a typed value; every byte the model sees is a byte a session client could
 //!   have seen.
 //!
-//! Deliberately absent: the three write tools (ADR-042 decision 6 freezes them), `run_analysis`
+//! Deliberately absent: the two write tools (ADR-042 decision 6 freezes them), `run_analysis`
 //! (blocks for up to two minutes and spends TSDB compute), `run_rca` (recursion), and `get_audit`
 //! (`ViewAudit`, refused by the branch rule rather than by being listed).
 
@@ -246,13 +246,7 @@ mod tests {
     /// the failure mode is someone adding a name that looks like a read.
     #[test]
     fn the_agent_never_reaches_a_write_tool() {
-        for banned in [
-            "ack_alert",
-            "open_maintenance",
-            "poll_now",
-            "run_analysis",
-            "run_rca",
-        ] {
+        for banned in ["open_maintenance", "poll_now", "run_analysis", "run_rca"] {
             assert!(
                 !AGENT_TOOLS.contains(&banned),
                 "{banned} must not be callable by the RCA agent"

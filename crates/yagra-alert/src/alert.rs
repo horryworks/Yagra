@@ -33,8 +33,8 @@ const CONFIG_REMOTE_FORM: &str = "config_remote";
 /// Namespace for the UUIDv5 identities non-node subjects are stored under.
 ///
 /// A fixed literal rather than a derived value so it is `const` and can never move: every row in
-/// `alert_history` and `alert_acks` written for a pool is keyed by a name hashed under this, so
-/// changing it would orphan every stored pool alert and every open acknowledgement. The bytes spell
+/// `alert_history` written for a pool is keyed by a name hashed under this, so changing it would
+/// orphan every stored pool alert. The bytes spell
 /// `YAGRA_SUBJECT_ID`, which is only a mnemonic — nothing reads them back.
 const SUBJECT_NAMESPACE: uuid::Uuid =
     uuid::Uuid::from_u128(0x5941_4752_415f_5355_424a_4543_545f_4944);
@@ -176,18 +176,16 @@ impl Subject {
         }
     }
 
-    /// The UUID this subject is **stored** under (`alert_history.node`, `alert_acks.node`).
+    /// The UUID this subject is **stored** under (`alert_history.node`).
     ///
-    /// For a node it is the node id itself, so every existing row and every open acknowledgement
-    /// keeps its identity byte-for-byte. For anything else it is a stable v5 hash of the flat form
-    /// under [`SUBJECT_NAMESPACE`], which buys three things at once:
+    /// For a node it is the node id itself, so every existing row keeps its identity
+    /// byte-for-byte. For anything else it is a stable v5 hash of the flat form
+    /// under [`SUBJECT_NAMESPACE`], which buys two things at once:
     ///
     ///  - the columns stay `NOT NULL`, so an **N-1 core** rolled back onto this data still decodes
     ///    every row into its bare `Uuid` and renders the History page instead of failing it (a
-    ///    nullable column would 500 the whole page for one row — ADR-017);
-    ///  - `alert_acks`' primary key `(node, check_id, severity)` needs no rewrite, so this stays an
-    ///    additive migration;
-    ///  - the ack join keeps working for pool alerts without a second key shape.
+    ///    nullable column would 500 the whole page for one row — ADR-017), and
+    ///  - the migration that introduced subjects (0075) stayed additive.
     ///
     /// It is an **identity token, not a node reference**: `subject_kind` is what says whether the
     /// value names a node, and every read that means "a node" filters on that column rather than
@@ -204,7 +202,7 @@ impl Subject {
             // [`Self::from_storage`] needs back — a hash could not be reversed, and this subject
             // carries no name to rebuild itself from. It cannot be taken for a node: every read
             // that means "a node" filters on `subject_kind`, the check id is hashed from the flat
-            // form (which is prefixed), and the ack key includes that check id.
+            // form (which is prefixed), and every key on a stored row includes that check id.
             Self::MerakiOrg(org) => *org,
             // Hashed from its flat form like a pool: there is only one, and nothing to rebuild.
             Self::ConfigRemote => {
@@ -261,7 +259,7 @@ impl FromStr for Subject {
             };
         }
         // 🚨 Not compiler-demanded: a prefix forgotten here still builds, and then the flat form
-        // this type itself writes cannot be read back — by the ack API, or by a peer core.
+        // this type itself writes cannot be read back — by a peer core.
         if let Some(org) = s.strip_prefix(MERAKI_ORG_PREFIX) {
             return uuid::Uuid::parse_str(org)
                 .map(Self::MerakiOrg)
@@ -502,16 +500,15 @@ mod tests {
 
     #[test]
     fn a_node_subject_is_stored_under_its_own_id() {
-        // Load-bearing for the migration: `alert_history.node` and `alert_acks.node` keep exactly
-        // the values they already hold for every node alert, so no row is re-keyed and no open
-        // acknowledgement is orphaned.
+        // Load-bearing for the migration: `alert_history.node` keeps exactly the values it
+        // already holds for every node alert, so no row is re-keyed.
         let n = NodeId::new();
         assert_eq!(Subject::Node(n).storage_id(), n.as_uuid());
     }
 
     #[test]
     fn a_pool_storage_id_is_stable_and_distinct_per_pool() {
-        // Stability is what makes a fire and its later resolve/ack agree on one row. Recomputed
+        // Stability is what makes a fire and its later resolve agree on one row. Recomputed
         // rather than asserted against a literal so the test states the property, not the digest —
         // but the namespace it hashes under must never change, which is why that constant is fixed.
         let a = Subject::Pool("tokyo".to_owned()).storage_id();
@@ -622,8 +619,8 @@ mod tests {
     }
 
     /// The third subject is addressed by the flat form this type itself writes — `FromStr` is an
-    /// if-chain, not a match, so a forgotten prefix still builds and then the ack API cannot name
-    /// the alert it was just shown.
+    /// if-chain, not a match, so a forgotten prefix still builds and then a peer core cannot read
+    /// back the alert it was just sent.
     #[test]
     fn a_meraki_organization_is_read_back_from_the_form_it_is_written_in() {
         let org = uuid::Uuid::from_u128(0xACE);

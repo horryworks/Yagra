@@ -21,7 +21,7 @@
         "operationId": "list_alerts",
         "responses": {
           "200": {
-            "description": "Every active alert, each decorated with its inbound ack state",
+            "description": "Every active alert",
             "content": {
               "application/json": {
                 "schema": {
@@ -45,86 +45,6 @@
           },
           "403": {
             "description": "Role lacks the read permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/alerts/ack": {
-      "post": {
-        "tags": [
-          "alerts"
-        ],
-        "operationId": "ack_alert",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AckRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "The ack was recorded (or cleared) and broadcast",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AckResult"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Neither `node` nor a readable `subject` was supplied",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the alert-acknowledgement permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "The subject is outside the caller's group scope",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This deployment has no ack store",
             "content": {
               "application/json": {
                 "schema": {
@@ -267,15 +187,6 @@
             "name": "resolved",
             "in": "query",
             "description": "`false` for fires only, `true` for clears only. Omit for both.",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "name": "acked",
-            "in": "query",
-            "description": "`true` for transitions whose incident has been acknowledged, `false` for those that have\nnot. Omit for both. Acknowledgement is per incident (node + check + severity), so every\ntransition of one incident answers the same way.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -27945,124 +27856,6 @@
   },
   "components": {
     "schemas": {
-      "AckRequest": {
-        "type": "object",
-        "description": "Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity\n`(subject, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request\nmiddleware records the audit entry.",
-        "required": [
-          "check",
-          "severity"
-        ],
-        "properties": {
-          "acked": {
-            "type": "boolean",
-            "description": "`true` = acked (upsert), `false` = cleared (delete). Defaults to `true`."
-          },
-          "at_unix_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "When the external tool recorded the ack (Unix ms, UTC); defaults to now."
-          },
-          "by": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "External actor reference (id / handle) — never a secret."
-          },
-          "check": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "node": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "The node the alert is about. Omit it and send `subject` instead for an alert about\nsomething other than a node (a poller pool). Exactly one of the two is required."
-          },
-          "note": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional free-text note from the external tool."
-          },
-          "severity": {
-            "$ref": "#/components/schemas/Severity"
-          },
-          "source": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Originating tool: `pagerduty` | `jsm` | `manual` | …"
-          },
-          "subject": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The alert's subject in its flat form — a node's UUID, `pool:<name>` or `meraki_org:<uuid>`. This is the value\nthe alert's own `node` field carries, so an integration can echo back what it received."
-          }
-        }
-      },
-      "AckResult": {
-        "type": "object",
-        "description": "What an ack call reports back: the new state, and the stored view when acknowledging.",
-        "required": [
-          "acked"
-        ],
-        "properties": {
-          "ack": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/AckView"
-              }
-            ]
-          },
-          "acked": {
-            "type": "boolean"
-          }
-        }
-      },
-      "AckView": {
-        "type": "object",
-        "description": "The acknowledgement view attached to an alert / history row in API responses. Carries who\nacked it, when, from which external tool, and an optional note. Never carries a secret.",
-        "required": [
-          "at_unix_ms",
-          "by",
-          "source"
-        ],
-        "properties": {
-          "at_unix_ms": {
-            "type": "integer",
-            "format": "int64",
-            "description": "When the external tool recorded the ack (Unix ms, UTC)."
-          },
-          "by": {
-            "type": "string",
-            "description": "External actor reference (id / handle) — not a secret."
-          },
-          "note": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional free-text note from the external tool."
-          },
-          "source": {
-            "type": "string",
-            "description": "Originating tool: `pagerduty` | `jsm` | `manual` | …"
-          }
-        }
-      },
       "ActiveAlertView": {
         "allOf": [
           {
@@ -28074,16 +27867,6 @@
               "subject_kind"
             ],
             "properties": {
-              "acked": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/AckView"
-                  }
-                ]
-              },
               "if_name": {
                 "type": [
                   "string",
@@ -28112,7 +27895,7 @@
             }
           }
         ],
-        "description": "An active alert plus its inbound (read-only) ack state.\n\n`subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a\nnode's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys."
+        "description": "An active alert plus what the list adds to it: its subject decomposed, its title, its port.\n\n`subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a\nnode's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys."
       },
       "AddressAmbiguity": {
         "type": "object",
@@ -28426,16 +28209,6 @@
           {
             "type": "object",
             "properties": {
-              "acked": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/AckView"
-                  }
-                ]
-              },
               "if_name": {
                 "type": [
                   "string",
@@ -28453,7 +28226,7 @@
             }
           }
         ],
-        "description": "An alert-history row plus its current inbound ack state (keyed by the dedup identity, so all\ntransitions of one incident share it)."
+        "description": "An alert-history row plus its title and its port's current name."
       },
       "AlertNodeCount": {
         "type": "object",

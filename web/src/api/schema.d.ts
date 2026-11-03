@@ -20,22 +20,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/alerts/ack": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post: operations["ack_alert"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/alerts/calendar": {
         parameters: {
             query?: never;
@@ -5884,69 +5868,12 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * @description Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity
-         *     `(subject, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
-         *     middleware records the audit entry.
-         */
-        AckRequest: {
-            /** @description `true` = acked (upsert), `false` = cleared (delete). Defaults to `true`. */
-            acked?: boolean;
-            /**
-             * Format: int64
-             * @description When the external tool recorded the ack (Unix ms, UTC); defaults to now.
-             */
-            at_unix_ms?: number | null;
-            /** @description External actor reference (id / handle) — never a secret. */
-            by?: string | null;
-            /** Format: uuid */
-            check: string;
-            /**
-             * Format: uuid
-             * @description The node the alert is about. Omit it and send `subject` instead for an alert about
-             *     something other than a node (a poller pool). Exactly one of the two is required.
-             */
-            node?: string | null;
-            /** @description Optional free-text note from the external tool. */
-            note?: string | null;
-            severity: components["schemas"]["Severity"];
-            /** @description Originating tool: `pagerduty` | `jsm` | `manual` | … */
-            source?: string | null;
-            /**
-             * @description The alert's subject in its flat form — a node's UUID, `pool:<name>` or `meraki_org:<uuid>`. This is the value
-             *     the alert's own `node` field carries, so an integration can echo back what it received.
-             */
-            subject?: string | null;
-        };
-        /** @description What an ack call reports back: the new state, and the stored view when acknowledging. */
-        AckResult: {
-            ack?: null | components["schemas"]["AckView"];
-            acked: boolean;
-        };
-        /**
-         * @description The acknowledgement view attached to an alert / history row in API responses. Carries who
-         *     acked it, when, from which external tool, and an optional note. Never carries a secret.
-         */
-        AckView: {
-            /**
-             * Format: int64
-             * @description When the external tool recorded the ack (Unix ms, UTC).
-             */
-            at_unix_ms: number;
-            /** @description External actor reference (id / handle) — not a secret. */
-            by: string;
-            /** @description Optional free-text note from the external tool. */
-            note?: string | null;
-            /** @description Originating tool: `pagerduty` | `jsm` | `manual` | … */
-            source: string;
-        };
-        /**
-         * @description An active alert plus its inbound (read-only) ack state.
+         * @description An active alert plus what the list adds to it: its subject decomposed, its title, its port.
          *
          *     `subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a
          *     node's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys.
          */
         ActiveAlertView: components["schemas"]["Alert"] & {
-            acked?: null | components["schemas"]["AckView"];
             /**
              * @description The name of the port a per-port alert is about (`ifName`), read from the interface inventory
              *     when the alert is read rather than stored with it (ADR-196 decision 6). Absent for an alert
@@ -6109,12 +6036,8 @@ export interface components {
              */
             threshold_value?: number | null;
         };
-        /**
-         * @description An alert-history row plus its current inbound ack state (keyed by the dedup identity, so all
-         *     transitions of one incident share it).
-         */
+        /** @description An alert-history row plus its title and its port's current name. */
         AlertHistoryView: components["schemas"]["AlertHistoryRow"] & {
-            acked?: null | components["schemas"]["AckView"];
             /**
              * @description The port's name, as it is called **now** (ADR-196 decision 6) — not necessarily what it was
              *     called when this row was written. See [`ActiveAlertView::if_name`].
@@ -16440,7 +16363,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every active alert, each decorated with its inbound ack state */
+            /** @description Every active alert */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16460,75 +16383,6 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    ack_alert: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AckRequest"];
-            };
-        };
-        responses: {
-            /** @description The ack was recorded (or cleared) and broadcast */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AckResult"];
-                };
-            };
-            /** @description Neither `node` nor a readable `subject` was supplied */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the alert-acknowledgement permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description The subject is outside the caller's group scope */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This deployment has no ack store */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16616,12 +16470,6 @@ export interface operations {
                 state?: string;
                 /** @description `false` for fires only, `true` for clears only. Omit for both. */
                 resolved?: boolean;
-                /**
-                 * @description `true` for transitions whose incident has been acknowledged, `false` for those that have
-                 *     not. Omit for both. Acknowledgement is per incident (node + check + severity), so every
-                 *     transition of one incident answers the same way.
-                 */
-                acked?: boolean;
                 /**
                  * @description Only transitions whose metric name contains this text (case-insensitive). Liveness rows
                  *     store no metric and therefore never match.

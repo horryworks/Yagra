@@ -39,7 +39,6 @@ pub(super) fn skeleton_state() -> ApiState {
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),
         history: None,
-        ack: None,
         event_engine: None,
         public_access: crate::api::public_access::handle(
             crate::api::public_access::PublicAccess::closed(),

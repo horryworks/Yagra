@@ -114,7 +114,7 @@
     "nodesMissingPrefixes": "ノードが持っているのに、サイトの IP レンジに無いサブネットをサイトごとに並べます",
     "topologyGeo": "与えた座標にもとづき、ノードグループを世界地図上に配置します",
     "alertsActive": "今おきている異常 — 振り分け用の一覧",
-    "alertsHistory": "発報して解消したアラートすべて。誰が ACK したかも含みます",
+    "alertsHistory": "発報して解消したアラートすべて",
     "troubleshootAll": "随時実行できる詳細分析 — 選び、範囲を決め、レポートを読みます",
     "settingsIntegrations": "Cisco Meraki など、Yagra がノードと値を取りに行くベンダークラウド",
     "settingsTls": "WebUI が提示する証明書",

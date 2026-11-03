@@ -44,8 +44,8 @@ export type HistoryRange = (typeof HISTORY_RANGES)[number];
  * *boolean* (`resolved`) — ticking both fired and cleared is the unfiltered view, and
  * [`resolvedFor`] returns `undefined` for it, which is exactly right rather than a special case.
  *
- * ⚠️ **The node / what / acked columns had no filter until Inc.4b, and the reason mattered: none
- * of the three could be asked of the API.** A user reported all three as missing twice, which is
+ * ⚠️ **The node / what columns had no filter until Inc.4b, and the reason mattered: neither
+ * could be asked of the API.** A user reported them as missing twice, which is
  * the real lesson — *from the screen there is no difference between "deliberately absent" and
  * "forgotten"*, so a column with no filter looks like a bug whatever the reason. Each got a
  * parameter rather than a browser-side predicate, because filtering a keyset-paged list in the
@@ -112,16 +112,6 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       options: HISTORY_PHASES.map((v) => ({ value: v, label: t(`history.phase.${v}`) })),
       allLabel: t('history.filter.allPhases'),
     },
-    // Whether the incident was acknowledged. The question this answers — "what fired this week that
-    // nobody has looked at" — had to be done by eye before.
-    acked: {
-      kind: 'enum',
-      options: [
-        { value: 'true', label: t('history.filter.acked') },
-        { value: 'false', label: t('history.filter.unacked') },
-      ],
-      allLabel: t('history.filter.allAcked'),
-    },
     range: {
       kind: 'range',
       // The window becomes `since` in the query, and the missing `readTime` — not a nulled
@@ -153,12 +143,6 @@ function phaseOf(value: string | undefined): HistoryPhase {
   return picked.length === 1 ? (picked[0] as HistoryPhase) : '';
 }
 
-/** Same rule for ack, straight to the boolean the API takes: `undefined` is "either". */
-function ackedOf(value: string | undefined): boolean | undefined {
-  const picked = decodeSet(value ?? '');
-  return picked.length === 1 ? picked[0] === 'true' : undefined;
-}
-
 /** `resolved` for a phase: `undefined` means "both", which is not the same as `false`. */
 export function resolvedFor(phase: HistoryPhase): boolean | undefined {
   if (phase === 'fired') return false;
@@ -174,7 +158,7 @@ export function resolvedFor(phase: HistoryPhase): boolean | undefined {
  * severity — a filter nobody set turning into a 400.
  *
  * ⚠️ **`normalizeSets` is what keeps a hand-typed `?severity=bogus` out of that same 400**, and on
- * this screen it does a second job: `phaseOf`/`ackedOf` below read `picked[0]` as a known token,
+ * this screen it does a second job: `phaseOf` below reads `picked[0]` as a known token,
  * which is only true downstream of it.
  *
  * The scope is a parameter rather than a column because it is not one — the ScopePicker in the
@@ -196,9 +180,6 @@ export function queryFor(
     severity: unset(f.severity),
     state: unset(f.state),
     resolved: resolvedFor(phaseOf(f.phase)),
-    // Two ticked boxes are strings in the filter state because that is what a filter cell stores.
-    // Only here do they become the boolean the API takes — and "both" is `undefined`, not `false`.
-    acked: ackedOf(f.acked),
     // The text columns store an encoded condition; only the term reaches this API, which has
     // neither a regex nor a negated form for either parameter.
     metric: unset(decodeCondition(f.metric ?? '').term),

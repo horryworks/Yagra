@@ -23,8 +23,8 @@
 //!
 //! The authenticated principal is propagated to tool bodies as an [`McpIdentity`] in the request
 //! extensions (WS-D): rmcp forwards the HTTP request `Parts` into each tool's `RequestContext`, so a
-//! **write** tool reads it back and enforces its own [`Permission`] (`ack_alert`→`AckAlerts`,
-//! `open_maintenance`→`ManageMaintenance`, `poll_now`→`ManageConfig`) and records an audit entry. So
+//! **write** tool reads it back and enforces its own [`Permission`]
+//! (`open_maintenance`→`ManageMaintenance`, `poll_now`→`ManageConfig`) and records an audit entry. So
 //! a Viewer token is read-only; an Operator/Admin token can also act. There are still **no
 //! device-configuration tools** (monitoring lane, ADR-015/029), and no credential/secret is ever
 //! placed in a tool result (ADR-018; enforced structurally in [`dto`] + its canary test).
@@ -64,9 +64,10 @@ use crate::api::ApiState;
 const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live node status, alerts, \
     metrics (per node and per interface), fleet rankings, topology, CDP/LLDP adjacency, traffic \
     flows, and passive events (syslog/traps/webhooks), and run on-demand Troubleshoot analyses \
-    (anomaly/correlation/capacity/flap). A few write tools act on the monitoring system — \
-    acknowledge an alert (ack_alert), open a maintenance window (open_maintenance), or trigger an \
-    immediate poll (poll_now); each needs an authorized token and is audited. There are still no \
+    (anomaly/correlation/capacity/flap). Two write tools act on the monitoring system — \
+    open a maintenance window (open_maintenance) or trigger an immediate poll (poll_now); each \
+    needs an authorized token and is audited. Acknowledgement is read-only here: an alert's acked \
+    state is mirrored in from an external incident tool. There are still no \
     tools that configure or change network devices, or change Yagra's own configuration. Start with \
     get_fleet_summary, then drill in with list_nodes / get_node_status / get_active_alerts / \
     query_metrics / search_events. Metric names differ per device, so call list_node_metrics before \
@@ -319,7 +320,6 @@ mod tests {
             sessions,
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
-            ack: None,
             event_engine: None,
             public_access: crate::api::public_access::handle(
                 crate::api::public_access::PublicAccess::closed(),
@@ -381,7 +381,7 @@ mod tests {
         assert!(viewer.can(Permission::View));
         assert!(
             !viewer.can(Permission::AckAlerts),
-            "viewer cannot ack_alert"
+            "viewer cannot run_analysis"
         );
         assert!(
             !viewer.can(Permission::ManageMaintenance),

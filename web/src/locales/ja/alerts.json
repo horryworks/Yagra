@@ -4,21 +4,12 @@
     "emptyFiltered": "この絞り込みに一致するアクティブなアラートがありません。",
     "noNodes": "監視しているノードがありません。",
     "searchPlaceholder": "ノードまたはメトリクスを検索…",
-    "ack": {
-      "all": "ACK の有無を問わない",
-      "aria": "ACK の有無で絞り込む",
-      "label": "ACK",
-      "acked": "ACK 済み",
-      "unacked": "ACK 未実施"
-    },
-    "ackedHint": "ACK はオンコールツール（PagerDuty / JSM）から届きます。Yagra は表示するだけで、自分では付けません。",
     "searchLabel": "ノード / メトリクス",
     "mute": "ミュート",
     "muteHint": "このノードのこのチェックをミュート"
   },
   "row": {
     "flapping": "フラッピング",
-    "acked": "ACK 済み",
     "mutedUntil": "ミュート中（{{until}} まで）",
     "poolSubject": "ポーラープール「{{pool}}」",
     "configRemoteSubject": "config のバックアップの Git の送り先",
@@ -33,10 +24,6 @@
     "heldUntil": "{{until}} まで保留中",
     "held": "保留中"
   },
-  "acked": {
-    "title": "{{source}} で {{by}} が ACK 済み{{note}}",
-    "note": " — {{note}}"
-  },
   "history": {
     "empty": "アラート履歴はまだありません。",
     "transitions": "件の遷移",
@@ -47,7 +34,6 @@
       "what": "内容",
       "state": "状態",
       "event": "イベント",
-      "acked": "ACK",
       "when": "日時"
     },
     "phase": {
@@ -58,10 +44,7 @@
     "filter": {
       "allSeverities": "すべての重大度",
       "allPhases": "発生と解消",
-      "allStates": "すべての状態",
-      "allAcked": "ACK の有無を問わない",
-      "acked": "ACK 済み",
-      "unacked": "ACK 未実施"
+      "allStates": "すべての状態"
     }
   },
   "events": {

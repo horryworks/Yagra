@@ -79,18 +79,8 @@
   padding: 0 5px;
 }
 
-/* Read-only "acked" indicator mirrored from the external tool (ADR-015). Neutral (not a status
-   color — acknowledgement is not a node state). */
-.alertrow-acked {
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 0 5px;
-}
-
-/* "Muted until …" (ADR-209 decision 3): the acked mark's shape, as a link to the mute list. Neutral
-   for the same reason — a mute is not a node state. */
+/* "Muted until …" (ADR-209 decision 3): a small outlined mark, as a link to the mute list. Neutral
+   (not a status color) — a mute is not a node state. */
 .alertrow-muted {
   font-size: var(--font-xs);
   color: var(--text-secondary);
@@ -125,7 +115,7 @@
 }
 
 /* Mobile (ADR-027): the single fixed-height row would overflow ~390px, so wrap it into a stacked
-   card — line 1: severity dot + node + age (right); line 2: the check; line 3: cause/flap/acked;
+   card — line 1: severity dot + node + age (right); line 2: the check; line 3: cause/flap/muted;
    line 4: actions. `order` reshuffles the DOM (which puts time before the descriptive bits) into
    reading order. CSS-only; desktop is untouched. */
 html[data-viewport='mobile'] .alertrow {
@@ -162,7 +152,6 @@ html[data-viewport='mobile'] .alertrow-check {
 
 html[data-viewport='mobile'] .alertrow-cause,
 html[data-viewport='mobile'] .alertrow-flap,
-html[data-viewport='mobile'] .alertrow-acked,
 html[data-viewport='mobile'] .alertrow-muted {
   order: 3;
 }

@@ -81,7 +81,6 @@ const alerts = (() => {
       state: 'critical',
       metric: 'meraki_api_collect',
       root_cause: null,
-      acked: null,
     },
   ] as unknown as Json;
 })();

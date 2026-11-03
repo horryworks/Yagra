@@ -1599,15 +1599,14 @@ impl Notifier {
 
     /// Send what was held for every node whose hours are open at `now` (ADR-226 decision 7).
     ///
-    /// A held fire goes out only if its alert is still open, not rolled up and not acknowledged
-    /// (decision 9) - and then as the alert is **now**, so a severity that rose overnight is the
-    /// one sent. A held resolve or roll-up goes out as it was (decision 10). Each row is removed
-    /// once handled, whatever happened to it. `acked` answers for one alert from the ack store.
+    /// A held fire goes out only if its alert is still open and not rolled up (decision 9; Yagra
+    /// keeps no acknowledgement to consult since ADR-233) - and then as the alert is **now**, so a
+    /// severity that rose overnight is the one sent. A held resolve or roll-up goes out as it was
+    /// (decision 10). Each row is removed once handled, whatever happened to it.
     pub async fn release(
         &self,
         rows: Vec<HeldRow>,
         active: &[Alert],
-        acked: &(dyn Fn(&Alert) -> bool + Sync),
         now: chrono::DateTime<chrono::Utc>,
     ) {
         let Some(store) = self.held_store() else {
@@ -1625,10 +1624,7 @@ impl Notifier {
                         .iter()
                         .find(|a| a.subject == row.alert.subject && a.check == row.alert.check);
                     if let Some(a) = live {
-                        if a.root_cause.is_none()
-                            && !acked(a)
-                            && sent.insert((a.subject.to_string(), a.check))
-                        {
+                        if a.root_cause.is_none() && sent.insert((a.subject.to_string(), a.check)) {
                             self.deliver(NotifyAction::Fire(a.clone())).await;
                         }
                     }
@@ -3387,9 +3383,9 @@ mod delivery_tests {
         chrono::Utc.with_ymd_and_hms(2026, 11, 3, 9, 0, 0).unwrap()
     }
 
-    async fn release_now(n: &Notifier, held: &MemHeld, active: &[Alert], acked: bool) {
+    async fn release_now(n: &Notifier, held: &MemHeld, active: &[Alert]) {
         let rows = held.list().await.unwrap();
-        n.release(rows, active, &|_| acked, morning()).await;
+        n.release(rows, active, morning()).await;
     }
 
     #[tokio::test]
@@ -3408,12 +3404,11 @@ mod delivery_tests {
 
         // Still closed: a release pass at night sends nothing and keeps the row.
         let rows = held.list().await.unwrap();
-        n.release(rows, std::slice::from_ref(&a), &|_| false, evening())
-            .await;
+        n.release(rows, std::slice::from_ref(&a), evening()).await;
         assert_eq!(dflt.lock().unwrap().count("fire"), 0);
         assert_eq!(held.rows.lock().unwrap().len(), 1);
 
-        release_now(&n, &held, std::slice::from_ref(&a), false).await;
+        release_now(&n, &held, std::slice::from_ref(&a)).await;
         assert_eq!(
             dflt.lock().unwrap().count("fire"),
             1,
@@ -3433,7 +3428,7 @@ mod delivery_tests {
             held.rows.lock().unwrap().is_empty(),
             "the resolve dropped the held fire"
         );
-        release_now(&n, &held, &[], false).await;
+        release_now(&n, &held, &[]).await;
         assert!(
             dflt.lock().unwrap().0.is_empty(),
             "neither the fire nor its end was sent"
@@ -3454,26 +3449,17 @@ mod delivery_tests {
         n.handle_at(NotifyAction::Resolve(a), evening()).await;
         assert_eq!(dflt.lock().unwrap().count("close"), 0);
         assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Resolve);
-        release_now(&n, &held, &[], false).await;
+        release_now(&n, &held, &[]).await;
         assert_eq!(dflt.lock().unwrap().count("close"), 1);
     }
 
     #[tokio::test]
-    async fn a_held_fire_someone_acknowledged_or_that_closed_is_not_sent() {
+    async fn a_held_fire_that_closed_is_not_sent() {
         let node = NodeId::new();
         let (n, dflt, held) = office_hours(node);
         let a = alert(node, Severity::Critical, None);
-        n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
-        release_now(&n, &held, std::slice::from_ref(&a), true).await;
-        assert_eq!(
-            dflt.lock().unwrap().count("fire"),
-            0,
-            "acknowledged overnight"
-        );
-        assert!(held.rows.lock().unwrap().is_empty(), "and forgotten");
-
         n.handle_at(NotifyAction::Fire(a), evening()).await;
-        release_now(&n, &held, &[], false).await;
+        release_now(&n, &held, &[]).await;
         assert_eq!(
             dflt.lock().unwrap().count("fire"),
             0,

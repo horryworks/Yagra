@@ -54,7 +54,6 @@ describe('queryFor', () => {
       severity: undefined,
       state: undefined,
       resolved: undefined,
-      acked: undefined,
       metric: undefined,
       node_id: undefined,
       node_q: undefined,
@@ -76,7 +75,6 @@ describe('queryFor', () => {
           phase: 'fired',
           node_q: contains('core-sw'),
           metric: contains('cpu'),
-          acked: 'false',
           range: '7d',
         },
         { nodeId: 'n1', groupId: '' },
@@ -85,10 +83,6 @@ describe('queryFor', () => {
       severity: 'warning,critical',
       state: 'unreachable',
       resolved: false,
-      // Only a chosen value becomes a boolean, and `false` must survive the conversion — a
-      // falsy-check here would drop "unacknowledged only", which is the filter an operator
-      // actually reaches for.
-      acked: false,
       metric: 'cpu',
       node_id: 'n1',
       node_q: 'core-sw',
@@ -98,21 +92,19 @@ describe('queryFor', () => {
   });
 
   it('treats both boxes ticked as the unfiltered view, not as a third answer', () => {
-    // `phase` and `acked` map onto booleans, so "fired and cleared" is the same request as
-    // neither. `undefined` omits the parameter; `false` would ask for fires only.
+    // `phase` maps onto a boolean, so "fired and cleared" is the same request as neither.
+    // `undefined` omits the parameter; `false` would ask for fires only.
     expect(query({ phase: 'fired,cleared' }).resolved).toBeUndefined();
-    expect(query({ acked: 'true,false' }).acked).toBeUndefined();
-    expect(query({ acked: 'true' }).acked).toBe(true);
+    expect(query({ phase: 'cleared' }).resolved).toBe(true);
   });
 
   it('drops a token the column does not offer instead of forwarding it', () => {
     // 🚨 The trap decision AA had to close: the URL is read without validation on purpose, so
     // `?severity=bogus` would otherwise reach an endpoint that rejects unknown severities. It is
-    // also what lets `phaseOf`/`ackedOf` read `picked[0]` as a token they already know.
+    // also what lets `phaseOf` read `picked[0]` as a token it already knows.
     expect(query({ severity: 'bogus' }).severity).toBeUndefined();
     expect(query({ severity: 'bogus,critical' }).severity).toBe('critical');
     expect(query({ phase: 'exploded' }).resolved).toBeUndefined();
-    expect(query({ acked: 'maybe' }).acked).toBeUndefined();
   });
 
   it('falls back to the default window for a preset a stale URL names', () => {
@@ -164,7 +156,6 @@ describe('URL round trip', () => {
       phase: 'cleared',
       node_q: contains('core-sw'),
       metric: contains('cpu_util'),
-      acked: 'true',
       range: '30d',
     };
     const scope: ScopeIds = { nodeId: 'n1', groupId: 'g1' };
@@ -232,23 +223,23 @@ describe('the filter row (ADR-053 Inc.4)', () => {
 
   it('offers a multi-select on every enum, because the endpoint takes a set', () => {
     // 🚨 What must stay true is the *pairing*: a multi-select over a parameter that accepts one
-    // value drops rows with nothing on screen saying so. `phase` and `acked` are the exception
-    // that proves it — they are sets in the control and booleans on the wire, and `queryFor`
-    // sends "both ticked" as no parameter at all rather than as one of the two.
+    // value drops rows with nothing on screen saying so. `phase` is the exception that proves it —
+    // a set in the control and a boolean on the wire, and `queryFor` sends "both ticked" as no
+    // parameter at all rather than as one of the two.
     const specs = historyFilters(t);
-    for (const key of ['severity', 'state', 'phase', 'acked']) {
+    for (const key of ['severity', 'state', 'phase']) {
       expect(specs[key].kind, key).toBe('enum');
       expect('single' in specs[key], `${key} still carries the removed single flag`).toBe(false);
     }
   });
 
   it('mounts a filter on every column, so none reads as forgotten', () => {
-    // The user-visible half of Inc.4b. Node / What / Acked each had a *reason* to be unfilterable —
+    // The user-visible half of Inc.4b. Node / What each had a *reason* to be unfilterable —
     // no API parameter existed — and from the screen that is indistinguishable from an oversight,
     // which is why it was reported twice. If a column here loses its filter again, that is a
     // decision someone has to make deliberately.
     expect(COLUMNS.map((c) => c.key).sort()).toEqual(
-      ['acked', 'metric', 'node_q', 'phase', 'range', 'severity', 'state'].sort(),
+      ['metric', 'node_q', 'phase', 'range', 'severity', 'state'].sort(),
     );
   });
 

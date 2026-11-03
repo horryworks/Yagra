@@ -62,7 +62,7 @@ pub(crate) fn tool_surface_files() -> Vec<(String, String)> {
 
 /// The whole tool surface, concatenated.
 ///
-/// **The floor lives here, so every caller inherits it.** Thirty-six tools are declared today; 34 is
+/// **The floor lives here, so every caller inherits it.** Forty-one tools are declared today; 34 is
 /// the same floor `route_table.rs` has always asserted, and it is a floor rather than a count on
 /// purpose — a tool may legitimately be removed, but half the surface disappearing at once is a
 /// build accident, not a decision. A caller that needs a tighter number still states its own.

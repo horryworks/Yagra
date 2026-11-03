@@ -52,8 +52,8 @@ polling**. Users access it through the WebUI.
 > narrowing what a compromised poller can reach. **AI assistants can now query Yagra through a built-in
 > MCP tool surface** at `/mcp`, served from the first boot — mostly read-only status, metrics, flow, and event queries plus
 > on-demand Troubleshoot analyses and **Yagra's own configuration**, each section demanding the same
-> permission the matching WebUI screen does, alongside a few audited write actions (acknowledge an
-> alert, open a maintenance window, poll now); it is authenticated by API token and cannot change
+> permission the matching WebUI screen does, alongside two audited write actions (open a maintenance
+> window, poll now); it is authenticated by API token and cannot change
 > device configuration. Received passive data can now be **forwarded onward** — a filtered tee that relays
 > syslog, SNMP traps and flow exports to a SIEM or collector byte-for-byte over UDP/TCP/TLS, or streams
 > normalized rows into **BigQuery** — from one egress point instead of a second export target on every
@@ -171,9 +171,8 @@ AI client — Claude Code, Claude Desktop, or another MCP-capable assistant — 
 state in natural language: *"which nodes are down?"*, *"summarize the active alerts"*, *"show CPU on
 edge-router-1 for the last hour"*, *"run anomaly detection and tell me what looks wrong"*. Most tools
 are **read-only** — the AI sees the same data the WebUI does — and it can launch the same on-demand
-**Troubleshoot** analyses (which only read metric history and return findings). A few **write** tools
-can act on the *monitoring* system — acknowledge an alert, open a maintenance window, or trigger an
-immediate poll — but only for a token whose role permits it (a **Viewer** token is read-only), and
+**Troubleshoot** analyses (which only read metric history and return findings). Two **write** tools
+can act on the *monitoring* system — open a maintenance window, or trigger an immediate poll — but only for a token whose role permits it (a **Viewer** token is read-only), and
 every write is recorded in the audit log. There are still **no** tools that configure or change
 network devices.
 
@@ -181,8 +180,7 @@ Read tools: `get_fleet_summary`, `list_nodes`, `get_node_status`, `get_active_al
 `get_alert_history`, `query_metrics`, `get_topology`, `top_flows`, `search_events` (syslog / traps /
 webhooks), plus the Troubleshoot trio `run_analysis`, `get_analysis_findings`, `list_analyses`
 (on-demand anomaly / correlation / capacity / flap analysis).
-Write tools (need an Operator/Admin token; every call is audited): `ack_alert`, `open_maintenance`,
-`poll_now`.
+Write tools (need an Operator/Admin token; every call is audited): `open_maintenance`, `poll_now`.
 
 ### 1. Find the endpoint
 
@@ -212,8 +210,8 @@ by default exposes nothing until you mint a token in step 2. To remove it entire
 
 Sign in to the WebUI as an admin → **Settings ▸ API tokens ▸ New token** → tick **MCP** under
 "Can be used for" → choose **Viewer** for a read-only assistant (all the read/Troubleshoot tools
-work), or **Operator/Admin** if you want it to also acknowledge alerts, open maintenance windows, or
-poll on demand → copy the `yat_…` value shown once. This is the bearer token the AI client sends.
+work), or **Operator/Admin** if you want it to also open maintenance windows or poll on
+demand → copy the `yat_…` value shown once. This is the bearer token the AI client sends.
 (A regular login session token works too, but it expires; an API token is meant for an unattended
 client and is revocable from the same page.)
 

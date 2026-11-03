@@ -11,7 +11,6 @@ import { SEVERITIES, type NodeState } from '../types/api';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
 import {
-  ACK_STATES,
   activeAlertColumns,
   activeAlertLabels,
   alertPredicate,
@@ -62,16 +61,6 @@ const poolAlert = (over: Partial<FilterableAlert> = {}): FilterableAlert => ({
 
 const read = (qs: string) => readFilters(cols(), new URLSearchParams(qs));
 
-describe('the ack vocabulary', () => {
-  it('offers no empty option, because "no filter" is the empty set', () => {
-    // Under the old single-valued dropdown this had to be checked against a second `ACK_FILTERS`
-    // list that added `''`. A multi-select has no such option to duplicate: nothing ticked *is* the
-    // unfiltered state, so there is one spelling of it and the second list is gone.
-    expect(ACK_STATES).not.toContain('');
-    expect(DEFAULTS.ack).toBe('');
-  });
-});
-
 describe('the column set', () => {
   it('labels every column, so the bar never shows a raw key', () => {
     // The bar has no header above each control, so a missing label is the only thing between the
@@ -118,23 +107,6 @@ describe('the predicate', () => {
     const info = nodeAlert({ severity: 'info' });
     const f = withFilters({ severity: 'critical,warning' });
     expect([matches(crit, f), matches(warn, f), matches(info, f)]).toEqual([true, true, false]);
-  });
-
-  it('splits acked from not-acked, and each excludes the other', () => {
-    // The mirror-image assertion is the point: "Acked" showing un-acked rows was the History bug
-    // this whole pass shipped a fix for, and it looked plausible from one direction only.
-    const acked = nodeAlert({ acked: { source: 'pagerduty', by: 'oncall', at_unix_ms: 1 } });
-    const plain = nodeAlert();
-    expect(matches(acked, withFilters({ ack: 'acked' }))).toBe(true);
-    expect(matches(plain, withFilters({ ack: 'acked' }))).toBe(false);
-    expect(matches(plain, withFilters({ ack: 'unacked' }))).toBe(true);
-    expect(matches(acked, withFilters({ ack: 'unacked' }))).toBe(false);
-    // Ticking both is the same as ticking neither — and must not become "nothing matches".
-    expect(matches(acked, withFilters({ ack: 'acked,unacked' }))).toBe(true);
-    expect(matches(plain, withFilters({ ack: 'acked,unacked' }))).toBe(true);
-    // And neither is applied at all when the filter is unset.
-    expect(matches(acked, DEFAULTS)).toBe(true);
-    expect(matches(plain, DEFAULTS)).toBe(true);
   });
 
   it('searches the resolved node name, the raw id and the metric', () => {
@@ -188,7 +160,6 @@ describe('isAnyFiltered', () => {
     const sample: FilterState = {
       severity: 'critical',
       state: 'unreachable',
-      ack: 'acked',
       q: 'rtr',
     };
     for (const c of cols()) {
@@ -206,7 +177,6 @@ describe('the URL codec', () => {
     const f: FilterState = {
       severity: 'warning',
       state: 'maintenance',
-      ack: 'unacked',
       q: 'rtr-01',
     };
     const params = new URLSearchParams();
@@ -218,7 +188,7 @@ describe('the URL codec', () => {
     // The keys and the one-value spelling did not change, so a link taken from the old screen opens
     // the same view — a one-element set.
     expect(read('severity=critical').severity).toBe('critical');
-    expect(read('ack=acked').ack).toBe('acked');
+    expect(read('state=unreachable').state).toBe('unreachable');
   });
 
   it('settles a set into the spec’s option order, whatever order the URL used', () => {
@@ -234,7 +204,7 @@ describe('the URL codec', () => {
   });
 
   it('clears a key when its filter goes back to the default', () => {
-    const params = new URLSearchParams('severity=critical&q=rtr&ack=acked');
+    const params = new URLSearchParams('severity=critical&q=rtr&state=unreachable');
     writeFilters(cols(), params, DEFAULTS);
     expect(params.toString()).toBe('');
   });
@@ -242,7 +212,7 @@ describe('the URL codec', () => {
   it('drops an unknown token instead of rejecting the value', () => {
     // A stale bookmark or a hand-edited URL must not render a control whose value is not one of its
     // own options — the opposite of the API edge, where an unknown token is a 400.
-    expect(read('severity=nuclear&state=melted&ack=maybe')).toEqual(DEFAULTS);
+    expect(read('severity=nuclear&state=melted')).toEqual(DEFAULTS);
     // …and a mixed value keeps the half this build understands.
     expect(read('severity=nuclear,warning').severity).toBe('warning');
   });

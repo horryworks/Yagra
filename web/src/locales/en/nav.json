@@ -114,7 +114,7 @@
     "nodesMissingPrefixes": "Subnets devices carry that none of their site's IP prefixes covers, site by site",
     "topologyGeo": "Node groups placed on a world map by the coordinates you give them",
     "alertsActive": "What is wrong right now — the triage list",
-    "alertsHistory": "Every alert that has fired and cleared, with who acknowledged it",
+    "alertsHistory": "Every alert that has fired and cleared",
     "troubleshootAll": "On-demand deep analyses — pick one, choose a scope, read the report",
     "settingsIntegrations": "Vendor clouds Yagra pulls inventory and metrics from, such as Cisco Meraki",
     "settingsTls": "The certificate the WebUI serves",

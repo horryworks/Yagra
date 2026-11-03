@@ -12,6 +12,7 @@
 
 ### Breaking changes
 
+- **Yagra no longer keeps alert acknowledgements.** `POST /api/v1/alerts/ack` and the MCP tool `ack_alert` are removed; `acked` is gone from `GET /api/v1/alerts`, `GET /api/v1/alerts/history`, the live alert stream and the MCP alert tools, and History no longer takes `acked=`. The Active alerts and History screens no longer show an acked mark, column or filter. The upgrade drops the stored acknowledgements (migration `0167`; going back needs a restore from backup, the same floor as `0166`). A notification held outside delivery hours now goes out whenever its alert is still open in the morning. Acknowledge in your incident tool.
 - **A label no longer decides any alert.** Threshold rules scoped to a node label (`scope_level: group`) and maintenance windows scoped to one are removed, and the upgrade deletes any that exist. A label stays on nodes and folders as a description that rides on notifications, for routing in PagerDuty and Jira Service Management. A rule now reaches a node through all nodes, its profile, a folder, the node itself or one of its ports. Creating either with `scope_level: group` is `400`. A configuration bundle exported from an older deployment still imports; its label-scoped rules are skipped and counted.
 - **After this upgrade, going back to an earlier core needs a restore from backup.** An event rule can now target a folder (migration `0166`); a core older than 0.3.67 would read a folder rule as a rule on every node and fire it fleet-wide, so the upgrade page no longer offers to go back past it.
 

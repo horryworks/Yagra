@@ -4,21 +4,12 @@
     "emptyFiltered": "No active alerts match these filters.",
     "noNodes": "No nodes are being monitored.",
     "searchPlaceholder": "Search node or metric…",
-    "ack": {
-      "all": "Acked and not",
-      "aria": "Filter by acknowledgement",
-      "label": "Acked",
-      "acked": "Acked",
-      "unacked": "Not acked"
-    },
-    "ackedHint": "Acked arrives from your on-call tool (PagerDuty / JSM). Yagra shows it and never sets it.",
     "searchLabel": "Node or metric",
     "mute": "Mute",
     "muteHint": "Mute this check on this node"
   },
   "row": {
     "flapping": "flapping",
-    "acked": "acked",
     "mutedUntil": "muted until {{until}}",
     "poolSubject": "Poller pool “{{pool}}”",
     "configRemoteSubject": "Config backup Git destination",
@@ -33,10 +24,6 @@
     "heldUntil": "held until {{until}}",
     "held": "held"
   },
-  "acked": {
-    "title": "Acknowledged in {{source}} by {{by}}{{note}}",
-    "note": " — {{note}}"
-  },
   "history": {
     "empty": "No alert history yet.",
     "transitions": "transitions",
@@ -47,7 +34,6 @@
       "what": "What",
       "state": "State",
       "event": "Event",
-      "acked": "Acked",
       "when": "When"
     },
     "phase": {
@@ -58,10 +44,7 @@
     "filter": {
       "allSeverities": "All severities",
       "allPhases": "Fires and clears",
-      "allStates": "All states",
-      "allAcked": "Acknowledged or not",
-      "acked": "Acknowledged",
-      "unacked": "Not acknowledged"
+      "allStates": "All states"
     }
   },
   "events": {

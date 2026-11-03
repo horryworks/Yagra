@@ -1,25 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Alerts: the active list, history and its aggregations, inbound ack reflection, and the two live
-//! streams.
+//! Alerts: the active list, history and its aggregations, and the two live streams.
 //!
-//! ## Ack is inbound-only
+//! ## No acknowledgement
 //!
-//! Yagra holds no escalation scheduler and no ack *action* (ADR-015). An external incident tool
-//! (PagerDuty / JSM) mirrors ack state in, keyed by the alert dedup identity
-//! `(node, check, severity)`, and Yagra never writes it back out. So `acked` is decorative: if
-//! loading it fails, the alert list is still served without it, because a blank alert list during
-//! an incident is far worse than a missing pill.
-//!
-//! [`apply_ack`] exists because recording an ack has **two** halves — persist it, then broadcast so
-//! the pill appears without a refetch — and both the REST endpoint and the MCP `ack_alert` tool did
-//! them separately. Omitting the broadcast is a silent failure: the write succeeds, the caller sees
-//! success, and every open dashboard keeps showing an unacknowledged alert until someone reloads.
-//! Making them one call means you cannot do one without the other.
+//! Yagra holds no escalation scheduler and no ack (ADR-015, ADR-233): it neither records nor shows
+//! whether someone has acknowledged an alert. That belongs to the external incident tool.
 
-use super::extract::{RequireAckAlerts, RequireView, Scoped};
+use super::extract::{RequireView, Scoped};
 use super::util::Ranked;
 use super::{ApiError, ApiResult, ApiState};
-use crate::alerts::ack::{AckKey, AckView};
 use crate::alerts::history::AlertHistoryRow;
 use axum::{
     extract::{Query, State},
@@ -27,7 +16,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use futures::stream::StreamExt;
@@ -43,7 +32,6 @@ use yagra_common::{NodeState, Severity};
 #[openapi(paths(
     list_alerts,
     list_alert_history,
-    ack_alert,
     alert_top_nodes,
     alert_calendar,
     alert_transitions,
@@ -57,7 +45,6 @@ pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/alerts", get(list_alerts))
         .route("/api/v1/alerts/history", get(list_alert_history))
-        .route("/api/v1/alerts/ack", post(ack_alert))
         .route("/api/v1/alerts/top-nodes", get(alert_top_nodes))
         .route("/api/v1/alerts/calendar", get(alert_calendar))
         .route("/api/v1/alerts/transitions", get(alert_transitions))
@@ -65,9 +52,9 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/stream/node-states", get(stream_node_states))
 }
 
-// ── Ack decoration ───────────────────────────────────────────────────────────
+// ── Decoration ───────────────────────────────────────────────────────────
 
-/// An active alert plus its inbound (read-only) ack state.
+/// An active alert plus what the list adds to it: its subject decomposed, its title, its port.
 ///
 /// `subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a
 /// node's UUID, `pool:<name>` or `meraki_org:<uuid>`. The live alert stream emits the same three keys.
@@ -93,12 +80,9 @@ pub(crate) struct ActiveAlertView {
     /// about no port, and for a port whose name is not known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub if_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub acked: Option<AckView>,
 }
 
-/// An alert-history row plus its current inbound ack state (keyed by the dedup identity, so all
-/// transitions of one incident share it).
+/// An alert-history row plus its title and its port's current name.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct AlertHistoryView {
     #[serde(flatten)]
@@ -110,8 +94,6 @@ pub(crate) struct AlertHistoryView {
     /// called when this row was written. See [`ActiveAlertView::if_name`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub if_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub acked: Option<AckView>,
 }
 
 /// The names of the ports a page of alerts (or a node's status) is about, keyed by
@@ -187,121 +169,32 @@ pub(crate) async fn with_port_names(st: &ApiState, alerts: Vec<Alert>) -> Vec<Po
         .collect()
 }
 
-/// The ack map key for one alert identity.
-///
-/// The first component is the subject's **storage id** — a node's own id for a node alert, so
-/// every acknowledgement recorded before the subject split still joins. Written once so the two
-/// decorators and the ack writer cannot key on three different things.
-fn ack_key(subject: &yagra_alert::Subject, check: Uuid, severity: Severity) -> AckKey {
-    (subject.storage_id(), check, severity.as_str().to_owned())
-}
-
-/// Join the ack map into the active-alert list (pure; unit-tested without a DB).
-fn decorate_alerts(alerts: Vec<Alert>, acks: &HashMap<AckKey, AckView>) -> Vec<ActiveAlertView> {
+/// Decorate the active-alert list (pure; unit-tested without a DB).
+fn decorate_alerts(alerts: Vec<Alert>) -> Vec<ActiveAlertView> {
     alerts
         .into_iter()
-        .map(|alert| {
-            let acked = acks
-                .get(&ack_key(
-                    &alert.subject,
-                    alert.check.as_uuid(),
-                    alert.severity,
-                ))
-                .cloned();
-            ActiveAlertView {
-                subject_kind: alert.subject.kind(),
-                subject_name: alert.subject.name().map(str::to_owned),
-                title: crate::tsdb::metric_meaning::alert_title_of(&alert.metric),
-                if_name: None,
-                alert,
-                acked,
-            }
+        .map(|alert| ActiveAlertView {
+            subject_kind: alert.subject.kind(),
+            subject_name: alert.subject.name().map(str::to_owned),
+            title: crate::tsdb::metric_meaning::alert_title_of(&alert.metric),
+            if_name: None,
+            alert,
         })
         .collect()
 }
 
-/// Join the ack map into a history page (pure; unit-tested without a DB).
-fn decorate_history(
-    rows: Vec<AlertHistoryRow>,
-    acks: &HashMap<AckKey, AckView>,
-) -> Vec<AlertHistoryView> {
+/// Decorate a history page (pure; unit-tested without a DB).
+fn decorate_history(rows: Vec<AlertHistoryRow>) -> Vec<AlertHistoryView> {
     rows.into_iter()
-        .map(|row| {
-            let acked = row
-                .subject()
-                .and_then(|s| acks.get(&ack_key(&s, row.check, row.severity)).cloned());
-            AlertHistoryView {
-                title: row
-                    .metric
-                    .as_deref()
-                    .and_then(crate::tsdb::metric_meaning::alert_title_of),
-                if_name: None,
-                row,
-                acked,
-            }
+        .map(|row| AlertHistoryView {
+            title: row
+                .metric
+                .as_deref()
+                .and_then(crate::tsdb::metric_meaning::alert_title_of),
+            if_name: None,
+            row,
         })
         .collect()
-}
-
-/// Load the current ack map, or an empty map when ack is unavailable (skeleton) or the query
-/// errors — ack state is decorative, so a failure here must not blank the alert list.
-async fn ack_map(st: &ApiState) -> HashMap<AckKey, AckView> {
-    match st.ack.as_ref() {
-        Some(repo) => repo.all().await.unwrap_or_else(|e| {
-            tracing::error!(error = %e, "load ack map failed; serving alerts without ack state");
-            HashMap::new()
-        }),
-        None => HashMap::new(),
-    }
-}
-
-/// Record or clear an inbound ack, **and** broadcast the change.
-///
-/// `view` is `Some` to acknowledge, `None` to clear. The two steps are one function on purpose: the
-/// persist is what survives a restart and the broadcast is what makes the pill appear without a
-/// refetch, and a caller that does only the first gets a success response while every open
-/// dashboard keeps showing the alert unacknowledged.
-pub(crate) async fn apply_ack(
-    st: &ApiState,
-    subject: &yagra_alert::Subject,
-    check: Uuid,
-    severity: Severity,
-    view: Option<AckView>,
-) -> Result<(), ApiError> {
-    let Some(repo) = st.ack.as_ref() else {
-        return Err(ApiError::admin_unavailable());
-    };
-    match &view {
-        Some(v) => repo
-            .set(subject, check, severity.as_str(), v)
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "record inbound ack",
-                    "failed to record acknowledgement",
-                )
-            })?,
-        None => repo
-            .clear(subject, check, severity.as_str())
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "clear inbound ack",
-                    "failed to clear acknowledgement",
-                )
-            })?,
-    }
-    // The event carries the alert shape plus `acked` and no `resolved`, so a client treats it as
-    // an upsert rather than a removal.
-    st.alerts.broadcast_acked(
-        subject,
-        check,
-        severity,
-        view.as_ref().and_then(|v| serde_json::to_value(v).ok()),
-    );
-    Ok(())
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
@@ -309,7 +202,7 @@ pub(crate) async fn apply_ack(
 #[utoipa::path(
     get, path = "/api/v1/alerts", tag = "alerts",
     responses(
-        (status = 200, description = "Every active alert, each decorated with its inbound ack state", body = Vec<ActiveAlertView>),
+        (status = 200, description = "Every active alert", body = Vec<ActiveAlertView>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
@@ -319,10 +212,8 @@ async fn list_alerts(
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
 ) -> Json<Vec<ActiveAlertView>> {
-    let acks = ack_map(&st).await;
-    // Filter before decorating: an out-of-scope alert must not reach the ack join either, or the
-    // response would be shorter but the work — and the ack lookups — would still name those nodes.
-    let mut views = decorate_alerts(visible_active_alerts(&st, &scope), &acks);
+    // Filter before decorating, so no port lookup is spent on an out-of-scope alert.
+    let mut views = decorate_alerts(visible_active_alerts(&st, &scope));
     let ports = port_names(&st, views.iter().filter_map(|v| port_key(&v.alert))).await;
     for view in &mut views {
         fill_subject_name(&st, &mut view.subject_name, &view.alert.subject);
@@ -332,7 +223,7 @@ async fn list_alerts(
 }
 
 /// The active alerts `scope` may see — the set both `GET /alerts` and `/mcp`'s `get_active_alerts`
-/// start from (ADR-184). Filtered first, so nothing downstream (an ack join, a limit) is spent on
+/// start from (ADR-184). Filtered first, so nothing downstream (a port lookup, a limit) is spent on
 /// a row that is about to be dropped.
 pub(crate) fn visible_active_alerts(st: &ApiState, scope: &super::scope::NodeScope) -> Vec<Alert> {
     st.alerts
@@ -391,10 +282,6 @@ pub(crate) struct HistoryQuery {
     pub state: Option<String>,
     /// `false` for fires only, `true` for clears only. Omit for both.
     pub resolved: Option<bool>,
-    /// `true` for transitions whose incident has been acknowledged, `false` for those that have
-    /// not. Omit for both. Acknowledgement is per incident (node + check + severity), so every
-    /// transition of one incident answers the same way.
-    pub acked: Option<bool>,
     /// Only transitions whose metric name contains this text (case-insensitive). Liveness rows
     /// store no metric and therefore never match.
     pub metric: Option<String>,
@@ -437,7 +324,6 @@ async fn list_alert_history(
             severity: q.severity.as_deref(),
             state: q.state.as_deref(),
             resolved: q.resolved,
-            acked: q.acked,
             metric: q.metric.as_deref(),
             node_id: q.node_id,
             node_q: q.node_q.as_deref(),
@@ -445,8 +331,7 @@ async fn list_alert_history(
         },
     )
     .await?;
-    let acks = ack_map(&st).await;
-    let mut views = decorate_history(rows, &acks);
+    let mut views = decorate_history(rows);
     let ports = port_names(
         &st,
         views
@@ -494,7 +379,6 @@ pub(crate) struct HistoryFilterInput<'a> {
     pub severity: Option<&'a str>,
     pub state: Option<&'a str>,
     pub resolved: Option<bool>,
-    pub acked: Option<bool>,
     pub metric: Option<&'a str>,
     pub node_id: Option<Uuid>,
     pub node_q: Option<&'a str>,
@@ -572,7 +456,6 @@ pub(crate) async fn history_page(
         resolved: input.resolved,
         node_id: input.node_id,
         in_group: in_group.as_deref(),
-        acked: input.acked,
         metric: metric.as_deref(),
         node_q: node_q.as_deref(),
         limit: input.limit.unwrap_or(100),
@@ -598,112 +481,6 @@ pub(crate) async fn history_page(
         .into_iter()
         .filter(|r| r.subject().is_some_and(|s| scope.allows_subject(st, &s)))
         .collect())
-}
-
-// ── Inbound ack (ADR-015, A1) ────────────────────────────────────────────────
-
-/// Default for `AckRequest::acked` when the field is omitted (a bare body means "ack").
-fn default_acked() -> bool {
-    true
-}
-
-/// Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity
-/// `(subject, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
-/// middleware records the audit entry.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct AckRequest {
-    /// The node the alert is about. Omit it and send `subject` instead for an alert about
-    /// something other than a node (a poller pool). Exactly one of the two is required.
-    #[serde(default)]
-    node: Option<Uuid>,
-    /// The alert's subject in its flat form — a node's UUID, `pool:<name>` or `meraki_org:<uuid>`. This is the value
-    /// the alert's own `node` field carries, so an integration can echo back what it received.
-    #[serde(default)]
-    subject: Option<String>,
-    check: Uuid,
-    severity: Severity,
-    /// `true` = acked (upsert), `false` = cleared (delete). Defaults to `true`.
-    #[serde(default = "default_acked")]
-    acked: bool,
-    /// External actor reference (id / handle) — never a secret.
-    #[serde(default)]
-    by: Option<String>,
-    /// Originating tool: `pagerduty` | `jsm` | `manual` | …
-    #[serde(default)]
-    source: Option<String>,
-    /// Optional free-text note from the external tool.
-    #[serde(default)]
-    note: Option<String>,
-    /// When the external tool recorded the ack (Unix ms, UTC); defaults to now.
-    #[serde(default)]
-    at_unix_ms: Option<i64>,
-}
-
-/// What an ack call reports back: the new state, and the stored view when acknowledging.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub(super) struct AckResult {
-    acked: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ack: Option<AckView>,
-}
-
-#[utoipa::path(
-    post, path = "/api/v1/alerts/ack", tag = "alerts",
-    request_body = AckRequest,
-    responses(
-        (status = 200, description = "The ack was recorded (or cleared) and broadcast", body = AckResult),
-        (status = 400, description = "Neither `node` nor a readable `subject` was supplied", body = super::error::ErrorBody),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the alert-acknowledgement permission", body = super::error::ErrorBody),
-        (status = 404, description = "The subject is outside the caller's group scope", body = super::error::ErrorBody),
-        (status = 503, description = "This deployment has no ack store", body = super::error::ErrorBody),
-    ),
-)]
-async fn ack_alert(
-    _perm: RequireAckAlerts,
-    Scoped(scope): Scoped,
-    State(st): State<ApiState>,
-    Json(body): Json<AckRequest>,
-) -> ApiResult<Json<AckResult>> {
-    let subject = ack_subject(body.node, body.subject.as_deref())?;
-    super::scope::require_visible_subject(&st, &scope, &subject)?;
-    let view = body.acked.then(|| AckView {
-        // The external tool's own timestamp wins when it sends one — its clock is the record of
-        // when the human actually acknowledged, which may be well before this request arrives.
-        at_unix_ms: body
-            .at_unix_ms
-            .unwrap_or_else(|| super::now_unix_s() * 1000),
-        by: body.by.unwrap_or_else(|| "external".to_owned()),
-        source: body.source.unwrap_or_else(|| "external".to_owned()),
-        note: body.note,
-    });
-    apply_ack(&st, &subject, body.check, body.severity, view.clone()).await?;
-    Ok(Json(AckResult {
-        acked: body.acked,
-        ack: view,
-    }))
-}
-
-/// Resolve an ack request's target from its two spellings.
-///
-/// `node` is the original field and stays the common case; `subject` is what an integration echoes
-/// back for an alert about something else. Pure, so the precedence and the refusal are unit-tested
-/// without a router.
-fn ack_subject(
-    node: Option<Uuid>,
-    subject: Option<&str>,
-) -> Result<yagra_alert::Subject, ApiError> {
-    // `node` wins when both are present: it is the narrower statement, and a caller that sends a
-    // node id cannot have meant a pool.
-    if let Some(node) = node {
-        return Ok(yagra_alert::Subject::Node(yagra_common::NodeId::from(node)));
-    }
-    subject.and_then(|s| s.parse().ok()).ok_or_else(|| {
-        ApiError::bad_request(
-            "invalid_subject",
-            "send `node`, or a `subject` of `<uuid>`, `pool:<name>` or `meraki_org:<uuid>`",
-        )
-    })
 }
 
 // ── History aggregations ─────────────────────────────────────────────────────
@@ -1158,68 +935,6 @@ mod tests {
     use tower::ServiceExt;
     use yagra_common::{NodeId, NodeState};
 
-    // ── Inbound ack reflection (ADR-015, A1) ────────────────────────────────
-
-    #[test]
-    fn decorate_alerts_attaches_inbound_ack_by_dedup_key() {
-        use std::collections::HashMap;
-        let node = NodeId::from(Uuid::from_u128(1));
-        let check = yagra_common::CheckId::from(Uuid::from_u128(2));
-        let acked_alert = Alert {
-            subject: yagra_alert::Subject::Node(node),
-            check,
-            severity: Severity::Critical,
-            state: NodeState::Critical,
-            at_unix_ms: 100,
-            root_cause: None,
-            flapping: false,
-            metric: "__liveness__".to_string(),
-            breach: None,
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-        let other = Alert {
-            subject: yagra_alert::Subject::Node(NodeId::from(Uuid::from_u128(9))),
-            check: yagra_common::CheckId::from(Uuid::from_u128(8)),
-            severity: Severity::Warning,
-            state: NodeState::Warning,
-            at_unix_ms: 50,
-            root_cause: None,
-            flapping: false,
-            metric: "__liveness__".to_string(),
-            breach: None,
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
-        acks.insert(
-            (node.as_uuid(), check.as_uuid(), "critical".to_owned()),
-            AckView {
-                at_unix_ms: 123,
-                by: "pd-user".to_owned(),
-                source: "pagerduty".to_owned(),
-                note: Some("acked".to_owned()),
-            },
-        );
-
-        let out = decorate_alerts(vec![acked_alert, other], &acks);
-        assert_eq!(
-            out[0].acked.as_ref().map(|a| a.source.as_str()),
-            Some("pagerduty")
-        );
-        assert!(out[1].acked.is_none(), "unrelated alert must not be acked");
-
-        // Serialized shape flattens the alert fields and includes the ack view.
-        let json = serde_json::to_value(&out[0]).unwrap();
-        assert_eq!(json["severity"], "critical");
-        assert_eq!(json["acked"]["by"], "pd-user");
-        // A non-acked alert omits the field entirely (skip_serializing_if).
-        let json2 = serde_json::to_value(&out[1]).unwrap();
-        assert!(json2.get("acked").is_none());
-    }
-
     #[test]
     fn a_pool_alert_carries_its_subject_and_still_serializes_node_as_a_string() {
         // Two properties in one shape, because they fail together. `web/src/services/sse.ts` and
@@ -1240,7 +955,7 @@ mod tests {
             row: None,
             row_name: None,
         };
-        let out = decorate_alerts(vec![alert], &HashMap::new());
+        let out = decorate_alerts(vec![alert]);
         let json = serde_json::to_value(&out[0]).unwrap();
         assert_eq!(json["node"], "pool:tokyo");
         assert!(json["node"].is_string());
@@ -1248,159 +963,10 @@ mod tests {
         assert_eq!(json["subject_name"], "tokyo");
     }
 
-    #[test]
-    fn a_pool_alerts_ack_does_not_land_on_the_node_whose_name_the_pool_carries() {
-        // A pool name is operator-authored free text, so it can be spelled as a node's UUID. The
-        // ack join keys on the subject's storage id, which is derived for a pool — if it keyed on
-        // the raw name, that pool's alert would wear that node's acknowledgement.
-        let node = Uuid::from_u128(42);
-        let check = Uuid::from_u128(2);
-        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
-        acks.insert(
-            (node, check, "critical".to_owned()),
-            AckView {
-                at_unix_ms: 1,
-                by: "x".to_owned(),
-                source: "pagerduty".to_owned(),
-                note: None,
-            },
-        );
-        let impostor = Alert {
-            subject: yagra_alert::Subject::Pool(node.to_string()),
-            check: yagra_common::CheckId::from(check),
-            severity: Severity::Critical,
-            state: NodeState::Unreachable,
-            at_unix_ms: 1,
-            root_cause: None,
-            flapping: false,
-            metric: "live_pollers".to_string(),
-            breach: None,
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-        assert!(decorate_alerts(vec![impostor], &acks)[0].acked.is_none());
-    }
-
-    #[test]
-    fn an_ack_request_names_its_subject_by_node_or_by_flat_form() {
-        let node = Uuid::from_u128(5);
-        assert_eq!(
-            ack_subject(Some(node), None).unwrap(),
-            yagra_alert::Subject::Node(NodeId::from(node))
-        );
-        assert_eq!(
-            ack_subject(None, Some("pool:tokyo")).unwrap(),
-            yagra_alert::Subject::Pool("tokyo".to_owned())
-        );
-        // A bare UUID in `subject` is the same node — an integration echoing back the alert's own
-        // `node` field must not need to know which spelling to use.
-        assert_eq!(
-            ack_subject(None, Some(&node.to_string())).unwrap(),
-            yagra_alert::Subject::Node(NodeId::from(node))
-        );
-        // `node` wins when both are sent: it is the narrower statement.
-        assert_eq!(
-            ack_subject(Some(node), Some("pool:tokyo")).unwrap(),
-            yagra_alert::Subject::Node(NodeId::from(node))
-        );
-        // Neither, or an unreadable subject, is the caller's bug and gets a typed 400 rather than
-        // a silent ack on some default target.
-        for bad in [None, Some(""), Some("pool:"), Some("nonsense")] {
-            let err = ack_subject(None, bad).expect_err("no target");
-            assert_eq!(err.code(), "invalid_subject", "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn decorate_history_shares_ack_across_an_incidents_transitions() {
-        use std::collections::HashMap;
-        let node = Uuid::from_u128(1);
-        let check = Uuid::from_u128(2);
-        let fire = AlertHistoryRow {
-            id: Uuid::new_v4(),
-            node: Some(node),
-            subject_kind: SubjectKind::Node,
-            subject_name: None,
-            subject_id: node,
-            check,
-            severity: Severity::Critical,
-            state: NodeState::Critical,
-            at_unix_ms: 10,
-            resolved: false,
-            metric: Some("icmp_rtt_ms".to_owned()),
-            observed_value: Some(150.0),
-            threshold_value: Some(100.0),
-            direction: Some(yagra_common::Direction::Above),
-            recorded_at: "1970-01-01T00:00:10Z".to_owned(),
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-        let clear = AlertHistoryRow {
-            id: Uuid::new_v4(),
-            node: Some(node),
-            subject_kind: SubjectKind::Node,
-            subject_name: None,
-            subject_id: node,
-            check,
-            severity: Severity::Critical,
-            state: NodeState::Ok,
-            at_unix_ms: 20,
-            resolved: true,
-            metric: Some("icmp_rtt_ms".to_owned()),
-            observed_value: None,
-            threshold_value: None,
-            direction: None,
-            recorded_at: "1970-01-01T00:00:20Z".to_owned(),
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-        let unrelated = AlertHistoryRow {
-            id: Uuid::new_v4(),
-            node: Some(Uuid::from_u128(7)),
-            subject_kind: SubjectKind::Node,
-            subject_name: None,
-            subject_id: Uuid::from_u128(7),
-            check,
-            severity: Severity::Warning,
-            state: NodeState::Warning,
-            at_unix_ms: 5,
-            resolved: false,
-            metric: None,
-            observed_value: None,
-            threshold_value: None,
-            direction: None,
-            recorded_at: "1970-01-01T00:00:05Z".to_owned(),
-            ifindex: None,
-            row: None,
-            row_name: None,
-        };
-        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
-        acks.insert(
-            (node, check, "critical".to_owned()),
-            AckView {
-                at_unix_ms: 11,
-                by: "x".to_owned(),
-                source: "jsm".to_owned(),
-                note: None,
-            },
-        );
-
-        let out = decorate_history(vec![fire, clear, unrelated], &acks);
-        assert!(out[0].acked.is_some(), "fire of acked incident is acked");
-        assert!(
-            out[1].acked.is_some(),
-            "clear of same incident shares the ack"
-        );
-        assert!(out[2].acked.is_none(), "unrelated transition is not acked");
-    }
     #[tokio::test]
-    async fn the_alert_list_survives_an_unavailable_ack_store() {
-        // Ack state is decorative (ADR-015: Yagra holds no ack action). Skeleton mode has no ack
-        // repo, and the list must still serve — a blank alert list during an incident would be far
-        // worse than a missing pill.
+    async fn the_alert_list_serves_in_skeleton_mode() {
+        // Skeleton mode has no store behind it, and the list must still serve — a blank alert list
+        // during an incident is the worst answer it could give.
         let resp = router(public_state())
             .oneshot(
                 Request::builder()
@@ -1757,48 +1323,5 @@ mod tests {
             std::pin::pin!(stream).collect::<Vec<_>>().await.is_empty(),
             "the stream must end once its sender is gone"
         );
-    }
-
-    #[tokio::test]
-    async fn acking_stays_closed_on_a_public_dashboard() {
-        // Reads are open there; writing ack state is not.
-        let resp = router(public_state())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/alerts/ack")
-                    .header("content-type", "application/json")
-                    .body(Body::from("{}"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-    // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
-
-    /// An ack is *recorded*, not merely accepted: the row lands in `alert_acks`.
-    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn acknowledging_an_alert_writes_the_ack_row(pool: sqlx::PgPool) {
-        use crate::api::tests_support::{live_state, send, token};
-        let st = live_state(pool.clone()).await;
-        let tok = token(&st, yagra_common::Role::Operator);
-        let node = yagra_base::pgtest::node(&pool, "acked", 1, None).await;
-        let (status, body) = send(
-            &st,
-            "POST",
-            "/api/v1/alerts/ack",
-            &tok,
-            Some(serde_json::json!({
-                "node": node,
-                "check": uuid::Uuid::new_v4(),
-                "severity": "critical",
-                "acked": true,
-            })),
-        )
-        .await;
-        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
-        assert_eq!(yagra_base::pgtest::rows(&pool, "alert_acks").await, 1);
     }
 }

@@ -17,7 +17,7 @@
 // **ADR-053 Inc.6 moved the controls into a `FilterBar` and the logic onto the shared predicate.**
 // `AlertRows` draws a run of spans with no header row, so there is nowhere to hang a filter row
 // (decision E). What changed for the operator is not the layout: every dimension became a *set*, so
-// "critical and warning" and "unacked, on either of two states" are sayable for the first time, and
+// "critical and warning" and "down or unreachable" are sayable for the first time, and
 // the free text gained the NOT and regex modes every other list has.
 
 import { alertSubject, subjectText, type HasSubject } from '../lib/alertSubject';
@@ -36,27 +36,17 @@ import { severityLabel, stateLabel } from '../lib/format';
 import type { TFunction } from 'i18next';
 import type { NodeState, Severity } from '../types/api';
 
-/** The acknowledgement states the screen offers, in the order the list shows them.
- *
- *  Ack is *inbound* state mirrored from the external on-call tool (ADR-015) — Yagra has no ack
- *  action — so this filter answers "has anyone picked this up yet", which is the first question
- *  during triage and the one the read-only pill exists to answer. */
-export const ACK_STATES = ['unacked', 'acked'] as const;
-export type AckState = (typeof ACK_STATES)[number];
-
 /**
  * The fields the predicate reads.
  *
  * Structural rather than `Alert` so a test can build a row without the whole `ActiveAlertView`,
  * and so the predicate stays usable against the history row shape if this filter is ever wanted
- * there. `acked` is `unknown` because only its presence is a question here — who acked it and from
- * which tool is the row's tooltip, not a filter.
+ * there.
  */
 export interface FilterableAlert extends HasSubject {
   severity: Severity;
   state: NodeState;
   metric?: string | null;
-  acked?: unknown;
 }
 
 /** Resolve a node id to its display name; the raw id when it has not resolved yet. */
@@ -99,21 +89,6 @@ export function activeAlertFilters(
       allLabel: t('history.filter.allStates'),
       counts: 'client',
     },
-    ack: {
-      kind: 'enum',
-      options: ACK_STATES.map((v) => ({ value: v, label: t(`active.ack.${v}`) })),
-      // Derived from presence, not stored: the row carries who acked it and from which tool, and
-      // only whether it is there is a filter.
-      readValue: (a) => (a.acked ? 'acked' : 'unacked'),
-      allLabel: t('active.ack.all'),
-      counts: 'client',
-      // Said HERE because this is where someone looking for the ack action arrives (ADR-055 R6).
-      // Yagra has no Ack button by decision (ADR-015); the state arrives inbound from the on-call
-      // tool. That used to be a parenthetical under the page title, and the person who wrote the
-      // decision still had to ask where the button was — so a filter offering `acked` with no
-      // on-screen path to it is exactly the case the rule is about.
-      hint: t('active.ackedHint'),
-    },
     q: {
       kind: 'text',
       // Both modes and NOT: the whole set is in the browser, so a regex costs a pass over a few
@@ -148,7 +123,6 @@ export function activeAlertLabels(t: TFunction): Record<string, string> {
   return {
     severity: t('history.cols.severity'),
     state: t('history.cols.state'),
-    ack: t('active.ack.label'),
     q: t('active.searchLabel'),
   };
 }
@@ -174,7 +148,7 @@ export function alertPredicate(
  * survives a reload and can be pasted into a chat during an incident — which is the whole point on
  * a screen two people are looking at at once.
  *
- * ⚠️ The keys stayed `severity` / `state` / `ack` / `q`, so links taken before the multi-value
+ * ⚠️ The keys stayed `severity` / `state` / `q`, so links taken before the multi-value
  * change still open the same view — a single token is a one-element set. Nothing had to be renamed
  * because these were already the column keys.
  */

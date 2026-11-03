@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Active alerts — triage only (§3.2). Per the responsibility split, Yagra detects/correlates/
-// suppresses/routes; the acknowledgement *action*, escalation and on-call live in external tools
-// (PagerDuty/JSM). So there is NO Ack button — but ack *state* mirrored back from the external
-// tool is shown read-only as an "acked" pill (ADR-015, inbound only), whose tooltip already names
-// the tool and the person, which is as far as Yagra can honestly point at an external incident.
+// suppresses/routes; acknowledgement, escalation and on-call live in external tools
+// (PagerDuty/JSM). So there is NO Ack button, and Yagra does not track acknowledgement at all —
+// not even as state mirrored back from the external tool (ADR-233).
 //
 // Two per-alert actions, and both appear only where they would actually work — a control that is
 // permanently disabled is a promise the UI cannot keep:
 //   - Mute (AckAlerts, operator and above) seeds a node mute with the metric that fired.
 //   - Explain (ADR-029) needs a configured provider AND a role that can spend the call.
-// Alerts (and acks) arrive live over SSE.
+// Alerts arrive live over SSE.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -163,7 +162,7 @@ export function ActiveAlertsPage() {
         // search → filters → spacer → count → primary action (there is no primary action here — creating
         // an alert is not a thing an operator does).
         toolbar={({ shown, total, nameOf, rows, silenced }) => {
-          // Built here, with the resolver the list already owns. `severity` / `state` / `ack` never
+          // Built here, with the resolver the list already owns. `severity` / `state` never
           // read the free-text column's strings, so this costs no name resolution unless something
           // is typed — the property `buildPredicate` gives for free and the old hand-written
           // predicate had to spell out as an early return.

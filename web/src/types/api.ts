@@ -284,15 +284,9 @@ export type InterfaceTopEntry = components['schemas']['InterfaceTopEntry'];
 
 // ── Alerts ──────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * Inbound acknowledgement state mirrored from an external incident tool (PagerDuty / JSM),
- * shown read-only (ADR-015). Yagra has no ack action of its own — this is reflected in only.
- */
-export type AckView = components['schemas']['AckView'];
-
-/** An alert as served by `GET /api/v1/alerts` — the engine's alert plus inbound ack state (the
- *  Rust type is `ActiveAlertView`; `schemas.Alert` is the bare engine alert without `acked`, which
- *  is what `NodeStatus.alerts` carries). */
+/** An alert as served by `GET /api/v1/alerts` (the Rust type is `ActiveAlertView`; `schemas.Alert`
+ *  is the bare engine alert, which is what `NodeStatus.alerts` carries). Yagra does not track
+ *  acknowledgement (ADR-233). */
 export type Alert = components['schemas']['ActiveAlertView'];
 
 /** A node row for inventory listings. */
@@ -385,7 +379,7 @@ export type SiteGapStatus = components['schemas']['SiteGapStatus'];
 export type ImportPreview = components['schemas']['ImportPreviewResult'];
 
 /** One node's live status (`GET /api/v1/nodes/:id/status`): rolled-up display state plus the
- *  alerts currently attributed to it (bare engine alerts — no ack state). */
+ *  alerts currently attributed to it (bare engine alerts). */
 export type NodeStatus = components['schemas']['NodeStatus'];
 
 /** Credential metadata (never the secret value). */
@@ -772,8 +766,8 @@ export type ThresholdQuery = NonNullable<
   paths['/api/v1/thresholds']['get']['parameters']['query']
 >;
 
-/** One alert-history row (`GET /api/v1/alerts/history`) — the stored row plus inbound ack state
- *  (the Rust type is `AlertHistoryView`). `metric` is `null` for rows recorded before it was
+/** One alert-history row (`GET /api/v1/alerts/history`) (the Rust type is
+ *  `AlertHistoryView`). `metric` is `null` for rows recorded before it was
  *  captured ⇒ render "—"; `observed_value` / `threshold_value` / `direction` are threshold checks
  *  only. The keyset cursor is the **pair** `(recorded_at, id)` — see `pages/historyCursor.ts`. */
 export type AlertHistoryRow = components['schemas']['AlertHistoryView'];

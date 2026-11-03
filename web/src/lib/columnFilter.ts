@@ -53,10 +53,8 @@ export interface RangePreset extends FilterOption {
  * and the desktop row were handed different option counts).
  *
  * It exists for ADR-055 R6: a column whose values arrive from somewhere the screen has no other
- * chance to name. `Acked` is the case that motivated it — the state is mirrored inbound from
- * PagerDuty/JSM, Yagra never sets it, and the only place that was said was a parenthetical under
- * the page title, which demonstrably did not reach the reader. Do not use it to restate what the
- * options already say.
+ * chance to name — said in a parenthetical under the page title instead, it demonstrably did not
+ * reach the reader. Do not use it to restate what the options already say.
  */
 export interface FilterSpecCommon {
   hint?: string;
@@ -426,7 +424,7 @@ export function writeFilterParams<T>(
  * know. So every server-side `queryFor` runs its state through here before building a request;
  * forget it on a new screen and a hand-edited `?severity=bogus` becomes an error page instead of
  * the unfiltered list. (It also earns the callers the right to trust the tokens afterwards: alert
- * history's `phase`/`acked` read `picked[0]` without re-checking it, which is only safe downstream
+ * history's `phase` reads `picked[0]` without re-checking it, which is only safe downstream
  * of this.)
  *
  * Ordering is not cosmetic, for the two reasons [`encodeSet`] gives: the joined value is a

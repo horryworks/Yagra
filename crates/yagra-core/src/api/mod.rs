@@ -121,7 +121,6 @@ pub(crate) use util::{audit_record, is_valid_oid, is_valid_oid_prefix, now_unix_
 
 use crate::account::dashboard::{DashboardRepo, SharedDashboardRepo};
 use crate::account::preferences::UserPrefsRepo;
-use crate::alerts::ack::AckRepo;
 use crate::alerts::history::AlertHistoryStore;
 use crate::alerts::maintenance::MaintenanceRepo;
 use crate::alerts::notifications::NotificationRepo;
@@ -345,9 +344,6 @@ pub struct ApiState {
     pub login_throttle: Arc<LoginThrottle>,
     /// Alert history (read); `None` in skeleton mode.
     pub history: Option<Arc<AlertHistoryStore>>,
-    /// Inbound ack reflection from external tools (read-only display, ADR-015); `None` in
-    /// skeleton mode.
-    pub ack: Option<Arc<AckRepo>>,
     /// Passive-event engine (webhook ingest + manual close + inline rule reload);
     /// `None` in skeleton mode.
     pub event_engine: Option<Arc<crate::events::EventEngine>>,
@@ -467,7 +463,7 @@ pub fn router(state: ApiState) -> Router {
         // AI-assisted RCA (ADR-029). Provider config is admin-only and its credential is
         // write-only; generation is `AckAlerts` (the people who actually work incidents) plus the
         // orchestrator's own rate + concurrency caps, and reading a stored report is `View`.
-        // Alerts: active list, history + aggregations, inbound ack, and the two SSE streams,
+        // Alerts: active list, history + aggregations, and the two SSE streams,
         // in `api/alerts.rs`.
         .merge(alerts::routes())
         // The dependency graph, in `api/topology.rs`.
@@ -963,7 +959,6 @@ mod tests {
             sessions: Arc::new(SessionStore::new()),
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
-            ack: None,
             event_engine: None,
             public_access: crate::api::public_access::handle(
                 crate::api::public_access::PublicAccess::skeleton_open(),
@@ -1005,7 +1000,6 @@ mod tests {
             sessions,
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
-            ack: None,
             event_engine: None,
             public_access: crate::api::public_access::handle(
                 crate::api::public_access::PublicAccess::closed(),
@@ -1045,7 +1039,6 @@ mod tests {
             sessions,
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
-            ack: None,
             event_engine: None,
             public_access: crate::api::public_access::handle(
                 crate::api::public_access::PublicAccess::closed(),

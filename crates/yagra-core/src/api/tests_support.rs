@@ -38,7 +38,6 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),
         history: None,
-        ack: None,
         event_engine: None,
         public_access: crate::api::public_access::handle(if public_dashboard {
             crate::api::public_access::PublicAccess::skeleton_open()
@@ -548,7 +547,6 @@ async fn live_state_with(
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),
         history: Some(history),
-        ack: Some(Arc::new(crate::alerts::ack::AckRepo::new(pool.clone()))),
         event_engine: Some(event_engine),
         // Closed: `live_state` exists to test writes being *accepted* (ADR-115), and anonymous
         // access has nothing to do with that. A test that wants the public surface builds it with

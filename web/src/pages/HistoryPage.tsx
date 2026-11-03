@@ -105,27 +105,6 @@ export function HistoryPage() {
           ),
       },
       {
-        // Read-only ack mirrored from the external tool (ADR-015) — Yagra has no ack action.
-        key: 'acked',
-        header: t('history.cols.acked'),
-        width: '120px',
-        render: (r) =>
-          r.acked ? (
-            <span
-              className="muted"
-              title={t('acked.title', {
-                source: r.acked.source,
-                by: r.acked.by,
-                note: r.acked.note ? t('acked.note', { note: r.acked.note }) : '',
-              })}
-            >
-              {r.acked.source}
-            </span>
-          ) : (
-            <span className="muted">—</span>
-          ),
-      },
-      {
         key: 'range',
         header: t('history.cols.when'),
         width: '1fr',

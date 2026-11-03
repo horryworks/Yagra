@@ -64,7 +64,7 @@ import { readSources, SRC } from './testSupport/sources';
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
-  alerts: [1019, 600], // + active.noNodes (the empty-fleet state) and row.mutedUntil (ADR-209, 2026-10-21)
+  alerts: [930, 535], // - the ack filter, its hint and the acked pill (ADR-233, 2026-11-03)
   alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
   auth: [79, 43],
   common: [806, 438], // + watch.nothingPolled, the shell state sentence when no poller is live (ADR-227, 2026-11-02)
@@ -72,7 +72,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
-  nav: [3007, 1415], // + Nodes ▸ Config backups and its one-line description (ADR-210 stage 3, 2026-10-22)
+  nav: [2687, 1230], // - "who acknowledged it" from the History description (ADR-233, 2026-11-03)
   nodes: [16287, 9286], // + rules.empty, the Alert rules tab's empty state (ADR-229, 2026-11-03)
   rca: [1022, 528],
   reports: [643, 402],

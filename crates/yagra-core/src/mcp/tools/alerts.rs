@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! MCP tools: what is wrong now and what was wrong before, plus the two writes that act on an alert (ADR-086).
+//! MCP tools: what is wrong now and what was wrong before, plus the one write that acts on an alert (ADR-086). There is no ack tool: acknowledgement is
+//! mirrored in from an external incident tool and only read here (ADR-015, ADR-233).
 //!
 //! Split out of the single `tools.rs` by ADR-086; the module doc for the surface as a whole,
 //! and the rules every tool here obeys, are in [`super`].
@@ -17,7 +18,6 @@ use uuid::Uuid;
 use yagra_common::{NodeId, Permission};
 
 use super::YagraMcp;
-use crate::alerts::ack::AckView;
 use crate::api::scope::NodeScope;
 use crate::mcp::dto::{AlertDto, AlertHistoryDto};
 
@@ -56,9 +56,6 @@ pub(crate) struct AlertHistoryParams {
     state: Option<String>,
     /// `false` for fires only, `true` for clears only. Omit for both.
     resolved: Option<bool>,
-    /// `true` for transitions whose incident has been acknowledged, `false` for those that have
-    /// not. Omit for both. Ask `false` for "what fired and nobody has looked at".
-    acked: Option<bool>,
     /// Only transitions whose metric name contains this text (case-insensitive), e.g. `cpu`.
     /// Liveness transitions store no metric and never match.
     metric: Option<String>,
@@ -81,20 +78,6 @@ pub(super) struct AlertTrendsParams {
     days: Option<i64>,
     /// Row count: top_nodes 1–50 (default 6), transitions default 12.
     limit: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub(super) struct AckAlertParams {
-    /// The alerting node's UUID.
-    node_id: Uuid,
-    /// The alert's check UUID (the `check_id` field from get_active_alerts / get_node_status).
-    check_id: Uuid,
-    /// The alert severity: info, warning, or critical.
-    severity: String,
-    /// True to acknowledge (default), false to clear a prior ack.
-    acked: Option<bool>,
-    /// Optional free-text note recorded with the acknowledgement.
-    note: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -148,8 +131,7 @@ impl YagraMcp {
             // values instead of ranking their spellings. The rank helper this replaces took a
             // `&str` with a `_ => 0` fallback: an unparseable `min_severity` scored below `info`,
             // so the filter matched everything and the model reasoned from a full list believing
-            // it had been narrowed. Refusing names the three valid values, the way `ack_alert`
-            // already does with the same parser.
+            // it had been narrowed. Refusing names the three valid values.
             let Some(min) = parse_severity(min) else {
                 return tool_bad_params(TOOL, "`min_severity` must be info, warning, or critical");
             };
@@ -192,8 +174,7 @@ impl YagraMcp {
     #[tool(
         description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
                        (default 100). Narrow with `severity` and `state` (each comma-separated for \
-                       several values), `resolved` (false=fires, true=clears), `acked` (false = \
-                       nobody has acknowledged it yet), `metric` (substring of the metric name), \
+                       several values), `resolved` (false=fires, true=clears), `metric` (substring of the metric name), \
                        `node_id`, `node_q` (substring of the node's name), `group_id` (that folder \
                        and everything beneath it) and `since`/`until` — the window to search, which \
                        is separate from the cursor. To page, pass the oldest returned row's \
@@ -236,7 +217,6 @@ impl YagraMcp {
             severity: p.severity.as_deref(),
             state: p.state.as_deref(),
             resolved: p.resolved,
-            acked: p.acked,
             metric: p.metric.as_deref(),
             node_id: p.node_id,
             node_q: p.node_q.as_deref(),
@@ -400,77 +380,6 @@ impl YagraMcp {
                 &format!("unknown kind {other:?}; must be top_nodes, transitions or calendar"),
             ),
         }
-    }
-
-    #[tool(
-        description = "Acknowledge an active alert (or clear its ack). Requires ack-alerts permission. \
-                       Identify the alert by `node_id` + `check_id` + `severity` — all from \
-                       get_active_alerts or get_node_status. `acked` defaults true; set false to clear. \
-                       Optional `note`. Requires live mode."
-    )]
-    async fn ack_alert(
-        &self,
-        Parameters(p): Parameters<AckAlertParams>,
-        ctx: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        const TOOL: &str = "ack_alert";
-        let Some(identity) = authed_for(identity_of(&ctx), Permission::AckAlerts) else {
-            return tool_forbidden(TOOL, "this token lacks ack-alerts permission");
-        };
-        // A write is scoped like a read, and this one is also a read: the 200/404 difference would
-        // otherwise tell a scoped caller whether an invisible node currently has that alert.
-        if let Some(deny) = self
-            .deny_invisible_node_for(identity_of(&ctx), TOOL, p.node_id)
-            .await
-        {
-            return deny;
-        }
-        let Some(severity) = parse_severity(&p.severity) else {
-            return tool_bad_params(TOOL, "`severity` must be info, warning, or critical");
-        };
-        let acked = p.acked.unwrap_or(true);
-        // `apply_ack` persists *and* broadcasts. Both surfaces used to do the two steps
-        // separately, and dropping the broadcast is a silent failure: the write succeeds, the
-        // caller sees success, and every open dashboard keeps showing the alert unacknowledged
-        // until someone reloads. `source` is what distinguishes this surface's acks in the audit
-        // trail and in the pill the operator sees.
-        let view = acked.then(|| AckView {
-            at_unix_ms: Utc::now().timestamp_millis(),
-            by: identity.actor.clone(),
-            source: "mcp".to_owned(),
-            note: p.note.clone(),
-        });
-        // Node subjects only. The MCP **write** surface is frozen at these three tools (ADR-042
-        // decision 6), so widening the parameter to accept a pool would be a write-surface change, not
-        // the read parity this rule is about — a pool alert is readable here and acknowledged from
-        // the WebUI or `POST /api/v1/alerts/ack`.
-        let subject = yagra_alert::Subject::Node(NodeId::from(p.node_id));
-        if let Err(e) =
-            crate::api::alerts::apply_ack(&self.state, &subject, p.check_id, severity, view).await
-        {
-            return tool_api_error(TOOL, &e);
-        }
-        let verb = if acked {
-            "ack_alert"
-        } else {
-            "ack_alert(clear)"
-        };
-        record_audit(
-            &self.state,
-            &identity,
-            &format!(
-                "mcp.{verb} node={} check={} sev={}",
-                p.node_id,
-                p.check_id,
-                severity.as_str()
-            ),
-            200,
-        )
-        .await;
-        ok_json_value(
-            TOOL,
-            serde_json::json!({ "acked": acked, "node_id": p.node_id, "check_id": p.check_id }),
-        )
     }
 
     #[tool(

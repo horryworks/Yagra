@@ -58,7 +58,6 @@
 //! means — a wedged vendor endpoint no longer holds up other channels or the 30-second config
 //! refresh — but it did not remove that path, and its decision 6 says why not.
 
-pub(crate) mod ack;
 pub(crate) mod availability;
 pub(crate) mod config;
 pub(crate) mod deleted;

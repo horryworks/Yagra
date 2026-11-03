@@ -152,8 +152,7 @@ pub struct AlertDto {
     pub subject_kind: String,
     /// The subject's name, for a subject identified by name rather than by id (the poller pool).
     pub subject_name: Option<String>,
-    /// The check that fired — the third part of an alert's `(subject, check, severity)` identity,
-    /// needed to acknowledge it via the `ack_alert` tool.
+    /// The check that fired — the third part of an alert's `(subject, check, severity)` identity.
     pub check_id: Uuid,
     /// Resolved node display name when available (else `None`; the caller keeps the id).
     pub node_name: Option<String>,
@@ -1749,7 +1748,6 @@ mod tests {
             "a json! wrapper around findings already covered as AnalysisFinding",
         ),
         ("event_stats", "a json! of counts built from group-by rows"),
-        ("ack_alert", "a json! acknowledgement receipt: ids and a count"),
         (
             "open_maintenance",
             "a json! receipt carrying the created window's id and bounds",

@@ -2991,8 +2991,8 @@ impl AlertManager {
         // `ActiveAlertView` in `api/alerts.rs` serves, because the stream patches the list that
         // endpoint seeded and a client parses both with one reader. Serializing the `Alert` rather
         // than listing its fields is what keeps the two in step: the hand-written list this replaced
-        // had dropped `ifindex`, `row` and `row_name`, so an ack arriving live erased the port a
-        // seeded row named (ADR-196 Inc.4). The port's *name* is added downstream, by the SSE
+        // had dropped `ifindex`, `row` and `row_name`, so a live update erased the port a seeded
+        // row named (ADR-196 Inc.4). The port's *name* is added downstream, by the SSE
         // edge, which can read the inventory (`api/alerts.rs::sse_with_resync`).
         let mut event = match serde_json::to_value(alert) {
             Ok(v @ serde_json::Value::Object(_)) => v,
@@ -3011,28 +3011,6 @@ impl AlertManager {
         let _ = self
             .tx
             .send((alert.subject.clone(), Arc::from(event.to_string())));
-    }
-
-    /// Broadcast an inbound ack-state change for one alert so subscribers update the read-only
-    /// acked indicator live (ADR-015). Finds the matching active alert by its dedup identity
-    /// `(subject, check, severity)` and re-sends its wire shape with `acked` attached (the external
-    /// tool's view as a JSON value, or `null` when cleared). No `resolved` flag ⇒ the client
-    /// treats it as an upsert, not a recovery. If the alert isn't currently active there's
-    /// nothing on screen to update, so this is a no-op (History reflects it on next fetch).
-    pub fn broadcast_acked(
-        &self,
-        subject: &Subject,
-        check: Uuid,
-        severity: Severity,
-        acked: Option<serde_json::Value>,
-    ) {
-        let active = self.active.lock().expect("alerts mutex poisoned");
-        let Some(alert) = active.values().find(|a| {
-            &a.subject == subject && a.check.as_uuid() == check && a.severity == severity
-        }) else {
-            return;
-        };
-        self.send_frame(alert, "acked", acked.unwrap_or(serde_json::Value::Null));
     }
 
     /// Push a frame onto the alert stream directly, for tests of the stream *plumbing*.
@@ -6112,39 +6090,6 @@ mod tests {
         assert_eq!(p_active.root_cause, Some(gp));
     }
 
-    #[tokio::test]
-    async fn broadcast_acked_emits_upsert_for_active_alert() {
-        // Fire a liveness alert, then mirror an inbound ack for it (ADR-015).
-        let mgr = manager();
-        let node = NodeId::new();
-        for i in 0..DEFAULT_LIVENESS_DWELL {
-            mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
-        }
-        let active = mgr.active_alerts();
-        let alert = active.first().expect("one active alert after dwell");
-
-        // Subscribe *after* the fire so only the ack event is observed.
-        let mut rx = mgr.subscribe();
-        mgr.broadcast_acked(
-            &alert.subject.clone(),
-            alert.check.as_uuid(),
-            alert.severity,
-            Some(serde_json::json!({ "by": "pd-user", "source": "pagerduty" })),
-        );
-
-        let (who, msg) = rx.try_recv().expect("ack event broadcast");
-        let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
-        assert_eq!(v["acked"]["by"], "pd-user");
-        // No `resolved` flag ⇒ the client upserts (keeps the alert), it doesn't clear it.
-        assert!(v.get("resolved").is_none());
-        assert_eq!(v["node"], serde_json::to_value(node).unwrap());
-        assert_eq!(
-            who,
-            Subject::Node(node),
-            "the frame names the node it concerns"
-        );
-    }
-
     #[test]
     fn every_stream_frame_names_the_node_its_body_describes() {
         // The scope filter on both SSE streams trusts the frame's node id and never looks inside
@@ -6181,7 +6126,7 @@ mod tests {
     }
 
     /// **A live frame carries every field the seeded list does** (ADR-196 Inc.4). The stream
-    /// replaces a row whole, so a key the frame lacks is erased from the screen by the next ack:
+    /// replaces a row whole, so a key the frame lacks is erased from the screen by the next frame:
     /// the hand-written frame this replaced dropped `ifindex`, and a port alert's "on Gi0/7" went
     /// with it. Pinned against `Alert`'s own serialization, so a field added to `Alert` is carried
     /// without anyone remembering this builder.
@@ -6246,20 +6191,6 @@ mod tests {
         );
         assert_eq!(frame["subject_kind"], "node");
         assert_eq!(frame["resolved"], false);
-    }
-
-    #[tokio::test]
-    async fn broadcast_acked_is_noop_when_alert_not_active() {
-        let mgr = manager();
-        let mut rx = mgr.subscribe();
-        // No matching active alert ⇒ nothing on screen to update, so no event is sent.
-        mgr.broadcast_acked(
-            &Subject::Node(NodeId::from(Uuid::from_u128(1))),
-            Uuid::from_u128(2),
-            Severity::Critical,
-            None,
-        );
-        assert!(rx.try_recv().is_err());
     }
 
     /// The Increment 1 exclusion, pinned. A pool-coverage alert is delivered over the notification

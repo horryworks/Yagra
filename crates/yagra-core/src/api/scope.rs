@@ -265,11 +265,11 @@ impl NodeScope {
 /// Reject a node id taken from a **request body** that the caller cannot see.
 ///
 /// The path-param case has its own extractor ([`super::extract::VisibleNode`]); this is for the
-/// operator actions that name their target in the body — ack, mute, maintenance, RCA, analysis.
+/// operator actions that name their target in the body — mute, maintenance, RCA, analysis.
 /// Those need it as much as the reads do, and for a reason that is easy to miss: they are gated on
-/// `AckAlerts`/`ManageMaintenance`, which a **scoped operator holds**, and the 200-vs-404 difference
-/// on `POST /alerts/ack` answers "does this invisible node currently have an alert with this
-/// (check, severity)". A write oracle is still a read.
+/// `AckAlerts`/`ManageMaintenance`, which a **scoped operator holds**, and a 200-vs-404 difference
+/// on an action would answer questions about a node the caller cannot see. A write oracle is
+/// still a read.
 ///
 /// Same 404 as the extractor, for the same reason — see [`super::extract::VisibleNode`].
 pub fn require_visible_node(

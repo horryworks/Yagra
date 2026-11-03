@@ -48,7 +48,7 @@
 //! gap and is ratcheted downward by `the_mcp_gap_only_moves_deliberately`.
 //!
 //! **Writes are out of scope by decision** (ADR-042 decision 6): MCP stays read-only, the write
-//! surface is frozen at three tools, and [`NO_MCP_WRITE`] is the one shared exemption.
+//! surface is frozen at two tools (ADR-233 removed a third), and [`NO_MCP_WRITE`] is the one shared exemption.
 //!
 //! One caveat worth stating precisely, because someone will test it with `cargo check` and conclude
 //! the mechanism is broken: this module is `#[cfg(test)]`, so "cannot be added without deciding"
@@ -112,7 +112,7 @@ use Scoping::{Global, GroupFiltered, NodeScoped, PostFiltered, Refused};
 /// GET-only capability sails through review looking considered.
 ///
 /// **Writes are out of scope by decision, not by backlog** (ADR-042 decision 6). MCP stays
-/// read-only; the write surface is frozen at the three ADR-028 WS-E incident-response tools. A new
+/// read-only; the write surface is frozen at two ADR-028 WS-E tools (ADR-233 removed `ack_alert`). A new
 /// `PUT`/`POST`/`DELETE` takes [`NO_MCP_WRITE`] and moves on — its `GET` counterpart does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mcp {
@@ -251,8 +251,8 @@ const CREDENTIAL_READ: Scoping = Global(
 /// thought, so it would become the only one anybody writes. Outside the three `PENDING_*` families
 /// below, every read writes its own sentence.
 const NO_MCP_WRITE: Mcp = Exempt(
-    "MCP is read-only; the write surface is frozen at ack_alert/open_maintenance/poll_now \
-     (ADR-042 decision 6)",
+    "MCP is read-only; the write surface is frozen at open_maintenance/poll_now \
+     (ADR-042 decision 6, ADR-233)",
 );
 
 // `PENDING_CONFIG_READ` lived here and is gone: ADR-042 I3b shipped `get_config(kind=…)`, so all 28
@@ -288,7 +288,6 @@ const PENDING_STREAM: Mcp = Pending(
 /// their `:name` form; the test substitutes a value that parses for every extractor in use.
 pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("GET", "/api/v1/alerts", PostFiltered, Tool("get_active_alerts")),
-    ("POST", "/api/v1/alerts/ack", NodeScoped, Tool("ack_alert")),
     (
         "GET",
         "/api/v1/alerts/calendar",
@@ -3048,13 +3047,6 @@ mod tests {
             "/api/v1/openapi.json",
             "the contract itself; the WebUI's types are generated from the committed copy \
              (ADR-035), so nothing in the bundle fetches it",
-        ),
-        (
-            "POST",
-            "/api/v1/alerts/ack",
-            "acknowledgement is delegated to external incident tools (ADR-015): the WebUI \
-             deliberately offers no ack action (`ActiveAlertsPage`), and the callers are the MCP \
-             `ack_alert` tool and inbound PagerDuty/JSM acknowledgements",
         ),
         (
             "GET",

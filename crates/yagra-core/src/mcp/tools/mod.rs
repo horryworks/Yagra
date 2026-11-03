@@ -7,10 +7,10 @@
 //! I/O. Increment 2 added: the Troubleshoot tools (`run_analysis` / `get_analysis_findings` /
 //! `list_analyses`) — a Troubleshoot analysis is a **read** that forces `notify = false` and is
 //! bounded by the runner's rate/concurrency limits rather than a role; the event reader
-//! (`search_events`, WS-C); and the first **write** tools (`ack_alert`, `open_maintenance`,
-//! `poll_now`, WS-E). A write tool reads the authenticated [`McpIdentity`] from its `RequestContext`
+//! (`search_events`, WS-C); and the first **write** tools (`open_maintenance`, `poll_now`,
+//! WS-E; WS-E's `ack_alert` was removed by ADR-233). A write tool reads the authenticated [`McpIdentity`] from its `RequestContext`
 //! (propagated via the HTTP request `Parts`, WS-D), enforces its own [`Permission`]
-//! (`AckAlerts`/`ManageMaintenance`/`ManageConfig`), and records an audit entry. There are still no
+//! (`ManageMaintenance`/`ManageConfig`), and records an audit entry. There are still no
 //! device-configuration tools (monitoring lane, ADR-015/029); the heavier writes
 //! (`run_probe`/`trigger_discovery`) remain future work. The plain-`async fn` shape (params in, DTO
 //! out) is what lets the ADR-029 RCA agent reuse these bodies in-process later.
@@ -628,8 +628,7 @@ mod tests {
     /// ⚠️ What remains is policy, not backlog. A tool added here needs a reason of the same kind.
     const NOT_DISPATCHABLE: &[&str] = &[
         // Writes: the in-process caller is a language model, and MCP's write surface is frozen at
-        // three tools it is deliberately not offered (ADR-042 decision 6).
-        "ack_alert",
+        // two tools it is deliberately not offered (ADR-042 decision 6, ADR-233).
         "open_maintenance",
         "poll_now",
         // Starts work and spends money; the agent must not recurse into itself.

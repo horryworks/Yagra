@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Presentational alert rows (worst-first), shared by the dashboard widget and the Active
 // alerts triage screen. Each row: severity dot + node name + what fired + root-cause + flapping
-// flag + acked pill + age. Triage-only per §3.2 — NO Ack *control* here (Yagra holds no ack
-// action; that's external PagerDuty/JSM). The `acked` pill is a READ-ONLY indicator mirrored
-// inbound from the external tool (ADR-015) — its tooltip names the tool and the person. The
-// optional actions slot is for suppression (Mute) and diagnosis (Explain), never acknowledgement.
+// flag + age. Triage-only per §3.2 — Yagra does not track acknowledgement at all (ADR-233); that
+// belongs to the external on-call tool. The optional actions slot is for suppression (Mute) and
+// diagnosis (Explain).
 //
 // Two things the row deliberately does NOT show as raw ids. The node and its root cause resolve to
 // names via the shared `useEntityNames` (ui-conventions: the visible primary is always the name,
@@ -42,7 +41,7 @@ import { alertRowKey as rowKey } from '../lib/alertSubject';
 
 type SortedAlert = ReturnType<typeof sortedAlerts>[number];
 
-/** Per-row actions. Triage-only — never an Ack. Receives the *resolved* node name alongside the
+/** Per-row actions. Triage-only. Receives the *resolved* node name alongside the
  *  alert: an action that opens a dialog naming the node (Mute) would otherwise need a second
  *  `useEntityNames()` resolver in the page, duplicating the batch this list already runs. */
 type RowActions = (alert: SortedAlert, nodeName: string) => ReactNode;
@@ -145,7 +144,7 @@ function AlertRow({
       <span className="alertrow-node">
         <AlertSubjectName alert={a} nodeName={nodeName} />
       </span>
-      {/* The check id is still the handle the API takes (RCA, ack), so keep it recoverable on
+      {/* The check id is still the handle the API takes (RCA), so keep it recoverable on
           hover even though it is no longer the cell's text. */}
       <span className="alertrow-check" title={a.check}>
         <AlertWhatText what={alertWhatOf(a)} />
@@ -167,18 +166,6 @@ function AlertRow({
         <span className="alertrow-cause muted">{t('row.partOfOutage')}</span>
       )}
       {a.flapping && <span className="alertrow-flap">{t('row.flapping')}</span>}
-      {a.acked && (
-        <span
-          className="alertrow-acked"
-          title={t('acked.title', {
-            source: a.acked.source,
-            by: a.acked.by,
-            note: a.acked.note ? t('acked.note', { note: a.acked.note }) : '',
-          })}
-        >
-          {t('row.acked')}
-        </span>
-      )}
       {/* A mute silences the notification and leaves the alert open (ADR-209 decision 3), so this
           is the only thing on the row that says nobody is being paged about it. It opens the
           mute list, where the mute can be lifted. */}

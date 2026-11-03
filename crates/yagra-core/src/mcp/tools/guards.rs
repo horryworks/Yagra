@@ -141,7 +141,7 @@ fn the_config_description_names_every_permission_it_can_demand() {
 ///
 /// **This is the half the compiler cannot see.** A seam struct like
 /// `api::alerts::HistoryFilterInput` makes a *new* field a compile error here — the initializer
-/// below will not build without it — but the compiler is satisfied by `acked: None`. A
+/// below will not build without it — but the compiler is satisfied by `resolved: None`. A
 /// dimension that is declared and then hardcoded away is the same silent failure as one that
 /// was never declared, and it is the failure ADR-042 read parity exists to prevent: the WebUI
 /// can ask the question and `/mcp` quietly cannot.

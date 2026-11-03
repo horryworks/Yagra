@@ -472,14 +472,10 @@ impl HeldStore for DeliveryHoursRepo {
 /// Leader-only loop: every 30 seconds, send what was held for every node whose hours have opened
 /// (ADR-226 decision 7). Spawned by `LeaderTasks::spawn_refresh_loops`; runs until shutdown.
 ///
-/// The acks are read only when something is held, and a pass whose ack read fails sends nothing:
-/// paging an alert someone already acknowledged is the mistake decision 9 exists to avoid, and
-/// the next pass is 30 seconds away.
 pub(crate) async fn run_release_loop(
     notifier: std::sync::Arc<super::Notifier>,
     store: std::sync::Arc<DeliveryHoursRepo>,
     alerts: std::sync::Arc<super::AlertManager>,
-    acks: std::sync::Arc<super::ack::AckRepo>,
 ) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -492,24 +488,8 @@ pub(crate) async fn run_release_loop(
                 continue;
             }
         };
-        let acked = match acks.all().await {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to read acks; holding notifications a while longer");
-                continue;
-            }
-        };
-        let is_acked = |a: &Alert| {
-            a.node().is_some_and(|n| {
-                acked.contains_key(&(
-                    n.as_uuid(),
-                    a.check.as_uuid(),
-                    a.severity.as_str().to_owned(),
-                ))
-            })
-        };
         let active = alerts.active_alerts();
-        notifier.release(rows, &active, &is_acked, Utc::now()).await;
+        notifier.release(rows, &active, Utc::now()).await;
     }
 }
 

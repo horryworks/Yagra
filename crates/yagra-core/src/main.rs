@@ -62,7 +62,6 @@ use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
 use account::dashboard::{DashboardRepo, PublicDashboardRepo, SharedDashboardRepo};
 use account::preferences::UserPrefsRepo;
-use alerts::ack::AckRepo;
 use alerts::history::AlertHistoryStore;
 use alerts::maintenance::MaintenanceRepo;
 use alerts::notifications::NotificationRepo;
@@ -447,8 +446,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // a rule scoped to a row name only matches a named row, and the poller re-reads names hourly, so
     // an engine that started without them would judge every row by the unnamed rule for that hour.
     alerts::restore::restore_row_names(&alerts, &repo).await;
-    // Inbound ack reflection from external tools (PagerDuty / JSM); read-only display (ADR-015).
-    let acks = Arc::new(AckRepo::new(repo.pool()));
 
     // Result consumer: bus → TSDB + alert engine (+ history + notifications + interface
     // inventory upsert).
@@ -884,7 +881,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classification: classification.clone(),
         notifications: notifications.clone(),
         delivery_hours: delivery_hours.clone(),
-        acks: acks.clone(),
         analysis_repo: analysis_repo.clone(),
         analysis: analysis.clone(),
         reports_repo: reports_repo.clone(),
@@ -1085,7 +1081,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         sessions,
         login_throttle: Arc::new(LoginThrottle::new()),
         history: Some(history),
-        ack: Some(acks),
         event_engine: Some(event_engine),
         public_access,
         is_leader: is_leader.clone(),
@@ -1206,8 +1201,6 @@ struct LeaderTasks {
     notifications: Arc<NotificationRepo>,
     /// Delivery hours (ADR-226): read by the routing refresh, drained by the release loop.
     delivery_hours: Arc<alerts::delivery_hours::DeliveryHoursRepo>,
-    /// Acknowledgements, so the release loop does not send a held fire someone already took.
-    acks: Arc<AckRepo>,
     analysis_repo: Arc<analysis::AnalysisRepo>,
     analysis: Arc<analysis::AnalysisRunner>,
     reports_repo: Arc<reports::ReportsRepo>,
@@ -1722,7 +1715,6 @@ impl LeaderTasks {
                 self.notifier.clone(),
                 self.delivery_hours.clone(),
                 self.alerts.clone(),
-                self.acks.clone(),
             ),
         );
         // Per-interface bandwidth utilisation (ADR-076). Leader-only for the same reason pool
@@ -1877,7 +1869,6 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         sessions: Arc::new(SessionStore::new()),
         login_throttle: Arc::new(LoginThrottle::new()),
         history: None,
-        ack: None,
         event_engine: None,
         // Skeleton has no user store (login returns 503), so reads must stay open or the
         // dev dashboard would be unreachable. Auth gating applies in live mode.
