@@ -1430,7 +1430,6 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--status-warning);
 }
 
-.nd-if-dock-rule,
 .nd-if-dock-close {
   flex: none;
   width: 26px;
@@ -1446,34 +1445,33 @@ html[data-viewport='mobile'] .nd-extract-row {
   transition: color var(--transition), background var(--transition);
 }
 
-.nd-if-dock-rule:hover,
 .nd-if-dock-close:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
-/* The rule count rides on the bell rather than beside it: the dock header is a dense row and a
-   second element would push the close button around as the count appears and disappears. */
+/* A labelled button, not an icon (ADR-230): the bell it replaced read as notifications. The count
+   is part of the label ("Thresholds · 2"), so nothing floats over it. */
 .nd-if-dock-rule {
-  position: relative;
-}
-
-.nd-if-dock-rule-count {
-  position: absolute;
-  top: 0;
-  right: 0;
-  min-width: 12px;
-  padding: 0 2px;
+  flex: none;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
-  background: var(--accent-color);
-  color: var(--bg-primary);
-  font-size: 9px;
-  line-height: 12px;
-  text-align: center;
-  font-weight: 600;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
 }
 
-.nd-if-dock-rule svg,
+.nd-if-dock-rule:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
 .nd-if-dock-close svg {
   width: 14px;
   height: 14px;

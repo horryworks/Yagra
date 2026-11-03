@@ -20,7 +20,7 @@ import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useCan, useRangeStore } from '../../store';
 import { InterfaceRulesModal } from '../InterfaceRules/InterfaceRulesModal';
-import { BellIcon } from '../ui/icons';
+import { isOpticalPort, ownRuleCount } from '../InterfaceRules/portSubjectRows';
 import { usePrefsStore, type RateUnit, type ThroughputScale } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
@@ -1069,9 +1069,9 @@ function InterfaceDock({
   const { t } = useTranslation('nodes');
   const canConfig = useCan('manage_config');
   const [rulesOpen, setRulesOpen] = useState(false);
-  /** How many rules reach this port. Shown on the button, so "something is watching this" is
-   *  visible without opening anything — the dock is where an operator looks at one port, and a
-   *  count they have to click to discover is a count most of them never see (ADR-055 R6).
+  /** How many rules this port has of its own. Shown on the button, so "this port is set apart" is
+   *  visible without opening anything (ADR-055 R6). Inherited rules are not counted since ADR-230:
+   *  every port has those, and a number that is never zero says nothing.
    *
    *  Re-read when the dialog closes, which is how adding or deleting a rule updates it. */
   const [ruleCount, setRuleCount] = useState(0);
@@ -1098,7 +1098,7 @@ function InterfaceDock({
     api
       .listInterfaceThresholds(nodeId, row.ifindex)
       .then((rs) => {
-        if (live) setRuleCount(rs.length);
+        if (live) setRuleCount(ownRuleCount(rs, nodeId, row.ifindex));
       })
       // A count that will not load is not worth an error surface here: the button still opens the
       // dialog, which has its own.
@@ -1407,15 +1407,16 @@ function InterfaceDock({
             (ADR-056). Viewing the ruleset is `ManageConfig` too, so this gate is the read gate as
             much as the write one. */}
         {canConfig && (
+          // Words, not a bell: a bell reads as notifications, and this opens thresholds (ADR-230).
           <button
             type="button"
             className="nd-if-dock-rule"
             aria-label={t('interfaces.rulesButton')}
-            title={t('interfaces.rulesButton')}
             onClick={() => setRulesOpen(true)}
           >
-            <BellIcon />
-            {ruleCount > 0 && <span className="nd-if-dock-rule-count">{ruleCount}</span>}
+            {ruleCount > 0
+              ? t('interfaces.rulesButtonCount', { count: ruleCount })
+              : t('interfaces.rulesButtonLabel')}
           </button>
         )}
         <button
@@ -1437,6 +1438,7 @@ function InterfaceDock({
           ifindex={row.ifindex}
           portLabel={portLabel}
           speedBps={row.if_speed_bps ?? null}
+          optical={isOpticalPort(row, series)}
           onClose={() => setRulesOpen(false)}
         />
       )}

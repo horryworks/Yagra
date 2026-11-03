@@ -456,8 +456,6 @@
   },
   "thresholds": {
     "noLiveness": "到達性のルールがないため、ノードが落ちてもアラートも通知も出ません。",
-    "portRulesHidden": "ポート単位のルール {{count}} 件は表示していません。",
-    "showPortRules": "表示する",
     "add": "+ ルールを追加",
     "cols": {
       "scope": "スコープの種類",
@@ -480,6 +478,22 @@
       "node": "ノード",
       "group_id": "グループ",
       "interface": "インターフェース"
+    },
+    "tabs": {
+      "all": "すべて",
+      "global": "全ノード",
+      "profile": "プロファイル",
+      "group_id": "フォルダ",
+      "node": "ノード",
+      "interface": "ポート"
+    },
+    "target": {
+      "any": "指定なし"
+    },
+    "check": {
+      "open": "ノードで確かめる",
+      "pick": "ノードを選ぶ",
+      "back": "すべてのルール"
     },
     "direction": {
       "above": "上回る",
@@ -532,7 +546,6 @@
     },
     "emptyFiltered": "この絞り込みに一致するルールがありません。",
     "filter": {
-      "allScopes": "すべての種類",
       "allDirections": "上振れ・下振れの両方"
     },
     "meaningUnknown": "このメトリクスの説明はありません",

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { StoredThreshold } from '../types/api';
-import { collectedMetrics, profileRuleGap, ruleIsBaselineFor } from './profileRuleGap';
+import { collectedMetrics, profileRuleCount, profileRuleGap, ruleIsBaselineFor } from './profileRuleGap';
 
 const P = '11111111-1111-1111-1111-111111111111';
 const OTHER = '22222222-2222-2222-2222-222222222222';
@@ -172,5 +172,22 @@ describe('profileRuleGap', () => {
   // nothing, not "0 metrics, all covered".
   it('is empty when the profile collects nothing', () => {
     expect(profileRuleGap({ ...base, metrics: [], rules: [] })).toEqual({ kind: 'empty' });
+  });
+});
+
+describe('profileRuleCount', () => {
+  it('counts the rules written on this profile, not the global ones it inherits', () => {
+    const rules = [
+      rule('cpu', 'profile', [P]),
+      rule('mem', 'profile', [P, OTHER]),
+      rule('temp', 'profile', [OTHER]),
+      rule('icmp_rtt_ms', 'global', []),
+    ];
+    expect(profileRuleCount(rules, P, false)).toBe(2);
+  });
+
+  it('gives no number when the list was capped or never arrived', () => {
+    expect(profileRuleCount([rule('cpu', 'profile', [P])], P, true)).toBeNull();
+    expect(profileRuleCount(null, P, false)).toBeNull();
   });
 });

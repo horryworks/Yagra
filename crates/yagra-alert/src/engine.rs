@@ -2299,6 +2299,26 @@ impl AlertManager {
         matching_rules(rules, node, ifindex, config.node_meta.get(&node))
     }
 
+    /// The rules on one port's per-interface metrics, each flagged with whether it is in force
+    /// there (ADR-230) — see [`crate::rules::interface_matching_rules`]. The same split as
+    /// [`Self::matching_rules`].
+    #[must_use]
+    pub fn interface_matching_rules(
+        &self,
+        rules: &[StoredThreshold],
+        node: NodeId,
+        ifindex: IfIndex,
+    ) -> Vec<(StoredThreshold, bool)> {
+        let config = self.config.read().expect("config rwlock poisoned");
+        crate::rules::interface_matching_rules(
+            rules,
+            node,
+            ifindex,
+            config.node_meta.get(&node),
+            &config.per_interface,
+        )
+    }
+
     /// The rules on one node's node-wide metrics, each flagged with whether it is in force there
     /// (ADR-229) — see [`crate::rules::node_matching_rules`]. The same split as
     /// [`Self::matching_rules`]: the rules come from the caller, read fresh; the node's membership

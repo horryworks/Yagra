@@ -48,9 +48,6 @@ export const NODE_DETAIL_TABS = [
   'interfaces',
   'neighbors',
   'collection',
-  // Beside Collection: that tab lists what the node measures, this one when a measurement pages
-  // someone (ADR-229).
-  'rules',
   'config',
   'events',
   'flow',
@@ -202,15 +199,6 @@ export interface NodeDetailTabMeta {
    *  over SNMP, so it passes both of the older axes — meaning the AP tab would appear on every
    *  switch, router and firewall in the fleet if this question did not exist (ADR-064 Inc.B3). */
   needsWlanController: boolean;
-  /** True when the tab reads something only `manage_config` may read (ADR-229) — the threshold
-   *  rules, which decide when the fleet pages someone. The tab bar leaves it out for a caller
-   *  without the permission (ADR-056).
-   *
-   *  **Required for the same reason the other three are.** ⚠️ It decides the BAR only, never
-   *  [`resolveNodeDetailTab`]: the permission resolves after the node does, and a deep link
-   *  corrected to Overview in that window would lose the tab it named. A caller without the
-   *  permission who arrives by link sees the server's refusal in the tab body instead. */
-  needsManageConfig: boolean;
   /** Count pill after the label. Return null for "no pill" (unknown or zero). */
   badge?: (s: NodeDetailTabStats) => number | null;
   /** Warning dot after the label — the tab needs attention. */
@@ -223,7 +211,6 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     kinds: ALL_KINDS,
     needsSnmp: false,
     needsWlanController: false,
-    needsManageConfig: false,
   },
   // A wireless controller only. `kinds` and `needsSnmp` are both true of every switch in the
   // fleet, so `needsWlanController` is the one that actually decides this tab — see its doc.
@@ -234,7 +221,6 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     kinds: DEVICE_ONLY,
     needsSnmp: true,
     needsWlanController: true,
-    needsManageConfig: false,
     badge: (s) => s.wlanController?.aps_reported || null,
     // The controller saw more APs than `max_aps` allows, so the inventory is truncated and the
     // ones past the cap are invisible to Yagra — a number in the list that quietly means "and
@@ -253,7 +239,6 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     kinds: INTERFACE_KINDS,
     needsSnmp: true,
     needsWlanController: false,
-    needsManageConfig: false,
     badge: (s) => s.interfaces.length || null,
     warn: (s) => s.interfaces.some((r) => r.oper_status != null && r.oper_status !== 1),
   },
@@ -266,7 +251,6 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     kinds: NEIGHBOR_KINDS,
     needsSnmp: true,
     needsWlanController: false,
-    needsManageConfig: false,
   },
   // Every kind: since ADR-046 this tab is the node's *metric inventory*, not its SNMP collection
   // set, so it is the only place a URL monitor's http_* / extracted values or a DNS monitor's
@@ -280,7 +264,6 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     kinds: ALL_KINDS,
     needsSnmp: false,
     needsWlanController: false,
-    needsManageConfig: false,
     // `|| null` per the doc above: a URL/DNS monitor's built-in profile attaches no SNMP templates,
     // and a bare `Collection 0` pill reads as a fault rather than as "not applicable".
     // ⚠️ Follow-up, deliberately not fixed here: this counts the profile's templates while the tab
@@ -307,35 +290,23 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // monitor has no command line, and Meraki gear is configured in the Dashboard, which oxidized has
   // no model for. `needsSnmp: false` — the config is read over SSH or telnet, so a ping-only switch
   // can be backed up too.
-  // Every kind: a URL or DNS monitor's checks are judged by rules too. Fed by the threshold
-  // ruleset, not by a walk, so the SNMP axis does not apply.
-  rules: {
-    labelKey: 'tabs.rules',
-    kinds: ALL_KINDS,
-    needsSnmp: false,
-    needsWlanController: false,
-    needsManageConfig: true,
-  },
   config: {
     labelKey: 'tabs.config',
     kinds: DEVICE_ONLY,
     needsSnmp: false,
     needsWlanController: false,
-    needsManageConfig: false,
   },
   events: {
     labelKey: 'tabs.events',
     kinds: ['device', 'meraki', 'wireless_ap'],
     needsSnmp: false,
     needsWlanController: false,
-    needsManageConfig: false,
   },
   flow: {
     labelKey: 'tabs.flow',
     kinds: DEVICE_ONLY,
     needsSnmp: false,
     needsWlanController: false,
-    needsManageConfig: false,
   },
 };
 
@@ -403,16 +374,10 @@ export function neighborsFed(node: NodeDetailSubject): boolean {
   }
 }
 
-/** `canManageConfig` is the tab bar's answer to `useCan('manage_config')`. Left out it is `true`,
- *  which is what every caller that asks about a node rather than a person wants. */
-export function visibleNodeDetailTabs(
-  node: NodeDetailSubject,
-  canManageConfig = true,
-): readonly NodeDetailTab[] {
+export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDetailTab[] {
   return NODE_DETAIL_TABS.filter((tab) => {
     const meta = NODE_DETAIL_TAB_META[tab];
     return (
-      (canManageConfig || !meta.needsManageConfig) &&
       meta.kinds.includes(node.kind) &&
       (!meta.needsSnmp || (tab === 'neighbors' ? neighborsFed(node) : interfacesFed(node))) &&
       (node.isWlanController || !meta.needsWlanController)

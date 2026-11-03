@@ -259,7 +259,8 @@
     "nameFromDevice": "Name from device…",
     "moveByPrefix": "Move by IP range…",
     "delete": "Delete…",
-    "showOnMap": "Show on map"
+    "showOnMap": "Show on map",
+    "thresholdRules": "Threshold rules"
   },
   "tabs": {
     "overview": "Overview",
@@ -269,8 +270,7 @@
     "collection": "Collection",
     "events": "Events",
     "flow": "Flow",
-    "config": "Config",
-    "rules": "Alert rules"
+    "config": "Config"
   },
   "ap": {
     "colAp": "Access point",
@@ -612,17 +612,22 @@
       "unknown": "Unknown"
     },
     "rules": {
-      "title": "Alert rules — {{port}}",
+      "title": "Thresholds — {{port}}",
       "subtitleNoSpeed": "This port does not report a speed, so only absolute rules can be evaluated on it.",
       "thisPort": "This port",
-      "inherited": "Also applies",
-      "inheritedHint": "Edit these on <lnk/>.",
-      "empty": "No rule is watching this port.",
+      "colWatch": "Watch",
+      "colInForce": "In force",
+      "colFrom": "From",
+      "notWatched": "Not watched",
+      "override": "Override",
+      "set": "Set",
+      "revert": "Revert",
+      "editElsewhere": "Edit in Threshold rules",
+      "other": "Other",
+      "nodeWide": "Node-wide thresholds",
       "add": "Add rule",
       "addTitle": "Add a rule — {{port}}",
       "editTitle": "Edit rule — {{port}}",
-      "inForce": "In force",
-      "overridden": "Overridden",
       "subject": "What to watch",
       "subjects": {
         "in_traffic": "Inbound traffic",
@@ -654,14 +659,17 @@
       "storedAs": "Saved as {{metric}} {{direction}} {{value}}",
       "loadFailed": "Could not load this port's rules",
       "saveFailed": "Could not save the rule",
-      "deleteTitle": "Delete rule",
-      "deleteBody": "Delete this alert rule for {{port}}? The alerts it raised are resolved on the next evaluation.",
+      "deleteTitle": "Revert to the inherited value",
+      "deleteBody": "Remove {{port}}'s own rule? The port goes back to the value it inherits.",
       "deleteFailed": "Could not delete the rule",
       "linkState": {
         "info": "Fires on anything but up. A hand-written \"below 0.5\" rule never fires, because ifOperStatus reports down as 2, not 0."
       }
     },
-    "rulesButton": "Alert rules for this port",
+    "rulesButton": "Thresholds for this port",
+    "rulesButtonLabel": "Thresholds",
+    "rulesButtonCount_one": "Thresholds · {{count}}",
+    "rulesButtonCount_other": "Thresholds · {{count}}",
     "blank": {
       "unknown": "not reported",
       "notApplicable": "n/a"
@@ -760,7 +768,9 @@
       "searchActiveRegex": "Searching (regex): {{term}}",
       "searchActiveRegexNot": "Searching (regex): not {{term}}",
       "searchClear": "Clear the map search"
-    }
+    },
+    "thresholdRules_one": "{{count}} threshold rule",
+    "thresholdRules_other": "{{count}} threshold rules"
   },
   "prefixGaps": {
     "title": "Subnets missing from the IP prefixes",
@@ -1454,6 +1464,6 @@
     "thisNode": "This node",
     "edit": "Edit",
     "override": "Change for this node",
-    "empty": "No alert rules reach this node."
+    "empty": "No threshold rules reach this node."
   }
 }

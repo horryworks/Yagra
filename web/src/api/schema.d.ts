@@ -37234,10 +37234,12 @@ export interface operations {
                 /** @description Case-insensitive substring of the metric name. */
                 q?: string;
                 /**
-                 * @description Comma-separated scope levels (`global` | `profile` | `group` | `group_id` | `node` |
-                 *     `interface`); empty or absent means every level.
+                 * @description Comma-separated scope levels (`global` | `profile` | `group_id` | `node` | `interface`);
+                 *     empty or absent means every level.
                  */
                 scope_level?: string;
+                /** @description Only rules whose targets include this profile, folder or node id. */
+                scope_id?: string;
                 /** @description Comma-separated directions (`above` | `below`); empty or absent means both. */
                 direction?: string;
                 /** @description `true` to fill `overridden`. Off by default: the count walks every node. */

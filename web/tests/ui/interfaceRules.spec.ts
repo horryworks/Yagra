@@ -1,18 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The port's alert-rule dialog and the rules screen's narrowed default (ADR-076 Inc.5, Tier1).
+// The port's thresholds dialog (ADR-076 Inc.5, redrawn by ADR-230 decision 7; Tier1).
 //
-// Three things here that no unit test in this repo can reach, because Vitest never executes a
-// `.tsx` and has no layout engine:
+// What no unit test in this repo can reach, because Vitest never executes a `.tsx` and has no
+// layout engine:
 //
-//   - the dock's bell opens the **list** of rules that govern the port, and the inherited ones are
-//     shown without edit controls. `portRuleForm.test.ts` proves the translation; only a browser
-//     can prove the translation is wired to a dialog and that the read-only half really is
-//     read-only;
-//   - the form asks what to watch and how to measure it, and **never** shows a metric picker. That
-//     is the whole of the user-reported complaint, and it is a rendering decision;
-//   - Alerts ▸ Metric alert rules now leaves port rules out by default. The count line is the only
-//     thing that makes that honest, so a missing line reads as "those rules do not exist" —
-//     `thresholdQuery.test.ts` pins the request, this pins that the operator is told.
+//   - the dock's button says what it opens, in words, and counts the port's own rules;
+//   - the dialog draws one row per subject, each with the one action that fits it — Edit and
+//     Revert on the port's own rule, Override on an inherited one, Set on a subject nothing
+//     watches. `portSubjectRows.test.ts` proves the choice; only a browser proves it is wired;
+//   - Override opens the form at the inherited bounds, and the form asks what to watch, never for
+//     a metric name.
 
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
@@ -21,13 +18,8 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
 const IFINDEX = 1;
 
-// Only a `device` shows the Interfaces tab, and the dock only exists once a port is selected — a
-// precondition of this whole spec, so a `//` rather than a doc block, which would attach to the
-// fixture below and displace its own.
 /** One rule on this port and one inherited from the node, both built from the generated shape so a
- *  change to the Rust type reaches this fixture. The inherited one is deliberately a *different*
- *  metric: two rules on one metric would make "in force" ambiguous, and the property under test is
- *  that the port's own rule is editable and the node's is not. */
+ *  change to the Rust type reaches this fixture. Different subjects, so each row has one answer. */
 function portRules(): Json {
   const template = (defaultBodyFor('/api/v1/thresholds') as Record<string, Json>)
     .items as Record<string, Json>[];
@@ -75,71 +67,81 @@ test.use({
   },
 });
 
-async function openRules(page: import('@playwright/test').Page) {
+async function openDock(page: import('@playwright/test').Page) {
   await page.goto(`/nodes/${NODE_ID}?tab=interfaces`);
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
   await page.locator('.nd-if-row .nd-if-name').first().click();
   await expect(page.locator('.nd-if-dock')).toBeVisible({ timeout: 15_000 });
+}
+
+async function openRules(page: import('@playwright/test').Page) {
+  await openDock(page);
   await page.locator('.nd-if-dock-rule').click();
   await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
 }
 
-test('the port button carries the rule count and opens the rules that govern the port', async ({
-  page,
-}) => {
-  await page.goto(`/nodes/${NODE_ID}?tab=interfaces`);
-  await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
-  await page.locator('.nd-if-row .nd-if-name').first().click();
-  await expect(page.locator('.nd-if-dock')).toBeVisible({ timeout: 15_000 });
+const subjectRow = (page: import('@playwright/test').Page, subject: string) =>
+  page.getByRole('dialog').locator(`.ifrules-row[data-subject="${subject}"]`);
 
-  // The count is the discoverability half: without it an operator has to click to learn that
-  // anything is watching this port at all (ADR-055 R6).
-  await expect(page.locator('.nd-if-dock-rule-count')).toHaveText('2');
-
-  await page.locator('.nd-if-dock-rule').click();
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-
-  // Both sections render, and each holds the rule that belongs in it.
-  // Addressed structurally. A `hasText` filter was the first attempt and it matched *both*
-  // sections — the inherited section's hint sentence also says "this port" — so the assertions
-  // below were inspecting two rows while claiming to inspect one.
-  const own = dialog.locator('.ifrules-section[data-kind="own"]');
-  const inherited = dialog.locator('.ifrules-section[data-kind="inherited"]');
-  await expect(own).toContainText('This port');
-  await expect(inherited).toContainText('Also applies');
-  await expect(own.locator('.ifrules-row')).toHaveCount(1);
-  await expect(inherited.locator('.ifrules-row')).toHaveCount(1);
-
-  // Said in the port's words, not as a metric name — the whole point of the subject list.
-  await expect(own.locator('.ifrules-subject')).toHaveText('Inbound traffic');
-  await expect(inherited.locator('.ifrules-subject')).toHaveText('Outbound traffic');
-
-  // 90% of the port's own speed, spelled out in bits/sec beside it. Which speed the mock reports
-  // is not this test's business — that the conversion is *offered* is.
-  await expect(own.locator('.ifrules-bound')).toContainText('90%');
-
-  // 🚨 The read-only half. A row an operator cannot act on must not draw controls they can press:
-  // the inherited rule is edited on the rules screen, and the dialog says so.
-  await expect(own.getByRole('button', { name: 'Edit' })).toHaveCount(1);
-  await expect(inherited.getByRole('button', { name: 'Edit' })).toHaveCount(0);
-  await expect(inherited.getByRole('button', { name: 'Delete' })).toHaveCount(0);
-  await expect(inherited).toContainText('Threshold rules');
+test('the port button names what it opens and counts the port’s own rules', async ({ page }) => {
+  await openDock(page);
+  // Words, not a bell, and the number is the port's own rules only: the inherited one is not
+  // counted, because every port has those (ADR-230).
+  await expect(page.locator('.nd-if-dock-rule')).toHaveText('Thresholds · 1');
 });
 
-test('adding a rule asks what to watch, never for a metric name', async ({ page }) => {
+test('each subject row offers the one action that fits it', async ({ page }) => {
   await openRules(page);
-  await page.getByRole('button', { name: 'Add rule' }).click();
   const dialog = page.getByRole('dialog');
 
-  // The complaint this increment came from: the generic dialog offered 88 metrics, of which 7 can
+  // The port's own rule: said in the port's words, edited or reverted here.
+  const own = subjectRow(page, 'in_traffic');
+  await expect(own.locator('.ifrules-subject')).toHaveText('Inbound traffic');
+  await expect(own.locator('.ifrules-bound')).toContainText('90%');
+  await expect(own.locator('.ifrules-scope')).toHaveText('This port');
+  await expect(own.getByRole('button', { name: 'Edit' })).toHaveCount(1);
+  await expect(own.getByRole('button', { name: 'Revert' })).toHaveCount(1);
+
+  // Inherited from the node: overridden, never edited in place.
+  const inherited = subjectRow(page, 'out_traffic');
+  await expect(inherited.locator('.ifrules-scope')).toContainText('Node');
+  await expect(inherited.getByRole('button', { name: 'Override' })).toHaveCount(1);
+  await expect(inherited.getByRole('button', { name: 'Edit' })).toHaveCount(0);
+
+  // Nothing watches the link state: one button to start.
+  const link = subjectRow(page, 'link_state');
+  await expect(link.locator('.ifrules-bound')).toHaveText('Not watched');
+  await expect(link.getByRole('button', { name: 'Set' })).toHaveCount(1);
+
+  // A node-wide metric is not one of this port's, and the way to them is the footer link.
+  await expect(dialog).not.toContainText('Also applies');
+  await expect(dialog.getByRole('link', { name: 'Node-wide thresholds' })).toHaveAttribute(
+    'href',
+    `/alerts/rules?check=${NODE_ID}`,
+  );
+});
+
+test('override opens the form at the inherited bounds', async ({ page }) => {
+  await openRules(page);
+  await subjectRow(page, 'out_traffic').getByRole('button', { name: 'Override' }).click();
+  const dialog = page.getByRole('dialog');
+  const subject = dialog.locator('.modal-field').filter({ hasText: 'What to watch' }).locator('select');
+  await expect(subject).toHaveValue('out_traffic');
+  await expect(dialog.locator('.ifrules-num').nth(1)).toHaveValue('80');
+});
+
+test('the form asks what to watch, never for a metric name', async ({ page }) => {
+  await openRules(page);
+  await subjectRow(page, 'in_traffic').getByRole('button', { name: 'Edit' }).click();
+  const dialog = page.getByRole('dialog');
+
+  // The complaint ADR-076 Inc.5 came from: the generic dialog offered 88 metrics, of which 7 can
   // carry a rule on a port. There is no metric control here at all.
   await expect(dialog.locator('.metricpick-trigger')).toHaveCount(0);
   await expect(dialog).not.toContainText('Scope type');
 
   const subject = dialog.locator('.modal-field').filter({ hasText: 'What to watch' }).locator('select');
   await expect(subject).toHaveValue('in_traffic');
-  // Both directions are one control away from each other — the second complaint.
   await expect(subject.locator('option')).toHaveCount(5);
 
   // The basis is a real choice, and picking absolute swaps the unit control for a rate unit.
@@ -149,34 +151,13 @@ test('adding a rule asks what to watch, never for a metric name', async ({ page 
   await expect(dialog.locator('.ifrules-bounds select')).toHaveCount(1);
 
   // Link state has no bounds to type, and says the thing an operator cannot guess: the rule that
-  // looks right by hand (`below 0.5`) can never fire. Since ADR-200 Inc.19 that is behind the ⓘ
-  // beside the condition, so it is read by pressing it; the popover is portalled to the body.
+  // looks right by hand (`below 0.5`) can never fire. It is behind the ⓘ beside the condition.
   await subject.selectOption('link_state');
   await expect(dialog.locator('.ifrules-fixed')).toContainText('not up');
   await dialog.locator('.ifrules-fixed .infotip-btn').click();
   await expect(page.locator('.infotip-pop')).toContainText('below 0.5');
-  // Escape closes the explanation and leaves the dialog open.
   await page.keyboard.press('Escape');
   await expect(page.locator('.infotip-pop')).toHaveCount(0);
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.ifrules-num')).toHaveCount(1); // the breach count only
-});
-
-test('the rules screen says how many port rules it is not showing', async ({ page }) => {
-  // The default view narrows (ADR-076 decision 12). This line is the whole of what stops a hidden rule
-  // reading as a rule that does not exist — and the count comes from the server, because the rows
-  // on screen are both filtered and capped.
-  await page.goto('/alerts/rules');
-  const hidden = page.locator('.thresholds-hidden');
-  await expect(hidden).toBeVisible({ timeout: 15_000 });
-  await expect(hidden).toContainText('hidden');
-
-  // 🚨 `isVisible()` returns true for an `opacity: 0` element, so read the computed value: a
-  // notice nobody can see is exactly the failure this line exists to prevent.
-  expect(await hidden.evaluate((e) => Number(getComputedStyle(e).opacity))).toBe(1);
-
-  // And the way back in is one click, not a filter the operator has to know to open.
-  await hidden.getByRole('button').click();
-  await expect(page).toHaveURL(/scope_level=/);
-  await expect(hidden).toHaveCount(0);
 });

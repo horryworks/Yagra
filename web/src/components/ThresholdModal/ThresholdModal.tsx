@@ -354,7 +354,6 @@ export function ThresholdModal({
         ifindex={handoff.ifindex}
         portLabel={handoff.label}
         speedBps={handoff.speedBps}
-        startAdding
         onChanged={() => {
           portRuleChanged.current = true;
         }}

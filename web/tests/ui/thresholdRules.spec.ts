@@ -390,9 +390,11 @@ test('a port rule is added by picking a node, then a port (ADR-209)', async ({ p
   await expect(next).toBeEnabled();
   await next.click();
 
-  // The port-rule dialog, open on its add form.
+  // The port's thresholds dialog, open on its rows: each subject is set from its own row
+  // (ADR-230 decision 7), so the hand-off lands there rather than on a blank form.
   const portDialog = page.getByRole('dialog');
-  await expect(portDialog).toContainText('Add a rule —');
+  await expect(portDialog).toContainText('Thresholds —');
+  await expect(portDialog.locator('.ifrules-row').first()).toBeVisible();
   await expect(
     portDialog.locator('.modal-field-label', { hasText: 'Scope type' }),
   ).toHaveCount(0);
@@ -418,8 +420,7 @@ test('backing out of the port-rule dialog leaves the list as it was', async ({ p
   await dialog.getByRole('button', { name: 'Next' }).click();
 
   const portDialog = page.getByRole('dialog');
-  await expect(portDialog).toContainText('Add a rule —');
-  await portDialog.locator('.modal-footer').getByRole('button', { name: 'Cancel' }).click();
+  await expect(portDialog).toContainText('Thresholds —');
   await portDialog.locator('.modal-footer').getByRole('button', { name: 'Close' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(page.url()).toBe(before);

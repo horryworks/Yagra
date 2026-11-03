@@ -259,7 +259,8 @@
     "nameFromDevice": "名前を sysName に合わせる…",
     "moveByPrefix": "IP レンジで移動…",
     "delete": "削除…",
-    "showOnMap": "マップで表示"
+    "showOnMap": "マップで表示",
+    "thresholdRules": "しきい値ルール"
   },
   "tabs": {
     "overview": "概要",
@@ -269,8 +270,7 @@
     "collection": "収集",
     "events": "イベント",
     "flow": "フロー",
-    "config": "Config",
-    "rules": "アラートルール"
+    "config": "Config"
   },
   "ap": {
     "colAp": "アクセスポイント",
@@ -610,17 +610,22 @@
       "unknown": "不明"
     },
     "rules": {
-      "title": "{{port}} のアラートルール",
+      "title": "{{port}} のしきい値",
       "subtitleNoSpeed": "このポートは速度を申告しないので、絶対値のルールだけが判定できます。",
       "thisPort": "このポート",
-      "inherited": "上位から効いているもの",
-      "inheritedHint": "編集は <lnk/> で行います。",
-      "empty": "このポートを見張っているルールはありません。",
+      "colWatch": "見るもの",
+      "colInForce": "効いている値",
+      "colFrom": "決まった場所",
+      "notWatched": "見ていない",
+      "override": "上書き",
+      "set": "設定",
+      "revert": "戻す",
+      "editElsewhere": "しきい値ルールで編集",
+      "other": "その他",
+      "nodeWide": "ノード全体のしきい値",
       "add": "ルールを追加",
       "addTitle": "{{port}} にルールを追加",
       "editTitle": "{{port}} のルールを編集",
-      "inForce": "効いている",
-      "overridden": "上書き中",
       "subject": "何を見張るか",
       "subjects": {
         "in_traffic": "受信トラフィック",
@@ -652,14 +657,17 @@
       "storedAs": "保存されるルール {{metric}} {{direction}} {{value}}",
       "loadFailed": "このポートのルールを読み込めませんでした",
       "saveFailed": "ルールを保存できませんでした",
-      "deleteTitle": "ルールを削除",
-      "deleteBody": "{{port}} のこのアラートルールを削除しますか？ 上がっているアラートは次の判定で解消されます。",
+      "deleteTitle": "受け継いだ値に戻す",
+      "deleteBody": "{{port}} 専用のルールを外しますか？ ポートは受け継いだ値に戻ります。",
       "deleteFailed": "ルールを削除できませんでした",
       "linkState": {
         "info": "up 以外のすべてで発報します。ifOperStatus は down を 0 でなく 2 で返すため、手書きの「0.5 未満」は鳴りません。"
       }
     },
-    "rulesButton": "このポートのアラートルール",
+    "rulesButton": "このポートのしきい値",
+    "rulesButtonLabel": "しきい値",
+    "rulesButtonCount_one": "しきい値 · {{count}}",
+    "rulesButtonCount_other": "しきい値 · {{count}}",
     "blank": {
       "unknown": "報告なし",
       "notApplicable": "該当なし"
@@ -758,7 +766,9 @@
       "searchActiveRegex": "検索中（正規表現）: {{term}}",
       "searchActiveRegexNot": "検索中（正規表現）: {{term}} 以外",
       "searchClear": "地図の検索を消す"
-    }
+    },
+    "thresholdRules_one": "しきい値ルール {{count}} 件",
+    "thresholdRules_other": "しきい値ルール {{count}} 件"
   },
   "prefixGaps": {
     "title": "IP レンジに無いサブネット",
@@ -1444,6 +1454,6 @@
     "thisNode": "このノード",
     "edit": "編集",
     "override": "このノードだけ変える",
-    "empty": "このノードに当たるアラートルールはありません。"
+    "empty": "このノードに当たるしきい値ルールはありません。"
   }
 }

@@ -25890,10 +25890,20 @@
           {
             "name": "scope_level",
             "in": "query",
-            "description": "Comma-separated scope levels (`global` | `profile` | `group` | `group_id` | `node` |\n`interface`); empty or absent means every level.",
+            "description": "Comma-separated scope levels (`global` | `profile` | `group_id` | `node` | `interface`);\nempty or absent means every level.",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "query",
+            "description": "Only rules whose targets include this profile, folder or node id.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           },
           {

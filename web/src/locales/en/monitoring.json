@@ -70,13 +70,15 @@
     },
     "templates": {
       "empty": "No metric sets exist yet. Create some first.",
-      "gap_one": "{{count}} metric collected here has an alert rule on other profiles but none on this one",
-      "gap_other": "{{count}} metrics collected here have alert rules on other profiles but none on this one",
+      "gap_one": "{{count}} metric collected here has an threshold rule on other profiles but none on this one",
+      "gap_other": "{{count}} metrics collected here have threshold rules on other profiles but none on this one",
       "gapHint": "A default rule names the profiles it was written for, and this profile is not one of them — so these are collected and nothing can fire on them.",
-      "gapLink": "Open Alert rules",
-      "covered_one": "1 metric collected here has an alert rule. The rest are raw values no rule bounds anywhere.",
-      "covered_other": "{{count}} metrics collected here have an alert rule. The rest are raw values no rule bounds anywhere.",
-      "unchecked": "Couldn't check which of these metrics have an alert rule — the rule list came back capped or unavailable."
+      "gapLink": "Open Threshold rules",
+      "covered_one": "1 metric collected here has an threshold rule. The rest are raw values no rule bounds anywhere.",
+      "covered_other": "{{count}} metrics collected here have an threshold rule. The rest are raw values no rule bounds anywhere.",
+      "unchecked": "Couldn't check which of these metrics have an threshold rule — the rule list came back capped or unavailable.",
+      "rules_one": "{{count}} threshold rule",
+      "rules_other": "{{count}} threshold rules"
     },
     "err": {
       "pollInterval": "Poll interval must be a whole number of seconds between 10 and 3600.",

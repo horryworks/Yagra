@@ -45,6 +45,18 @@ export function ruleIsBaselineFor(rule: StoredThreshold, profileId: string): boo
   return rule.scope_level === 'profile' && rule.scope_ids.includes(profileId);
 }
 
+/** How many rules are written on this profile itself, for the "Threshold rules" link (ADR-230
+ *  decision 5) — or `null` when the list behind the answer was capped, because a count taken from
+ *  a prefix would be a number that reads as complete and is not. */
+export function profileRuleCount(
+  rules: readonly StoredThreshold[] | null,
+  profileId: string,
+  rulesTruncated: boolean,
+): number | null {
+  if (rules === null || rulesTruncated) return null;
+  return rules.filter((r) => r.scope_level === 'profile' && r.scope_ids.includes(profileId)).length;
+}
+
 /** What the panel knows about the metrics behind a profile's attached sets. `loading` and `failed`
  *  are kept apart on purpose: one renders nothing and resolves itself, the other is a standing
  *  admission that the question was not answered. */

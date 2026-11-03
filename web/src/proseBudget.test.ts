@@ -71,7 +71,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [6229, 3448],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11338, 6793], // Monitor's same-device confirmation, three sentences in place of one hint (ADR-139 Inc.5, 2026-10-29)
+  monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
   nav: [3007, 1415], // + Nodes ▸ Config backups and its one-line description (ADR-210 stage 3, 2026-10-22)
   nodes: [16287, 9286], // + rules.empty, the Alert rules tab's empty state (ADR-229, 2026-11-03)
   rca: [1022, 528],

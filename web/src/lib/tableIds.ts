@@ -27,7 +27,6 @@
  */
 export const TABLE_IDS = [
   // Node detail
-  'node.alertRules',
   'node.configAttempts',
   'node.configSaves',
   'node.configVersions',
@@ -42,6 +41,7 @@ export const TABLE_IDS = [
   'alerts.history',
   'alerts.maintenance',
   'alerts.mutes',
+  'alerts.nodeRules',
   'alerts.thresholds',
   // Nodes / monitoring configuration
   'nodes.classification',

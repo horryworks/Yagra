@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Alert rules (Alerts ▸ Alert rules). Thresholds resolve by hierarchical
+// Threshold rules (Alerts ▸ Threshold rules). Thresholds resolve by hierarchical
 // override — profile → group → node, most-specific wins (§3.3) — so each rule carries a
 // scope level + id. CRUD against /thresholds. Rules are evaluated live: the alert engine
 // snapshots them (refreshed every ~30s) and checks each matching poll sample through the
@@ -14,8 +14,15 @@
 // (node × metric) — so it uses the virtualized `DataTable` rather than a hand-rolled grid, and the
 // server caps the response. When the cap bites, the toolbar says so: a silently short ruleset reads
 // as "these are all the rules", which is exactly the wrong belief to hold about alerting config.
+//
+// **Since ADR-230 it is the one place a threshold rule is made or changed.** The level tabs and the
+// target picker say where in the five levels the operator is looking; "Check a node" shows what
+// reaches one node and which rule wins there. Node detail, Device profiles and the folder pane link
+// here with the view in the URL (`thresholdQuery.ts::thresholdRulesHref`) instead of keeping lists
+// of their own.
 
 import { useCallback, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { useCan } from '../store';
@@ -38,11 +45,26 @@ import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
 import { IconButton } from '../components/ui/IconButton';
 import { EditIcon } from '../components/ui/icons';
-import { decodeSet, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
-import { queryFor, thresholdFilters } from './thresholdQuery';
+import {
+  SCOPE_TABS,
+  queryFor,
+  ruleViewFrom,
+  startFormFor,
+  targetKind,
+  thresholdFilters,
+  writeRuleView,
+  type RuleView,
+} from './thresholdQuery';
+import { Tabs } from '../components/ui/Tabs';
+import { Select } from '../components/ui/Field';
+import { GroupPicker } from '../components/ui/GroupPicker';
+import { NodePicker } from '../components/NodePicker/NodePicker';
+import { NodeRulesView } from '../components/NodeRules/NodeRulesView';
+import { groupOptions } from '../lib/nodeTree';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
@@ -112,7 +134,22 @@ export function ThresholdsPage() {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<StoredThreshold | null>(null);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
-  const { scopeName } = useEntityNames();
+  const { scopeName, nodeName, profiles, groups } = useEntityNames();
+  // The level, the target and the node being checked (ADR-230). Written beside the column filters
+  // into one query string; each writer starts from the current params, so neither erases the other.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = useMemo(() => ruleViewFrom(searchParams), [searchParams]);
+  const setView = useCallback(
+    (next: RuleView) => {
+      const params = new URLSearchParams(searchParams);
+      writeRuleView(params, next);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+  /** "Check a node" was pressed and no node is chosen yet — the picker is showing. */
+  const [checking, setChecking] = useState(false);
+  const folderItems = useMemo(() => groupOptions(groups), [groups]);
 
   // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
   // `useFilterParams` derives the filter state from whatever list it is given, `load` depends on
@@ -136,8 +173,9 @@ export function ThresholdsPage() {
   // The only call that asks for the override count: the two `total` questions below would pay a
   // fleet walk each and throw it away (ADR-200 Inc.33).
   const ruleset = useLoad(
-    () => api.listThresholds({ ...queryFor(filterCols, filters), overridden: true }),
-    [filterCols, filters],
+    () => api.listThresholds({ ...queryFor(filterCols, filters, view), overridden: true }),
+    // The tab and the target, not `view`: a new object on every URL write, the check included.
+    [filterCols, filters, view.tab, view.target],
     {
       initial: {
         items: [],
@@ -370,30 +408,10 @@ export function ThresholdsPage() {
     [filterCols, filters],
     { initial: null as boolean | null },
   );
-  /** How many port-scoped rules exist, whether or not this view is showing them.
-   *
-   *  🚨 Asked as its own request, not counted from `rows`. The rows are the operator's filter —
-   *  which by default excludes exactly these — and capped at 500 besides, so counting them would
-   *  answer "none" about a fleet with thousands. A default that hides rows without saying how many
-   *  is a screen that quietly reports a shorter ruleset than the deployment has. Re-asked with the
-   *  list, so it stays true after an add or a delete and after the level filter opens up. */
-  const { data: portRuleTotal, reload: portsReload } = useLoad(
-    () => api.listThresholds({ scope_level: 'interface', limit: 1 }).then((p) => p.total),
-    [filterCols, filters],
-    { initial: 0 },
-  );
   const load = useCallback(() => {
     rulesetReload();
     livenessReload();
-    portsReload();
-  }, [rulesetReload, livenessReload, portsReload]);
-
-  /** Whether this view is currently leaving port rules out. */
-  const portRulesHidden = useMemo(() => {
-    const selected = decodeSet(filters.scope_level ?? '');
-    // An empty selection means every level, so nothing is being left out.
-    return selected.length > 0 && !selected.includes('interface');
-  }, [filters.scope_level]);
+  }, [rulesetReload, livenessReload]);
 
   return (
     <div>
@@ -417,29 +435,79 @@ export function ThresholdsPage() {
         </Card>
       )}
 
-      {/* The default view leaves port rules out (ADR-076 decision 12), and this line is the whole of
-          what makes that honest: the count comes from the server, and the way back in is one
-          click. Without it a hidden rule is indistinguishable from a rule that does not exist —
-          which is the wrong belief to hold about alerting configuration. */}
-      {portRulesHidden && portRuleTotal > 0 && (
-        <p className="thresholds-hidden">
-          {t('thresholds.portRulesHidden', { count: portRuleTotal })}{' '}
-          <button
-            type="button"
-            className="linklike"
-            onClick={() => setFilters({ ...filters, scope_level: '' })}
-          >
-            {t('thresholds.showPortRules')}
-          </button>
-        </p>
+      {view.check || checking ? (
+        <>
+          <div className="thresholds-check-head">
+            <NodePicker
+              value={view.check}
+              valueLabel={view.check ? nodeName(view.check) : undefined}
+              placeholder={t('thresholds.check.pick')}
+              onChange={(n) => {
+                setChecking(n == null);
+                setView({ ...view, check: n?.id ?? null });
+              }}
+            />
+            <button
+              type="button"
+              className="linklike"
+              onClick={() => {
+                setChecking(false);
+                setView({ ...view, check: null });
+              }}
+            >
+              {t('thresholds.check.back')}
+            </button>
+          </div>
+          {view.check && <NodeRulesView nodeId={view.check} />}
+        </>
+      ) : (
+      <>
+      <Tabs
+        tabs={SCOPE_TABS.map((key) => ({
+          key,
+          label: t(`thresholds.tabs.${key}`),
+        }))}
+        active={view.tab}
+        onChange={(tab) => setView({ tab, target: null, check: null })}
+      />
+      {targetKind(view.tab) && (
+        <div className="thresholds-target">
+          <span className="muted">{t(`thresholds.tabs.${view.tab}`)}</span>
+          {targetKind(view.tab) === 'profile' ? (
+            <Select
+              aria-label={t('thresholds.tabs.profile')}
+              value={view.target ?? ''}
+              onChange={(e) => setView({ ...view, target: e.target.value || null })}
+            >
+              <option value="">{t('thresholds.target.any')}</option>
+              {profiles.map((pr) => (
+                <option key={pr.id} value={pr.id}>
+                  {pr.name}
+                </option>
+              ))}
+            </Select>
+          ) : targetKind(view.tab) === 'folder' ? (
+            <GroupPicker
+              options={folderItems}
+              value={view.target ?? ''}
+              emptyOption={t('thresholds.target.any')}
+              onChange={(id) => setView({ ...view, target: id || null })}
+            />
+          ) : (
+            <NodePicker
+              value={view.target}
+              valueLabel={view.target ? nodeName(view.target) : undefined}
+              placeholder={t('thresholds.target.any')}
+              onChange={(n) => setView({ ...view, target: n?.id ?? null })}
+            />
+          )}
+        </div>
       )}
-
       <LoadGate load={ruleset} permission="manage_config">
         <ListToolbar
           list={serverToolbarFilters(filterCols, { filters, setFilters })}
           labels={{
             q: t('thresholds.cols.metric'),
-            scope_level: t('thresholds.cols.scope'),
             direction: t('thresholds.cols.direction'),
           }}
           count={{
@@ -459,6 +527,9 @@ export function ThresholdsPage() {
             </>
           }
         >
+          <Button variant="outline" onClick={() => setChecking(true)}>
+            {t('thresholds.check.open')}
+          </Button>
           {canConfig && (
             <Button variant="primary" onClick={() => setAdding(true)}>
               {t('thresholds.add')}
@@ -502,17 +573,17 @@ export function ThresholdsPage() {
           }
         />
       </LoadGate>
+      </>
+      )}
 
       {adding && (
         <ThresholdModal
           mode="add"
+          // The tab and target already chosen open the dialog there, so a rule added while looking
+          // at one profile is a rule on that profile unless the operator changes it.
+          start={startFormFor(view)}
           onClose={() => setAdding(false)}
-          onSaved={(level) => {
-            load();
-            // A port rule just made would be left out by the default view (ADR-076 decision 12):
-            // open the level filter, as "Show them" does, so the rule is seen to exist (ADR-209).
-            if (level === 'interface' && portRulesHidden) setFilters({ ...filters, scope_level: '' });
-          }}
+          onSaved={load}
         />
       )}
       {editing && (

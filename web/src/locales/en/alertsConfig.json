@@ -459,8 +459,6 @@
   },
   "thresholds": {
     "noLiveness": "No reachability rule: a node going down raises no alert and no notification.",
-    "portRulesHidden": "{{count}} port rules are hidden.",
-    "showPortRules": "Show them",
     "add": "+ Add rule",
     "cols": {
       "scope": "Scope type",
@@ -483,6 +481,22 @@
       "node": "node",
       "group_id": "folder group",
       "interface": "interface"
+    },
+    "tabs": {
+      "all": "All",
+      "global": "All nodes",
+      "profile": "Profile",
+      "group_id": "Folder",
+      "node": "Node",
+      "interface": "Port"
+    },
+    "target": {
+      "any": "Any"
+    },
+    "check": {
+      "open": "Check a node",
+      "pick": "Pick a node",
+      "back": "All rules"
     },
     "direction": {
       "above": "above",
@@ -535,7 +549,6 @@
     },
     "emptyFiltered": "No rules match these filters.",
     "filter": {
-      "allScopes": "All scopes",
       "allDirections": "Both directions"
     },
     "meaningUnknown": "No description for this metric",

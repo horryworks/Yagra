@@ -127,6 +127,9 @@ pub struct ThresholdFilter<'a> {
     pub level: &'a [ScopeLevel],
     /// Any of these directions. Empty means unfiltered.
     pub direction: &'a [Direction],
+    /// Only rules whose targets include this id — a profile, a folder or a node (ADR-230
+    /// decision 3). Compared as text against `scope_ids`, which is how the column stores them.
+    pub scope_id: Option<&'a str>,
 }
 
 /// PostgreSQL-backed threshold store.
@@ -181,7 +184,8 @@ impl ThresholdStore {
               OR ('above' = ANY($3) \
                   AND (warning_above IS NOT NULL OR critical_above IS NOT NULL)) \
               OR ('below' = ANY($3) \
-                  AND (warning_below IS NOT NULL OR critical_below IS NOT NULL)))";
+                  AND (warning_below IS NOT NULL OR critical_below IS NOT NULL))) \
+         AND ($4::text IS NULL OR $4 = ANY(scope_ids))";
 
     /// `CASE scope_level WHEN … END` ranking the levels broadest-first, **built from
     /// [`ScopeLevel::ALL`]** rather than written out.
@@ -231,7 +235,7 @@ impl ThresholdStore {
         .try_get(0)?;
         let rows = Self::bind_filter(
             sqlx::query(&format!(
-                "SELECT {} FROM thresholds WHERE {} ORDER BY {}, metric, scope_id LIMIT $4",
+                "SELECT {} FROM thresholds WHERE {} ORDER BY {}, metric, scope_id LIMIT $5",
                 Self::COLUMNS,
                 Self::FILTER_WHERE,
                 Self::scope_level_rank()
@@ -248,7 +252,7 @@ impl ThresholdStore {
         Ok((items, total))
     }
 
-    /// Bind `$1..=$3` of [`Self::FILTER_WHERE`], in the one order that matches it.
+    /// Bind `$1..=$4` of [`Self::FILTER_WHERE`], in the one order that matches it.
     ///
     /// One helper because the sequence is positional and silent when wrong: swapping two binds
     /// still compiles, still runs, and just answers a different question. The metric goes in as a
@@ -265,6 +269,7 @@ impl ThresholdStore {
         q.bind(f.metric.map(str::to_owned))
             .bind(set(f.level.iter().map(|l| l.as_str())))
             .bind(set(f.direction.iter().map(|d| d.as_str())))
+            .bind(f.scope_id.map(str::to_owned))
     }
 
     /// Every rule that could conceivably reach one port — the input to
@@ -628,9 +633,9 @@ mod tests {
             !all_body.contains("LIMIT"),
             "list_all must stay uncapped — a truncated snapshot silently stops alerting"
         );
-        // The API page is capped and bound, never interpolated. `$4` because the filter takes the
-        // first three placeholders — see `FILTER_WHERE`.
-        assert!(src.contains("metric, scope_id LIMIT $4"), "{src}");
+        // The API page is capped and bound, never interpolated. `$5` because the filter takes the
+        // first four placeholders — see `FILTER_WHERE`.
+        assert!(src.contains("metric, scope_id LIMIT $5"), "{src}");
     }
 
     #[test]
@@ -641,10 +646,10 @@ mod tests {
         // constants at runtime: a literal needle in a test that reads its own file matches itself
         // and passes forever.
         let src = production_source();
-        let placeholders = (1..=3)
+        let placeholders = (1..=4)
             .filter(|n| ThresholdStore::FILTER_WHERE.contains(&format!("${n}")))
             .count();
-        assert_eq!(placeholders, 3, "{}", ThresholdStore::FILTER_WHERE);
+        assert_eq!(placeholders, 4, "{}", ThresholdStore::FILTER_WHERE);
         let after = src
             .split_once("fn bind_filter")
             .expect("bind_filter exists")
@@ -698,7 +703,7 @@ mod tests {
             "{sql}"
         );
         assert!(
-            production_source().contains("ORDER BY {}, metric, scope_id LIMIT $4"),
+            production_source().contains("ORDER BY {}, metric, scope_id LIMIT $5"),
             "the page must order by the generated rank, not a hand-written CASE"
         );
     }

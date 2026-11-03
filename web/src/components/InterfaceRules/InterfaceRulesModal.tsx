@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The port's alert rules: what governs this interface, and the form to add or change one
-// (ADR-076 Inc.5, decision 8 and decision 11).
+// The port's thresholds: what watches this interface, and the form to set or change it
+// (ADR-076 Inc.5, decisions 8 and 11; redrawn by ADR-230 decision 7).
 //
-// Two views in one dialog. The list answers "what is watching this port", and it lists **every**
-// rule that reaches it — a port is governed from six scope levels and the interesting rule is
-// usually not its own, so a list of only the port's rules would show nothing about a port that is
-// alerting. The form asks what to watch and how to express the bound; it never asks for a metric
-// name (see `lib/portRuleForm.ts` for why that question is wrong here).
+// Two views in one dialog. The list is one row per thing a port rule can watch — the value in
+// force, where it was decided (this port, every node, a profile, a folder, the node), and the one
+// action that fits. A rule on a node-wide metric is not listed: it cannot be changed for one port,
+// and the node's rules are on Alerts ▸ Threshold rules. The form asks what to watch and how to
+// express the bound; it never asks for a metric name (see `lib/portRuleForm.ts` for why).
 //
-// Every judgement lives in `lib/portRuleForm.ts`, because Vitest does not execute a `.tsx`
-// (`testing.md`). This file owns the two layouts, the fetch, and nothing else.
+// Every judgement lives in `lib/portRuleForm.ts` and `portSubjectRows.ts`, because Vitest does not
+// execute a `.tsx` (`testing.md`). This file owns the two layouts, the fetch, and nothing else.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import { formatBps } from '../../lib/format';
@@ -35,18 +36,17 @@ import {
 } from '../../lib/portRuleForm';
 import type { MatchingThreshold, StoredThreshold } from '../../types/api';
 import { boundSentence, isOwnRule } from './interfaceRuleText';
+import { portSubjectRows, type PortSubjectRow } from './portSubjectRows';
+import { thresholdRulesHref } from '../../pages/thresholdQuery';
+import { useEntityNames } from '../ui/entityNames';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
-import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Select, TextInput } from '../ui/Field';
-import { IconButton } from '../ui/IconButton';
-import { EditIcon, TrashIcon } from '../ui/icons';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 import { InfoTip } from '../ui/InfoTip';
-import { ScreenLink } from '../ui/ScreenLink';
 import './InterfaceRulesModal.css';
 
 interface Props {
@@ -56,31 +56,34 @@ interface Props {
   portLabel: string;
   /** The device's own declared speed, in bits/sec, or null when it reports none. */
   speedBps: number | null;
-  /** Open on the add form rather than the list — the threshold-rule dialog hands a freshly picked
-   *  port here to have a rule made for it (ADR-209 decision 7). */
-  startAdding?: boolean;
+  /** Whether the port carries a transceiver (`portSubjectRows.ts::isOpticalPort`). Left out it is
+   *  `true`: a caller that cannot tell (the threshold-rule dialog's port picker) shows all five. */
+  optical?: boolean;
   /** A rule of this port was saved or deleted. The dialog itself re-reads its list either way. */
   onChanged?: () => void;
   onClose: () => void;
 }
+
+/** What the form is for: an existing port rule, or a new one starting from `start`. */
+type Editing = { rule: StoredThreshold; start?: undefined } | { rule?: undefined; start: PortRuleForm };
 
 export function InterfaceRulesModal({
   nodeId,
   ifindex,
   portLabel,
   speedBps,
-  startAdding = false,
+  optical = true,
   onChanged,
   onClose,
 }: Props) {
   const { t } = useTranslation('nodes');
+  const { t: ta } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
+  const { scopeName } = useEntityNames();
   const [rows, setRows] = useState<MatchingThreshold[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** `null` = the list; otherwise the form, editing `rule` or adding when it is undefined. */
-  const [editing, setEditing] = useState<{ rule?: StoredThreshold } | null>(
-    startAdding ? {} : null,
-  );
+  /** `null` = the list; otherwise the form. */
+  const [editing, setEditing] = useState<Editing | null>(null);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
   /** Where the list was scrolled when it gave way to the confirm step or the form. The dialog swaps
    *  its body for either, so coming back mounts a fresh list at the top; this puts it back (ADR-203).
@@ -115,19 +118,24 @@ export function InterfaceRulesModal({
 
   useEffect(load, [load]);
 
-  const own = useMemo(
-    () => (rows ?? []).filter((r) => isOwnRule(r, nodeId, ifindex)),
-    [rows, nodeId, ifindex],
+  const table = useMemo(
+    () => (rows === null ? null : portSubjectRows(rows, nodeId, ifindex, optical)),
+    [rows, nodeId, ifindex, optical],
   );
-  const inherited = useMemo(
-    () => (rows ?? []).filter((r) => !isOwnRule(r, nodeId, ifindex)),
-    [rows, nodeId, ifindex],
-  );
+
+  /** Where one rule came from: this port, or its level and what it names. */
+  const source = (m: MatchingThreshold) => {
+    if (isOwnRule(m, nodeId, ifindex)) return t('interfaces.rules.thisPort');
+    const level = ta(`thresholds.tabs.${m.rule.scope_level}`);
+    const names = m.rule.scope_ids.map((id) => scopeName(m.rule.scope_level, id)).join(', ');
+    return names ? `${level}: ${names}` : level;
+  };
 
   if (deleting) {
     return (
       <ConfirmDeleteModal
         title={t('interfaces.rules.deleteTitle')}
+        confirmLabel={t('interfaces.rules.revert')}
         onConfirm={() => api.deleteThreshold(deleting.id)}
         errorFallback={t('interfaces.rules.deleteFailed')}
         onClose={() => setDeleting(null)}
@@ -150,6 +158,7 @@ export function InterfaceRulesModal({
         portLabel={portLabel}
         speedBps={speedBps}
         rule={editing.rule}
+        start={editing.start}
         onCancel={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -166,76 +175,90 @@ export function InterfaceRulesModal({
       onClose={onClose}
       footer={
         <>
-          {canConfig && (
-            <Button
-              variant="outline"
-              onClick={() => {
-                leaveList();
-                setEditing({});
-              }}
-            >
-              {t('interfaces.rules.add')}
-            </Button>
-          )}
+          {/* The node-wide rules (CPU, reachability) are not this port's, and are read where the
+              node's rules are (ADR-230 decision 7). */}
+          <Link className="ifrules-nodewide" to={thresholdRulesHref({ check: nodeId })}>
+            {t('interfaces.rules.nodeWide')}
+          </Link>
           <Button variant="primary" onClick={onClose}>
             {t('common:actions.close')}
           </Button>
         </>
       }
     >
-      {/* Only the state that limits what can be added. With a speed, each percentage is spelled
+      {/* Only the state that limits what can be set. With a speed, each percentage is spelled
           out against it in the form itself (`percentOf`), which is where the number is typed. */}
       {!(speedBps != null && speedBps > 0) && (
         <p className="ifrules-sub">{t('interfaces.rules.subtitleNoSpeed')}</p>
       )}
 
       <div ref={listEl}>
-        {rows === null ? (
+        {table === null ? (
           <p className="form-status">{t('common:loading')}</p>
-        ) : rows.length === 0 ? (
-          <p className="ifrules-empty">{t('interfaces.rules.empty')}</p>
         ) : (
           <>
-            {/* The sections carry `data-kind` so a test can address them structurally: the
-                inherited section's own hint sentence contains the words "this port" too, so a text
-                filter matches both and the assertions inspect the wrong rows while staying green.
-                (It did, on the first run of `interfaceRules.spec.ts`.) */}
-            {own.length > 0 && (
-              <section className="ifrules-section" data-kind="own">
-                <h4 className="ifrules-head">{t('interfaces.rules.thisPort')}</h4>
-                {own.map((row) => (
-                  <RuleRow
-                    key={row.rule.id}
-                    row={row}
-                    speedBps={speedBps}
-                    editable={canConfig}
-                    onEdit={() => {
-                      leaveList();
-                      setEditing({ rule: row.rule });
-                    }}
-                    onDelete={() => {
-                      leaveList();
-                      setDeleting(row.rule);
-                    }}
-                  />
+            <div className="ifrules-grid ifrules-headrow">
+              <span>{t('interfaces.rules.colWatch')}</span>
+              <span>{t('interfaces.rules.colInForce')}</span>
+              <span>{t('interfaces.rules.colFrom')}</span>
+              <span />
+            </div>
+            {table.subjects.map((r) => (
+              <div className="ifrules-grid ifrules-row" key={r.subject} data-subject={r.subject}>
+                <span className="ifrules-subject">{t(`interfaces.rules.subjects.${r.subject}`)}</span>
+                <span className="ifrules-bound">
+                  {r.inForce.length === 0 ? (
+                    <span className="muted">{t('interfaces.rules.notWatched')}</span>
+                  ) : (
+                    r.inForce.map((m) => (
+                      <span key={m.rule.id}>
+                        {boundSentence(m.rule, portRuleFrom(m.rule), speedBps, t)}
+                      </span>
+                    ))
+                  )}
+                </span>
+                <span className="ifrules-scope">
+                  {r.inForce.map((m) => (
+                    <span key={m.rule.id} className={isOwnRule(m, nodeId, ifindex) ? 'own' : 'muted'}>
+                      {source(m)}
+                    </span>
+                  ))}
+                </span>
+                <span className="ifrules-actions">
+                  {canConfig && (
+                    <RowActions
+                      row={r}
+                      onEdit={(rule) => {
+                        leaveList();
+                        setEditing({ rule });
+                      }}
+                      onStart={(start) => {
+                        leaveList();
+                        setEditing({ start });
+                      }}
+                      onRevert={(rule) => {
+                        leaveList();
+                        setDeleting(rule);
+                      }}
+                      elsewhere={thresholdRulesHref({ tab: 'interface' })}
+                    />
+                  )}
+                </span>
+              </div>
+            ))}
+            {/* Rules on this port's other per-interface metrics (errors, discards): the port form
+                has no subject for them, and a rule that fires here must still be findable here. */}
+            {table.other.length > 0 && (
+              <section className="ifrules-section" data-kind="other">
+                <h4 className="ifrules-head">{t('interfaces.rules.other')}</h4>
+                {table.other.map((m) => (
+                  <div className="ifrules-grid ifrules-row" key={m.rule.id}>
+                    <span className="mono ifrules-subject">{m.rule.metric}</span>
+                    <span className="ifrules-bound">{boundSentence(m.rule, null, speedBps, t)}</span>
+                    <span className="ifrules-scope muted">{source(m)}</span>
+                    <span />
+                  </div>
                 ))}
-              </section>
-            )}
-            {inherited.length > 0 && (
-              <section className="ifrules-section" data-kind="inherited">
-                <h4 className="ifrules-head">{t('interfaces.rules.inherited')}</h4>
-                {inherited.map((row) => (
-                  <RuleRow key={row.rule.id} row={row} speedBps={speedBps} editable={false} />
-                ))}
-                {/* Not a footnote: without it the read-only rows read as broken rather than as
-                    deliberately edited elsewhere (ADR-055 R6). */}
-                <p className="form-status">
-                  <Trans
-                    t={t}
-                    i18nKey="interfaces.rules.inheritedHint"
-                    components={{ lnk: <ScreenLink to="/alerts/rules" /> }}
-                  />
-                </p>
               </section>
             )}
           </>
@@ -246,67 +269,57 @@ export function InterfaceRulesModal({
   );
 }
 
-/** One rule, in the words of the port dialog where it can be — by its metric name where it cannot. */
-function RuleRow({
+/** The one action a row offers, by what is in force there. */
+function RowActions({
   row,
-  speedBps,
-  editable,
   onEdit,
-  onDelete,
+  onStart,
+  onRevert,
+  elsewhere,
 }: {
-  row: MatchingThreshold;
-  speedBps: number | null;
-  editable: boolean;
-  onEdit?: () => void;
-  onDelete?: () => void;
+  row: PortSubjectRow;
+  onEdit: (rule: StoredThreshold) => void;
+  onStart: (start: PortRuleForm) => void;
+  onRevert: (rule: StoredThreshold) => void;
+  elsewhere: string;
 }) {
   const { t } = useTranslation('nodes');
-  const { t: ta } = useTranslation('alertsConfig');
-  const form = portRuleFrom(row.rule);
-
-  return (
-    <div className={`ifrules-row${row.in_force ? '' : ' overridden'}`}>
-      {/* The dot is the at-a-glance mark; the losing row also says so in words (ADR-076
-          decision 11), because a hollow dot with a hover title was all it had, and a title cannot
-          be read on touch (ADR-055 R4) — the row read as in force. */}
-      <span
-        className="ifrules-dot"
-        aria-label={
-          row.in_force ? t('interfaces.rules.inForce') : t('interfaces.rules.overridden')
-        }
-      />
-      <div className="ifrules-what">
-        <span className="ifrules-subject">
-          {form ? (
-            t(`interfaces.rules.subjects.${form.subject}`)
-          ) : (
-            // No subject says this rule, so it is shown as what it is. Rounding it into the
-            // nearest subject would retarget it the next time anyone pressed Save.
-            <span className="mono">{row.rule.metric}</span>
+  const mine = row.own[0]?.rule;
+  switch (row.action.kind) {
+    case 'edit':
+      return (
+        <>
+          {mine && (
+            <Button variant="outline" onClick={() => onEdit(mine)}>
+              {t('common:actions.edit')}
+            </Button>
           )}
-          {!row.in_force && (
-            <span className="ifrules-overridden">
-              <Badge>{t('interfaces.rules.overridden')}</Badge>
-            </span>
+          {mine && (
+            <Button variant="outline" onClick={() => onRevert(mine)}>
+              {t('interfaces.rules.revert')}
+            </Button>
           )}
-        </span>
-        <span className="ifrules-bound">{boundSentence(row.rule, form, speedBps, t)}</span>
-      </div>
-      <span className="ifrules-scope">{ta(`thresholds.scopeLevel.${row.rule.scope_level}`)}</span>
-      {editable && onEdit && onDelete ? (
-        <span className="ifrules-actions">
-          <IconButton title={t('common:actions.edit')} onClick={onEdit}>
-            <EditIcon />
-          </IconButton>
-          <IconButton title={t('common:actions.delete')} onClick={onDelete} danger>
-            <TrashIcon />
-          </IconButton>
-        </span>
-      ) : (
-        <span className="ifrules-actions" />
-      )}
-    </div>
-  );
+        </>
+      );
+    case 'override': {
+      const start = row.action.form;
+      return (
+        <Button variant="outline" onClick={() => onStart(start)}>
+          {t('interfaces.rules.override')}
+        </Button>
+      );
+    }
+    case 'set': {
+      const start = row.action.form;
+      return (
+        <Button variant="outline" onClick={() => onStart(start)}>
+          {t('interfaces.rules.set')}
+        </Button>
+      );
+    }
+    case 'elsewhere':
+      return <Link to={elsewhere}>{t('interfaces.rules.editElsewhere')}</Link>;
+  }
 }
 
 /** The bound, said the way the subject means it. */
@@ -318,6 +331,7 @@ function PortRuleFormView({
   portLabel,
   speedBps,
   rule,
+  start,
   onCancel,
   onSaved,
 }: {
@@ -326,12 +340,14 @@ function PortRuleFormView({
   portLabel: string;
   speedBps: number | null;
   rule?: StoredThreshold;
+  /** A new rule's opening values — an inherited rule's bounds for an override (ADR-230). */
+  start?: PortRuleForm;
   onCancel: () => void;
   onSaved: () => void;
 }) {
   const { t } = useTranslation('nodes');
   const [form, setForm] = useState<PortRuleForm>(
-    () => (rule && portRuleFrom(rule)) || newPortRuleForm(),
+    () => start ?? ((rule && portRuleFrom(rule)) || newPortRuleForm()),
   );
   const save = useSubmit({ errorFallback: t('interfaces.rules.saveFailed'), onDone: onSaved });
   const set = <K extends keyof PortRuleForm>(key: K, value: PortRuleForm[K]) =>

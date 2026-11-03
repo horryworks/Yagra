@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* The port's alert-rule dialog (ADR-076 Inc.5). Lives inside the shared `Modal` chrome, so this
+/* The port's thresholds dialog (ADR-076 Inc.5, redrawn by ADR-230). Lives inside the shared `Modal` chrome, so this
    file styles only the list rows and the form's inline groups — never the overlay, radius, header
    or footer, which are the Modals consistency group's. */
 
@@ -7,15 +7,6 @@
   margin: 0 0 var(--space-3);
   color: var(--text-secondary);
   font-size: var(--font-sm);
-}
-
-.ifrules-empty {
-  margin: var(--space-4) 0;
-  color: var(--text-secondary);
-}
-
-.ifrules-section + .ifrules-section {
-  margin-top: var(--space-4);
 }
 
 .ifrules-head {
@@ -27,73 +18,69 @@
   color: var(--text-tertiary);
 }
 
-.ifrules-row {
+.ifrules-section {
+  margin-top: var(--space-4);
+}
+
+/* One row per subject (ADR-230 decision 7): what it watches, the value in force, where it was
+   decided, and the one action. The header row shares the grid so the columns line up. */
+.ifrules-grid {
   display: grid;
-  grid-template-columns: 10px 1fr auto auto;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.6fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) 0;
   border-bottom: 1px solid var(--border-color);
 }
 
-.ifrules-row:last-of-type {
+.ifrules-headrow {
+  padding-top: 0;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.ifrules-row:last-child {
   border-bottom: none;
-}
-
-/* Filled = this rule decides; hollow = a narrower rule on the same metric wins. Never colour
-   alone: the losing row carries a visible "Overridden" badge, and the dot an aria-label
-   (ui-conventions, colour-blind safety). */
-.ifrules-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--status-ok);
-  border: 1px solid var(--status-ok);
-}
-
-.ifrules-row.overridden .ifrules-dot {
-  background: transparent;
-  border-color: var(--text-tertiary);
-}
-
-.ifrules-row.overridden .ifrules-what {
-  color: var(--text-secondary);
-}
-
-.ifrules-what {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
 }
 
 .ifrules-subject {
   font-weight: 500;
 }
-.ifrules-overridden {
-  margin-left: var(--space-2);
-  font-weight: normal;
-}
 
-.ifrules-bound {
+.ifrules-bound,
+.ifrules-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
-.ifrules-scope {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  white-space: nowrap;
+.ifrules-scope .own {
+  color: var(--accent-color);
 }
 
-/* Reserved even when empty, so the inherited rows' text does not sit at a different width from
-   the editable ones' — a ragged right edge reads as a rendering fault rather than as "no actions
-   here". */
 .ifrules-actions {
   display: flex;
   gap: var(--space-1);
-  min-width: 56px;
   justify-content: flex-end;
+  white-space: nowrap;
+}
+
+/* The way to the node's own rules, at the start of the footer. */
+.ifrules-nodewide {
+  margin-right: auto;
+  font-size: var(--font-sm);
+}
+
+/* A phone has no room for four columns: the action drops under the row. */
+html[data-viewport='mobile'] .ifrules-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+html[data-viewport='mobile'] .ifrules-headrow {
+  display: none;
 }
 
 .ifrules-basis {

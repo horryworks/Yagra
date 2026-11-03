@@ -27,6 +27,7 @@ describe('nodeHeaderActions', () => {
     expect(got.more).toEqual([
       'openDetail',
       'map',
+      'thresholds',
       'pin',
       'upstream',
       'move',

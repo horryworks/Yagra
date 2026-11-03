@@ -43,7 +43,8 @@ import {
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
 import { useLoad } from '../lib/useLoad';
-import { collectedMetrics, profileRuleGap } from '../lib/profileRuleGap';
+import { collectedMetrics, profileRuleCount, profileRuleGap } from '../lib/profileRuleGap';
+import { thresholdRulesHref } from './thresholdQuery';
 import { LoadGate } from '../components/ui/LoadGate';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -578,6 +579,7 @@ function ProfileTemplates({
       .finally(() => setBusy(false));
   };
 
+  const ruleCount = profileRuleCount(rules, profileId, rulesTruncated);
   if (templates.length === 0) {
     return <p className="muted">{t('profiles.templates.empty')}</p>;
   }
@@ -606,7 +608,10 @@ function ProfileTemplates({
           </p>
           <p className="profile-gap-metrics">{gap.missing.join(' · ')}</p>
           <p className="profile-gap-hint">{t('profiles.templates.gapHint')}</p>
-          <Link className="profile-gap-link" to="/alerts/rules">
+          <Link
+            className="profile-gap-link"
+            to={thresholdRulesHref({ tab: 'profile', target: profileId })}
+          >
             {t('profiles.templates.gapLink')}
           </Link>
         </div>
@@ -619,6 +624,15 @@ function ProfileTemplates({
       {gap?.kind === 'unchecked' && (
         <p className="profile-gap">{t('profiles.templates.unchecked')}</p>
       )}
+      {/* The rules written on this profile live on Alerts ▸ Threshold rules (ADR-230 decision 5). */}
+      <Link
+        className="profile-rules-link"
+        to={thresholdRulesHref({ tab: 'profile', target: profileId })}
+      >
+        {ruleCount === null
+          ? t('nav:alerts.rules')
+          : t('profiles.templates.rules', { count: ruleCount })}
+      </Link>
     </div>
   );
 }

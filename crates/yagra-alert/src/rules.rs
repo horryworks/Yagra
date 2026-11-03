@@ -722,6 +722,27 @@ pub fn matching_rules(
     flag_in_force(matched, meta)
 }
 
+/// The rules on one port's **per-interface** metrics that reach it, each flagged with whether it
+/// is in force there (ADR-230 decision 7) — [`matching_rules`] for a port, minus node-wide metrics.
+///
+/// A CPU or a liveness rule "reaches" a port only in the sense that it reaches the port's node; it
+/// cannot be changed for one port, so a port's list that carried it was a list of things the
+/// operator could do nothing about there. The node's own list is [`node_matching_rules`].
+pub fn interface_matching_rules(
+    rules: &[StoredThreshold],
+    node: NodeId,
+    ifindex: IfIndex,
+    meta: Option<&NodeMeta>,
+    per_interface: &BTreeSet<String>,
+) -> Vec<(StoredThreshold, bool)> {
+    let on_ports: Vec<StoredThreshold> = rules
+        .iter()
+        .filter(|t| per_interface.contains(&t.rule.metric))
+        .cloned()
+        .collect();
+    matching_rules(&on_ports, node, Some(ifindex), meta)
+}
+
 /// The rules on a node's **node-wide** metrics that reach it, each flagged with whether it is in
 /// force there (ADR-229 decision 5) — the node's half of [`matching_rules`].
 ///
@@ -2225,6 +2246,38 @@ mod override_tests {
             "port metrics belong to the Interfaces tab"
         );
         assert_eq!(got.len(), 5);
+    }
+
+    /// ADR-230: a port's list holds only per-interface metrics; a node-wide rule that reaches the
+    /// node is not one of them, and a port rule still beats the broad one.
+    #[test]
+    fn a_ports_rules_leave_out_node_wide_metrics() {
+        let node = NodeId::new();
+        let util = "if_in_util_pct";
+        let cpu = rule(CPU, ScopeLevel::Global, &[], None);
+        let broad = rule(util, ScopeLevel::Global, &[], None);
+        let port = rule(
+            util,
+            ScopeLevel::Interface,
+            &[&yagra_common::interface_scope_id(node.as_uuid(), 7)],
+            None,
+        );
+        let per_interface: BTreeSet<String> = [util.to_owned()].into_iter().collect();
+        let got = interface_matching_rules(
+            &[cpu.clone(), broad.clone(), port.clone()],
+            node,
+            IfIndex(7),
+            None,
+            &per_interface,
+        );
+        let by_id: HashMap<Uuid, bool> = got.iter().map(|(t, on)| (t.id, *on)).collect();
+        assert_eq!(
+            by_id.get(&cpu.id),
+            None,
+            "a node-wide metric is not a port's"
+        );
+        assert_eq!(by_id.get(&broad.id), Some(&false));
+        assert_eq!(by_id.get(&port.id), Some(&true));
     }
 
     #[test]

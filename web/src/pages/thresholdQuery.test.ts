@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Unit tests for the Thresholds filter state (no DOM — Vitest node env).
+// Unit tests for the Threshold rules view and filter state (no DOM — Vitest node env).
 
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
@@ -11,42 +11,111 @@ import {
   writeFilterParams,
 } from '../lib/columnFilter';
 import { encodeCondition } from '../lib/filterCondition';
-import { DEFAULT_SCOPE_LEVELS, queryFor, thresholdFilters } from './thresholdQuery';
+import {
+  SCOPE_TABS,
+  queryFor,
+  ruleViewFrom,
+  startFormFor,
+  targetKind,
+  thresholdFilters,
+  thresholdRulesHref,
+  writeRuleView,
+  type RuleView,
+} from './thresholdQuery';
 import { SCOPE_LEVELS } from '../types/api';
 
 const t = ((k: string) => k) as unknown as TFunction;
 const COLUMNS = specColumns(thresholdFilters(t));
 /** The state the screen opens with — derived from the specs, exactly as the page derives it. */
 const DEFAULTS = defaultFilters(COLUMNS);
-const query = (over: Record<string, string> = {}) => queryFor(COLUMNS, { ...DEFAULTS, ...over });
+const ALL: RuleView = { tab: 'all', target: null, check: null };
+const ID = '0e7a3b52-6a0f-4f4f-9d0e-2b7c1a9d4e11';
+const query = (over: Record<string, string> = {}, view: RuleView = ALL) =>
+  queryFor(COLUMNS, { ...DEFAULTS, ...over }, view);
 /** What the page holds after the router hands it a query string. */
 const read = (qs: string) => readFilterParams(COLUMNS, new URLSearchParams(qs));
+const view = (qs: string) => ruleViewFrom(new URLSearchParams(qs));
 
-describe('queryFor', () => {
-  it('asks for every scope level except interface when nothing is filtered', () => {
-    // The screen's default narrows (ADR-076 decision 12): port rules are per (node × port × metric),
-    // so one 48-port switch would contribute 96 rows to a list capped at 500 and bury the rules
-    // an operator came to read. The narrowing is a *request*, not a browser-side filter, or the
-    // cap would still be spent on the rows being hidden.
-    expect(query()).toEqual({
-      q: undefined,
-      scope_level: DEFAULT_SCOPE_LEVELS.join(','),
-      direction: undefined,
-    });
-    expect(DEFAULT_SCOPE_LEVELS).not.toContain('interface');
-    // Derived, not hand-listed: a seventh level joins the default view rather than being silently
-    // excluded by a list nobody revisits.
-    expect(DEFAULT_SCOPE_LEVELS).toHaveLength(SCOPE_LEVELS.length - 1);
+describe('the level tabs', () => {
+  it('offer every level, after All', () => {
+    // Derived from SCOPE_LEVELS, so a new level gets a tab rather than being left out.
+    expect(SCOPE_TABS).toEqual(['all', ...SCOPE_LEVELS]);
   });
 
-  it('sends nothing for a level column the operator opened up', () => {
-    // Clearing the selection means "every level", which is how the hidden port rules are reached.
-    expect(query({ scope_level: '' }).scope_level).toBeUndefined();
+  it('give a target picker to exactly the levels that name things', () => {
+    expect(SCOPE_TABS.filter((tab) => targetKind(tab))).toEqual(['profile', 'group_id', 'node']);
+  });
+});
+
+describe('the view in the URL', () => {
+  it('opens All for an empty, unknown or multi-valued level', () => {
+    for (const qs of ['', 'scope_level=galaxy', 'scope_level=global,profile']) {
+      expect(view(qs), qs).toEqual(ALL);
+    }
+  });
+
+  it('keeps a target only on a tab that names that kind of thing, and only a uuid', () => {
+    expect(view(`scope_level=profile&scope_id=${ID}`)).toEqual({ ...ALL, tab: 'profile', target: ID });
+    expect(view(`scope_level=global&scope_id=${ID}`).target).toBeNull();
+    expect(view('scope_level=node&scope_id=sw-01').target).toBeNull();
+  });
+
+  it('reads a node to check, and drops one that is not an id', () => {
+    expect(view(`check=${ID}`).check).toBe(ID);
+    expect(view('check=sw-01').check).toBeNull();
+  });
+
+  it('round-trips, and leaves no key for what is not set', () => {
+    const v: RuleView = { tab: 'group_id', target: ID, check: null };
+    const params = new URLSearchParams('q=cpu');
+    writeRuleView(params, v);
+    expect(ruleViewFrom(params)).toEqual(v);
+    writeRuleView(params, ALL);
+    expect(params.toString()).toBe('q=cpu');
+  });
+
+  it('builds the links other screens use', () => {
+    expect(thresholdRulesHref({})).toBe('/alerts/rules');
+    expect(thresholdRulesHref({ tab: 'profile', target: ID })).toBe(
+      `/alerts/rules?scope_level=profile&scope_id=${ID}`,
+    );
+    expect(thresholdRulesHref({ check: ID })).toBe(`/alerts/rules?check=${ID}`);
+  });
+});
+
+describe('the add dialog from a tab', () => {
+  it('opens at the tab level with the chosen target picked', () => {
+    const f = startFormFor({ tab: 'node', target: ID, check: null });
+    expect(f?.level).toBe('node');
+    expect(f?.scopeIds).toEqual([ID]);
+    expect(startFormFor({ tab: 'global', target: null, check: null })?.scopeIds).toEqual([]);
+  });
+
+  it('leaves the dialog to its own default on All', () => {
+    expect(startFormFor(ALL)).toBeUndefined();
+  });
+});
+
+describe('queryFor', () => {
+  it('asks for every level, ports included, when nothing is chosen', () => {
+    expect(query()).toEqual({
+      q: undefined,
+      scope_level: undefined,
+      scope_id: undefined,
+      direction: undefined,
+    });
+  });
+
+  it('sends the tab and its target', () => {
+    expect(query({}, { tab: 'profile', target: ID, check: null })).toMatchObject({
+      scope_level: 'profile',
+      scope_id: ID,
+    });
   });
 
   it('never sends an empty string, which the backend would reject', () => {
-    // `buildUrl` drops undefined but keeps '', so `scope_level=` would reach the API as an unknown
-    // level and 400 — a filter nobody set turning into an error.
+    // `buildUrl` drops undefined but keeps '', so `direction=` would reach the API as an unknown
+    // value and 400 — a filter nobody set turning into an error.
     for (const v of Object.values(query({ q: '   ' }))) expect(v === '').toBe(false);
     expect(query({ q: '   ' }).q).toBeUndefined();
   });
@@ -55,10 +124,9 @@ describe('queryFor', () => {
     expect(
       query({
         q: encodeCondition({ term: 'cpu', mode: 'contains', not: false }),
-        scope_level: 'node',
         direction: 'below',
       }),
-    ).toEqual({ q: 'cpu', scope_level: 'node', direction: 'below' });
+    ).toMatchObject({ q: 'cpu', direction: 'below' });
   });
 
   it('trims the search term', () => {
@@ -66,23 +134,7 @@ describe('queryFor', () => {
   });
 
   it('drops a token the column does not offer instead of forwarding it', () => {
-    // 🚨 The trap decision AA had to close. The URL is read without validation on purpose — a
-    // stale bookmark must open the default view rather than render a control showing a value it
-    // does not offer — so `?scope_level=galaxy` reaching the API is what `normalizeSets` prevents.
-    expect(query({ scope_level: 'galaxy', direction: 'sideways' })).toEqual({
-      q: undefined,
-      scope_level: undefined,
-      direction: undefined,
-    });
-    expect(query({ scope_level: 'galaxy,node' }).scope_level).toBe('node');
-  });
-
-  it('reads a set the operator typed in any order back in the spec order', () => {
-    // The joined value is an effect dependency and a shared link: both need the same selection to
-    // produce the same string however it was reached.
-    expect(query({ scope_level: 'node,profile' }).scope_level).toBe(
-      query({ scope_level: 'profile,node' }).scope_level,
-    );
+    expect(query({ direction: 'sideways' }).direction).toBeUndefined();
   });
 });
 
@@ -98,9 +150,6 @@ describe('the empty state discriminator', () => {
 });
 
 describe('the URL codec', () => {
-  // Now the shared one (`readFilterParams`/`writeFilterParams`), reached through `useFilterParams`.
-  // The keys did not move: a column key **is** its query key, and these three were already named
-  // after the query parameters this screen shipped with, so older bookmarks still resolve.
   it('reads an empty query as the default view', () => {
     expect(read('')).toEqual(DEFAULTS);
   });
@@ -108,7 +157,6 @@ describe('the URL codec', () => {
   it('round-trips every field', () => {
     const all = {
       q: encodeCondition({ term: 'cpu_util', mode: 'contains', not: false }),
-      scope_level: 'group',
       direction: 'above',
     };
     const params = new URLSearchParams();
@@ -116,24 +164,10 @@ describe('the URL codec', () => {
     expect(read(params.toString())).toEqual({ ...DEFAULTS, ...all });
   });
 
-  it('leaves no query string at all for the default view', () => {
-    const params = new URLSearchParams('q=cpu&scope_level=node&direction=below');
+  it('leaves the view keys alone', () => {
+    // The tabs and the columns share one query string; writing one must not erase the other.
+    const params = new URLSearchParams(`scope_level=node&scope_id=${ID}&q=cpu`);
     writeFilterParams(COLUMNS, params, DEFAULTS);
-    expect(params.toString()).toBe('');
-  });
-
-  it('keeps an unknown value out of the request rather than out of the URL', () => {
-    // The division of labour that changed with Inc.10: reading no longer drops the token (the
-    // control shows nothing selected), and `queryFor` is what stops it reaching the API. Both
-    // spellings end at the same place — the default view — and only one of them can also serve a
-    // bookmark whose tokens this build has never heard of.
-    expect(read('scope_level=galaxy').scope_level).toBe('galaxy');
-    expect(queryFor(COLUMNS, read('scope_level=galaxy')).scope_level).toBeUndefined();
-  });
-
-  it('leaves query keys it does not own alone', () => {
-    const params = new URLSearchParams('tab=rules&q=cpu');
-    writeFilterParams(COLUMNS, params, DEFAULTS);
-    expect(params.toString()).toBe('tab=rules');
+    expect(params.toString()).toBe(`scope_level=node&scope_id=${ID}`);
   });
 });

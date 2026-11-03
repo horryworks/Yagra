@@ -354,6 +354,11 @@ export function boundText(metric: string, value: number): string {
   return spec.unit ? String(value) + ' ' + spec.unit : String(value);
 }
 
+/** Which subject a metric belongs to, or `null` for one no port subject covers (ADR-230). */
+export function portSubjectOf(metric: string): PortRuleSubject | null {
+  return METRIC_TO_SHAPE[metric]?.subject ?? null;
+}
+
 /** Every metric this form can express — what the port dialog can round-trip. */
 export function portRuleMetrics(): string[] {
   return Object.keys(METRIC_TO_SHAPE);

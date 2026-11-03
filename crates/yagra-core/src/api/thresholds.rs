@@ -111,9 +111,11 @@ pub(super) struct ThresholdQuery {
     limit: Option<i64>,
     /// Case-insensitive substring of the metric name.
     q: Option<String>,
-    /// Comma-separated scope levels (`global` | `profile` | `group` | `group_id` | `node` |
-    /// `interface`); empty or absent means every level.
+    /// Comma-separated scope levels (`global` | `profile` | `group_id` | `node` | `interface`);
+    /// empty or absent means every level.
     scope_level: Option<String>,
+    /// Only rules whose targets include this profile, folder or node id.
+    scope_id: Option<Uuid>,
     /// Comma-separated directions (`above` | `below`); empty or absent means both.
     direction: Option<String>,
     /// `true` to fill `overridden`. Off by default: the count walks every node.
@@ -154,6 +156,7 @@ async fn list_thresholds(
         &super::util::token_list(yagra_common::Direction::ALL.iter().map(|d| d.as_str())),
         yagra_common::Direction::from_token,
     )?;
+    let scope_id = q.scope_id.map(|id| id.to_string());
     Ok(Json(
         threshold_page(
             &admin,
@@ -163,6 +166,7 @@ async fn list_thresholds(
                 metric: metric.as_deref(),
                 level: &levels,
                 direction: &directions,
+                scope_id: scope_id.as_deref(),
             },
             q.overridden.unwrap_or(false),
         )
@@ -354,7 +358,7 @@ pub(crate) async fn interface_thresholds(
         })?;
     Ok(st
         .alerts
-        .matching_rules(&candidates, NodeId::from(node_id), Some(IfIndex(ifindex)))
+        .interface_matching_rules(&candidates, NodeId::from(node_id), IfIndex(ifindex))
         .into_iter()
         .map(|(rule, in_force)| MatchingThreshold { rule, in_force })
         .collect())
@@ -1249,6 +1253,50 @@ mod tests {
             yagra_base::pgtest::rows(&pool, "thresholds").await,
             before + 1
         );
+    }
+
+    /// ADR-230 decision 3: `scope_id` keeps the rules whose targets include that id, and only
+    /// those — what a profile's or a folder's "Threshold rules" link opens.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn scope_id_keeps_only_the_rules_naming_that_target(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let mine = yagra_base::pgtest::node(&pool, "mine", 6, None).await;
+        let other = yagra_base::pgtest::node(&pool, "other", 6, None).await;
+        for (node, metric) in [
+            (mine, "icmp_rtt_ms"),
+            (mine, "icmp_loss_pct"),
+            (other, "icmp_rtt_ms"),
+        ] {
+            let (status, body) = send(
+                &st,
+                "POST",
+                "/api/v1/thresholds",
+                &tok,
+                Some(serde_json::json!({
+                    "scope_level": "node", "scope_ids": [node.to_string()],
+                    "metric": metric, "direction": "above", "warning": 1.0,
+                })),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        }
+        let (status, page) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/thresholds?scope_id={mine}"),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(page["total"], 2, "{page}");
+        let items = page["items"].as_array().unwrap();
+        assert!(items
+            .iter()
+            .all(|r| r["scope_ids"] == serde_json::json!([mine.to_string()])));
     }
 
     /// ADR-200 Inc.33: only a request that asks pays for the override count. The screen's two

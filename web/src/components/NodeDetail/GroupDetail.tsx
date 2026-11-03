@@ -8,6 +8,10 @@
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import { api } from '../../services/api';
+import { useLoad } from '../../lib/useLoad';
+import { thresholdRulesHref } from '../../pages/thresholdQuery';
 import { addressText } from '../../lib/nodeAddress';
 import { StatusDot } from '../ui/StatusDot';
 import { Badge } from '../ui/Badge';
@@ -85,6 +89,18 @@ export function GroupDetail({
   onSortChildren,
 }: Props) {
   const { t } = useTranslation('nodes');
+  // How many rules name this folder. Asked only of a caller who may read the ruleset; the link is
+  // drawn for them alone (ADR-056).
+  const folderRules = useLoad(
+    () =>
+      canEdit
+        ? api
+            .listThresholds({ scope_level: 'group_id', scope_id: group.id, limit: 1 })
+            .then((p): number | null => p.total)
+        : Promise.resolve<number | null>(null),
+    [canEdit, group.id],
+    { initial: null as number | null, onConfigChange: true },
+  );
   // 🚨 **The rollup comes from the server counts, exactly as the tree row's does** (ADR-125). It
   // used to be `tallyStates(descendantNodes(...))` over the members that happened to be LOADED,
   // while the row beside it read `subtreeTallyMap(groupCounts)` — so the same folder could show two
@@ -192,6 +208,16 @@ export function GroupDetail({
                       )}
                     />
                   )}
+                  {/* The rules written on this folder live on Alerts ▸ Threshold rules (ADR-230
+                      decision 5); the count is the server's, so it is not a capped prefix. */}
+                  <Link
+                    className="btn btn-outline"
+                    to={thresholdRulesHref({ tab: 'group_id', target: group.id })}
+                  >
+                    {folderRules.data == null
+                      ? t('nav:alerts.rules')
+                      : t('groupDetail.thresholdRules', { count: folderRules.data })}
+                  </Link>
                   <Button variant="primary" onClick={onAddNode}>
                     {t('add.node')}
                   </Button>

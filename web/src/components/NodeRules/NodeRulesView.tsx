@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Node detail ▸ Alert rules (ADR-229): the threshold rules on this node's node-wide metrics, the
-// one in force for each, and where it was decided. Per-port rules stay on the Interfaces tab.
+// Alerts ▸ Threshold rules ▸ Check a node (ADR-230 decision 4; ADR-229 decision 4 drew it as a
+// node-detail tab): the threshold rules on one node's node-wide metrics, the one in force for each,
+// and where it was decided. Per-port rules are in the port's own dialog on the Interfaces tab.
 //
 // The grouping and the "which rule does the button edit" answer live in `nodeRules.ts`, because
 // Vitest never executes a `.tsx` (testing.md).
@@ -9,12 +10,11 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { useCan } from '../../store';
-import type { NodeDetail, StoredThreshold } from '../../types/api';
+import type { StoredThreshold } from '../../types/api';
 import { useLoad } from '../../lib/useLoad';
 import { LoadGate } from '../ui/LoadGate';
 import { DataTable, type Column } from '../ui/DataTable';
 import { EmptyState } from '../ui/EmptyState';
-import { ScreenLink } from '../ui/ScreenLink';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { useEntityNames } from '../ui/entityNames';
@@ -22,19 +22,19 @@ import { RuleBounds } from '../ThresholdModal/RuleBounds';
 import { ThresholdModal } from '../ThresholdModal/ThresholdModal';
 import type { ThresholdForm } from '../../pages/thresholdRequest';
 import { nodeOverrideForm, nodeRuleRows, ownRule, type NodeRuleRow } from './nodeRules';
-import './RulesTab.css';
+import './NodeRulesView.css';
 
 /** What the row's button opened: the node's own rule to edit, or a new one for this node alone. */
 type Editing = { mode: 'edit'; rule: StoredThreshold } | { mode: 'add'; start: ThresholdForm };
 
-export function RulesTab({ node }: { node: NodeDetail }) {
+export function NodeRulesView({ nodeId }: { nodeId: string }) {
   const { t } = useTranslation('nodes');
   const { t: tc } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
   const { scopeName } = useEntityNames();
   const [openMetric, setOpenMetric] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
-  const load = useLoad(() => api.listNodeThresholds(node.id), [node.id], {
+  const load = useLoad(() => api.listNodeThresholds(nodeId), [nodeId], {
     initial: [],
     onConfigChange: true,
   });
@@ -42,7 +42,7 @@ export function RulesTab({ node }: { node: NodeDetail }) {
 
   /** Where one rule was decided: its level and what it names, or "This node" for its own. */
   const decidedAt = (r: StoredThreshold) => {
-    if (r.scope_level === 'node' && r.scope_ids.includes(node.id)) return t('rules.thisNode');
+    if (r.scope_level === 'node' && r.scope_ids.includes(nodeId)) return t('rules.thisNode');
     const level = tc(`thresholds.scopeLevel.${r.scope_level}`);
     const names = r.scope_ids.map((id) => scopeName(r.scope_level, id)).join(', ');
     return names ? `${level}: ${names}` : level;
@@ -98,7 +98,7 @@ export function RulesTab({ node }: { node: NodeDetail }) {
       align: 'right',
       render: (row) => {
         if (!canConfig) return null;
-        const own = ownRule(row, node.id);
+        const own = ownRule(row, nodeId);
         return (
           <Button
             type="button"
@@ -108,7 +108,7 @@ export function RulesTab({ node }: { node: NodeDetail }) {
               setEditing(
                 own
                   ? { mode: 'edit', rule: own }
-                  : { mode: 'add', start: nodeOverrideForm(row, node.id) },
+                  : { mode: 'add', start: nodeOverrideForm(row, nodeId) },
               );
             }}
           >
@@ -123,18 +123,13 @@ export function RulesTab({ node }: { node: NodeDetail }) {
     <LoadGate load={load} permission="manage_config">
       <div className="nd-rules-table">
         <DataTable
-          tableId="node.alertRules"
+          tableId="alerts.nodeRules"
           autoRowHeight
           rows={rows}
           columns={columns}
           rowKey={(row) => row.metric}
           loading={load.loading}
-          empty={
-            <EmptyState
-              text={t('rules.empty')}
-              action={<ScreenLink to="/alerts/rules" />}
-            />
-          }
+          empty={<EmptyState text={t('rules.empty')} />}
           onRowClick={(row) =>
             row.overridden.length > 0 &&
             setOpenMetric((cur) => (cur === row.metric ? null : row.metric))

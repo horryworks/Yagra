@@ -369,8 +369,10 @@ impl YagraMcp {
 
     #[tool(
         description = "Which threshold rules govern one interface - or, with `ifindex` left \
-                       out, one node's node-wide metrics - and which of them is in force. A port \
-                       is reached by rules at five scope levels - all nodes, device profile, \
+                       out, one node's node-wide metrics - and which of them is in force. With \
+                       `ifindex`, only per-interface metrics are returned (traffic, link state, \
+                       optical levels, errors); a CPU or reachability rule is the node's, asked \
+                       for without `ifindex`. A port is reached by rules at five scope levels - all nodes, device profile, \
                        folder group, node, and the port itself - and the narrow ones are usually not where the interesting rule lives, so listing \
                        only the port's own rules would report nothing about a port that is \
                        alerting. Each entry carries the rule (its `scope_level`, `scope_id`, \

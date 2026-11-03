@@ -358,9 +358,12 @@ pub(super) struct ConfigParams {
     /// Case-insensitive substring: over metric name / OID / vendor (kind=mib_catalog), or over
     /// the metric name alone (kind=thresholds).
     search: Option<String>,
-    /// Comma-separated scope levels to keep (kind=thresholds): `global`, `profile`, `group`,
-    /// `group_id`, `node`, `interface`. Absent or empty means every level.
+    /// Comma-separated scope levels to keep (kind=thresholds): `global`, `profile`, `group_id`,
+    /// `node`, `interface`. Absent or empty means every level.
     scope_level: Option<String>,
+    /// Keep only the rules whose targets include this profile, folder or node id
+    /// (kind=thresholds).
+    scope_id: Option<Uuid>,
     /// Comma-separated directions to keep (kind=thresholds): `above`, `below`. Absent or empty
     /// means both. A rule bounding **both** sides matches either value, so asking for `below`
     /// returns every rule that can fire as a value drops — including band rules whose reported
@@ -380,6 +383,7 @@ pub(super) struct ThresholdFilterOwned {
     metric: Option<String>,
     levels: Vec<yagra_common::ScopeLevel>,
     directions: Vec<yagra_common::Direction>,
+    scope_id: Option<String>,
 }
 
 impl ThresholdFilterOwned {
@@ -388,6 +392,7 @@ impl ThresholdFilterOwned {
             metric: self.metric.as_deref(),
             level: &self.levels,
             direction: &self.directions,
+            scope_id: self.scope_id.as_deref(),
         }
     }
 }
@@ -427,6 +432,7 @@ pub(super) fn threshold_filter_of(p: &ConfigParams) -> Result<ThresholdFilterOwn
             &crate::api::util::token_list(yagra_common::Direction::ALL.iter().map(|d| d.as_str())),
             yagra_common::Direction::from_token,
         )?,
+        scope_id: p.scope_id.map(|id| id.to_string()),
     })
 }
 
@@ -866,7 +872,7 @@ impl YagraMcp {
         description = "Read Yagra's own configuration — what it is set up to monitor, alert on, \
                        notify and forward, and how. `kind` is one of: **alerting/notification** — \
                        thresholds (the metric alert rules; `limit` 1–500, narrowed by `search` / \
-                       `scope_level` / `direction`), event_rules, event_sources, \
+                       `scope_level` / `direction` / `scope_id`), event_rules, event_sources, \
                        notification_channels, routing_rules, notification_default_route (the \
                        route set by the core's environment, which every alert is sent to whatever \
                        the routing rules say: whether it is configured and which kinds of channel \
@@ -1292,7 +1298,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared,
-            ["metric", "level", "direction"],
+            ["metric", "level", "direction", "scope_id"],
             "ThresholdFilter gained or lost a dimension — decide whether get_config should offer              it, then update this test and the tool's description"
         );
 
@@ -1314,6 +1320,7 @@ mod tests {
                 metric: Some("cpu".into()),
                 levels: vec![],
                 directions: vec![],
+                scope_id: None,
             },
             "search must trim and must move nothing but the metric term"
         );
@@ -1332,6 +1339,7 @@ mod tests {
                     yagra_common::ScopeLevel::Interface
                 ],
                 directions: vec![],
+                scope_id: None,
             },
             "scope_level must move nothing but the level set, in the order given"
         );
@@ -1347,8 +1355,21 @@ mod tests {
                 metric: None,
                 levels: vec![],
                 directions: vec![yagra_common::Direction::Below],
+                scope_id: None,
             },
             "direction must move nothing but the direction set"
+        );
+
+        let target = Uuid::from_u128(7);
+        assert_eq!(
+            threshold_filter_of(&ConfigParams {
+                scope_id: Some(target),
+                ..Default::default()
+            })
+            .expect("a target parses")
+            .scope_id,
+            Some(target.to_string()),
+            "scope_id must reach the filter as the text the column stores"
         );
     }
 
