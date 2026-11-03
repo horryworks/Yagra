@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Alert grouping on Notification delivery (ADR-236): each level of the switch keeps its name and
+// its count on one line. The shared control stretched its buttons to share the width, which broke
+// "Certain only · 3" across two lines.
+import { expect, test } from '../support/app';
+
+test('each grouping level reads on one line', async ({ page }) => {
+  await page.goto('/alerts/routing');
+  const group = page.getByRole('group', { name: 'Alert grouping' });
+  await expect(group).toBeVisible();
+  const buttons = group.getByRole('button');
+  await expect(buttons).toHaveCount(4);
+  // The mock reports a node down, so every label carries a count.
+  await expect(buttons.nth(1)).toContainText('·');
+  for (const b of await buttons.all()) {
+    const box = await b.evaluate((el) => {
+      const line = parseFloat(getComputedStyle(el).lineHeight) || 16;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return { lines: Math.round(range.getBoundingClientRect().height / line) };
+    });
+    expect(box.lines, await b.innerText()).toBe(1);
+  }
+});

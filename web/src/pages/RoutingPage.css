@@ -46,6 +46,20 @@
   margin-bottom: 12px;
 }
 
+/* Each level keeps its name and count on one line: the shared control stretches its buttons to
+   share the width, which broke "Certain only · 3" across two lines. The buttons size to their
+   text, and on a screen too narrow for all four the row wraps between buttons, never inside one. */
+.routing-grouping .ts-seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.routing-grouping .ts-seg button {
+  flex: none;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
 .routing-grouping .table-section-title {
   display: flex;
   align-items: center;
