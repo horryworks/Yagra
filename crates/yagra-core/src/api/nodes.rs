@@ -213,6 +213,10 @@ pub(crate) struct NodeSummary {
     /// Descriptive maker/model for the "name (addr) (vendor) (model)" display.
     vendor: Option<String>,
     model: Option<String>,
+    /// The device profile that decides what is collected; `null` on a node with none (ICMP only).
+    /// The folder list names it and marks the generic one (ADR-231) — read `fallback` on the
+    /// profile to tell which that is.
+    profile_id: Option<Uuid>,
     /// The group this node belongs to (for the inventory tree); `null` ⇒ ungrouped.
     group_id: Option<Uuid>,
     /// Manual order within the group (the tree sorts members by this, then by name).
@@ -570,6 +574,7 @@ pub(super) async fn build_node_summaries(
             address: n.address.to_string(),
             vendor: n.vendor,
             model: n.model,
+            profile_id: n.profile.map(|p| p.as_uuid()),
             group_id: n.group.map(|g| g.as_uuid()),
             pool: n.pool,
         })
@@ -3987,6 +3992,55 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("core-sw-01"), "{list}");
+    }
+
+    /// A list row names the node's device profile, so the folder list can show it and mark the
+    /// generic one (ADR-231), and says `null` for a node with none.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_list_row_carries_the_nodes_profile(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let repo = yagra_base::pgtest::repo(pool.clone());
+        let profile = repo
+            .create_profile("edge switch", "switch", None, None)
+            .await
+            .expect("profile");
+        for (name, address) in [("with-profile", "10.0.0.1"), ("without", "10.0.0.2")] {
+            let (status, body) = send(
+                &st,
+                "POST",
+                "/api/v1/nodes",
+                &tok,
+                Some(serde_json::json!({ "name": name, "address": address })),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::CREATED, "{body}");
+        }
+        sqlx::query("UPDATE nodes SET profile_id = $1 WHERE name = 'with-profile'")
+            .bind(profile)
+            .execute(&pool)
+            .await
+            .expect("bind the profile");
+        sqlx::query("UPDATE nodes SET profile_id = NULL WHERE name = 'without'")
+            .execute(&pool)
+            .await
+            .expect("clear the profile");
+
+        let (status, list) = send(&st, "GET", "/api/v1/nodes", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        let row = |name: &str| {
+            list["nodes"]
+                .as_array()
+                .expect("nodes")
+                .iter()
+                .find(|n| n["name"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {name} in {list}"))
+        };
+        assert_eq!(row("with-profile")["profile_id"], profile.to_string());
+        assert!(row("without")["profile_id"].is_null(), "{list}");
     }
 
     /// The Geo map's bubble cuts its ids into batches of `NODE_NAMES_BATCH`, a copy of

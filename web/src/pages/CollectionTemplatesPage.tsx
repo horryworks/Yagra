@@ -13,7 +13,6 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CollectionTemplate } from '../types/api';
-import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -127,10 +126,6 @@ export function CollectionTemplatesPage() {
 
   return (
     <div>
-      <PageHeader
-        title={t('nav:nodes.metricSets')}
-        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.metricSets') }]}
-      />
 
       <LoadGate load={sets} permission="manage_config">
         <ListToolbar

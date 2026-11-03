@@ -410,7 +410,7 @@ const ROUTES: readonly Route[] = [
     })),
   },
   {
-    path: '/nodes/classification-rules',
+    path: '/nodes/collection/rules',
     own: [],
     tables: [{ entries: ['classificationRuleFilters'], prefix: '' }],
   },
@@ -506,11 +506,11 @@ const ROUTES: readonly Route[] = [
   { path: '/settings/audit', own: [], tables: [{ entries: ['auditFilters'], prefix: '' }] },
   {
     // One table: the category bar and the column cells are one filter state.
-    path: '/nodes/profiles',
+    path: '/nodes/collection',
     own: [],
     tables: [{ entries: ['profileFilters', 'profileCategoryFilter'], prefix: '' }],
   },
-  { path: '/nodes/collection-templates', own: [], tables: [{ entries: ['metricSetFilters'], prefix: '' }] },
+  { path: '/nodes/collection/metric-sets', own: [], tables: [{ entries: ['metricSetFilters'], prefix: '' }] },
   {
     path: '/nodes/discovery',
     own: ['scan', 'group', 'tab'],

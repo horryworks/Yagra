@@ -23,9 +23,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_common::ClassificationRule;
 
-/// Name of the built-in catch-all profile a SNMP-speaking device falls back to when no rule
-/// matches (mirrors `yagra_common::builtin_profiles`).
-const GENERIC_SNMP_PROFILE: &str = "Generic SNMP";
+use yagra_common::GENERIC_SNMP_PROFILE;
 
 /// The profile a classification resolved to, plus any vendor/model the rule pins.
 #[derive(Debug, Clone, PartialEq, Eq)]

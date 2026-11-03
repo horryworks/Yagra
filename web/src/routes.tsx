@@ -38,6 +38,12 @@ import { SubnetOverlapsPage } from './pages/SubnetOverlapsPage';
 import { MissingPrefixesPage } from './pages/MissingPrefixesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { MibRepositoryPage } from './pages/MibRepositoryPage';
+import { CollectionSetupPage } from './pages/CollectionSetupPage';
+import {
+  COLLECTION_MOVED_FROM,
+  COLLECTION_TABS,
+  collectionTabPath,
+} from './pages/collectionSetup';
 import { DiscoveryPage } from './pages/DiscoveryPage';
 import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
@@ -122,11 +128,22 @@ export function AppRoutes() {
           path="nodes/dependencies"
           element={<Navigate to="/topology/dependency" replace />}
         />
-        <Route path="nodes/profiles" element={<ProfilesPage />} />
-        <Route path="nodes/classification-rules" element={<ClassificationRulesPage />} />
-        <Route path="nodes/reclassify" element={<ReclassifyPage />} />
-        <Route path="nodes/collection-templates" element={<CollectionTemplatesPage />} />
-        <Route path="nodes/mib" element={<MibRepositoryPage />} />
+        {/* Collection setup: five screens as path tabs of one page (ADR-231). */}
+        <Route path="nodes/collection" element={<CollectionSetupPage />}>
+          <Route index element={<ProfilesPage />} />
+          <Route path="rules" element={<ClassificationRulesPage />} />
+          <Route path="metric-sets" element={<CollectionTemplatesPage />} />
+          <Route path="mib" element={<MibRepositoryPage />} />
+          <Route path="reclassify" element={<ReclassifyPage />} />
+        </Route>
+        {/* Where those five lived. `MovedTo` keeps a bookmark's filters. */}
+        {COLLECTION_TABS.map((tab) => (
+          <Route
+            key={tab}
+            path={COLLECTION_MOVED_FROM[tab].slice(1)}
+            element={<MovedTo to={collectionTabPath(tab)} />}
+          />
+        ))}
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />
 
         {/* Alerts */}

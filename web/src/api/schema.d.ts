@@ -12396,6 +12396,13 @@ export interface components {
              */
             pool?: string | null;
             /**
+             * Format: uuid
+             * @description The device profile that decides what is collected; `null` on a node with none (ICMP only).
+             *     The folder list names it and marks the generic one (ADR-231) — read `fallback` on the
+             *     profile to tell which that is.
+             */
+            profile_id?: string | null;
+            /**
              * Format: double
              * @description Manual order within the group (the tree sorts members by this, then by name).
              */
@@ -13354,6 +13361,13 @@ export interface components {
         ProfileSummary: {
             /** @description Functional role token (kebab-case `ProfileCategory`) — the UI's grouping key. */
             category: string;
+            /**
+             * @description `true` on the one profile a device lands on when it answers SNMP and no classification
+             *     rule recognised it — "Generic SNMP". The WebUI marks a node on it as generic and offers to
+             *     make it a profile of its own (ADR-231). Decided here from the classifier's own constant,
+             *     so the screen never compares a name.
+             */
+            fallback: boolean;
             /** Format: uuid */
             id: string;
             name: string;

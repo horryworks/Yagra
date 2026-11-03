@@ -21,6 +21,12 @@ const MOVES: { from: string; to: string; what: string }[] = [
   { from: '/alerts/event-sources', to: '/events/webhooks', what: 'webhook sources' },
   { from: '/settings/forwarding', to: '/events/forwarding', what: 'forwarding' },
   { from: '/settings/credentials', to: '/nodes/credentials', what: 'credentials' },
+  // ADR-231: the five collection screens became tabs of Nodes ▸ Collection setup.
+  { from: '/nodes/classification-rules', to: '/nodes/collection/rules', what: 'classification rules' },
+  { from: '/nodes/profiles', to: '/nodes/collection', what: 'device profiles' },
+  { from: '/nodes/collection-templates', to: '/nodes/collection/metric-sets', what: 'metric sets' },
+  { from: '/nodes/mib', to: '/nodes/collection/mib', what: 'the MIB repository' },
+  { from: '/nodes/reclassify', to: '/nodes/collection/reclassify', what: 'reclassify' },
 ];
 
 for (const { from, to, what } of MOVES) {
@@ -33,4 +39,18 @@ for (const { from, to, what } of MOVES) {
 test('a redirect carries the query string it was given, not just the path', async ({ page }) => {
   await page.goto(`/alerts/events?node_id=${NODE}`);
   await expect(page).toHaveURL(new RegExp(`\\/events\\?node_id=${NODE}$`), { timeout: 15_000 });
+});
+
+test('a collection tab is a path, and the menu item stays lit on every tab', async ({ page }) => {
+  await page.goto('/nodes/collection');
+  const tabs = page.getByRole('tablist');
+  await tabs.getByRole('tab', { name: 'MIB repository' }).click({ timeout: 15_000 });
+  await expect(page).toHaveURL(/\/nodes\/collection\/mib$/);
+  await expect(page.getByRole('link', { name: 'Collection setup' }).first()).toHaveClass(/active/);
+});
+
+test('?add=1 opens the new-profile dialog and leaves the URL clean', async ({ page }) => {
+  await page.goto('/nodes/profiles?add=1');
+  await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
+  await expect(page).toHaveURL(/\/nodes\/collection$/);
 });

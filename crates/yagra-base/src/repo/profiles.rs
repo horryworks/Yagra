@@ -26,6 +26,11 @@ pub struct ProfileSummary {
     pub vendor: Option<String>,
     /// Per-profile polling-interval override (seconds); `None` ⇒ inherit the global default.
     pub poll_interval_secs: Option<i32>,
+    /// `true` on the one profile a device lands on when it answers SNMP and no classification
+    /// rule recognised it — "Generic SNMP". The WebUI marks a node on it as generic and offers to
+    /// make it a profile of its own (ADR-231). Decided here from the classifier's own constant,
+    /// so the screen never compares a name.
+    pub fallback: bool,
 }
 
 impl NodeRepo {
@@ -38,9 +43,11 @@ impl NodeRepo {
         .await?;
         rows.into_iter()
             .map(|row| {
+                let name: String = row.try_get("name")?;
                 Ok(ProfileSummary {
                     id: row.try_get("id")?,
-                    name: row.try_get("name")?,
+                    fallback: name == yagra_common::GENERIC_SNMP_PROFILE,
+                    name,
                     category: row.try_get("category")?,
                     vendor: row.try_get("vendor")?,
                     poll_interval_secs: row.try_get("poll_interval_secs")?,
@@ -222,5 +229,26 @@ mod tests {
             !overrides.contains_key(&inherits),
             "a profile with no override of its own is in the override map"
         );
+    }
+    /// Exactly one built-in is the fallback, and it is the one the classifier falls back to — an
+    /// operator profile that merely shares its category is not (ADR-231).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_the_classifiers_fallback_profile_is_marked_fallback(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool);
+        repo.seed_builtin_profiles().await.expect("seed");
+        let mine = repo
+            .create_profile("my generic", "generic-snmp", None, None)
+            .await
+            .expect("create");
+
+        let listed = repo.list_profiles().await.expect("list");
+        let fallbacks: Vec<&str> = listed
+            .iter()
+            .filter(|p| p.fallback)
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(fallbacks, vec![yagra_common::GENERIC_SNMP_PROFILE]);
+        assert!(!listed.iter().any(|p| p.id == mine && p.fallback));
     }
 }

@@ -76,7 +76,7 @@ const urlNode = (over: Partial<NodeDetail> = {}) =>
 const dnsNode = (over: Partial<NodeDetail> = {}) =>
   node({ kind: 'dns', dns_check: { name: 'example.test' }, ...over });
 
-const profile = (id: string, category: string): ProfileSummary => ({ id, name: id, category });
+const profile = (id: string, category: string): ProfileSummary => ({ id, name: id, category, fallback: false });
 
 const req = (r: { req: NodeEditRequest } | { error: string }): NodeEditRequest => {
   if ('error' in r) throw new Error(`unexpectedly rejected: ${r.error}`);

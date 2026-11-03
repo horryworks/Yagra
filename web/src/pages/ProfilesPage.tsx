@@ -10,7 +10,7 @@
 // Collection-template attachment checklist. Add/edit via modal, delete via confirm modal.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan, useConfigStore } from '../store';
@@ -21,7 +21,6 @@ import type {
   StoredThreshold,
 } from '../types/api';
 import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
-import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -55,7 +54,17 @@ const COLS = '1.8fr 1fr 120px 130px 96px';
 export function ProfilesPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
-  const [adding, setAdding] = useState(false);
+  // `?add=1` arrives from a node on the generic profile (ADR-231): open the dialog and drop the
+  // flag, so closing it and reloading does not open it again.
+  const [search, setSearch] = useSearchParams();
+  const [adding, setAdding] = useState(() => canConfig && search.get('add') === '1');
+  useEffect(() => {
+    if (search.get('add') === null) return;
+    if (canConfig) setAdding(true);
+    const next = new URLSearchParams(search);
+    next.delete('add');
+    setSearch(next, { replace: true });
+  }, [search, setSearch, canConfig]);
   const [editing, setEditing] = useState<ProfileSummary | null>(null);
   const [deleting, setDeleting] = useState<ProfileSummary | null>(null);
   // Which profile's template attachments are expanded (one at a time).
@@ -156,10 +165,6 @@ export function ProfilesPage() {
 
   return (
     <div>
-      <PageHeader
-        title={t('nav:nodes.profiles')}
-        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.profiles') }]}
-      />
 
       <LoadGate load={profiles} permission="manage_config">
         <ListToolbar

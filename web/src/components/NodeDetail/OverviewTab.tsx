@@ -20,6 +20,8 @@ import { InfoPress } from '../ui/InfoTip';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
 import { nodesPageHref } from '../../lib/entityHref';
 import { api } from '../../services/api';
+import { nodeProfileOf, type NodeProfile } from '../../lib/nodeProfile';
+import { NEW_PROFILE_HREF } from '../../pages/collectionSetup';
 import {
   alertWhatOf,
   deriveMem,
@@ -108,7 +110,7 @@ import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
 import { AvailabilitySection } from './AvailabilitySection';
 import { CheckConfigActions } from './CheckConfigActions';
-import { useRangeStore } from '../../store';
+import { useCan, useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { addressText, hasAddress } from '../../lib/nodeAddress';
 
@@ -1011,7 +1013,8 @@ function useFacts(
   unreachable: boolean,
 ): Record<FactRow, Fact> {
   const { t } = useTranslation('nodes');
-  const [profileName, setProfileName] = useState<string | null>(null);
+  const [profile, setProfile] = useState<NodeProfile | null>(null);
+  const canConfig = useCan('manage_config');
   const [credentialName, setCredentialName] = useState<string | null>(null);
   const [parentName, setParentName] = useState<string | null>(null);
   const [uptime, setUptime] = useState<string | null>(null);
@@ -1028,9 +1031,9 @@ function useFacts(
     if (node.profile_id) {
       api
         .listProfiles()
-        .then((ps) => !cancelled && setProfileName(ps.find((p) => p.id === node.profile_id)?.name ?? null))
+        .then((ps) => !cancelled && setProfile(nodeProfileOf(ps, node.profile_id)))
         .catch(() => undefined);
-    } else setProfileName(null);
+    } else setProfile(null);
     if (node.credential_id && wantsCredential) {
       api
         .listCredentials()
@@ -1138,7 +1141,20 @@ function useFacts(
     // Observed, not configured (ADR-138): the poller re-reads it hourly, so it can trail an upgrade
     // by up to an hour, and a dash means the version table does not know this device.
     osVersion: { label: t('field.osVersion'), value: node.os_version || '—', mono: true },
-    profile: { label: t('field.deviceProfile'), value: profileName ?? '—' },
+    // The generic profile is where a device lands when no rule recognised it, so the row offers
+    // to make it one of its own (ADR-231 decision 7) — to whoever may.
+    profile: {
+      label: t('field.deviceProfile'),
+      value: profile ? (
+        <span className="nd-profile">
+          {profile.name}
+          {profile.fallback && <Badge tone="warning">{t('profile.generic')}</Badge>}
+          {profile.fallback && canConfig && <Link to={NEW_PROFILE_HREF}>{t('profile.makeOwn')}</Link>}
+        </span>
+      ) : (
+        '—'
+      ),
+    },
     credential: { label: t('field.snmpCredential'), value: credentialName ?? '—' },
     parent: { label: t('field.parentNode'), value: parentName ?? '—', mono: !!parentName },
     uptime: {

@@ -245,9 +245,9 @@ describe('nav route memory (ADR-134 増分 2 and 3)', () => {
   // The effect that writes this runs on every route change, and a filter can rewrite the query on
   // every keystroke — so an unchanged value must return the same state object and re-render nothing.
   it('does not churn state when the route has not changed', () => {
-    remember('nodes', '/nodes/mib', '/nodes/mib');
+    remember('nodes', '/nodes/collection', '/nodes/collection/mib');
     const before = useSectionRouteStore.getState();
-    remember('nodes', '/nodes/mib', '/nodes/mib');
+    remember('nodes', '/nodes/collection', '/nodes/collection/mib');
     expect(useSectionRouteStore.getState().bySection).toBe(before.bySection);
     expect(useSectionRouteStore.getState().byItem).toBe(before.byItem);
   });

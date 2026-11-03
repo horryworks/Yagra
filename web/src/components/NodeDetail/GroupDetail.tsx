@@ -13,6 +13,7 @@ import { api } from '../../services/api';
 import { useLoad } from '../../lib/useLoad';
 import { thresholdRulesHref } from '../../pages/thresholdQuery';
 import { addressText } from '../../lib/nodeAddress';
+import { nodeProfileOf } from '../../lib/nodeProfile';
 import { StatusDot } from '../ui/StatusDot';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
@@ -100,6 +101,13 @@ export function GroupDetail({
         : Promise.resolve<number | null>(null),
     [canEdit, group.id],
     { initial: null as number | null, onConfigChange: true },
+  );
+  // The profiles, to name each node's and mark the generic one (ADR-231). Reading them needs the
+  // same permission as editing; a caller without it sees no profile on the rows.
+  const profiles = useLoad(
+    () => (canEdit ? api.listProfiles() : Promise.resolve([])),
+    [canEdit],
+    { initial: [] as Awaited<ReturnType<typeof api.listProfiles>>, onConfigChange: true },
   );
   // 🚨 **The rollup comes from the server counts, exactly as the tree row's does** (ADR-125). It
   // used to be `tallyStates(descendantNodes(...))` over the members that happened to be LOADED,
@@ -370,6 +378,15 @@ export function GroupDetail({
                     <span className="nd-member-addr mono">
                       {addressText(n.address, t, { meshRepeater: n.meraki_repeater })}
                     </span>
+                    {(() => {
+                      const prof = nodeProfileOf(profiles.data, n.profile_id);
+                      return prof ? (
+                        <span className="nd-member-profile">
+                          {prof.name}
+                          {prof.fallback && <Badge tone="warning">{t('profile.generic')}</Badge>}
+                        </span>
+                      ) : null;
+                    })()}
                   </>
                 );
                 // A real button, so the row is reachable by keyboard like every other drill-in

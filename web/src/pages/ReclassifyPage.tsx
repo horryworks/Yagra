@@ -13,7 +13,6 @@ import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { ReclassifyProposal, ReclassifyView } from '../types/api';
-import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
@@ -178,10 +177,6 @@ export function ReclassifyPage() {
 
   return (
     <div>
-      <PageHeader
-        title={t('nav:nodes.reclassify')}
-        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.reclassify') }]}
-      />
 
       <LoadGate load={proposals} permission="manage_config">
         <TableToolbar>

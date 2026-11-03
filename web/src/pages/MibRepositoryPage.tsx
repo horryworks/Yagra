@@ -27,7 +27,6 @@ import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { api } from '../services/api';
 import { useCan } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
-import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -287,10 +286,6 @@ export function MibRepositoryPage() {
 
   return (
     <div>
-      <PageHeader
-        title={t('nav:nodes.mib')}
-        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.mib') }]}
-      />
 
       <LoadGate load={catalog}>
         <ListToolbar

@@ -112,8 +112,8 @@ export const MUST_FILTER: Record<string, string> = {
   // popover, which is closed at rest, so there is no trigger for the walk to find. The popover is
   // pressed by `treeAttention.spec.ts` and `treeWithNodes.spec.ts` instead.
   '/nodes/discovery': 'the two hand-built discovery tables (where the 28px defect landed)',
-  '/nodes/mib': 'a server-side filter: typing has to reach the request',
-  '/nodes/profiles': 'a grouped `.ytable`, header funnels plus the toolbar funnel for category',
+  '/nodes/collection/mib': 'a server-side filter: typing has to reach the request',
+  '/nodes/collection': 'a grouped `.ytable`, header funnels plus the toolbar funnel for category',
   '/alerts': 'a header-less list over SSE: its funnel is in the toolbar',
   '/events': 'URL-backed header funnels',
   '/alerts/history': 'server-side, and the one that shipped never reaching the request',

@@ -31,6 +31,10 @@ export interface NavItem {
   /** Optional live count badge keyed by a discriminator the SideBar resolves to a store value
    *  (e.g. 'troubleshoot-runs' ⇒ number of running analysis jobs). */
   liveBadge?: 'troubleshoot-runs';
+  /** The item is also every route below its path — a page whose tabs are paths
+   *  (`/nodes/collection/rules`, ADR-231). Such a route is that item's screen: it lights the
+   *  item, carries its page note, and is what the item remembers. */
+  ownsSubpaths?: boolean;
 }
 
 export interface NavGroup {
@@ -112,6 +116,15 @@ export const NAV: NavSection[] = [
             path: '/nodes/config-backups',
             implemented: true,
           },
+          // The keys for reaching monitored devices — the one thing besides the node itself that
+          // monitoring needs (ADR-231 decision 4). Not under Settings ▸ Access, which is how a
+          // person signs in to Yagra (ADR-055 R8).
+          {
+            labelKey: 'nodes.credentials',
+            descKey: 'descriptions.nodesCredentials',
+            path: '/nodes/credentials',
+            implemented: true,
+          },
         ],
       },
       {
@@ -149,54 +162,17 @@ export const NAV: NavSection[] = [
         ],
       },
       {
-        // ⚠️ ORDER IS THE ORDER OF THE WORK (ADR-055 R7): what to read → the bundle that names it →
-        // the profile that attaches the bundle → the rule that assigns the profile. It ran the
-        // other way and the first item's own description said "Attach Metric sets here", which is
-        // two entries further down — the menu was telling the reader to start at the end.
-        labelKey: 'groups.monitoringConfig',
+        // One item for the five screens that shape what is collected (ADR-231). They are tabs of
+        // one page, `/nodes/collection/*`: an ordinary device needs none of them — a credential
+        // and the node are enough — so they no longer sit in the menu as steps to be done in order.
+        // Unlabeled: one item under a heading would say its own name twice.
         items: [
-          // The keys for reaching monitored devices. They lived under Settings ▸ Access next to
-          // Users, Roles and Authentication — which is how a person signs in to Yagra, a different
-          // subject with a different blast radius (ADR-055 decision 4 / R8). A device profile is
-          // defined as "which sets, how often, WITH WHICH CREDENTIAL", so this is a part of
-          // collection, and it comes first because nothing below it can be tried without it.
           {
-            labelKey: 'nodes.credentials',
-            descKey: 'descriptions.nodesCredentials',
-            path: '/nodes/credentials',
+            labelKey: 'nodes.collectionSetup',
+            descKey: 'descriptions.nodesCollectionSetup',
+            path: '/nodes/collection',
             implemented: true,
-          },
-          {
-            labelKey: 'nodes.mib',
-            descKey: 'descriptions.nodesMib',
-            path: '/nodes/mib',
-            implemented: true,
-          },
-          {
-            labelKey: 'nodes.metricSets',
-            descKey: 'descriptions.nodesMetricSets',
-            path: '/nodes/collection-templates',
-            implemented: true,
-          },
-          {
-            labelKey: 'nodes.profiles',
-            descKey: 'descriptions.nodesProfiles',
-            path: '/nodes/profiles',
-            implemented: true,
-          },
-          {
-            labelKey: 'nodes.classificationRules',
-            descKey: 'descriptions.nodesClassificationRules',
-            path: '/nodes/classification-rules',
-            implemented: true,
-          },
-          // After the rules, because it is what a rule change leads to: the nodes already in the
-          // tree that the rules as they now stand would file under a different profile (ADR-140).
-          {
-            labelKey: 'nodes.reclassify',
-            descKey: 'descriptions.nodesReclassify',
-            path: '/nodes/reclassify',
-            implemented: true,
+            ownsSubpaths: true,
           },
         ],
       },
@@ -547,6 +523,7 @@ export function navItemForPath(pathname: string): { section: NavSection; item: N
   for (const s of NAV) {
     for (const item of sectionItems(s)) {
       if (item.path === pathname) return { section: s, item };
+      if (item.ownsSubpaths && pathname.startsWith(item.path + '/')) return { section: s, item };
     }
   }
   return null;
@@ -605,7 +582,8 @@ export function rememberableRoute(
 ): { sectionKey: string; itemPath: string; route: string } | null {
   const hit = navItemForPath(pathname);
   if (!hit) return null;
-  return { sectionKey: hit.section.key, itemPath: hit.item.path, route: hit.item.path + search };
+  // `pathname`, not the item's path: on an item that owns sub-paths it is the tab to come back to.
+  return { sectionKey: hit.section.key, itemPath: hit.item.path, route: pathname + search };
 }
 
 /**

@@ -34,6 +34,7 @@ const prof = (over: Partial<ProfileSummary> = {}): ProfileSummary => ({
   vendor: 'Cisco',
   category: 'l2-switch',
   poll_interval_secs: null,
+  fallback: false,
   ...over,
 });
 

@@ -33,7 +33,7 @@ interface Subject {
 const SUBJECTS: Subject[] = [
   { path: '/events/webhooks', read: '/api/v1/event-sources', toolbar: true },
   { path: '/nodes/credentials', read: '/api/v1/credentials', toolbar: true },
-  { path: '/nodes/collection-templates', read: '/api/v1/collection-templates', toolbar: true },
+  { path: '/nodes/collection/metric-sets', read: '/api/v1/collection-templates', toolbar: true },
   { path: '/settings/auth', read: '/api/v1/settings/oidc', toolbar: false },
   {
     path: '/settings/users',
@@ -41,20 +41,20 @@ const SUBJECTS: Subject[] = [
     toolbar: true,
     refused: /Managing users requires an admin account/,
   },
-  { path: '/nodes/classification-rules', read: '/api/v1/classification-rules', toolbar: true },
+  { path: '/nodes/collection/rules', read: '/api/v1/classification-rules', toolbar: true },
   { path: '/alerts/event-rules', read: '/api/v1/event-rules', toolbar: true },
   { path: '/settings/integrations/netbox', read: '/api/v1/netbox/servers', toolbar: false },
   { path: '/alerts/mutes', read: '/api/v1/mutes', toolbar: true },
   { path: '/alerts/maintenance', read: '/api/v1/maintenance-windows', toolbar: true },
-  { path: '/nodes/profiles', read: '/api/v1/profiles', toolbar: true },
+  { path: '/nodes/collection', read: '/api/v1/profiles', toolbar: true },
   { path: '/alerts/routing', read: '/api/v1/routing-rules', toolbar: true },
   { path: '/settings/integrations/meraki', read: '/api/v1/meraki/orgs', toolbar: false },
   { path: '/nodes/duplicates', read: '/api/v1/nodes/duplicates', toolbar: false, adds: false },
-  { path: '/nodes/reclassify', read: '/api/v1/reclassify', toolbar: false, adds: false },
+  { path: '/nodes/collection/reclassify', read: '/api/v1/reclassify', toolbar: false, adds: false },
   { path: '/settings/pollers', read: '/api/v1/pollers', toolbar: true },
   { path: '/settings/api-tokens', read: '/api/v1/api-tokens', toolbar: true },
   { path: '/events/forwarding', read: '/api/v1/forwarding/destinations', toolbar: true },
-  { path: '/nodes/mib', read: '/api/v1/mib-catalog', toolbar: true },
+  { path: '/nodes/collection/mib', read: '/api/v1/mib-catalog', toolbar: true },
   { path: '/alerts/rules', read: '/api/v1/thresholds', toolbar: true },
   // A log, not a configuration list: nothing to add. It swallowed every failure until ADR-184
   // increment 27, so a refusal read as an empty history.

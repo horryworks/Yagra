@@ -32,7 +32,7 @@ describe('nav IA', () => {
   });
 
   it('keeps sub-feature and drill-down paths within their section', () => {
-    expect(sectionForPath('/nodes/profiles').key).toBe('nodes');
+    expect(sectionForPath('/nodes/collection').key).toBe('nodes');
     expect(sectionForPath('/nodes/abc-123').key).toBe('nodes'); // node detail
     expect(sectionForPath('/alerts/rules').key).toBe('alerts');
     expect(sectionForPath('/nodes/credentials').key).toBe('nodes');
@@ -121,14 +121,16 @@ describe('nav IA', () => {
     expect(nodes.groups.map((g) => g.labelKey)).toEqual([
       'groups.inventory',
       'groups.consistencyChecks',
-      'groups.monitoringConfig',
+      undefined,
     ]);
     // Config backups (ADR-210 stage 3) is the fleet's view of what the inventory backs up, so it
-    // sits with the inventory rather than among the checks.
+    // sits with the inventory rather than among the checks. Credentials joined it with ADR-231:
+    // with the node itself, it is all that monitoring an ordinary device needs.
     expect(nodes.groups[0].items.map((i) => i.path)).toEqual([
       '/nodes',
       '/nodes/discovery',
       '/nodes/config-backups',
+      '/nodes/credentials',
     ]);
     expect(nodes.groups[1].items.map((i) => i.path)).toEqual([
       '/nodes/duplicates',
@@ -137,20 +139,13 @@ describe('nav IA', () => {
     ]);
   });
 
-  it('orders Nodes ▸ Monitoring setup in the order the work is done', () => {
-    // ADR-055 R7. Not cosmetic: it ran profiles-first, and the profiles entry's own description
-    // says "Attach Metric sets here" — two items further down. A menu that tells the reader to
-    // start at the end is the failure this pins against, so re-sorting it is a deliberate act.
+  it('folds the collection screens into one item that owns its tabs', () => {
+    // ADR-231 decision 1. The five screens were six menu entries read as steps to be done in order;
+    // they are tabs of one page now, and the order of the work is the tab order
+    // (`pages/collectionSetup.ts`).
     const nodes = NAV.find((s) => s.key === 'nodes')!;
-    const setup = nodes.groups.find((g) => g.labelKey === 'groups.monitoringConfig')!;
-    expect(setup.items.map((i) => i.path)).toEqual([
-      '/nodes/credentials',
-      '/nodes/mib',
-      '/nodes/collection-templates',
-      '/nodes/profiles',
-      '/nodes/classification-rules',
-      '/nodes/reclassify',
-    ]);
+    const last = nodes.groups[nodes.groups.length - 1];
+    expect(last.items.map((i) => [i.path, i.ownsSubpaths])).toEqual([['/nodes/collection', true]]);
   });
 
   it('keeps the two alert-rule screens adjacent, ahead of what happens after one fires', () => {

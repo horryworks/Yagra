@@ -2456,3 +2456,21 @@ html[data-viewport='mobile'] .nd-grpmap-chip-x {
 .nd-grpmap-edge {
   margin-top: 8px;
 }
+
+/* A folder row's device profile, after its address (ADR-231): muted, and the generic one marked. */
+.nd-member-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* The overview's profile row: the name, the generic mark, and the link to make one of its own. */
+.nd-profile {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}

@@ -37,7 +37,9 @@ fn state_str(state: Option<NodeState>) -> String {
 }
 
 /// A monitored node, sanitized for AI consumption: identity + display metadata + rolled-up state.
-/// Excludes `credential` (ADR-018), `pool` (internal poller assignment), and `profile` (internal id).
+/// Excludes `credential` (ADR-018) and `pool` (internal poller assignment). The device profile is
+/// carried as `profile_id` since ADR-231, because the WebUI's folder list shows it; resolve the
+/// name with `get_config(kind=profiles)`.
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeSummaryDto {
     pub id: Uuid,
@@ -62,6 +64,10 @@ pub struct NodeSummaryDto {
     pub group: Option<Uuid>,
     pub vendor: Option<String>,
     pub model: Option<String>,
+    /// The device profile that decides what is collected from this node; `null` on a node with
+    /// none (ICMP only). A profile whose `fallback` is true in `get_config(kind=profiles)` is the
+    /// generic one a device lands on when no classification rule recognised it (ADR-231).
+    pub profile_id: Option<Uuid>,
     /// The node's **effective** labels: its own plus everything its inventory folder chain
     /// supplies, minus what it refuses (ADR-135 inc. 2). This is what the WebUI shows on the node,
     /// so MCP read parity means the resolved set rather than the raw column.
@@ -105,6 +111,7 @@ impl NodeSummaryDto {
             group: node.group.map(|g| g.0),
             vendor: node.vendor.clone(),
             model: node.model.clone(),
+            profile_id: node.profile.map(|p| p.0),
             tags: tags.effective(node),
             meraki_product_type: None,
             meraki_repeater: false,
@@ -1058,6 +1065,10 @@ mod tests {
         // REST `kind` field must be the same word.
         assert_eq!(json["kind"], "url");
         assert_eq!(json["tags"][0], "tokyo");
+        assert!(
+            json["profile_id"].is_null(),
+            "a node with no profile says so"
+        );
         // …and not the secret/internal ones.
         assert!(json.get("credential").is_none());
         assert!(json.get("pool").is_none());

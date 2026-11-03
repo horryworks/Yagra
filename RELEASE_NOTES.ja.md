@@ -32,6 +32,7 @@
 - **ブラウザが行を全部持っている一覧は、どの列でも並び替えられます。** 設定の一覧（Pollers・Notification delivery・Event rules・Maintenance・Mutes・Forwarding・Reports・Scheduled analyses・Classification rules・Dependencies・Missing prefixes・Subnet overlaps、ノードの Neighbors と AP など）で見出しを押すと、その列で並びます。もう一度押すと逆になり、3 回目で元の並びに戻ります。矢印は、並べている列にだけ出ます。開いたときの並びは今までどおりで、選んだ並びは URL に残ります。サーバーがページ送りする一覧（Events・History・Audit）は、まだ並び替えられません。
 - **ノードの Interfaces はどの列でも並び替えられます。** 見出しを押すとその列で並び、もう一度押すと逆に、3 回目で機器のポート番号の順（開いたときの並び）に戻ります。並び順は絞り込みと一緒に URL に残ります。IP addresses・Neighbors・Duplex の ⓘ と、IP addresses・Media の絞り込みの説明文はなくしました。
 - **Topology は Geo map から開きます。** Topology のメニューの先頭を Geo map にし、Topology タブを押すとそこに着きます。Dependencies はその次です。
+- **Nodes ▸ 収集の作り込み に、収集を決める 5 つの画面をまとめました。** 分類ルール・デバイスプロファイル・メトリクスセット・MIB リポジトリ・分類のかけ直しは、1 つのページのタブになりました。並びは、どれがどれを使うかの順です。メニューは 6 項目のまとまりから 1 項目になりました。よくある機器なら、認証情報とノードだけで監視が始まります。認証情報はインベントリのまとまりへ移しました。古いアドレス（`/nodes/profiles`・`/nodes/classification-rules`・`/nodes/collection-templates`・`/nodes/mib`・`/nodes/reclassify`）は新しいタブへ飛び、クエリも引き継ぎます。フォルダのノード一覧は、各ノードのデバイスプロファイルの名前を出し、汎用のものに印を付けます。汎用のノードの概要には **この機器用のプロファイルを作る** が出ます。`GET /api/v1/nodes`（と MCP の `list_nodes`）は `profile_id` を返します。`GET /api/v1/profiles` は `fallback` を返し、どの分類ルールにも当たらなかった機器が落ちるプロファイルで true になります。
 
 ## v0.3.66 — ノードごとの稼働状況を概要タブで見られる。Config backups の一覧からオン・オフできる。戻った機器を通知し直さない
 

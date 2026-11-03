@@ -1465,5 +1465,9 @@
     "edit": "Edit",
     "override": "Change for this node",
     "empty": "No threshold rules reach this node."
+  },
+  "profile": {
+    "generic": "Generic",
+    "makeOwn": "Make a profile for this device"
   }
 }

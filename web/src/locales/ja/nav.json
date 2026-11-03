@@ -26,7 +26,8 @@
     "reclassify": "分類のかけ直し",
     "metricSets": "メトリクスセット",
     "mib": "MIB リポジトリ",
-    "credentials": "認証情報とシークレット"
+    "credentials": "認証情報とシークレット",
+    "collectionSetup": "収集の作り込み"
   },
   "topology": {
     "map": "ネットワークマップ",
@@ -74,7 +75,6 @@
   "groups": {
     "inventory": "インベントリ",
     "consistencyChecks": "整合性チェック",
-    "monitoringConfig": "監視の組み立て",
     "monitor": "モニタリング",
     "configure": "設定",
     "system": "システム",
@@ -82,12 +82,8 @@
     "comingSoon": "近日公開"
   },
   "descriptions": {
-    "nodesProfiles": "デバイスクラスごとに、ノードが何を収集するかをまとめた設定",
-    "nodesClassificationRules": "検出したノードにプロファイルとグループを自動で割り当てるルール",
-    "nodesReclassify": "分類ルールが今なら別のプロファイルを選ぶノード",
-    "nodesMetricSets": "デバイスプロファイルに取り付ける、名前付きのメトリクスの束（OID → メトリクス）",
-    "nodesMib": "MIB ファイルを取り込んで、OID を名前付きメトリクスに変換",
     "nodesCredentials": "監視対象のノードに接続するための認証情報",
+    "nodesCollectionSetup": "組み込みに合わない機器の収集を作り込む",
     "alertsRules": "能動監視 — ポーリングで集めた値のしきい値",
     "alertsRouting": "アラート通知を届けるチャネルと配信ルール",
     "alertsEventRules": "受動監視 — Events タブに届いたイベントに対する一致条件",

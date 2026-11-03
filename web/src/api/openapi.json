@@ -41260,6 +41260,14 @@
             ],
             "description": "The node's **own** poll-pool; `null` ⇒ inherited from its folder, else the default pool.\nThe tree's pool picker edits exactly this value, so it is what marks the active choice —\nthe *effective* pool (and the poller holding the node) comes from `/nodes/:id/assignment`."
           },
+          "profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The device profile that decides what is collected; `null` on a node with none (ICMP only).\nThe folder list names it and marks the generic one (ADR-231) — read `fallback` on the\nprofile to tell which that is."
+          },
           "sort_order": {
             "type": "number",
             "format": "double",
@@ -43217,12 +43225,17 @@
         "required": [
           "id",
           "name",
-          "category"
+          "category",
+          "fallback"
         ],
         "properties": {
           "category": {
             "type": "string",
             "description": "Functional role token (kebab-case `ProfileCategory`) — the UI's grouping key."
+          },
+          "fallback": {
+            "type": "boolean",
+            "description": "`true` on the one profile a device lands on when it answers SNMP and no classification\nrule recognised it — \"Generic SNMP\". The WebUI marks a node on it as generic and offers to\nmake it a profile of its own (ADR-231). Decided here from the classifier's own constant,\nso the screen never compares a name."
           },
           "id": {
             "type": "string",

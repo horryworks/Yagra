@@ -652,6 +652,11 @@ fn vendor_scalar_counter(metric: &str, oid: &str) -> CollectionItem {
 /// builds on (sysUpTime + interface counters/errors/status + generic `hrProcessorLoad`).
 pub const TEMPLATE_STANDARD_SNMP: &str = "Standard SNMP";
 
+/// The built-in profile a device that answers SNMP but matches no classification rule falls back
+/// to. The classifier looks it up **by this name**, and the profile list marks it `fallback` from
+/// the same constant (ADR-231), so the name is load-bearing: never rename the built-in.
+pub const GENERIC_SNMP_PROFILE: &str = "Generic SNMP";
+
 // Role-base (vendor-neutral).
 const T_HOST_RESOURCES: &str = "Host resources";
 const T_ENTITY_SENSORS: &str = "Entity sensors";
@@ -1808,7 +1813,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
         ),
         // ── Generic / fallback (keep these names — classifier looks them up) ──
         prof(
-            "Generic SNMP",
+            GENERIC_SNMP_PROFILE,
             C::GenericSnmp,
             None,
             vec![TEMPLATE_STANDARD_SNMP],

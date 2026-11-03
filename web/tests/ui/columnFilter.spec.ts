@@ -42,7 +42,7 @@ const rows = (page: import('@playwright/test').Page) => page.locator('.dt-row');
 test('each filterable column carries its funnel inside its own header, and no row is added', async ({
   page,
 }) => {
-  await page.goto('/nodes/mib');
+  await page.goto('/nodes/collection/mib');
   await expect(rows(page).first()).toBeVisible();
 
   // ADR-228: the controls moved from a row under the header to a funnel beside each label. The
@@ -66,7 +66,7 @@ test('each filterable column carries its funnel inside its own header, and no ro
 });
 
 test('typing a term reaches the server, and clearing it comes back', async ({ page, mock }) => {
-  await page.goto('/nodes/mib');
+  await page.goto('/nodes/collection/mib');
   await expect(rows(page)).toHaveCount(ROW_COUNT);
 
   await page.getByRole('button', { name: /Filter by/ }).first().click();

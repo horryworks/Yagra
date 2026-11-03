@@ -62,6 +62,12 @@ export const EXTRA_SCREENS: Screen[] = [
   // Off the menu since ADR-191 (opened from the tree, a node's detail and a Geo map pin), so the
   // nav-derived walk no longer reaches it.
   { path: '/topology/map', label: 'topology.map' },
+  // The collection setup tabs other than the one at the menu item's own path (ADR-231): a tab is a
+  // path, and only the bare `/nodes/collection` comes from the nav.
+  { path: '/nodes/collection/rules', label: 'nodes.collection.rules' },
+  { path: '/nodes/collection/metric-sets', label: 'nodes.collection.metricSets' },
+  { path: '/nodes/collection/mib', label: 'nodes.collection.mib' },
+  { path: '/nodes/collection/reclassify', label: 'nodes.collection.reclassify' },
   { path: '/login', label: 'login' },
 ];
 
@@ -161,14 +167,14 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   // rather than this list's, so no `ymock-` name reaches it. The state word is drawn from the row
   // the mock served, and an empty list draws none.
   '/nodes/config-backups': { kind: 'locator', sel: '.cfgbl-mark' },
-  '/nodes/profiles': MARKER,
-  '/nodes/classification-rules': MARKER,
-  '/nodes/reclassify': MARKER,
+  '/nodes/collection': MARKER,
+  '/nodes/collection/rules': MARKER,
+  '/nodes/collection/reclassify': MARKER,
   '/nodes/duplicates': MARKER,
   '/nodes/subnet-overlaps': MARKER,
   '/nodes/missing-prefixes': MARKER,
-  '/nodes/collection-templates': MARKER,
-  '/nodes/mib': MARKER,
+  '/nodes/collection/metric-sets': MARKER,
+  '/nodes/collection/mib': MARKER,
   // An SVG box has no text a query reaches reliably (labels are cut to fit), so the box itself.
   '/topology/map': { kind: 'locator', sel: '.topomap-node' },
   '/topology/dependency': MARKER,

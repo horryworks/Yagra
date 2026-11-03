@@ -15,7 +15,6 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
-import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -164,10 +163,6 @@ export function ClassificationRulesPage() {
 
   return (
     <div>
-      <PageHeader
-        title={t('nav:nodes.classificationRules')}
-        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.classificationRules') }]}
-      />
 
       <LoadGate load={rules} permission="manage_config">
         <ListToolbar
