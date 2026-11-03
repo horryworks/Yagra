@@ -552,12 +552,28 @@ fn no_rule(id: Uuid) -> ApiError {
     ApiError::not_found("rule_not_found", format!("no event rule {id}"))
 }
 
+/// A failed rule write. A node, folder or source the rule names that does not exist (or was just
+/// deleted) fails its foreign key, which is the caller's mistake and answers 400, not 500.
+fn rule_write_error(e: &anyhow::Error, what: &'static str, msg: &'static str) -> ApiError {
+    let fk = e
+        .downcast_ref::<sqlx::Error>()
+        .and_then(sqlx::Error::as_database_error)
+        .is_some_and(|db| db.is_foreign_key_violation());
+    if fk {
+        return ApiError::bad_request(
+            "unknown_target",
+            "the node, folder or source the rule names does not exist",
+        );
+    }
+    ApiError::from_internal(e.as_ref(), what, msg)
+}
+
 #[utoipa::path(
     post, path = "/api/v1/event-rules", tag = "events",
     request_body = EventRuleBody,
     responses(
         (status = 201, description = "Rule created", body = CreatedId),
-        (status = 400, description = "A pattern does not compile, or a field is outside its accepted range", body = super::error::ErrorBody),
+        (status = 400, description = "A pattern does not compile, a field is outside its accepted range, or the node, folder or source it names does not exist", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -570,13 +586,10 @@ async fn create_event_rule(
     Json(body): Json<EventRuleBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let params = validate_event_rule(&body)?;
-    let id = admin.events.create_rule(&params).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "create event rule",
-            "failed to create event rule",
-        )
-    })?;
+    let id =
+        admin.events.create_rule(&params).await.map_err(|e| {
+            rule_write_error(&e, "create event rule", "failed to create event rule")
+        })?;
     reload_event_engine(&st, &admin).await;
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
 }
@@ -587,7 +600,7 @@ async fn create_event_rule(
     request_body = EventRuleBody,
     responses(
         (status = 204, description = "Rule updated"),
-        (status = 400, description = "A pattern does not compile, or a field is outside its accepted range", body = super::error::ErrorBody),
+        (status = 400, description = "A pattern does not compile, a field is outside its accepted range, or the node, folder or source it names does not exist", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such event rule", body = super::error::ErrorBody),
@@ -602,13 +615,10 @@ async fn update_event_rule(
     Json(body): Json<EventRuleBody>,
 ) -> ApiResult<StatusCode> {
     let params = validate_event_rule(&body)?;
-    let updated = admin.events.update_rule(id, &params).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "update event rule",
-            "failed to update event rule",
-        )
-    })?;
+    let updated =
+        admin.events.update_rule(id, &params).await.map_err(|e| {
+            rule_write_error(&e, "update event rule", "failed to update event rule")
+        })?;
     if !updated {
         return Err(no_rule(id));
     }
@@ -951,5 +961,43 @@ mod tests {
         let (status, list) = send(&st, "GET", "/api/v1/event-sources", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK, "{list}");
         assert!(list.to_string().contains("the lab firewall"), "{list}");
+    }
+
+    /// A rule naming a folder that does not exist is the caller's mistake: 400 with a code the
+    /// screen can read, not a 500. A real folder is accepted.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_on_a_folder_that_does_not_exist_is_refused_as_bad_input(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        // The built-in rules are seeded, so count what this test adds.
+        let before = yagra_base::pgtest::rows(&pool, "event_rules").await;
+        let body = |group: Uuid| {
+            serde_json::json!({
+                "name": "psu", "match_kind": "substring", "pattern": "PSU",
+                "severity": "warning", "group_id": group,
+            })
+        };
+        let (status, err) = send(
+            &st,
+            "POST",
+            "/api/v1/event-rules",
+            &tok,
+            Some(body(Uuid::new_v4())),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{err}");
+        assert_eq!(err["error"]["code"], "unknown_target", "{err}");
+        assert_eq!(yagra_base::pgtest::rows(&pool, "event_rules").await, before);
+
+        let folder = yagra_base::pgtest::group(&pool, "site-a").await;
+        let (status, made) =
+            send(&st, "POST", "/api/v1/event-rules", &tok, Some(body(folder))).await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{made}");
+        assert_eq!(
+            yagra_base::pgtest::rows(&pool, "event_rules").await,
+            before + 1
+        );
     }
 }

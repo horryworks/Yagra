@@ -10,7 +10,7 @@ use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageSystem, RequireView, Scoped};
 use super::util::CreatedId;
 use super::ApiState;
-use crate::alerts::delivery_hours::{DeliverySchedule, HeldEvent, HeldStore, ScheduleFields};
+use crate::alerts::delivery_hours::{DeliverySchedule, HeldEvent, ScheduleFields};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -319,15 +319,13 @@ pub(crate) async fn visible_held(
     scope: &super::scope::NodeScope,
     admin: &super::AdminState,
 ) -> ApiResult<Vec<HeldNotification>> {
-    let rows = HeldStore::list(admin.delivery_hours.as_ref())
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "list held notifications",
-                "failed to list held notifications",
-            )
-        })?;
+    let rows = admin.delivery_hours.held_for_display().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list held notifications",
+            "failed to list held notifications",
+        )
+    })?;
     Ok(rows
         .into_iter()
         .filter(|r| scope.allows_subject(st, &r.alert.subject))
@@ -542,5 +540,34 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// Reading what is held is a read: a row this core cannot parse is left in place for the
+    /// release loop, rather than deleted because a Viewer opened a screen.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn listing_held_notifications_deletes_nothing(pool: sqlx::PgPool) {
+        sqlx::query(
+            "INSERT INTO held_notifications (event, subject, check_id, alert) \
+             VALUES ('fire', 'x', $1, '{\"not\": \"an alert\"}')",
+        )
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .unwrap();
+        let st = live_state(pool.clone()).await;
+        let viewer = token(&st, Role::Viewer);
+        let (status, body) = send(&st, "GET", "/api/v1/held-notifications", &viewer, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!([]),
+            "the unreadable row is not shown"
+        );
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM held_notifications")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 1, "and it is still there");
     }
 }

@@ -47,6 +47,8 @@
 
 - **A dashboard card's resize grip is no longer hidden under its scrollbar.** While customizing, a card whose content scrolled drew its scrollbar over the grip in the bottom-right corner, so the card looked impossible to resize. The scrolling area now ends above the grip.
 - **Editing an event rule kept to one node no longer turns it into a rule on every node.** The dialog sent no node on save; it now keeps the rule's target.
+- **An event rule that names a node, folder or source that does not exist is refused with `400 unknown_target`** instead of failing with `500`.
+- **A held resolve no longer closes an alert that fired again.** When an alert resolved after hours and fired again as the hours opened, the old resolve could reach PagerDuty or JSM after the new fire and close the open incident. It is now dropped. Reading the held list also no longer deletes a row this core cannot read.
 
 ## v0.3.66 — See each node's availability on its Overview, switch config backups on and off from the list, and stop re-paging a device that comes back
 

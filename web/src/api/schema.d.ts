@@ -20752,7 +20752,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description A pattern does not compile, or a field is outside its accepted range */
+            /** @description A pattern does not compile, a field is outside its accepted range, or the node, folder or source it names does not exist */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -20855,7 +20855,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A pattern does not compile, or a field is outside its accepted range */
+            /** @description A pattern does not compile, a field is outside its accepted range, or the node, folder or source it names does not exist */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -5779,7 +5779,7 @@
             }
           },
           "400": {
-            "description": "A pattern does not compile, or a field is outside its accepted range",
+            "description": "A pattern does not compile, a field is outside its accepted range, or the node, folder or source it names does not exist",
             "content": {
               "application/json": {
                 "schema": {
@@ -5906,7 +5906,7 @@
             "description": "Rule updated"
           },
           "400": {
-            "description": "A pattern does not compile, or a field is outside its accepted range",
+            "description": "A pattern does not compile, a field is outside its accepted range, or the node, folder or source it names does not exist",
             "content": {
               "application/json": {
                 "schema": {

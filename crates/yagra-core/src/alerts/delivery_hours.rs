@@ -433,6 +433,27 @@ impl HeldStore for DeliveryHoursRepo {
     }
 
     async fn list(&self) -> anyhow::Result<Vec<HeldRow>> {
+        self.read_held(true).await
+    }
+
+    async fn remove(&self, id: i64) -> anyhow::Result<()> {
+        sqlx::query("DELETE FROM held_notifications WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+impl DeliveryHoursRepo {
+    /// Everything held, oldest first, for a screen or a tool to show. Unlike the release loop's
+    /// [`HeldStore::list`] it removes nothing: a row this core cannot read is skipped, not
+    /// dropped, because a read must not decide what happens to a held page.
+    pub async fn held_for_display(&self) -> anyhow::Result<Vec<HeldRow>> {
+        self.read_held(false).await
+    }
+
+    async fn read_held(&self, drop_unreadable: bool) -> anyhow::Result<Vec<HeldRow>> {
         let rows = sqlx::query(
             "SELECT id, event, alert, held_at, release_at FROM held_notifications ORDER BY id",
         )
@@ -445,8 +466,10 @@ impl HeldStore for DeliveryHoursRepo {
             // One row an older or newer core wrote in a shape this one cannot read costs that row,
             // not the whole release pass.
             let Ok(alert) = serde_json::from_value::<Alert>(alert) else {
-                tracing::warn!(id, "a held notification could not be read; dropping it");
-                self.remove(id).await?;
+                if drop_unreadable {
+                    tracing::warn!(id, "a held notification could not be read; dropping it");
+                    HeldStore::remove(self, id).await?;
+                }
                 continue;
             };
             out.push(HeldRow {
@@ -458,14 +481,6 @@ impl HeldStore for DeliveryHoursRepo {
             });
         }
         Ok(out)
-    }
-
-    async fn remove(&self, id: i64) -> anyhow::Result<()> {
-        sqlx::query("DELETE FROM held_notifications WHERE id = $1")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 }
 

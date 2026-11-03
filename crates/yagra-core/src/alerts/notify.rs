@@ -1521,7 +1521,8 @@ impl Notifier {
     /// A held fire goes out only if its alert is still open and not rolled up (decision 9; Yagra
     /// keeps no acknowledgement to consult since ADR-233) - and then as the alert is **now**, so a
     /// severity that rose overnight is the one sent. A held resolve or roll-up goes out as it was
-    /// (decision 10). Each row is removed once handled, whatever happened to it.
+    /// (decision 10), unless the same alert is open again, in which case it is stale and dropped.
+    /// Each row is removed once handled, whatever happened to it.
     pub async fn release(
         &self,
         rows: Vec<HeldRow>,
@@ -1548,6 +1549,14 @@ impl Notifier {
                         }
                     }
                 }
+                // A held end whose alert is open again under the same identity is stale: the alert
+                // fired again after it, and that fire may already have gone out once the hours
+                // opened, before this pass ran. Sending the old end now would close the incident
+                // of an alert that is open, so it is dropped instead.
+                HeldEvent::Resolve | HeldEvent::Suppress
+                    if active.iter().any(|a| {
+                        a.dedup_key() == row.alert.dedup_key() && a.root_cause.is_none()
+                    }) => {}
                 HeldEvent::Resolve => self.deliver(NotifyAction::Resolve(row.alert)).await,
                 HeldEvent::Suppress => self.deliver(NotifyAction::Suppress(row.alert)).await,
             }
@@ -3168,6 +3177,37 @@ mod delivery_tests {
         assert_eq!(dflt.lock().unwrap().count("close"), 0);
         assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Resolve);
         release_now(&n, &held, &[]).await;
+        assert_eq!(dflt.lock().unwrap().count("close"), 1);
+    }
+
+    /// A resolve held overnight must not close an incident the alert reopened once the hours
+    /// opened: the new fire goes straight out, and the release pass that follows drops the stale
+    /// end rather than sending it after the fire.
+    #[tokio::test]
+    async fn a_held_resolve_does_not_close_an_alert_that_fired_again() {
+        let node = NodeId::new();
+        let (n, dflt, held) = office_hours(node);
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Fire(a.clone()), morning()).await;
+        n.handle_at(NotifyAction::Resolve(a.clone()), evening())
+            .await;
+        assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Resolve);
+        // The next morning it fires again before the release pass has run.
+        n.handle_at(NotifyAction::Fire(a.clone()), morning()).await;
+        release_now(&n, &held, std::slice::from_ref(&a)).await;
+        assert_eq!(
+            dflt.lock().unwrap().count("close"),
+            0,
+            "the stale end is not sent after the fire"
+        );
+        assert!(held.rows.lock().unwrap().is_empty(), "the row is forgotten");
+
+        // A held end for another severity still goes out: that incident is a different one.
+        let warning = alert(node, Severity::Warning, None);
+        n.handle_at(NotifyAction::Fire(warning.clone()), morning())
+            .await;
+        n.handle_at(NotifyAction::Resolve(warning), evening()).await;
+        release_now(&n, &held, std::slice::from_ref(&a)).await;
         assert_eq!(dflt.lock().unwrap().count("close"), 1);
     }
 
