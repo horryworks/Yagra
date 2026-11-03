@@ -49,6 +49,8 @@
 - **Editing an event rule kept to one node no longer turns it into a rule on every node.** The dialog sent no node on save; it now keeps the rule's target.
 - **An event rule that names a node, folder or source that does not exist is refused with `400 unknown_target`** instead of failing with `500`.
 - **A held resolve no longer closes an alert that fired again.** When an alert resolved after hours and fired again as the hours opened, the old resolve could reach PagerDuty or JSM after the new fire and close the open incident. It is now dropped. Reading the held list also no longer deletes a row this core cannot read.
+- **Active alerts: "Clear all filters" now also clears the silenced-only view**, and it appears when that view is the only thing narrowing the list.
+- **The API document now says what three endpoints actually answer.** `GET /api/v1/nodes/{node_id}/thresholds` and its interface twin answer `404` (not `403`) for a node outside the caller's folders, and the two alert-grouping `PUT`s' `422` carries a plain-text body, not the JSON error envelope. Nothing about the responses changed.
 
 ## v0.3.66 — See each node's availability on its Overview, switch config backups on and off from the list, and stop re-paging a device that comes back
 

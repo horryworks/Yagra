@@ -4,7 +4,8 @@
 // Why Tier1: which chips are drawn and when the fleet counts as unpolled is decided in
 // `lib/watchCounts.ts`, which Vitest runs. What only a browser proves is the wiring: the shell
 // reading `/fleet/watch` on a screen that is not Active alerts, the chip on Active alerts leading
-// where the cause is, and a fully watched fleet drawing neither.
+// where the cause is, a fully watched fleet drawing neither, and "Clear all filters" counting the
+// silenced chip as a filter it clears.
 
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
@@ -50,4 +51,14 @@ test.describe('a fleet that is fully watched', () => {
     await expect(page.locator('.nothing-polled')).toHaveCount(0);
     await expect(page.locator('.watch-chip', { hasText: 'Not watched' })).toHaveCount(0);
   });
+});
+
+test('narrowing to the silenced rows offers "Clear all filters", which takes it off', async ({
+  page,
+}) => {
+  await page.goto('/alerts?silenced=1');
+  const clear = page.getByRole('button', { name: /Clear all filters/ });
+  await expect(clear).toHaveCount(1);
+  await clear.click();
+  await expect(page).not.toHaveURL(/silenced=1/);
 });

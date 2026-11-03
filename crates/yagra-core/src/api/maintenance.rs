@@ -74,8 +74,8 @@ pub(crate) fn routes() -> Router<ApiState> {
 }
 
 /// The scope levels a maintenance window may target. `group_id` is a folder-group UUID (resolved
-/// recursively — the All Nodes right-click scope); the other three mirror threshold scoping
-/// (ADR-013).
+/// recursively — the All Nodes right-click scope); the other two mirror threshold scoping
+/// (ADR-013). Every stored [`WindowScope`] but `System`, which a test pins.
 ///
 /// ⚠️ **`system` is deliberately absent.** A fleet-wide window exists (ADR-050) but is opened only
 /// by the upgrade path, which knows its own end time. Leaving it out of this list means no caller —
@@ -875,6 +875,23 @@ mod tests {
             levels, decided,
             "a window scope level exists that the group-scope check has no arm for"
         );
+    }
+
+    /// The creatable levels are every stored window scope but `System`, spelt as the stored
+    /// token. The two lists are written apart, so a scope added to the enum (or removed from it,
+    /// as the label level was in ADR-229) must be answered here as well.
+    #[test]
+    fn the_creatable_levels_are_every_window_scope_but_system() {
+        use crate::alerts::maintenance::WindowScope;
+        let mut from_enum: Vec<&str> = WindowScope::ALL
+            .iter()
+            .filter(|s| !matches!(s, WindowScope::System))
+            .map(|s| s.as_str())
+            .collect();
+        from_enum.sort_unstable();
+        let mut listed = super::WINDOW_SCOPE_LEVELS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(listed, from_enum);
     }
 
     use super::*;

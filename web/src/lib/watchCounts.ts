@@ -5,7 +5,7 @@
 
 import type { Alert, FleetWatch } from '../types/api';
 
-/** A row is silenced when it is held under a root cause (dependency suppression). It stays in the
+/** A row is silenced when it is held under a root cause (outage grouping, ADR-236). It stays in the
  *  list with its own mark; this only counts it. A node in maintenance raises no alert at all, so
  *  it is counted by the `maintenance` chip instead (ADR-234). */
 export function isSilenced(a: Pick<Alert, 'root_cause'>): boolean {

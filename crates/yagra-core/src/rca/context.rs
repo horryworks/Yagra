@@ -282,8 +282,8 @@ pub async fn gather(
         .find(|a| a.subject.is_node(node) && a.check == check)
         .cloned();
 
-    // Rule 1: hop to the cause. The alert's own `root_cause` is what dependency suppression already
-    // decided, so this agrees with the notification the operator received.
+    // Rule 1: hop to the cause. The alert's own `root_cause` is what outage grouping already
+    // decided (ADR-236), so this agrees with the notification the operator received.
     let root_id = asked.as_ref().and_then(|a| a.root_cause).unwrap_or(node);
     let asked_about_symptom = root_id != node;
 
@@ -415,7 +415,7 @@ fn roll_up_dependents(
     let mut total = 0;
     for a in active.iter().filter(|a| a.root_cause == Some(root)) {
         // Node subjects only: a dependent is a node rolled up under `root`, and only nodes are
-        // vertices in the dependency graph that produced `root_cause`.
+        // vertices in the link graph that produced `root_cause`.
         let Some(node) = a.node() else { continue };
         // One entry per node, not per check — a node with three failing checks is one dependent.
         if seen.contains(&node) {

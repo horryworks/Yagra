@@ -1956,7 +1956,7 @@ fn json_notification(
             format!("resolved: poller pool \"{pool}\" has a live poller again")
         }
         // Unreachable today — a pool alert is raised through `raise_event_alert`, which sets
-        // `root_cause: None`, and the dependency graph a roll-up walks is a graph of nodes. Spelled
+        // `root_cause: None`, and the link graph a roll-up walks is a graph of nodes. Spelled
         // out anyway so a future suppression path cannot silently emit node-shaped wording.
         (Subject::Pool(pool), NotifyEvent::Suppress) => {
             format!("rolled up: poller pool \"{pool}\" suppressed")

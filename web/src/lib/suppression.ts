@@ -51,7 +51,7 @@ export const DURATION_PRESETS: { label: string; ms: number }[] = [
 ];
 
 /** Group/node ids currently affected, so both row kinds in the tree can show an icon. Maintenance
- *  also sets a node's rolled-up `state` to `maintenance` (the backend covers node/profile/tag/
+ *  also sets a node's rolled-up `state` to `maintenance` (the backend covers node/profile/
  *  folder-group scopes), but `maintenanceNodes` lets the icon appear immediately for node- and
  *  folder-group-scoped windows without waiting on the next state refresh.
  *
@@ -201,7 +201,7 @@ export function suppressionRefreshDelayMs(expiresAt: number, now: number = Date.
  * Which nodes/groups are currently in maintenance, for the All Nodes icons. A folder-group
  * target propagates down its subtree — the group, all descendant subgroups, and their member nodes
  * (decision: incl. subgroups). Only windows that are *active and not yet over at `now`* count, and
- * likewise exemptions — see {@link inForce}. Node/profile/tag-scoped windows aren't mapped
+ * likewise exemptions — see {@link inForce}. Node- and profile-scoped windows aren't mapped
  * onto tree rows here — those nodes surface through their `maintenance` state instead.
  */
 export function buildSuppressionIndex(
@@ -258,7 +258,7 @@ export function buildSuppressionIndex(
  *    so a node offers a release for itself instead and a group offers nothing (see
  *    {@link causesFor}).
  *  - `unattributed` — the node is in `maintenance` state but nothing the browser holds explains
- *    it. Profile-, tag- and fleet-wide windows are resolved server-side against facts this page
+ *    it. Profile- and fleet-wide windows are resolved server-side against facts this page
  *    never loads, so they arrive as a state with no row behind it. */
 export const CAUSE_SOURCES = ['direct', 'inherited', 'unattributed'] as const;
 export type CauseSource = (typeof CAUSE_SOURCES)[number];
@@ -312,7 +312,7 @@ export const CAUSE_LABEL_KEYS = [
  * Why this row is suppressed right now, most actionable first.
  *
  * Deliberately best-effort, and the deliberate part is `unattributed`. A window scoped to a
- * profile, a tag or the whole fleet is resolved by the server against facts the inventory tree
+ * profile or the whole fleet is resolved by the server against facts the inventory tree
  * does not load, so the browser can see the node is in `maintenance` and still not name the
  * window. Reporting that honestly ("something else is covering this") beats both alternatives:
  * inventing a cause, or showing no panel at all on a row whose icon is lit.

@@ -175,7 +175,7 @@ pub(super) struct LevelBody {
         (status = 204, description = "The deployment's grouping level is set"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
-        (status = 422, description = "Not a grouping level", body = super::error::ErrorBody),
+        (status = 422, description = "Not a grouping level (the body framework's own rejection, plain text)"),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -200,7 +200,7 @@ async fn set_alert_grouping_level(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such folder", body = super::error::ErrorBody),
-        (status = 422, description = "Not a grouping level", body = super::error::ErrorBody),
+        (status = 422, description = "Not a grouping level (the body framework's own rejection, plain text)"),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]

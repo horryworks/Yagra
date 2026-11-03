@@ -109,6 +109,12 @@
      yellow on the light ground, where #ffd400 all but disappears against white. */
   --pin-color: #d09c00;
 
+  /* ---- world clock (ADR-237) — the sun and moon beside a zone's time ----
+     Their own hues, NOT --status-warning / --series-1: a clock's daylight says nothing about any
+     device, and the warning orange beside a status badge on the same board reads as one. */
+  --clock-day: #c48a00;
+  --clock-night: #5a63b8;
+
   /* ---- same device (ADR-139 Inc.5) — a Discovery candidate already monitored elsewhere ----
      Three filled chips, one per level of the judgement: the serial matched (red), the node's
      interface list carries the address on the same model (orange), or only the name and model
@@ -354,6 +360,10 @@
 
   /* The pin's yellow at full brightness — a 16px stroke, not a fill, so it cannot blind. */
   --pin-color: #f5c518;
+
+  /* The clock's sun and moon, lifted for the dark surface. */
+  --clock-day: #f0c040;
+  --clock-night: #9aa3ec;
 
   /* The mirrored chart's two grounds on the dark surface (ADR-128). Lightness only, as above: the
      upper half lifts off #1f2630, the lower half sinks. Darkening both would leave the upper one

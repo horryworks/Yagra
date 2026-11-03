@@ -429,6 +429,73 @@ pub(crate) struct FleetWatch {
     pub pollers_known: bool,
 }
 
+/// The three fleet-wide reads [`watch`] needs, whoever is asking: every node, the Meraki-bound
+/// ones, and the ones with a fresh liveness sample.
+pub(crate) struct WatchInputs {
+    nodes: Vec<yagra_common::Node>,
+    meraki: HashSet<Uuid>,
+    fresh: HashSet<Uuid>,
+}
+
+/// How long one read of [`WatchInputs`] serves every caller. The shell asks on every screen of
+/// every open tab every 15 seconds; without this each ask was a full `nodes` scan and a fleet-wide
+/// TSDB query. Short against the 15-second refresh, so a reading is never older than the one the
+/// screen would have shown, and a configuration change (new node, new folder) takes effect at once.
+const WATCH_INPUTS_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The last [`WatchInputs`] read: when, at which config generation, and what. One per write side.
+/// The lock is never held across an await.
+#[derive(Default)]
+pub(crate) struct WatchInputsCache(
+    std::sync::Mutex<Option<(std::time::Instant, u64, std::sync::Arc<WatchInputs>)>>,
+);
+
+impl WatchInputsCache {
+    fn fresh(
+        &self,
+        now: std::time::Instant,
+        generation: u64,
+    ) -> Option<std::sync::Arc<WatchInputs>> {
+        let held = self.0.lock().expect("fleet watch cache poisoned");
+        held.as_ref()
+            .filter(|(at, g, _)| *g == generation && now.duration_since(*at) < WATCH_INPUTS_TTL)
+            .map(|(_, _, inputs)| std::sync::Arc::clone(inputs))
+    }
+
+    fn store(&self, at: std::time::Instant, generation: u64, inputs: std::sync::Arc<WatchInputs>) {
+        *self.0.lock().expect("fleet watch cache poisoned") = Some((at, generation, inputs));
+    }
+}
+
+/// Read [`WatchInputs`], or reuse the last read while it is fresh. A failed read is not cached.
+async fn watch_inputs(
+    st: &ApiState,
+    admin: &super::AdminState,
+) -> anyhow::Result<std::sync::Arc<WatchInputs>> {
+    let now = std::time::Instant::now();
+    let generation = yagra_base::config_gen::current();
+    if let Some(inputs) = admin.fleet_watch_inputs.fresh(now, generation) {
+        return Ok(inputs);
+    }
+    let nodes = admin.repo.list_nodes().await?;
+    let meraki = admin.meraki_devices.node_ids().await?;
+    let fresh = st
+        .store
+        .fresh_node_ids(&NodeKind::LIVENESS_METRICS, COVERAGE_FRESH_SECS)
+        .await
+        .into_iter()
+        .collect();
+    let inputs = std::sync::Arc::new(WatchInputs {
+        nodes,
+        meraki,
+        fresh,
+    });
+    admin
+        .fleet_watch_inputs
+        .store(now, generation, std::sync::Arc::clone(&inputs));
+    Ok(inputs)
+}
+
 /// Count what is not being watched. Shared by `GET /api/v1/fleet/watch` and the MCP
 /// `get_fleet_summary(kind="watch")` tool.
 ///
@@ -444,8 +511,8 @@ pub(crate) async fn watch(
     let internal = |e: anyhow::Error| {
         ApiError::from_internal(e.as_ref(), "fleet watch", "failed to count unwatched nodes")
     };
-    let all = admin.repo.list_nodes().await.map_err(internal)?;
-    let meraki = admin.meraki_devices.node_ids().await.map_err(internal)?;
+    let inputs = watch_inputs(st, admin).await.map_err(internal)?;
+    let (all, meraki) = (&inputs.nodes, &inputs.meraki);
     let resolver = super::util::pool_resolver(admin).await;
     let pollers_known = st.is_leader.load(std::sync::atomic::Ordering::Acquire);
     // Coverage is a fact about the whole pool, so it is judged over the whole inventory; only the
@@ -453,7 +520,7 @@ pub(crate) async fn watch(
     let uncovered = pollers_known.then(|| {
         let polled: Vec<_> = all
             .iter()
-            .filter(|n| pc::is_pool_polled(n, &meraki))
+            .filter(|n| pc::is_pool_polled(n, meraki))
             .cloned()
             .collect();
         pc::uncovered_pools(
@@ -462,16 +529,17 @@ pub(crate) async fn watch(
         )
     });
     let visible: Vec<_> = all
-        .into_iter()
+        .iter()
         .filter(|n| scope.allows_group(n.group.map(|g| g.as_uuid())))
+        .cloned()
         .collect();
-    let fresh: HashSet<Uuid> = st
-        .store
-        .fresh_node_ids(&NodeKind::LIVENESS_METRICS, COVERAGE_FRESH_SECS)
-        .await
-        .into_iter()
-        .collect();
-    let n = pc::not_watched(&visible, &meraki, &resolver, uncovered.as_ref(), &fresh);
+    let n = pc::not_watched(
+        &visible,
+        meraki,
+        &resolver,
+        uncovered.as_ref(),
+        &inputs.fresh,
+    );
     Ok(FleetWatch {
         no_live_poller: n.no_live_poller,
         no_recent_data: n.no_recent_data,

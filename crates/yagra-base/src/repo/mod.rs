@@ -73,17 +73,15 @@ mod seed;
 mod settings;
 mod snapshots;
 mod subnet_overlaps;
-pub mod topology_mode;
 
 #[cfg(test)]
 mod guards;
 
 // Everything a caller outside this module could name before the split, still named the same way.
 //
-// ⚠️ `TopologyRow` and `InterfaceIdent` are flagged unused and are re-exported anyway: both are the
-// return type of a `pub` method here, and no caller happens to write the name. Dropping them would
-// make those two signatures unnameable from outside `repo` — a narrowing of the surface disguised
-// as a warning fix, and the one difference this split would have made to a caller.
+// ⚠️ `InterfaceIdent` is flagged unused and is re-exported anyway: it is the return type of a `pub`
+// method here, and no caller happens to write the name. Dropping it would make that signature
+// unnameable from outside `repo` — a narrowing of the surface disguised as a warning fix.
 #[allow(unused_imports)]
 pub use interfaces::{
     InterfaceBatchRow, InterfaceIdent, InterfaceMeta, InterfaceUpsert, INTERFACE_STALE_SECS,
@@ -96,13 +94,11 @@ pub use migrate::embedded_migrations;
 // from outside `migrate`. Unconditional, it is dead code in the shipped binary.
 #[cfg(any(test, feature = "test-util"))]
 pub use migrate::MIGRATIONS;
-#[allow(unused_imports)]
-pub use nodes::TopologyRow;
 pub use nodes::{
     DuplicateInput, NameFollowed, NameFromDevice, NodeBindingUpdate, NodeWithNotes,
     ReclassifyInput, ReclassifyWrite, RediscoverWrite, SHARED_VALUE_MAX,
 };
-// Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
+// Re-exported for `InterfaceIdent`'s reason above, not by oversight: both are the return type of a
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping
 // them would make `list_pools` and `pool_references` unnameable from outside `repo`.
 #[allow(unused_imports)]

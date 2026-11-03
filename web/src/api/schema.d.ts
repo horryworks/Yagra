@@ -10377,7 +10377,7 @@ export interface components {
             role_reason: components["schemas"]["MapRoleReason"];
             /**
              * Format: uuid
-             * @description Upstream node blamed for this node's alert (dependency suppression), if any.
+             * @description The node whose outage this alert is rolled up into: the border of the outage it sits behind (ADR-236), or its own node for a down node's other alerts (ADR-087).
              */
             root_cause?: string | null;
             state: components["schemas"]["NodeState"];
@@ -11751,7 +11751,7 @@ export interface components {
          */
         NodeCollection: components["schemas"]["StoredCollectionItem"][] | components["schemas"]["CollectionItem"][];
         /**
-         * @description One node's configuration detail, including its bindings (profile/credential/parent) so the
+         * @description One node's configuration detail, including its bindings (profile and credential) so the
          *     node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
          */
         NodeDetail: {
@@ -15361,8 +15361,8 @@ export interface components {
             first_seen: string;
             /**
              * Format: uuid
-             * @description The endpoint an operator declared upstream, when one was declared. `null` means the direction
-             *     is worked out from how far each end is from a poller.
+             * @description The endpoint an operator declared upstream before ADR-236, when one was. Read by nothing
+             *     since then: no direction is worked out or recorded any more.
              */
             forced_parent?: string | null;
             /**
@@ -16125,14 +16125,12 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Not a grouping level */
+            /** @description Not a grouping level (the body framework's own rejection, plain text) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
+                content?: never;
             };
             /** @description This core has no write side (skeleton mode) */
             503: {
@@ -16240,14 +16238,12 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Not a grouping level */
+            /** @description Not a grouping level (the body framework's own rejection, plain text) */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
+                content?: never;
             };
             /** @description This core has no write side (skeleton mode) */
             503: {
@@ -28782,8 +28778,17 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig, or the node is outside the token's group scope */
+            /** @description Role lacks ManageConfig */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node, or one outside the caller's folders */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -29680,8 +29685,17 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig, or the node is outside the token's group scope */
+            /** @description Role lacks ManageConfig */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node, or one outside the caller's folders */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

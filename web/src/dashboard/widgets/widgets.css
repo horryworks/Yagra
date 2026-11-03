@@ -617,11 +617,11 @@ html[data-viewport='mobile'] .vpnsess-rm {
 }
 
 .wclock-ico.is-day {
-  color: var(--status-warning);
+  color: var(--clock-day);
 }
 
 .wclock-ico.is-night {
-  color: var(--series-1);
+  color: var(--clock-night);
 }
 
 @container (min-width: 440px) {

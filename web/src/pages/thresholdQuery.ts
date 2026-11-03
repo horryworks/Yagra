@@ -26,6 +26,7 @@ import {
 import { decodeCondition } from '../lib/filterCondition';
 import { unset } from '../lib/filterQuery';
 import { DIRECTIONS, SCOPE_LEVELS, type ScopeLevel, type StoredThreshold } from '../types/api';
+import { ALERT_RULES_PATH } from './alertRules';
 import { thresholdFormFrom, type ThresholdForm } from './thresholdRequest';
 
 /** The level tabs, in the order the precedence reads: every level, then broadest to narrowest. */
@@ -98,7 +99,7 @@ export function thresholdRulesHref(view: Partial<RuleView>): string {
   const params = new URLSearchParams();
   writeRuleView(params, { tab: 'all', target: null, check: null, ...view });
   const qs = params.toString();
-  return qs ? `/alerts/rules?${qs}` : '/alerts/rules';
+  return qs ? `${ALERT_RULES_PATH}?${qs}` : ALERT_RULES_PATH;
 }
 
 /** The add dialog's opening state: the tab's level, and the chosen target already picked. On

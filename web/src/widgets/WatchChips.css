@@ -11,7 +11,7 @@
   align-items: center;
   min-height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: 999px;
   background: var(--bg-secondary);
   color: var(--text-primary);
@@ -19,7 +19,7 @@
   font-size: var(--font-sm);
   text-decoration: none;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color var(--transition), background var(--transition);
 }
 
 .watch-chip:hover {

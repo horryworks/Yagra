@@ -2,9 +2,8 @@
 // Create a maintenance window — shared by the Maintenance page ("+ Add window") and the All Nodes
 // right-click "Custom…" path. When `initialScope` is set the scope is fixed to that node/folder
 // group (the operator already picked the target); otherwise the scope is chosen here (node /
-// folder group / device profile). The legacy tag-based "group" scope is no longer offered for
-// creation — a folder group (`group_id`, recursive incl. subgroups, ADR-022) supersedes it; old
-// tag-group windows still list and resolve.
+// folder group / device profile). A folder group is `group_id`, recursive incl. subgroups
+// (ADR-022); the old label-scoped windows were deleted by migration 0164 (ADR-229).
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

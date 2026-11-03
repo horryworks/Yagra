@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The core inventory entity: a monitored node.
 //!
-//! Nodes form a **multi-tier nested** inventory (a node may have a parent), which is
-//! what dependency suppression and root-cause roll-up build on. Identity is the
+//! Nodes sit in the folder tree. A node's `parent` is left over from the dependency graph ADR-236
+//! removed: it is still read from its column but decides nothing. Identity is the
 //! stable [`NodeId`]; `name`/`tags` are mutable metadata. Poller assignment uses the
 //! `pool` attribute (location-affinity pools, ADR-009).
 

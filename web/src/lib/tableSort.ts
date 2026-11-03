@@ -67,6 +67,11 @@ export const DIR_PARAM = 'dir';
  *  A column this table does not sort on falls back to the table's default — a stale bookmark from a
  *  build with one more sortable column opens the default order, never an order the header cannot
  *  show an arrow for. A `dir` that is not `desc` reads as `asc`, which is where a click starts. */
+/** The text comparison, built once: `localeCompare` with options obtains a collator for every
+ *  comparison, which `lib/nodeTree.ts` measured and removed (ADR-133). The options are the ones the
+ *  per-call form passed, so the order does not change; `tableSort.test.ts` pins that. */
+export const SORT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 export function readSortParams(
   params: URLSearchParams,
   sortable: readonly string[],
@@ -140,10 +145,7 @@ export function sortRows<T>(rows: readonly T[], sort: SortState, values: SortVal
       if (typeof av === 'number' && typeof bv === 'number') {
         cmp = av - bv;
       } else {
-        cmp = String(av).localeCompare(String(bv), undefined, {
-          numeric: true,
-          sensitivity: 'base',
-        });
+        cmp = SORT_COLLATOR.compare(String(av), String(bv));
       }
       // Stable: equal rows keep the order they arrived in.
       return cmp === 0 ? a.index - b.index : cmp * sign;

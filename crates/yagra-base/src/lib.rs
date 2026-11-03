@@ -9,7 +9,7 @@
 //! **It names nothing above it, and the compiler holds that.** It used to be a folder in core,
 //! where `repo/guards.rs` searched the text for an upward import; as its own crate it cannot
 //! depend on `yagra-core`, so the import does not compile. A type a repository needs lives here
-//! and its domain module imports it from here (`repo::adjacency_settings`, `repo::topology_mode`,
+//! and its domain module imports it from here (`repo::adjacency_settings`,
 //! `groups::org_group_id`).
 //!
 //! ⚠️ **The checks that speak for the whole program live in core**, in

@@ -17,7 +17,6 @@ use sqlx::Row;
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
 use super::adjacency_settings::AdjacencySettings;
 use super::retention_settings::RetentionSettings;
-use super::topology_mode::TopologyMode;
 
 use super::*;
 
@@ -336,58 +335,6 @@ impl NodeRepo {
         Ok(())
     }
 
-    /// Which dependency graph the alert engine uses (ADR-043 decision 5).
-    ///
-    /// Degrades to [`TopologyMode::Manual`] on any read failure, and on any value it cannot parse.
-    /// Both are the same decision: a database blip or a value written by a newer core must not be
-    /// able to *turn on* derived suppression, because the failure mode of a wrong dependency graph
-    /// is a real outage nobody is told about. Falling back to the mode that changes nothing is the
-    /// only fallback that cannot silence anything.
-    pub async fn get_topology_mode(&self) -> TopologyMode {
-        let Ok(Some(row)) = sqlx::query("SELECT topology_mode FROM app_settings WHERE id = TRUE")
-            .fetch_optional(&self.pool)
-            .await
-        else {
-            return TopologyMode::Manual;
-        };
-        row.try_get::<String, _>("topology_mode")
-            .map(|s| TopologyMode::from_stored(&s))
-            .unwrap_or(TopologyMode::Manual)
-    }
-
-    /// Set the topology mode, upserting the singleton row. The API edge validates the token
-    /// (`TopologyMode::from_token`) and checks the blocking preconditions; the column carries no
-    /// `CHECK` on purpose (see migration 0067).
-    pub async fn set_topology_mode(&self, mode: TopologyMode) -> anyhow::Result<()> {
-        // `topology_mode_since` moves only when the mode actually changes. Stamping it on every
-        // write would make "how long has this been in shadow" reset whenever an unrelated save
-        // touched the row — and that number is the only evidence the promotion checklist has.
-        sqlx::query(
-            "INSERT INTO app_settings (id, topology_mode, topology_mode_since, updated_at) \
-             VALUES (TRUE, $1, now(), now()) \
-             ON CONFLICT (id) DO UPDATE SET \
-                 topology_mode_since = CASE \
-                     WHEN app_settings.topology_mode IS DISTINCT FROM $1 THEN now() \
-                     ELSE app_settings.topology_mode_since END, \
-                 topology_mode = $1, \
-                 updated_at = now()",
-        )
-        .bind(mode.as_str())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// When the topology mode was last changed, or `None` if it never has been.
-    pub async fn topology_mode_since(&self) -> Option<chrono::DateTime<chrono::Utc>> {
-        sqlx::query("SELECT topology_mode_since FROM app_settings WHERE id = TRUE")
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|r| r.try_get("topology_mode_since").ok())
-    }
-
     /// The global Cisco Meraki polling kill switch (safeguard). Defaults to `true` (enabled) if the
     /// row is somehow absent or on any read error, so a transient DB blip never silently pauses
     /// monitoring — the operator's explicit `false` is the only thing that halts polling.
@@ -612,30 +559,6 @@ mod tests {
             repo.get_discovery_max_targets().await,
             8192,
             "absent leaves it alone"
-        );
-    }
-
-    /// The topology mode is stored, and its timestamp moves only when the mode actually changes.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn the_topology_mode_and_the_moment_it_changed(pool: sqlx::PgPool) {
-        let repo = pgtest::repo(pool);
-        repo.seed_app_settings(30, 7).await.expect("seed");
-        assert_eq!(repo.get_topology_mode().await, TopologyMode::Manual);
-
-        repo.set_topology_mode(TopologyMode::Shadow)
-            .await
-            .expect("write");
-        assert_eq!(repo.get_topology_mode().await, TopologyMode::Shadow);
-        let first = repo.topology_mode_since().await.expect("a timestamp");
-
-        repo.set_topology_mode(TopologyMode::Derived)
-            .await
-            .expect("write");
-        assert_eq!(repo.get_topology_mode().await, TopologyMode::Derived);
-        assert!(
-            repo.topology_mode_since().await.expect("a timestamp") >= first,
-            "the mode changed but the moment it changed went backwards"
         );
     }
 

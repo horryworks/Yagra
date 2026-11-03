@@ -1050,7 +1050,7 @@ pub(crate) async fn resolve_node_names(
     }
 }
 
-/// One node's configuration detail, including its bindings (profile/credential/parent) so the
+/// One node's configuration detail, including its bindings (profile and credential) so the
 /// node-detail page can show and edit them. Live mode only (PostgreSQL inventory).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeDetail {

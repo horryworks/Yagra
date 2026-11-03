@@ -307,7 +307,8 @@ pub(crate) struct MatchingThreshold {
     responses(
         (status = 200, description = "Every rule that reaches this port, from any scope level, most specific first, each flagged with whether it is in force", body = Vec<MatchingThreshold>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig, or the node is outside the token's group scope", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or one outside the caller's folders", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -370,7 +371,8 @@ pub(crate) async fn interface_thresholds(
     responses(
         (status = 200, description = "Every rule on a node-wide metric that reaches this node, from any scope level, most specific first, each flagged with whether it is in force. Per-interface metrics are answered per port by the interface route", body = Vec<MatchingThreshold>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig, or the node is outside the token's group scope", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or one outside the caller's folders", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]

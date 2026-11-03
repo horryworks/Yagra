@@ -43,7 +43,7 @@ pub enum WindowScope {
     /// Every node, with no id at all — the deployment itself is out of service.
     ///
     /// Added for ADR-050: an upgrade restarts core and every poller, and alerting about that is
-    /// noise an operator cannot act on. The other four scopes all answer "which nodes", and none of
+    /// noise an operator cannot act on. The other three scopes all answer "which nodes", and none of
     /// them can say "all of them" without enumerating something that changes underneath.
     ///
     /// ⚠️ **The window hides real outages too.** The upgrade path therefore does both halves: it

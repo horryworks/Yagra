@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  SORT_COLLATOR,
   nextSort,
   readSortParams,
   sortOrDefault,
@@ -108,6 +109,18 @@ describe('nextSort', () => {
     let s = UNSORTED;
     for (let i = 0; i < 4; i++) s = nextSort(s, 'name');
     expect(s).toEqual(asc('name'));
+  });
+});
+
+describe('the shared collator', () => {
+  it('orders text exactly as the per-call localeCompare it replaced', () => {
+    const words = ['b', 'B', 'a', 'á', 'port 10', 'port 9', 'Port 2', 'ge-0/0/10', 'ge-0/0/2', '', 'Ω', 'z1', 'Z01'];
+    for (const x of words) {
+      for (const y of words) {
+        const old = Math.sign(x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' }));
+        expect(Math.sign(SORT_COLLATOR.compare(x, y)), `${x} vs ${y}`).toBe(old);
+      }
+    }
   });
 });
 

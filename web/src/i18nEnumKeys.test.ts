@@ -235,6 +235,7 @@ import enTopology from './locales/en/topology.json';
 import jaTopology from './locales/ja/topology.json';
 import enSuppression from './locales/en/suppression.json';
 import jaSuppression from './locales/ja/suppression.json';
+import { SCOPE_TABS } from './pages/thresholdQuery';
 
 type Json = Record<string, unknown>;
 
@@ -309,6 +310,8 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   it('every threshold scope level and direction has a label (alertsConfig)', () => {
     const locales = { en: enAlertsConfig, ja: jaAlertsConfig };
     expectKeys('scope level', locales, 'thresholds.scopeLevel.', SCOPE_LEVELS);
+    // The page's tabs are `all` plus every level, built into `thresholds.tabs.${key}`.
+    expectKeys('scope tab', locales, 'thresholds.tabs.', SCOPE_TABS);
     // The placeholder is checked over a *subset*, derived rather than listed: the scope-id input
     // is not rendered for `global` (a fleet-wide rule has nothing to point at), so demanding a
     // string there would demand one nobody can ever see — and an unread string is what drifts.

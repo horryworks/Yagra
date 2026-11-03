@@ -13,11 +13,11 @@
 //! - **Threshold alerting** — each poll sample with a resolved [`EffectiveThreshold`]
 //!   (scope inheritance via [`AlertConfig`]) is evaluated and fed through the same
 //!   hysteresis/flapping machinery as liveness.
-//! - **Dependency suppression** — a node's committed liveness is tracked per node; when a
-//!   node goes down and *every* upstream is also down (per the [`Topology`]), its alert is
-//!   attributed to the highest down ancestor (`root_cause`) and the downstream
-//!   notification is suppressed (rolled up into the parent incident, ADR-015). The alert
-//!   still fires for the UI/history — only the duplicate page is suppressed.
+//! - **Outage grouping** (ADR-236) — a node's committed liveness is tracked per node; when a
+//!   node goes down and none of its linked neighbours is alive, its alert is attributed to the
+//!   border of the outage it sits in (`root_cause`) and its notification is rolled up into the
+//!   border's incident, at the level the operator chose (off by default). The alert still fires
+//!   for the UI/history — only the duplicate page is withheld.
 //! - **Maintenance windows** — nodes covered by an active window (snapshot in
 //!   [`AlertConfig`]) observe `Maintenance` instead of their real state, so no alert can
 //!   fire during the window and existing alerts resolve (after the usual dwell). When the

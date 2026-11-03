@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-10-31
-# counts: MA-L=40315 MA-L-repeats-dropped=3 MA-M=6585 MA-S=7222 withheld=3
+# fetched: 2026-11-03
+# counts: MA-L=40330 MA-L-repeats-dropped=3 MA-M=6587 MA-S=7227 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -12074,7 +12074,7 @@
 00A053	COMPACT DEVICES, INC.
 00A055	Data Device Corporation
 00A056	MICROPROSS
-00A057	LANCOM Systems GmbH
+00A057	Rohde & Schwarz Networks and Cybersecurity GmbH
 00A058	GLORY, LTD.
 00A059	HAMILTON HALLMARK
 00A05A	KOFAX IMAGE PRODUCTS
@@ -14486,6 +14486,7 @@
 08F4AB	Apple, Inc.
 08F4F0	Cisco Systems, Inc
 08F606	zte corporation
+08F679	Huawei Device Co., Ltd.
 08F69C	Apple, Inc.
 08F6F8	GET Engineering
 08F728	GLOBO Multimedia Sp. z o.o. Sp.k.
@@ -16150,6 +16151,7 @@
 182CB4	Nectarsoft Co., Ltd.
 182D98	Jinwoo Industrial system
 182DF7	JY COMPANY
+182F58	Veritech LLC
 183009	Woojin Industrial Systems Co., Ltd.
 18300C	Hisense Electric Co.,Ltd
 18314F	AIDIN ROBOTICS
@@ -17584,6 +17586,7 @@
 20AB53	Motorola Mobility LLC, a Lenovo Company
 20AC9C	China Telecom Corporation Limited
 20AD56	AUMOVIO Systems, Inc.
+20AD72	eero inc.
 20AEB6	Huawei Device Co., Ltd.
 20AF1B	SteelSeries ApS
 20B001	Vantiva Technologies Belgium
@@ -19286,7 +19289,7 @@
 2CD3AD	Texas Instruments
 2CD444	FUJITSU LIMITED
 2CD748	Itron Inc
-2CD7FF	LANCOM Systems GmbH
+2CD7FF	Rohde & Schwarz Networks and Cybersecurity GmbH
 2CD8AE	Shenzhen SEI Robotics Co.,Ltd
 2CD8DE	AltoBeam Inc.
 2CD974	Hui Zhou Gaoshengda Technology Co.,LTD
@@ -19323,6 +19326,7 @@
 2CEADA	ICC Intelligent Platforms GmbH
 2CEADC	ASKEY COMPUTER CORP
 2CEAFC	Intel Corporate
+2CEB66	Huawei Device Co., Ltd.
 2CECA6	HUAWEI TECHNOLOGIES CO.,LTD
 2CECF7	Shenzhen SDMC Technology CO.,Ltd.
 2CED89	HUAWEI TECHNOLOGIES CO.,LTD
@@ -19365,6 +19369,7 @@
 300505	Intel Corporate
 30053F	JTI Co.,Ltd.
 30055C	Brother industries, LTD.
+3005C8	Huawei Device Co., Ltd.
 30074D	SAMSUNG ELECTRO-MECHANICS(THAILAND)
 30075C	Netis Technology Co., Ltd.
 3007A3	Shenzhen Skyworth Digital Technology CO., Ltd
@@ -19965,6 +19970,7 @@
 341B22	Grandbeing Technology Co., Ltd
 341B2D	Cisco Systems, Inc
 341CF0	Xiaomi Communications Co Ltd
+341E64	Huawei Device Co., Ltd.
 341E6B	HUAWEI TECHNOLOGIES CO.,LTD
 341FC4	Shenzhen V-Link Technology CO., LTD.
 341FE4	Commscope
@@ -19974,6 +19980,7 @@
 342109	Jensen Scandinavia AS
 3422CF	AUMOVIO Systems, Inc.
 342387	Hon Hai Precision Ind. Co.,Ltd.
+34238E	eero inc.
 3423BA	SAMSUNG ELECTRO-MECHANICS(THAILAND)
 34243E	zte corporation
 34255D	Shenzhen Loadcom Technology Co.,Ltd
@@ -23326,6 +23333,7 @@
 4C63AD	Huawei Device Co., Ltd.
 4C63EB	Application Solutions (Electronics and Vision) Ltd
 4C6460	ITEL MOBILE LIMITED
+4C64C9	Huawei Device Co., Ltd.
 4C64D9	Guangdong Leawin Group Co., Ltd
 4C65A8	IEEE Registration Authority
 4C65A80	WELT Corporation
@@ -23813,6 +23821,7 @@
 50236D	Nintendo Co.,Ltd
 5023A2	Apple, Inc.
 50252B	Nethra Imaging Incorporated
+5025FE	Huawei Device Co., Ltd.
 502690	FUJITSU LIMITED
 5026D2	AVIRE Trading Limited
 5026EF	Murata Manufacturing Co., Ltd.
@@ -24449,6 +24458,7 @@
 543E64	Fiberhome Telecommunication Technologies Co.,LTD
 5440AD	Samsung Electronics Co.,Ltd
 544249	Sony Corporation
+544387	Huawei Device Co., Ltd.
 5443B2	Espressif Inc.
 544408	Nokia Corporation
 54443B	HUAWEI TECHNOLOGIES CO.,LTD
@@ -32374,6 +32384,7 @@
 70BC48	Cisco Systems, Inc
 70BD96	Cisco Systems, Inc
 70BDD2	Adva Network Security GmbH
+70BE8E	Huawei Device Co., Ltd.
 70BF3E	Charles River Laboratories
 70BF92	GN Audio A/S
 70C288	Intel Corporate
@@ -34504,6 +34515,7 @@
 806DDE	Beken Corporation
 806F1C	Huawei Device Co., Ltd.
 806FB0	Texas Instruments
+807039	Huawei Device Co., Ltd.
 80711F	Juniper Networks
 80717A	HUAWEI TECHNOLOGIES CO.,LTD
 807215	SKY UK LIMITED
@@ -35194,6 +35206,7 @@
 84C0EF	Samsung Electronics Co.,Ltd
 84C1C1	Juniper Networks
 84C2E4	Jiangsu Qinheng Co., Ltd.
+84C300	Shenzhen SDMC Technology CP,.LTD
 84C3E8	Vaillant GmbH
 84C5A6	Intel Corporate
 84C665	Taicang T&W Electronics
@@ -36236,6 +36249,7 @@
 8C1F64189	HERUTU ELECTRONICS CORPORATION
 8C1F6418A	Network Rail
 8C1F6418B	M-Pulse GmbH & Co.KG
+8C1F6418C	Cence Power Inc.
 8C1F6418E	J1-LED Intelligent Transport Systems Pty Ltd
 8C1F64190	Wesync
 8C1F64193	Sicon srl
@@ -36384,6 +36398,7 @@
 8C1F64269	Sicon srl
 8C1F6426B	Profcon AB
 8C1F6426C	Diatech co.,ltd.
+8C1F6426D	Blueprint Subsea
 8C1F6426E	Koizumi Lighting Technology Corp.
 8C1F6426F	QUISS GmbH
 8C1F64270	Xi‘an Hangguang Satellite and Control Technology Co.,Ltd
@@ -37494,6 +37509,7 @@
 8C1F6485A	ENBIK Technology Co., Ltd
 8C1F6485B	Atlantic Pumps Ltd
 8C1F6485C	Zing 5g Communications Canada Inc.
+8C1F6485D	Subsea Data Systems
 8C1F6485E	Apen Group S.p.A. (VAT IT08767740155)
 8C1F6485F	NEC Asia Pacific Pte Ltd
 8C1F64860	Gogo BA
@@ -38699,6 +38715,7 @@
 8C1F64EF1	BIOTAGE GB LTD
 8C1F64EF4	Mediaport Systems Ltd
 8C1F64EF5	Sigma Defense Systems LLC
+8C1F64EF6	UNCOMMON GROUP INC
 8C1F64EF8	Northwest Central Indiana Community Partnerships Inc dba Wabash Heartland Innovation Network (WHIN)
 8C1F64EFB	WARECUBE,INC
 8C1F64EFC	LonTen Technology（BeiJing）Co.,LTD.
@@ -38779,6 +38796,7 @@
 8C1F64F67	DISTRON S.L.
 8C1F64F68	YUYAMA MFG Co.,Ltd
 8C1F64F69	SUS Corporation
+8C1F64F6A	NoWire Connect Sweden AB
 8C1F64F6C	Sonatronic
 8C1F64F6D	Ophir Manufacturing Solutions Pte Ltd
 8C1F64F6E	ITG Co.Ltd
@@ -39192,6 +39210,7 @@
 8C9A8F	Sagemcom Broadband SAS
 8C9B2D	PLANTRONICS, INC.
 8C9F3B	Qingdao Hisense Communications Co.,Ltd.
+8CA02C	Arcadyan Corporation
 8CA048	Beijing NeTopChip Technology Co.,LTD
 8CA229	Huawei Device Co., Ltd.
 8CA2F5	Huawei Device Co., Ltd.
@@ -39456,6 +39475,7 @@
 901A4F	EM Microelectronic
 901ACA	Commscope
 901B0E	Fujitsu Technology Solutions GmbH
+901C23	Huawei Device Co., Ltd.
 901C9E	Alcatel-Lucent Enterprise
 901D27	zte corporation
 901DFF	ZOWEE TECHNOLOGY(HEYUAN)Co.,Ltd
@@ -45065,12 +45085,14 @@ B8F453	IEEE Registration Authority
 B8F4530	ELS Instruments
 B8F4531	GANZHOU DEHUIDA TECHNOLOGY CO., LTD
 B8F4532	Hamamatsu Photonics K.K.
+B8F4533	Annapurna labs
 B8F4534	Ontic Engineering & Manufacturing
 B8F4537	Valthor, s.r.o.
 B8F4538	ViewSonic Corp
 B8F4539	PA Technology Solutions Ltd
 B8F453A	Skeleton Technologies OÜ
 B8F453B	SDMT Limited
+B8F453C	Wavin T&I
 B8F453D	Withusnet Co., Ltd
 B8F4A4	Google, Inc.
 B8F4D0	Herrmann Ultraschalltechnik GmbH & Co. Kg

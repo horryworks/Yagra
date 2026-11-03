@@ -19,16 +19,6 @@ use yagra_common::Node;
 
 use super::*;
 
-/// The dependency-graph skeleton for one node: just enough to draw the topology/dependency views
-/// (id, display name, upstream parent). Loaded in keyset pages by [`NodeRepo::list_topology_page`]
-/// so the endpoints never build one unbounded full-fleet row set (S7).
-#[derive(Debug, Clone)]
-pub struct TopologyRow {
-    pub id: Uuid,
-    pub name: String,
-    pub parent_id: Option<Uuid>,
-}
-
 /// A node row plus its position among its siblings in the folder tree (ADR-133).
 ///
 /// The two by-group reads already `ORDER BY sort_order` and then threw the value away, because
@@ -347,57 +337,6 @@ impl NodeRepo {
             }
         };
         rows.iter().map(node_from_row).collect()
-    }
-
-    /// One keyset page of the dependency-graph skeleton — only `(id, name, parent_id)` — ordered by
-    /// id, starting after `after` (S7). Deliberately light: the topology/coverage endpoints don't
-    /// need the full node row (address/creds/tags), and at 50k nodes a large page keeps the
-    /// whole-graph assembly to a handful of round-trips instead of returning one unbounded JSON blob.
-    /// Scoping note: a scoped caller sees only the in-scope nodes, so a dependency edge whose
-    /// parent lies outside the scope arrives with a `parent_id` that is not in the response. The
-    /// graph renders it as a root, which is the honest reading — the caller cannot see the parent,
-    /// so they cannot be told the child hangs off it.
-    pub async fn list_topology_page(
-        &self,
-        groups: GroupFilter<'_>,
-        after: Option<Uuid>,
-        limit: i64,
-    ) -> anyhow::Result<Vec<TopologyRow>> {
-        // Larger page than the node list (its 501 cap is UI-facing); +1 to detect "has more".
-        let limit = limit.clamp(1, 5001);
-        let rows = match after {
-            Some(after) => {
-                sqlx::query(&format!(
-                    "SELECT id, name, parent_id FROM nodes WHERE {} AND id > $2 \
-                     ORDER BY id LIMIT $3",
-                    Self::SCOPE_PREDICATE
-                ))
-                .bind(Self::scope_bind(groups))
-                .bind(after)
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            None => {
-                sqlx::query(&format!(
-                    "SELECT id, name, parent_id FROM nodes WHERE {} ORDER BY id LIMIT $2",
-                    Self::SCOPE_PREDICATE
-                ))
-                .bind(Self::scope_bind(groups))
-                .bind(limit)
-                .fetch_all(&self.pool)
-                .await?
-            }
-        };
-        rows.iter()
-            .map(|row| {
-                Ok(TopologyRow {
-                    id: row.try_get("id")?,
-                    name: row.try_get("name")?,
-                    parent_id: row.try_get("parent_id")?,
-                })
-            })
-            .collect()
     }
 
     /// Create a node; returns its new id. Optional profile, bound credential, parent, and
@@ -1048,19 +987,6 @@ impl NodeRepo {
         Ok(rows)
     }
 
-    /// Set (or clear with `None`) a node's **dependency parent** (upstream) — the `parent_id`
-    /// edge that feeds parent-down alert suppression and root-cause roll-up (ADR-015). Distinct
-    /// from [`Self::set_node_group`], which moves a node in the inventory *folder* tree. Returns
-    /// whether the node exists. The caller validates that `parent` exists and that the new edge
-    /// introduces no cycle ([`crate::groups::would_create_cycle`]) before calling this.
-    pub async fn set_node_parent(&self, id: Uuid, parent: Option<Uuid>) -> anyhow::Result<bool> {
-        let res = sqlx::query("UPDATE nodes SET parent_id = $2, updated_at = now() WHERE id = $1")
-            .bind(id)
-            .bind(parent)
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected() > 0)
-    }
     /// Everything directly under `group` — its sub-folders and its member nodes in one ordered
     /// list. The list a drag's before/after anchor is looked up in; see
     /// [`crate::groups::ordered_tree_siblings`], which owns the statement because it names both
@@ -2181,41 +2107,6 @@ impl NodeRepo {
             .await?;
         Ok(res.rows_affected() > 0)
     }
-
-    /// Nodes an operator has excluded from derived suppression (ADR-043 Increment 3).
-    ///
-    /// Read as a set rather than a column on [`yagra_common::Node`] on purpose: only the projection
-    /// consults it, and widening the shared node model would ripple through every construction site
-    /// of a type that already carries everything else about a node.
-    ///
-    /// Degrades to **empty** on a read failure — empty means nothing is excluded, i.e. the derived
-    /// graph applies in full. That is the wrong direction to fail in, so it is worth being explicit:
-    /// the alternative (treating a failed read as "exclude everything") would silently disable
-    /// suppression fleet-wide on a transient, which is a louder failure but a much more confusing
-    /// one. The read is a single indexed scan alongside the node list it accompanies.
-    pub async fn suppression_opt_outs(&self) -> std::collections::BTreeSet<yagra_common::NodeId> {
-        let Ok(rows) = sqlx::query("SELECT id FROM nodes WHERE suppression_opt_out")
-            .fetch_all(&self.pool)
-            .await
-        else {
-            tracing::warn!("failed to read suppression opt-outs; treating none as excluded");
-            return std::collections::BTreeSet::new();
-        };
-        rows.iter()
-            .filter_map(|r| r.try_get::<Uuid, _>("id").ok())
-            .map(yagra_common::NodeId)
-            .collect()
-    }
-
-    /// Exclude one node from derived suppression, or put it back. Returns whether the node exists.
-    pub async fn set_suppression_opt_out(&self, id: Uuid, opt_out: bool) -> anyhow::Result<bool> {
-        let res = sqlx::query("UPDATE nodes SET suppression_opt_out = $2 WHERE id = $1")
-            .bind(id)
-            .bind(opt_out)
-            .execute(&self.pool)
-            .await?;
-        Ok(res.rows_affected() > 0)
-    }
 }
 
 /// One node as the "name from device" dialog previews it (ADR-208 Inc.2) — see
@@ -3313,7 +3204,6 @@ mod tests {
     async fn a_setter_reports_whether_it_found_the_row(pool: sqlx::PgPool) {
         let group = pgtest::group(&pool, "tokyo").await;
         let id = pgtest::node(&pool, "n1", 1, None).await;
-        let parent = pgtest::node(&pool, "n2", 2, None).await;
         let repo = pgtest::repo(pool);
         let absent = Uuid::new_v4();
 
@@ -3327,18 +3217,9 @@ mod tests {
             .set_node_pool(absent, Some("edge"))
             .await
             .expect("pool"));
-        assert!(repo
-            .set_node_parent(id, Some(parent))
-            .await
-            .expect("parent"));
-        assert!(!repo
-            .set_node_parent(absent, Some(parent))
-            .await
-            .expect("parent"));
 
         let node = repo.get_node(id).await.expect("read").expect("the node");
         assert_eq!(node.pool.as_deref(), Some("edge"));
-        assert_eq!(node.parent, Some(yagra_common::NodeId::from(parent)));
         // The folder is not a column on the node the API returns, so it is read where it lives.
         assert_eq!(
             repo.nodes_in_groups(&[group]).await.expect("in group"),
@@ -3749,28 +3630,6 @@ mod tests {
         assert_eq!(
             map.get(&"10.0.0.42".parse::<IpAddr>().expect("address")),
             Some(&id)
-        );
-    }
-
-    /// A suppression opt-out is stored, listed, and can be taken back.
-    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn a_suppression_opt_out_can_be_set_and_cleared(pool: sqlx::PgPool) {
-        let id = pgtest::node(&pool, "never-suppress-me", 1, None).await;
-        let repo = pgtest::repo(pool);
-        assert!(repo.suppression_opt_outs().await.is_empty());
-
-        assert!(repo.set_suppression_opt_out(id, true).await.expect("set"));
-        let opted = repo.suppression_opt_outs().await;
-        assert!(opted.contains(&yagra_common::NodeId::from(id)));
-
-        assert!(repo
-            .set_suppression_opt_out(id, false)
-            .await
-            .expect("clear"));
-        assert!(
-            repo.suppression_opt_outs().await.is_empty(),
-            "clearing the opt-out left the node on the list"
         );
     }
 

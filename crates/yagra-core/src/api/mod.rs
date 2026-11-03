@@ -265,6 +265,9 @@ pub struct AdminState {
     pub netbox: Arc<yagra_netbox::NetboxRepo>,
     /// Per-node Cisco Meraki device bindings.
     pub meraki_devices: Arc<yagra_meraki::MerakiDeviceRepo>,
+    /// The fleet-wide reads behind `GET /fleet/watch`, shared by every caller for a few seconds
+    /// (`fleet::WatchInputsCache`): the shell asks on every screen of every open tab.
+    pub fleet_watch_inputs: fleet::WatchInputsCache,
     /// Passive-event sources / rules / event log (syslog/trap/webhook pipeline).
     pub events: Arc<crate::events::EventRepo>,
     /// Distributed poller pool control plane (ADR-009/020): the live poller registry + working-set

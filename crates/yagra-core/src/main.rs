@@ -958,6 +958,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         meraki_sync,
         netbox: netbox.clone(),
         meraki_devices,
+        fleet_watch_inputs: Default::default(),
         events: events_repo,
         coordinator: coordinator.clone(),
         pollers: poller_repo.clone(),

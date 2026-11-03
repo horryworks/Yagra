@@ -5,7 +5,7 @@
 // live and are tested: an unknown column reads as the default, and the default is no keys at all.
 // `replace`, because re-sorting a table is not a place Back should step through.
 
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { readSortParams, writeSortParams, type SortState } from './tableSort';
 
@@ -16,7 +16,11 @@ export function useSortParams(
   prefix = '',
 ): [SortState, (next: SortState) => void] {
   const [params, setParams] = useSearchParams();
-  const sort = readSortParams(params, sortable, fallback, prefix);
+  const read = readSortParams(params, sortable, fallback, prefix);
+  // The same object while the sort is the same, so a list memoized on it is not re-sorted on
+  // every render (`readSortParams` builds a fresh one each call).
+  const { by, dir } = read;
+  const sort = useMemo<SortState>(() => ({ by, dir }), [by, dir]);
   const set = useCallback(
     (next: SortState) => {
       const p = new URLSearchParams(params);

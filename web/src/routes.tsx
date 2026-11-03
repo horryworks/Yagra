@@ -187,7 +187,7 @@ export function AppRoutes() {
 
         {/* The lazy groups. Each mounts its own nested <Routes>; see `routeGroups/`.
             Topology — the network map visualizes the derived connectivity graph
-            (GET /api/v1/topology), the dependency view manages its edges, and the geo map places
+            (GET /api/v1/topology), and the geo map places
             groups by the coordinates `PUT /api/v1/node-groups/{id}/geo` stores.
             Troubleshoot — deep diagnostics run as background jobs. */}
         <Route element={<LazyGroup />}>

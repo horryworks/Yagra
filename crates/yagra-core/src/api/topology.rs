@@ -87,8 +87,8 @@ pub(crate) struct TopologyLink {
     pub source: LinkSource,
     /// The subnet behind a shared-subnet link, e.g. `192.168.1.0/24`.
     pub subnet: Option<String>,
-    /// The endpoint an operator declared upstream, when one was declared. `null` means the direction
-    /// is worked out from how far each end is from a poller.
+    /// The endpoint an operator declared upstream before ADR-236, when one was. Read by nothing
+    /// since then: no direction is worked out or recorded any more.
     pub forced_parent: Option<Uuid>,
     /// When this link was first derived (RFC 3339).
     pub first_seen: String,
@@ -303,7 +303,7 @@ pub(crate) struct MapNode {
     pub id: Uuid,
     pub name: String,
     pub state: NodeState,
-    /// Upstream node blamed for this node's alert (dependency suppression), if any.
+    /// The node whose outage this alert is rolled up into: the border of the outage it sits behind (ADR-236), or its own node for a down node's other alerts (ADR-087).
     pub root_cause: Option<Uuid>,
     /// On a `flattened` level, the folders between the level and the node, outermost first, ending
     /// with the one the node is filed in; empty when it sits directly in the level's own folder

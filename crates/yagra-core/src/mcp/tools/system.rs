@@ -769,7 +769,7 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "The audit log: who changed, acknowledged or triggered what, newest first. \
+        description = "The audit log: who changed or triggered what, newest first. \
                        `limit` is 1–500 (default 100); `before` is an RFC 3339 timestamp for the \
                        next page. Narrow with `since`/`until` (the window to search, distinct from \
                        the `before` cursor), `q` (free text over the username and the action), \

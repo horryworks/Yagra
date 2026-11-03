@@ -337,7 +337,7 @@ pub struct Alert {
     pub state: NodeState,
     /// When it fired (Unix ms, UTC).
     pub at_unix_ms: i64,
-    /// Root-cause node, if this alert was attributed upstream by dependency analysis.
+    /// The node whose outage this alert is rolled up into: the border of the outage it sits behind (ADR-236), or its own node for a down node's other alerts (ADR-087).
     pub root_cause: Option<NodeId>,
     /// Whether the underlying check is currently flapping.
     pub flapping: bool,

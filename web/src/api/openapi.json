@@ -126,14 +126,7 @@
             }
           },
           "422": {
-            "description": "Not a grouping level",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
+            "description": "Not a grouping level (the body framework's own rejection, plain text)"
           },
           "503": {
             "description": "This core has no write side (skeleton mode)",
@@ -252,14 +245,7 @@
             }
           },
           "422": {
-            "description": "Not a grouping level",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
+            "description": "Not a grouping level (the body framework's own rejection, plain text)"
           },
           "503": {
             "description": "This core has no write side (skeleton mode)",
@@ -16291,7 +16277,17 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig, or the node is outside the token's group scope",
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node, or one outside the caller's folders",
             "content": {
               "application/json": {
                 "schema": {
@@ -17503,7 +17499,17 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig, or the node is outside the token's group scope",
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node, or one outside the caller's folders",
             "content": {
               "application/json": {
                 "schema": {
@@ -27439,7 +27445,7 @@
               },
               {
                 "$ref": "#/components/schemas/NodeId",
-                "description": "Root-cause node, if this alert was attributed upstream by dependency analysis."
+                "description": "The node whose outage this alert is rolled up into: the border of the outage it sits behind (ADR-236), or its own node for a down node's other alerts (ADR-087)."
               }
             ]
           },
@@ -37266,7 +37272,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Upstream node blamed for this node's alert (dependency suppression), if any."
+            "description": "The node whose outage this alert is rolled up into: the border of the outage it sits behind (ADR-236), or its own node for a down node's other alerts (ADR-087)."
           },
           "state": {
             "$ref": "#/components/schemas/NodeState"
@@ -39748,7 +39754,7 @@
       },
       "NodeDetail": {
         "type": "object",
-        "description": "One node's configuration detail, including its bindings (profile/credential/parent) so the\nnode-detail page can show and edit them. Live mode only (PostgreSQL inventory).",
+        "description": "One node's configuration detail, including its bindings (profile and credential) so the\nnode-detail page can show and edit them. Live mode only (PostgreSQL inventory).",
         "required": [
           "id",
           "name",
@@ -47366,7 +47372,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "The endpoint an operator declared upstream, when one was declared. `null` means the direction\nis worked out from how far each end is from a poller."
+            "description": "The endpoint an operator declared upstream before ADR-236, when one was. Read by nothing\nsince then: no direction is worked out or recorded any more."
           },
           "id": {
             "type": "integer",

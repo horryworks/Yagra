@@ -2,7 +2,7 @@
 //! Has anything changed? — the state-machine half of the alert module (ADR-083).
 //!
 //! Drives this crate's [`CheckState`] machine from live poll results: dwell-time hysteresis,
-//! flapping detection, dependency suppression, maintenance windows, the in-memory active set and
+//! flapping detection, outage grouping (ADR-236), maintenance windows, the in-memory active set and
 //! the SSE broadcast. Everything here is stateful and lock-bearing; the pure "which rule applies"
 //! half is [`crate::rules`] and the "who gets told" half is core's `alerts/notify.rs`.
 //!
@@ -1131,7 +1131,7 @@ impl AlertManager {
 
     /// Run one raw state through a check's hysteresis and emit a fire/resolve action on a
     /// committed transition. `is_liveness` checks also update the per-node committed-state
-    /// map and apply dependency suppression (root-cause attribution) on a problem
+    /// map and apply outage grouping (root-cause attribution, ADR-236) on a problem
     /// transition.
     /// Feed one already-resolved sample through the state machine as a threshold check.
     ///
@@ -1506,8 +1506,8 @@ impl AlertManager {
         //
         // Two cases, and they are the same idea one level apart:
         //
-        // - **liveness**: if this node is down and every upstream is also down, attribute it to the
-        //   highest down ancestor, so it groups under *that* incident.
+        // - **liveness**: if this node is down and none of its linked neighbours is alive, attribute
+        //   it to the border of the outage it sits in (ADR-236), so it groups under *that* incident.
         // - **anything else on a node that is already down** (ADR-087): attribute it to **the node
         //   itself**. The incident is "node X is down", and `snmp_up` going to 0 is part of that
         //   outage rather than a second one. Before this, a single device falling over opened two
@@ -1702,9 +1702,10 @@ impl AlertManager {
     ///   it pages on its own now that its upstream is back.
     /// - **re-attributed** (`Some → Some`): never paged; just refresh the attribution.
     ///
-    /// Liveness alerts of `changed`'s descendants, **plus `changed`'s own non-liveness alerts**
-    /// (ADR-087). Bounded by the current active-alert count; runs only when a node actually
-    /// entered/left `Unreachable`.
+    /// The liveness alerts of every other node the grouping now rolls up or no longer does
+    /// (ADR-236: a region's border can move with any flip), **plus `changed`'s own non-liveness
+    /// alerts** (ADR-087). Bounded by the current active-alert count; runs only when a node
+    /// actually entered/left `Unreachable`.
     ///
     /// ⚠️ `changed`'s own alerts do **not** take the `Some → None` branch above: a node that came
     /// back keeps them rolled up and [`Self::advance_release`] fires them only once their check has
@@ -1765,13 +1766,18 @@ impl AlertManager {
             let active = self.active.lock().expect("alerts mutex poisoned");
             active
                 .values()
-                // Node subjects only: the dependency graph is a graph of nodes, so a
-                // pool-coverage alert has no ancestor to be attributed to — and `changed`s own
+                // Node subjects only: the link graph is a graph of nodes, so a
+                // pool-coverage alert has no border to be attributed to — and `changed`s own
                 // roll-up is about `changed` as a node too.
                 .filter(|a| {
                     a.node().is_some_and(|n| {
                         if a.metric == LIVENESS {
-                            Some(n) != changed && (down.contains(&n) || a.root_cause.is_some())
+                            // Only an alert whose answer can change: one the attribution
+                            // rolls up, or one that carries a marker to take off. Every other
+                            // down node's alert would be cloned only to be skipped as
+                            // unchanged, and with grouping off that is all of them.
+                            Some(n) != changed
+                                && (attribution.contains_key(&n) || a.root_cause.is_some())
                         } else {
                             // ADR-087: everything else this node is complaining about belongs to
                             // this node's outage. Only `changed` 's own — a sibling's threshold
@@ -2017,7 +2023,7 @@ impl AlertManager {
     ///
     /// Built on [`Self::raise_event_alert`] because that path is already subject-agnostic — keyed
     /// by `CheckId`, no dwell (the caller owns its own debounce), and `root_cause: None`, which is
-    /// correct here for a stronger reason than for an event alert: the dependency graph has no pool
+    /// correct here for a stronger reason than for an event alert: the link graph has no pool
     /// vertices, so there is nothing this could be attributed to.
     ///
     /// `Critical` because an entire site's monitoring has stopped, which is a strictly larger blast
@@ -2063,7 +2069,7 @@ impl AlertManager {
     /// (ADR-076 decision 3).
     ///
     /// A thin seam onto [`Self::process_check`] rather than a second engine: dwell, flap damping,
-    /// dependency suppression, dedup and the SSE broadcast are the *same code* the poll path
+    /// outage grouping, dedup and the SSE broadcast are the *same code* the poll path
     /// runs. A copy would be a second place alert quality is decided, and the copy is the one that
     /// gets a fix late.
     ///

@@ -66,11 +66,10 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ("mod.rs", &[]),
     // A `const` table of seeded alert rules. `super::seed` is what writes it.
     ("defaults.rs", &[]),
-    // The shapes three `app_settings` columns are read into (ADR-202 Inc.3): types, defaults and
+    // The shapes two `app_settings` columns are read into (ADR-202 Inc.3): types, defaults and
     // bands, no SQL. `settings.rs` is what reads and writes them.
     ("adjacency_settings.rs", &[]),
     ("retention_settings.rs", &[]),
-    ("topology_mode.rs", &[]),
     // The two joins are for display names (`node_facts` answers "what is this node called, in
     // which folder, on which profile"), not a second file's worth of `profiles` logic.
     // `url_checks` / `dns_checks` are named only by `DEVICE_NODE_PREDICATE` (ADR-139): a URL or DNS

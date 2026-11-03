@@ -259,6 +259,10 @@ impl LinkGraph {
         let mut seen = BTreeSet::from([start]);
         let mut queue = VecDeque::from([start]);
         let walks_logical = matches!(level, Level::Links | Level::Site);
+        // A site's members are walked once, by the first of them taken off the queue: every
+        // later member would list the same set again, and a site that goes dark as one region
+        // would cost its size squared.
+        let mut sites_walked: BTreeSet<GroupId> = BTreeSet::new();
         while let Some(n) = queue.pop_front() {
             let physical = self.physical.get(&n).into_iter().flatten();
             let logical = walks_logical
@@ -268,8 +272,10 @@ impl LinkGraph {
                 .flatten();
             let linked = physical.chain(logical);
             let same_site = (level == Level::Site)
-                .then(|| self.site.get(&n).and_then(|s| self.site_members.get(s)))
+                .then(|| self.site.get(&n))
                 .flatten()
+                .filter(|s| sites_walked.insert(**s))
+                .and_then(|s| self.site_members.get(s))
                 .into_iter()
                 .flatten();
             for &m in linked.chain(same_site) {
@@ -450,6 +456,39 @@ mod tests {
             assert_eq!(rc.get(&n), Some(&b.gws[0]));
         }
         assert_eq!(b.g.notified_count(&down), 1);
+    }
+
+    /// A site walked once still reaches every member: a large site that goes dark with no link
+    /// between its nodes is one region with one speaker, and a member of another site is not in it.
+    #[test]
+    fn a_large_dark_site_is_one_region_however_its_members_are_reached() {
+        let mut g = LinkGraph::new(Level::Site);
+        let site = GroupId(Uuid::from_u128(0x5_17e));
+        let other = GroupId(Uuid::from_u128(0x07_4e5));
+        let members: Vec<NodeId> = (1..=400).map(id).collect();
+        for &n in &members {
+            g.set_site(n, site);
+        }
+        // Two members linked to each other, so the walk enters the site from more than one node.
+        g.add_link(members[10], members[20], false);
+        let outsider = id(1_000);
+        g.set_site(outsider, other);
+        let mut down = set(&members);
+        down.insert(outsider);
+        let rc = g.attribute(&down);
+        assert_eq!(
+            rc.len(),
+            members.len() - 1,
+            "every member but the speaker is rolled up"
+        );
+        assert!(
+            rc.values().all(|s| *s == members[0]),
+            "the lowest id speaks"
+        );
+        assert!(
+            !rc.contains_key(&outsider),
+            "another site is another region"
+        );
     }
 
     #[test]

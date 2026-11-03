@@ -73,9 +73,12 @@ export function ActiveAlertsPage() {
     [codecColumns, params],
   );
   const setFilters = useCallback(
-    (next: FilterState) => {
+    // `also` is the toolbar's hook for the filters outside the columns: "clear all" passes the one
+    // that drops `?silenced=1`, in the same URL write.
+    (next: FilterState, also?: (p: URLSearchParams) => void) => {
       const p = new URLSearchParams(params);
       writeFilters(codecColumns, p, next);
+      also?.(p);
       setParams(p, { replace: true });
     },
     [codecColumns, params, setParams],
@@ -173,7 +176,12 @@ export function ActiveAlertsPage() {
           return (
             <>
               <ListToolbar
-                list={serverToolbarFilters(cols, { filters, setFilters }, undefined, counts)}
+                list={serverToolbarFilters(
+                  cols,
+                  { filters, setFilters },
+                  { active: onlySilenced, clear: (p) => p.delete('silenced') },
+                  counts,
+                )}
                 labels={labels}
                 menu
                 count={{

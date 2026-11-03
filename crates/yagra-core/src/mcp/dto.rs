@@ -167,7 +167,7 @@ pub struct AlertDto {
     pub title: Option<String>,
     /// Fire time as an RFC 3339 UTC timestamp.
     pub fired_at: String,
-    /// Upstream root-cause node id when this alert was attributed by dependency analysis.
+    /// The node whose outage this alert is rolled up into: the border of the outage it sits behind (ADR-236), or its own node for a down node's other alerts (ADR-087).
     pub root_cause: Option<Uuid>,
     /// The port this is about, as its SNMP ifIndex, for a metric collected once per interface —
     /// interface utilisation, port status, optical level. `null` means the alert is about the node

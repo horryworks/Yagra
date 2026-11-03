@@ -509,6 +509,7 @@ async fn live_state_with(
         meraki_sync,
         netbox: Arc::new(yagra_netbox::NetboxRepo::new(pool.clone())),
         meraki_devices,
+        fleet_watch_inputs: Default::default(),
         events: events_repo,
         coordinator: Arc::new(crate::fleet::coordinator::Coordinator::new(
             sync_bus,
