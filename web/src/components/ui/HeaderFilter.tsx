@@ -156,9 +156,10 @@ export function FilterHeaderCell<T>({
 }
 
 /**
- * A header label that sorts its column: an up or down arrow on the column the list is ordered
- * by, a faint double arrow on the rest. A real button, so the sort is keyboard-operable. The arrow stays in the layout rather
- * than appearing on hover, so the label never shifts under the pointer.
+ * A header label that sorts its column. Each press goes ascending → descending → no sort, and only
+ * the column the list is ordered by carries an arrow (ADR-228 Inc.3, as the mock had it). A real
+ * button, so the sort is keyboard-operable. The arrow appears on the press, never on hover, so the
+ * label does not move under a pointer that is only passing.
  */
 export function SortHeaderButton({
   active,
@@ -180,7 +181,7 @@ export function SortHeaderButton({
       {children}
       {/* Drawn by CSS from `data-dir`, so the header's text is its name alone — for a screen
           reader, and for anything that reads the header to find a column. */}
-      <span className="dt-h-arrow" data-dir={active ?? 'none'} aria-hidden="true" />
+      {active && <span className="dt-h-arrow" data-dir={active} aria-hidden="true" />}
     </button>
   );
 }

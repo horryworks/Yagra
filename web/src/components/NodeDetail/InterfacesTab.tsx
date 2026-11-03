@@ -31,7 +31,7 @@ import {
   INTERFACE_SORT_KEYS,
   interfaceSortValues,
 } from './interfaceSort';
-import { nextSort, sortRows } from '../../lib/tableSort';
+import { nextSort, sortOrDefault, sortRows, UNSORTED } from '../../lib/tableSort';
 import { useSortParams } from '../../lib/useSortParams';
 import { ColumnResizeHandles, ColumnWidthReset } from '../ui/ColumnResizeHandles';
 import { useColumnWidths } from '../ui/useColumnWidths';
@@ -253,13 +253,20 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // Sorted in the browser: one device's ports are all here (ADR-228, `interfaceSort.ts`). In the URL
   // beside the filters, under the same prefix (ADR-153), so "slowest first" survives a reload and
   // the walk to the next device.
+  // Opens unsorted, which shows the device's own port order without marking a header; a header's
+  // third press comes back here (ADR-228 Inc.3).
   const [sort, setSort] = useSortParams(
     INTERFACE_SORT_KEYS,
-    DEFAULT_INTERFACE_SORT,
+    UNSORTED,
     nodeTabFilterPrefix('interfaces'),
   );
   const sorted = useMemo(
-    () => sortRows(shown, sort, interfaceSortValues((ifindex) => byPort.get(ifindex))),
+    () =>
+      sortRows(
+        shown,
+        sortOrDefault(sort, DEFAULT_INTERFACE_SORT),
+        interfaceSortValues((ifindex) => byPort.get(ifindex)),
+      ),
     [shown, sort, byPort],
   );
   const counts = useMemo(

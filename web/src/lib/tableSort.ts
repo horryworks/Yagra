@@ -19,8 +19,8 @@
 //
 // In a `.ts` because Vitest never executes a `.tsx` (testing.md).
 
-/** Ascending or descending. There is deliberately no "unsorted" third state: a table always has
- *  some order, and cycling back to "whatever the server sent" is a state an operator cannot name. */
+/** Ascending or descending. "Not sorted by any column" is a `SortState` of its own (`UNSORTED`),
+ *  not a third direction. */
 export type SortDir = 'asc' | 'desc';
 
 export interface SortState {
@@ -31,13 +31,30 @@ export interface SortState {
 
 /** The next sort state after clicking `key`.
  *
- *  Clicking the active column flips the direction; clicking a different one moves to it and starts
- *  ascending. Starting ascending rather than keeping the previous direction is the convention every
+ *  Clicking the active column goes ascending → descending → `UNSORTED` (ADR-228 Inc.3); clicking a
+ *  different one moves to it and starts ascending. Starting ascending rather than keeping the previous direction is the convention every
  *  spreadsheet uses, and the alternative — inheriting a `desc` from an unrelated column — reads as
  *  the click not having worked. */
 export function nextSort(current: SortState, key: string): SortState {
   if (current.by !== key) return { by: key, dir: 'asc' };
-  return { by: key, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  if (current.dir === 'asc') return { by: key, dir: 'desc' };
+  return UNSORTED;
+}
+
+/**
+ * No column chosen: the table shows its own order and marks no header (ADR-228 Inc.3).
+ *
+ * The third press of a header lands here. This used to be refused, on the ground that "back to
+ * whatever the server sent" is a state an operator cannot name — but every table's own order has a
+ * name (a device's port numbering, newest token first, the order credentials are tried, the order
+ * a list arrived in), and the screen applies it through `sortOrDefault`. The user asked for the
+ * three-step cycle after trying it in a mock.
+ */
+export const UNSORTED: SortState = { by: '', dir: 'asc' };
+
+/** The order to apply: the chosen one, or the table's own when none is chosen. */
+export function sortOrDefault(sort: SortState, natural: SortState): SortState {
+  return sort.by === '' ? natural : sort;
 }
 
 /** The URL keys a sort is held under (ADR-153). Both are in `RESERVED_URL_KEYS`, which is what stops

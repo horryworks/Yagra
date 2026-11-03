@@ -108,13 +108,8 @@
   color: var(--accent-color);
 }
 
-/* The inactive arrow stays in the layout rather than appearing on hover: a header that grows a
-   glyph when the pointer touches it shifts its own label, and the affordance is then invisible to
-   anyone driving the table from the keyboard. */
-.dt-h-arrow::after {
-  content: '↕';
-}
-
+/* Only the sorted column carries an arrow (ADR-228 Inc.3). It appears on the press, never on
+   hover, so a passing pointer does not move the label. */
 .dt-h-arrow[data-dir='asc']::after {
   content: '▲';
 }
@@ -125,9 +120,4 @@
 
 .dt-h-arrow {
   font-size: 0.85em;
-  opacity: 0.45;
-}
-
-.dt-h-sort.active .dt-h-arrow {
-  opacity: 1;
 }

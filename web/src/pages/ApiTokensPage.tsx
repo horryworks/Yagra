@@ -52,7 +52,7 @@ import { Field, TextInput, Select, FieldError } from '../components/ui/Field';
 import { InfoPress } from '../components/ui/InfoTip';
 import { EmptyState } from '../components/ui/EmptyState';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { sortRows } from '../lib/tableSort';
+import { sortOrDefault, sortRows, UNSORTED } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -514,7 +514,7 @@ export function ApiTokensPage() {
   // screen cannot accidentally sort a prefix and present it as the order (`lib/tableSort.ts`).
   // In the URL (ADR-153), so a reload keeps the order. The sortable keys are the ones the sort
   // values name — a key nothing can sort on reads as the default.
-  const [sort, setSort] = useSortParams(TOKEN_SORT_KEYS, DEFAULT_TOKEN_SORT);
+  const [sort, setSort] = useSortParams(TOKEN_SORT_KEYS, UNSORTED);
   // One clock reading, shared by the filter specs, the sort and the status badge — see
   // `tokenColumns`. Re-read only when the rows are replaced, so a relative window ("used in the
   // last 24 hours") does not creep forward while the operator reads the screen. Same shape as
@@ -538,7 +538,8 @@ export function ApiTokensPage() {
   const filtering = useClientFilters(columns, rows);
   const { filters, setFilters, shown: matched, counts, anyFiltered } = filtering;
   const shown = useMemo(
-    () => sortRows(matched, sort, tokenSortValues(now)),
+    // Unsorted shows the newest first, with no header marked (ADR-228 Inc.3).
+    () => sortRows(matched, sortOrDefault(sort, DEFAULT_TOKEN_SORT), tokenSortValues(now)),
     [matched, sort, now],
   );
 

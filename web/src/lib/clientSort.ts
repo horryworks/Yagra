@@ -18,7 +18,7 @@
 // In a `.ts` because Vitest never executes a `.tsx` (testing.md).
 
 import type { ColumnFilterSpec } from './columnFilter';
-import type { SortState, SortValues } from './tableSort';
+import type { SortValues } from './tableSort';
 
 type SortValue = string | number | null | undefined;
 
@@ -29,10 +29,6 @@ export interface ClientSortColumn<T> {
   /** What the column orders by when its filter does not say, or says something else. */
   sortValue?: (row: T) => SortValue;
 }
-
-/** The state a list opens in: the order it arrived in, with no column marked. A click moves it to a
- *  real sort, which then alternates between the two directions (`nextSort`). */
-export const ARRIVAL_ORDER: SortState = { by: '', dir: 'asc' };
 
 const first = <V>(v: V | readonly V[] | null | undefined): V | undefined =>
   Array.isArray(v) ? (v as readonly V[])[0] : ((v ?? undefined) as V | undefined);

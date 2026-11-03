@@ -31,7 +31,7 @@ import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
-import { sortRows } from '../lib/tableSort';
+import { sortOrDefault, sortRows, UNSORTED } from '../lib/tableSort';
 import { useSortParams } from '../lib/useSortParams';
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
 import { ClippedText } from '../components/ui/ClippedText';
@@ -804,8 +804,10 @@ function CredentialGroupTable({
   const canCredentials = useCan('manage_credentials');
   const canReveal = useCan('reveal_credentials');
   // In the URL (ADR-153), so a reload keeps the order. One sort for the route: the tabs share it.
-  const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, DEFAULT_CREDENTIAL_SORT);
-  const applied = credentialSortIn(group, sort);
+  const [sort, setSort] = useSortParams(CREDENTIAL_SORT_KEYS, UNSORTED);
+  // Unsorted shows the try order, with no header marked; `applied` is the order the rows are in and
+  // `sort` is what the headers show (ADR-228 Inc.3).
+  const applied = credentialSortIn(group, sortOrDefault(sort, DEFAULT_CREDENTIAL_SORT));
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
   const [deleting, setDeleting] = useState<CredentialSummary | null>(null);
@@ -822,7 +824,7 @@ function CredentialGroupTable({
   // columns exist (`useClientFilters` takes them), so it is mirrored into state by an effect after
   // that call; the arrows follow a filter one render late, which nothing can click in between.
   const [filteredNow, setFilteredNow] = useState(false);
-  const reorderable = canCredentials && canReorderCredentials(group, sort, filteredNow);
+  const reorderable = canCredentials && canReorderCredentials(group, applied, filteredNow);
   // The order just saved, until the re-read that shows it arrives. The arrows are pressable again
   // as soon as the save returns, and a second press in that gap must move on from the saved order —
   // computed from the list on screen, it repeated the first move and the second press was lost.
@@ -1042,7 +1044,7 @@ function CredentialGroupTable({
     rows: shown,
     columns,
     rowKey: (c: CredentialSummary) => c.id,
-    sort: applied,
+    sort,
     onSortChange: setSort,
     filters,
     onFiltersChange: setFilters,

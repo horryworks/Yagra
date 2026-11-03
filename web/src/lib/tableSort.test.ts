@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 import {
   nextSort,
   readSortParams,
+  sortOrDefault,
   sortRows,
+  UNSORTED,
   writeSortParams,
   type SortState,
   type SortValues,
@@ -86,9 +88,15 @@ describe('the sort in the URL (ADR-153)', () => {
 });
 
 describe('nextSort', () => {
-  it('flips direction on the active column', () => {
+  it('goes ascending, then descending, then back to no sort on the same column (ADR-228 Inc.3)', () => {
+    expect(nextSort(UNSORTED, 'name')).toEqual(asc('name'));
     expect(nextSort(asc('name'), 'name')).toEqual(desc('name'));
-    expect(nextSort(desc('name'), 'name')).toEqual(asc('name'));
+    expect(nextSort(desc('name'), 'name')).toEqual(UNSORTED);
+  });
+
+  it('applies the table own order while no column is chosen', () => {
+    expect(sortOrDefault(UNSORTED, desc('created'))).toEqual(desc('created'));
+    expect(sortOrDefault(asc('name'), desc('created'))).toEqual(asc('name'));
   });
 
   it('starts a new column ascending rather than inheriting the old direction', () => {
@@ -96,12 +104,9 @@ describe('nextSort', () => {
     expect(nextSort(desc('name'), 'n')).toEqual(asc('n'));
   });
 
-  it('has no unsorted third state', () => {
-    // A table always has some order, and "back to whatever the server sent" is a state an operator
-    // cannot name — so clicking twice returns to ascending, never to nothing.
-    let s = asc('name');
-    s = nextSort(s, 'name');
-    s = nextSort(s, 'name');
+  it('a fourth press starts the cycle again', () => {
+    let s = UNSORTED;
+    for (let i = 0; i < 4; i++) s = nextSort(s, 'name');
     expect(s).toEqual(asc('name'));
   });
 });

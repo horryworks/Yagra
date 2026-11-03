@@ -3,11 +3,12 @@
 // (ADR-228 Inc.2). The values come from `clientSort.ts`; the state lives in the URL beside the
 // filters, under the same prefix (ADR-153), so a reload keeps it.
 //
-// It opens in the order the list arrived in (`ARRIVAL_ORDER`) and sorts from the first click on.
+// It opens in the order the list arrived in (`UNSORTED`); a header's presses go ascending,
+// descending, then back to that order (`nextSort`).
 
 import { useMemo } from 'react';
-import { ARRIVAL_ORDER, clientSortValues, type ClientSortColumn } from './clientSort';
-import { sortRows, type SortState } from './tableSort';
+import { clientSortValues, type ClientSortColumn } from './clientSort';
+import { sortRows, UNSORTED, type SortState } from './tableSort';
 import { useSortParams } from './useSortParams';
 
 export interface ClientSort<T, C> {
@@ -26,7 +27,7 @@ export function useClientSort<T, C extends ClientSortColumn<T>>(
 ): ClientSort<T, C> {
   const values = useMemo(() => clientSortValues(columns), [columns]);
   const keys = useMemo(() => Object.keys(values), [values]);
-  const [sort, setSort] = useSortParams(keys, ARRIVAL_ORDER, opts?.prefix ?? '');
+  const [sort, setSort] = useSortParams(keys, UNSORTED, opts?.prefix ?? '');
   const sorted = useMemo(
     () => (sort.by === '' ? [...rows] : sortRows(rows, sort, values)),
     [rows, sort, values],

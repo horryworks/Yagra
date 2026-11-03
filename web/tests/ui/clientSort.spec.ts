@@ -8,12 +8,13 @@
 
 import { expect, test } from '../support/app';
 
-test('Pollers opens in arrival order and sorts from the first press of a header', async ({ page }) => {
+test('Pollers opens unsorted, and a header goes ascending, descending, then off', async ({ page }) => {
   await page.goto('/settings/pollers');
   const header = page.locator('.dt-head .dt-h-sort', { hasText: 'Poller' });
   await expect(header).toBeVisible();
-  // Arrival order: no column is marked until the operator chooses one.
+  // Unsorted: no column is marked, and no arrow is drawn on any of them (as in the mock).
   await expect(page.locator('.dt-head .dt-h-sort.active')).toHaveCount(0);
+  await expect(page.locator('.dt-head .dt-h-arrow')).toHaveCount(0);
 
   await header.click();
   await expect(page).toHaveURL(/[?&]sort=poller&dir=asc/);
@@ -22,6 +23,15 @@ test('Pollers opens in arrival order and sorts from the first press of a header'
   await header.click();
   await expect(page).toHaveURL(/[?&]dir=desc/);
   await expect(header).toHaveAttribute('aria-sort', 'descending');
+
+  // The third press takes the sort off (ADR-228 Inc.3): no key in the URL, no header marked, the
+  // list back in the order it arrived in.
+  await header.click();
+  await expect(page).not.toHaveURL(/[?&]sort=/);
+  await expect(header).toHaveAttribute('aria-sort', 'none');
+  await expect(page.locator('.dt-head .dt-h-arrow')).toHaveCount(0);
+  await header.click();
+  await header.click();
 
   // A reload keeps it: the order is in the URL, not in component state (ADR-153).
   await page.goto(page.url());
