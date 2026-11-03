@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_bus::PollResult;
 use yagra_common::{Node, NodeId, SeriesKey};
-use yagra_topology::Topology;
+use yagra_topology::grouping::LinkGraph;
 
 use crate::events::{
     EventAuthSource, EventBucketCount, EventFilter, EventFlapStat, EventRow, EventSeverityCount,
@@ -470,11 +470,11 @@ impl FleetInventory for StaticInventory {
 
 // ── Connectivity graph ───────────────────────────────────────────────────────────────────────
 
-/// A fixed derived graph. Empty unless a test seeds one, which is the shape a deployment in the
-/// default `manual` topology mode has.
+/// A fixed derived graph. Empty unless a test seeds one, which is the shape a deployment whose
+/// derivation has found no links has.
 #[derive(Default)]
 pub(super) struct StaticGraph {
-    topology: Mutex<Topology>,
+    graph: Mutex<LinkGraph>,
 }
 
 impl StaticGraph {
@@ -482,15 +482,15 @@ impl StaticGraph {
         Arc::new(Self::default())
     }
 
-    pub(super) fn set(&self, topology: Topology) {
-        *self.topology.lock().expect("topology poisoned") = topology;
+    pub(super) fn set(&self, graph: LinkGraph) {
+        *self.graph.lock().expect("graph poisoned") = graph;
     }
 }
 
 #[async_trait]
 impl DerivedGraph for StaticGraph {
-    async fn derived(&self, _nodes: &[Node]) -> Topology {
-        self.topology.lock().expect("topology poisoned").clone()
+    async fn links(&self) -> LinkGraph {
+        self.graph.lock().expect("graph poisoned").clone()
     }
 }
 

@@ -30,14 +30,14 @@ use async_trait::async_trait;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 use yagra_common::Node;
-use yagra_topology::Topology;
+use yagra_topology::grouping::LinkGraph;
 
 use crate::events::{
     EventAuthSource, EventBucketCount, EventFilter, EventFlapStat, EventRepo, EventRow,
     EventSeverityCount, EventSignatureCount,
 };
 use crate::passive::logstore::{LogStore, NameIds};
-use crate::topology::topology_projection::{derived_topology, TopologySources};
+use crate::topology::topology_links::TopoLinkRepo;
 use yagra_base::groups::GroupRepo;
 use yagra_base::repo::NodeRepo;
 
@@ -253,25 +253,35 @@ impl FleetInventory for RepoInventory {
 /// (ADR-043 → ADR-022 Increment 2).
 #[async_trait]
 pub(super) trait DerivedGraph: Send + Sync {
-    async fn derived(&self, nodes: &[Node]) -> Topology;
+    /// Every derived link. Empty when the links cannot be read.
+    async fn links(&self) -> LinkGraph;
 }
 
 pub(super) struct ProjectedGraph {
-    topo: TopologySources,
+    links: Arc<TopoLinkRepo>,
 }
 
 impl ProjectedGraph {
-    pub(super) const fn new(topo: TopologySources) -> Self {
-        Self { topo }
+    pub(super) const fn new(links: Arc<TopoLinkRepo>) -> Self {
+        Self { links }
     }
 }
 
 #[async_trait]
 impl DerivedGraph for ProjectedGraph {
-    /// The anchor resolution is dropped: `incident_correlate` suppresses nothing, so an unresolved
-    /// anchor costs it a peer in a diagnostic rather than silencing an outage. The gate that does
-    /// care lives in `topology_mode.rs`.
-    async fn derived(&self, nodes: &[Node]) -> Topology {
-        derived_topology(&self.topo, nodes).await.0
+    async fn links(&self) -> LinkGraph {
+        match self.links.all_links().await {
+            Ok(links) => crate::alerts::config::build_link_graph(
+                &crate::alerts::config::GroupingFacts {
+                    links,
+                    ..Default::default()
+                },
+                &std::collections::HashMap::new(),
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "incident correlation: reading the links failed");
+                LinkGraph::default()
+            }
+        }
     }
 }

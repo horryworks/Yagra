@@ -91,12 +91,6 @@ function Evidence({ ev }: { ev: RcaEvidence }) {
         </div>
       )}
 
-      {ev.upstream.length > 0 && (
-        <div className="rca-ev-block">
-          <div className="rca-ev-label">{t('evidence.upstream')}</div>
-          <div className="rca-ev-value mono">{ev.upstream.map((n) => n.name).join(' → ')}</div>
-        </div>
-      )}
 
       <div className="rca-ev-block">
         <div className="rca-ev-label">

@@ -2,11 +2,8 @@
   "action": "Explain",
   "actionHint": "Ask the configured language model to explain this incident",
   "title": "Explain this incident",
-
   "disclaimer": "AI-generated and sometimes wrong. Read it against the evidence below before acting on it.",
-
   "loading": "Reading the evidence and writing an explanation…",
-
   "section": {
     "rootCause": "Likely root cause",
     "dependents": "Dependent alerts",
@@ -14,9 +11,7 @@
     "evidence": "Evidence it was given",
     "raw": "Model reply"
   },
-
   "rawNote": "The model did not answer in the expected structure, so its reply is shown as written.",
-
   "confidence": {
     "label": "Confidence",
     "high": "High confidence",
@@ -24,7 +19,6 @@
     "low": "Low confidence",
     "unknown": "Confidence not stated"
   },
-
   "meta": {
     "cached": "Cached",
     "cachedWhy": {
@@ -33,7 +27,6 @@
     "generated": "Generated {{at}} by {{by}}",
     "model": "{{provider}} · {{model}}"
   },
-
   "evidence": {
     "node": "Node",
     "hopped": "You clicked {{symptom}}; this explains its upstream cause instead.",
@@ -44,19 +37,16 @@
     "breach": "measured {{value}}, threshold {{threshold}} ({{direction}})",
     "dependents": "Dependent alerts",
     "dependentsMore": "and {{count}} more",
-    "upstream": "Upstream chain",
     "timeline": "Timeline (last {{window}})",
     "timelineEmpty": "No metric anomalies, events or flow signals in the window.",
     "changes": "Recent configuration changes",
     "changesEmpty": "No audited changes touched this node in the window.",
     "noneRecorded": "No evidence was recorded with this report."
   },
-
   "actions": {
     "regenerate": "Regenerate",
     "regenerateHint": "Call the provider again instead of reusing the stored answer"
   },
-
   "err": {
     "notConfigured": "No AI provider is configured. Set one up in <lnk/>.",
     "misconfigured": "The AI provider is configured but unusable: {{message}}",

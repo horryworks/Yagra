@@ -284,7 +284,7 @@ impl YagraMcp {
                        (ok|warning|critical|unreachable|unknown|maintenance), `kind` \
                        (wireless_ap|meraki|url|dns|device) and `pool` (the effective poll pool, \
                        inherited from the folder tree when the node sets none); `limit` is 1–100 \
-                       (default 50). Returns node id, name, address, state, kind, parent, group, \
+                       (default 50). Returns node id, name, address, state, kind, group, \
                        vendor, model, and tags. `kind` says what a node is — `device`, `url`, \
                        `dns`, `meraki` or `wireless_ap` — and therefore which metrics it can have. \
                        `address` is null when the node has none — a Meraki access point marked \

@@ -383,36 +383,27 @@ pub(super) fn peak_severity(signals: &[IncidentSignal]) -> f64 {
     signals.iter().map(|s| s.severity).fold(0.0, f64::max)
 }
 
-/// The one-hop neighbourhood of every authorized node, from the union of the two graphs.
+/// The one-hop neighbourhood of every authorized node, over the connectivity graph's links.
 ///
 /// ⚠️ **The scope rule lives here, and it is the security-relevant part of the expansion**: a peer
 /// appears only if it is itself in `authorized`. Pure, so that rule is testable without a database
-/// — which is the point, because the failure it prevents is silent. See
-/// `incident_neighbourhood` for why both graphs are unioned and why the topology mode is not a gate.
+/// — which is the point, because the failure it prevents is silent.
+///
+/// Every peer is labelled `linked`: since ADR-236 no link has a direction, so neither end is
+/// upstream of the other.
 pub(super) fn one_hop_neighbours(
-    derived: &Topology,
-    manual: &Topology,
+    graph: &LinkGraph,
     authorized: &HashSet<Uuid>,
 ) -> HashMap<Uuid, Vec<(Uuid, &'static str)>> {
     let mut out: HashMap<Uuid, Vec<(Uuid, &'static str)>> = HashMap::new();
     for &node in authorized {
-        let id = NodeId::from(node);
-        let mut seen: HashSet<Uuid> = HashSet::new();
-        let mut peers: Vec<(Uuid, &'static str)> = Vec::new();
-        // Upstream first, so a node that is somehow both keeps the more useful label.
-        for (set, relation) in [
-            (derived.parents_of(id), "upstream"),
-            (manual.parents_of(id), "upstream"),
-            (derived.children_of(id), "downstream"),
-            (manual.children_of(id), "downstream"),
-        ] {
-            for peer in set {
-                let peer = peer.as_uuid();
-                if peer != node && authorized.contains(&peer) && seen.insert(peer) {
-                    peers.push((peer, relation));
-                }
-            }
-        }
+        let peers: Vec<(Uuid, &'static str)> = graph
+            .neighbours(NodeId::from(node))
+            .into_iter()
+            .map(|p| p.as_uuid())
+            .filter(|p| *p != node && authorized.contains(p))
+            .map(|p| (p, "linked"))
+            .collect();
         if !peers.is_empty() {
             out.insert(node, peers);
         }
@@ -923,61 +914,54 @@ mod tests {
     #[test]
     fn a_neighbour_outside_the_job_scope_is_never_consulted() {
         let (mine, theirs) = (Uuid::from_u128(1), Uuid::from_u128(2));
-        let mut derived = Topology::new();
-        // `theirs` is `mine`'s upstream, but the caller cannot see it.
-        derived.add_dependency(NodeId::from(mine), NodeId::from(theirs));
+        let mut graph = LinkGraph::default();
+        // `theirs` is linked to `mine`, but the caller cannot see it.
+        graph.add_link(NodeId::from(mine), NodeId::from(theirs), true);
 
         let authorized: HashSet<Uuid> = [mine].into_iter().collect();
-        let n = one_hop_neighbours(&derived, &Topology::new(), &authorized);
+        let n = one_hop_neighbours(&graph, &authorized);
         assert!(
             !n.contains_key(&mine),
             "an out-of-scope neighbour must not appear at all: {n:?}"
         );
 
-        // …and with both endpoints authorized, the edge is used and labelled from the subject's
-        // point of view.
+        // …and with both endpoints authorized, the link is used from both ends.
         let authorized: HashSet<Uuid> = [mine, theirs].into_iter().collect();
-        let n = one_hop_neighbours(&derived, &Topology::new(), &authorized);
+        let n = one_hop_neighbours(&graph, &authorized);
         assert_eq!(
             n.get(&mine).map(Vec::as_slice),
-            Some(&[(theirs, "upstream")][..])
+            Some(&[(theirs, "linked")][..])
         );
         assert_eq!(
             n.get(&theirs).map(Vec::as_slice),
-            Some(&[(mine, "downstream")][..])
+            Some(&[(mine, "linked")][..])
         );
     }
 
-    /// The manual graph counts as evidence alongside the derived one, and a node appearing in both
-    /// is listed once. This is what makes the expansion useful on a deployment still in `manual`
-    /// topology mode — which is the default, and where upgrades land.
+    /// A physical and a logical link between the same pair are one neighbour, not two.
     #[test]
-    fn hand_authored_and_derived_edges_are_unioned_without_duplicates() {
-        let (child, parent) = (Uuid::from_u128(1), Uuid::from_u128(2));
-        let mut derived = Topology::new();
-        derived.add_dependency(NodeId::from(child), NodeId::from(parent));
-        let mut manual = Topology::new();
-        manual.add_dependency(NodeId::from(child), NodeId::from(parent));
-
-        let authorized: HashSet<Uuid> = [child, parent].into_iter().collect();
-        let n = one_hop_neighbours(&derived, &manual, &authorized);
-        assert_eq!(n[&child], vec![(parent, "upstream")], "listed twice");
-
-        // A manual-only edge still counts, so the feature is not dead in `manual` mode.
-        let n = one_hop_neighbours(&Topology::new(), &manual, &authorized);
-        assert_eq!(n[&child], vec![(parent, "upstream")]);
+    fn a_pair_linked_twice_is_one_neighbour() {
+        let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut graph = LinkGraph::default();
+        graph.add_link(NodeId::from(a), NodeId::from(b), true);
+        graph.add_link(NodeId::from(a), NodeId::from(b), false);
+        let authorized: HashSet<Uuid> = [a, b].into_iter().collect();
+        assert_eq!(
+            one_hop_neighbours(&graph, &authorized)[&a],
+            vec![(b, "linked")]
+        );
     }
 
-    /// A self-edge is not a neighbour, and a node with no edges gets no entry at all (rather than
-    /// an empty vector the caller would have to distinguish).
+    /// A node with no links gets no entry at all (rather than an empty vector the caller would
+    /// have to distinguish), and a link to itself is not one.
     #[test]
     fn a_node_is_not_its_own_neighbour() {
         let a = Uuid::from_u128(1);
-        let mut topo = Topology::new();
-        topo.add_dependency(NodeId::from(a), NodeId::from(a));
+        let mut graph = LinkGraph::default();
+        graph.add_link(NodeId::from(a), NodeId::from(a), true);
         let authorized: HashSet<Uuid> = [a].into_iter().collect();
-        assert!(one_hop_neighbours(&topo, &Topology::new(), &authorized).is_empty());
-        assert!(one_hop_neighbours(&Topology::new(), &Topology::new(), &authorized).is_empty());
+        assert!(one_hop_neighbours(&graph, &authorized).is_empty());
+        assert!(one_hop_neighbours(&LinkGraph::default(), &authorized).is_empty());
     }
 
     /// The fan-out bound. Twenty subjects each expanding to four peers is the worst case, and the

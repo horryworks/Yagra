@@ -47,7 +47,6 @@ export const TABLE_IDS = [
   'nodes.classification',
   'nodes.collectionTemplates',
   'nodes.configBackups',
-  'nodes.dependencies',
   'nodes.duplicates',
   'nodes.mib',
   'nodes.missingPrefixes',
@@ -67,6 +66,7 @@ export const TABLE_IDS = [
   'troubleshoot.ruleGap',
   'troubleshoot.scheduled',
   // Settings
+  'settings.alertGroupingFolders',
   'settings.apiTokens',
   'settings.audit',
   'settings.credentials',

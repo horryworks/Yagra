@@ -42,7 +42,7 @@ use crate::passive::logstore::LogStore;
 use crate::tsdb::store::{MetricPoint, MetricStore};
 use yagra_base::groups::{group_subtree, GroupRepo};
 use yagra_base::repo::NodeRepo;
-use yagra_topology::Topology;
+use yagra_topology::grouping::LinkGraph;
 
 /// Broadcast buffer for the job-status SSE stream (matches the alert engine's sizing intent).
 const EVENT_BUFFER: usize = 256;
@@ -361,7 +361,7 @@ pub struct AnalysisRunner {
 ///
 /// A struct rather than more parameters: `new` was already at the `clippy::too_many_arguments`
 /// threshold, and that lint is a design signal rather than something to silence
-/// (coding-conventions). Same shape as [`crate::topology::topology_projection::TopologySources`].
+/// (coding-conventions).
 pub struct AnalysisStores {
     pub store: Arc<dyn MetricStore>,
     pub nodes: Arc<NodeRepo>,
@@ -373,7 +373,7 @@ pub struct AnalysisStores {
     pub flows: Option<Arc<dyn FlowStore>>,
     pub ipasn: IpAsnHandle,
     /// The connectivity graph, for `incident_correlate`'s neighbour expansion (ADR-043 → ADR-022).
-    pub topo: crate::topology::topology_projection::TopologySources,
+    pub links: Arc<crate::topology::topology_links::TopoLinkRepo>,
 }
 
 impl AnalysisRunner {
@@ -387,7 +387,7 @@ impl AnalysisRunner {
             logs,
             flows,
             ipasn,
-            topo,
+            links,
         } = stores;
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
         let max_concurrent = env_cap("YAGRA_ANALYSIS_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
@@ -398,7 +398,7 @@ impl AnalysisRunner {
             ipasn,
             events: Arc::new(RoutedEvents::new(logs, events)),
             inventory: Arc::new(RepoInventory::new(nodes, groups)),
-            graph: Arc::new(ProjectedGraph::new(topo)),
+            graph: Arc::new(ProjectedGraph::new(links)),
             progress: Arc::new(RepoProgress::new(repo.clone(), tx.clone())),
         });
         Self {

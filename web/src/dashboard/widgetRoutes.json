@@ -21,10 +21,6 @@
   "data-coverage": [
     "GET /api/v1/fleet/coverage"
   ],
-  "dependency-view": [
-    "GET /api/v1/topology",
-    "GET /api/v1/stream/node-states"
-  ],
   "discovery-queue": [
     "GET /api/v1/discovery/candidates"
   ],

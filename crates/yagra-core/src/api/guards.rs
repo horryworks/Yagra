@@ -43,7 +43,8 @@ use std::path::{Path, PathBuf};
 /// A ledger, not a wish list — the same contract as [`super::route_table`]. Adding a write route to
 /// a file not named here fails [`every_file_that_registers_a_write_is_declared`], and removing the
 /// last write from one that is named fails it too.
-const WRITE_DOMAINS: [&str; 48] = [
+const WRITE_DOMAINS: [&str; 49] = [
+    "alert_grouping.rs",
     "analysis.rs",
     "api_tokens.rs",
     "bus.rs",

@@ -196,10 +196,6 @@
         "title": "ジオマップ",
         "blurb": "座標でサイトを配置し、最悪の状態でピンを色分け。"
       },
-      "dependency-view": {
-        "title": "依存関係 / 根本原因",
-        "blurb": "上流 → 下流の依存ツリー。根本原因とみなされた上流ノードを示します。"
-      },
       "maintenance": {
         "title": "メンテナンスウィンドウ",
         "blurb": "現在抑制中の対象と今後のウィンドウ。"
@@ -463,14 +459,6 @@
     "audit": {
       "forbidden": "最近の変更を表示するには管理者ロールが必要です。",
       "empty": "最近の変更はありません。"
-    },
-    "dependency": {
-      "empty": "インベントリにノードがありません。",
-      "allClear": "ダウンしているノードはありません。",
-      "explains_one": "アラート {{count}} 件の原因",
-      "explains_other": "アラート {{count}} 件の原因",
-      "andMore_one": "… 他 {{count}} 件",
-      "andMore_other": "… 他 {{count}} 件"
     },
     "eventFeed": {
       "empty": "受信イベントはまだありません。",

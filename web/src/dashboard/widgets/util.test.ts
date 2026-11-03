@@ -9,7 +9,6 @@ import type {
   CalendarBucket,
   NodeGroup,
   NodeSummary,
-  TopologyNode,
 } from '../../types/api';
 import {
   DEFAULT_WIDGET_RANGE_SECS,
@@ -20,7 +19,6 @@ import {
   flowDirOf,
   interfaceEntryLabel,
   percentText,
-  rootCauseRows,
   refreshMsFor,
   timeColLabels,
   calendarMatrix,
@@ -110,73 +108,6 @@ describe('bucketAlertsByHour', () => {
     expect(buckets[buckets.length - 2].count).toBe(1);
     const total = buckets.reduce((n, b) => n + b.count, 0);
     expect(total).toBe(3);
-  });
-});
-
-describe('rootCauseRows', () => {
-  const tnode = (
-    id: string,
-    root_cause: string | null = null,
-    state: TopologyNode['state'] = 'ok',
-  ): TopologyNode => ({ id, name: id, parent_id: null, state, root_cause });
-
-  it('groups suppressed alerts under the cause the engine blamed', () => {
-    const rows = rootCauseRows([
-      tnode('core', null, 'unreachable'),
-      tnode('a', 'core', 'unreachable'),
-      tnode('b', 'core', 'unreachable'),
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].node.id).toBe('core');
-    expect(rows[0].affected.map((n) => n.id).sort()).toEqual(['a', 'b']);
-  });
-
-  it('orders by how much each cause explains, then by name', () => {
-    // Stable across refreshes, and the biggest incident first — the widget is small, so what lands
-    // at the top is most of what an operator reads.
-    const rows = rootCauseRows([
-      tnode('small', null, 'unreachable'),
-      tnode('big', null, 'unreachable'),
-      tnode('x', 'big', 'unreachable'),
-      tnode('y', 'big', 'unreachable'),
-      tnode('z', 'small', 'unreachable'),
-    ]);
-    expect(rows.map((r) => r.node.id)).toEqual(['big', 'small']);
-  });
-
-  it('lists an unattributed problem on its own, and never a healthy node', () => {
-    // The state most of a fleet is in while nothing is modelled: a real outage with no dependency
-    // to roll it up under. Dropping those would make the widget look empty during an incident.
-    const rows = rootCauseRows([
-      tnode('lonely', null, 'critical'),
-      tnode('fine', null, 'ok'),
-      tnode('warned', null, 'warning'),
-    ]);
-    expect(rows.map((r) => r.node.id)).toEqual(['lonely']);
-    expect(rows[0].affected).toEqual([]);
-  });
-
-  it('lists a node once, as the cause, when it is both blamed and suppressed', () => {
-    // `root_cause` has already climbed to the top of the down chain, so re-nesting here would
-    // second-guess the engine and show the same node twice.
-    const rows = rootCauseRows([
-      tnode('gp', null, 'unreachable'),
-      tnode('mid', 'gp', 'unreachable'),
-      tnode('leaf', 'mid', 'unreachable'),
-    ]);
-    expect(rows.map((r) => r.node.id).sort()).toEqual(['gp', 'mid']);
-    expect(rows.flatMap((r) => r.affected.map((a) => a.id)).sort()).toEqual(['leaf', 'mid']);
-  });
-
-  it('skips a cause that is not in the payload rather than inventing a row', () => {
-    // A group-scoped caller does not receive an out-of-scope cause. Showing a placeholder would
-    // disclose that it exists.
-    const rows = rootCauseRows([tnode('a', 'invisible', 'unreachable')]);
-    expect(rows).toEqual([]);
-  });
-
-  it('returns nothing for a healthy fleet', () => {
-    expect(rootCauseRows([tnode('a'), tnode('b')])).toEqual([]);
   });
 });
 

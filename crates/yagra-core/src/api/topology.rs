@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The dependency graph (`GET /api/v1/topology`).
+//! The connectivity graph: its links, one folder level of the network map, and the operator's
+//! decisions about links (ADR-043, ADR-191).
 //!
-//! Assembled from two live sources and stored as neither: the inventory supplies the parent edges,
-//! the alert engine supplies each node's current state and any root-cause attribution from
-//! dependency suppression. There is no topology table.
-//!
-//! Keyset-paginated (S7): this used to return one unbounded full-fleet blob every 15 seconds. It
-//! now returns bounded pages ordered by id with a `next_cursor`, and the client keeps them fresh
-//! over the node-state SSE stream rather than re-fetching.
-//!
-//! [`topology_page`] is the seam the REST handler and the MCP `get_topology` tool both call, so the
-//! graph is assembled once in the codebase. The two surfaces keep their own limits — the UI wants
-//! large pages, an AI client wants small ones — because a clamp is surface policy, not assembly.
+//! There is no dependency graph any more (ADR-236): nothing names a parent in advance, and an
+//! alert's `root_cause` is decided when an outage happens. The map reads that attribution from the
+//! open alerts ([`root_cause_map`]).
 
 use super::extract::{Actor, RequireManageConfig, RequireView, Scoped};
-use super::nodes::{fresh_fallback_ids, NodePageQuery};
 use super::{ApiError, ApiResult, ApiState};
 use crate::api::extract::Admin;
 use crate::runtime::node_display::state_or_fallback;
@@ -24,7 +16,7 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use yagra_common::{
     LinkDirection, LinkOverrideAction, LinkSource, NodeId, NodeState, TopologyLinkSummary,
@@ -33,21 +25,17 @@ use yagra_common::{
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
 #[openapi(paths(
-    get_topology,
     get_topology_links,
     get_topology_map,
     get_link_overrides,
     create_link_override,
     delete_link_override,
-    get_topology_shadow,
-    set_topology_mode,
 ))]
 pub(super) struct Doc;
 
 /// The topology routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
-        .route("/api/v1/topology", get(get_topology))
         .route("/api/v1/topology/links", get(get_topology_links))
         .route("/api/v1/topology/map", get(get_topology_map))
         .route(
@@ -58,105 +46,9 @@ pub(crate) fn routes() -> Router<ApiState> {
             "/api/v1/topology/link-overrides/:id",
             delete(delete_link_override),
         )
-        .route("/api/v1/topology/shadow", get(get_topology_shadow))
-        // ⚠️ Write-only, deliberately. A `GET /api/v1/settings/topology` would be a configuration
-        // read with no MCP tool, which raises `MCP_PENDING` — a ratchet that only moves down. The
-        // mode is already returned by `/topology/shadow`, which does have one, so the read exists
-        // without the gap. This is the ledger doing its job; do not route around it.
-        .route(
-            "/api/v1/settings/topology",
-            axum::routing::put(set_topology_mode),
-        )
 }
 
-/// One node in the dependency/topology graph.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub(crate) struct TopologyNode {
-    pub id: Uuid,
-    pub name: String,
-    /// Upstream parent in the dependency graph (`null` ⇒ a root).
-    pub parent_id: Option<Uuid>,
-    pub state: NodeState,
-    /// Upstream node currently identified as the root cause of this node's alert (dependency
-    /// suppression), if any — lets a client collapse downstream alerts under the cause.
-    pub root_cause: Option<Uuid>,
-}
-
-/// One keyset page of the dependency graph.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub(crate) struct TopologyPage {
-    pub nodes: Vec<TopologyNode>,
-    /// Pass back as `cursor` for the next page; `null` ⇒ this was the last one.
-    pub next_cursor: Option<String>,
-}
-
-/// Assemble one page of the dependency graph, enriched with live state and root cause.
-///
-/// `limit` is the page size the caller has already clamped — this fetches `limit + 1` rows to
-/// detect a further page and truncates before returning, so `next_cursor` is `Some` if and only if
-/// there really is more.
-///
-/// Scoped at the row source, so an out-of-scope node never enters the page — including as somebody
-/// else's `parent_id`. A visible node whose parent is not visible therefore arrives with a
-/// `parent_id` pointing at a node absent from the response, and the graph draws it as a root. That
-/// is the honest rendering: the caller is not shown the parent, so they are not told about it.
-pub(crate) async fn topology_page(
-    st: &ApiState,
-    admin: &super::AdminState,
-    scope: &super::scope::NodeScope,
-    cursor: Option<Uuid>,
-    limit: i64,
-) -> Result<TopologyPage, ApiError> {
-    let mut rows = admin
-        .repo
-        .list_topology_page(scope.group_filter(), cursor, limit + 1)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "topology list nodes", "failed to load topology")
-        })?;
-    let has_more = rows.len() as i64 > limit;
-    if has_more {
-        rows.truncate(limit as usize);
-    }
-    let next_cursor = if has_more {
-        rows.last().map(|r| r.id.to_string())
-    } else {
-        None
-    };
-
-    let states = st.alerts.node_states();
-    let root_causes = root_cause_map(st);
-    // Batch the coarse fallback probe for this page's unobserved nodes: a single TSDB query rather
-    // than one `latest()` round-trip per node (see `fresh_fallback_ids`). After a core restart
-    // (empty `states`) the per-node version fired one VM query for every node.
-    let unobserved: Vec<NodeId> = rows
-        .iter()
-        .map(|r| NodeId::from(r.id))
-        .filter(|id| !states.contains_key(id))
-        .collect();
-    let fresh_fallback: HashSet<Uuid> = fresh_fallback_ids(st, &unobserved).await;
-
-    let nodes = rows
-        .into_iter()
-        .map(|r| {
-            let nid = NodeId::from(r.id);
-            TopologyNode {
-                id: r.id,
-                name: r.name,
-                parent_id: r.parent_id,
-                // The rule lives in `node_display::state_or_fallback`, not here: this map was a fourth
-                // hand-written copy of it, and the copies had already drifted.
-                state: state_or_fallback(states.get(&nid).copied(), fresh_fallback.contains(&r.id)),
-                root_cause: root_causes.get(&r.id).copied(),
-            }
-        })
-        .collect();
-    Ok(TopologyPage { nodes, next_cursor })
-}
-
-/// node → the upstream node its alert is suppressed under (from active, suppressed alerts).
-///
-/// Shared by the dependency graph and the network map, so "which node is blamed" is read once.
+/// node → the node its alert is rolled up into (from the open alerts, ADR-236).
 fn root_cause_map(st: &ApiState) -> HashMap<Uuid, Uuid> {
     let mut root_causes: HashMap<Uuid, Uuid> = HashMap::new();
     for a in st.alerts.active_alerts() {
@@ -168,34 +60,6 @@ fn root_cause_map(st: &ApiState) -> HashMap<Uuid, Uuid> {
         }
     }
     root_causes
-}
-
-/// The dependency graph: every node with its parent edge, current state, and any active root-cause
-/// attribution. Admin-only data source.
-///
-/// The default page is large — the graph views assemble the whole fleet, so fewer round-trips is
-/// better — but bounded, so no single response is a multi-MB blob.
-#[utoipa::path(
-    get, path = "/api/v1/topology", tag = "topology",
-    params(NodePageQuery),
-    responses(
-        (status = 200, description = "One keyset page of the dependency graph; `next_cursor` is null on the last page", body = TopologyPage),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode has no inventory to build the graph from", body = super::error::ErrorBody),
-    ),
-)]
-async fn get_topology(
-    _perm: RequireView,
-    Scoped(scope): Scoped,
-    admin: Admin,
-    axum::extract::State(st): axum::extract::State<ApiState>,
-    Query(q): Query<NodePageQuery>,
-) -> ApiResult<Json<TopologyPage>> {
-    let limit = super::util::page_limit(q.limit, 2000, 5000);
-    Ok(Json(
-        topology_page(&st, &admin, &scope, q.cursor, limit).await?,
-    ))
 }
 
 // ── The derived connectivity graph (ADR-043) ─────────────────────────────────
@@ -818,9 +682,9 @@ pub(crate) struct LinkOverrideRequest {
     pub a_node: Uuid,
     /// The other endpoint.
     pub b_node: Uuid,
-    /// `pin`, `hide` or `direction`.
+    /// `pin` or `hide`. `direction` is refused (ADR-236).
     pub action: LinkOverrideAction,
-    /// Which endpoint is upstream. Required when `action` is `direction`, rejected otherwise.
+    /// Refused when present (ADR-236): a link's direction is no longer recorded.
     pub direction: Option<LinkDirection>,
     /// Free-text note for whoever reads this decision later.
     pub note: Option<String>,
@@ -890,7 +754,7 @@ pub(crate) async fn link_override_list(
     request_body = LinkOverrideRequest,
     responses(
         (status = 200, description = "The decision was recorded", body = super::util::CreatedId),
-        (status = 400, description = "The two endpoints are the same node, or `direction` disagrees with `action`", body = super::error::ErrorBody),
+        (status = 400, description = "The two endpoints are the same node, or the action is `direction`, which is no longer recorded", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the manage-config permission", body = super::error::ErrorBody),
         (status = 404, description = "One of the endpoints is not a node the caller can see", body = super::error::ErrorBody),
@@ -912,14 +776,14 @@ async fn create_link_override(
             "a link needs two different nodes",
         ));
     }
-    // `direction` and `action` must agree. Rejecting the two inconsistent combinations here is what
-    // lets every reader downstream trust that a stored `direction` row carries a direction — the
-    // alternative is a row that parses fine and silently forces nothing.
-    let wants_direction = req.action == LinkOverrideAction::Direction;
-    if wants_direction != req.direction.is_some() {
+    // ADR-236 decision 7: which end of a link is upstream no longer means anything — an outage is
+    // grouped by who is alive around it, not by a direction decided in advance — so a new
+    // `direction` decision is refused rather than stored and silently ignored. One already stored
+    // stays readable until the column is dropped.
+    if req.action == LinkOverrideAction::Direction || req.direction.is_some() {
         return Err(ApiError::bad_request(
-            "invalid_direction",
-            "`direction` is required for action `direction` and not allowed for any other",
+            "direction_retired",
+            "a link's direction is no longer recorded; pin or hide it instead",
         ));
     }
     // Both endpoints, checked against the caller's scope before anything is written. A scoped
@@ -995,334 +859,11 @@ async fn delete_link_override(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-// ── Shadow mode: what the derived graph would do (ADR-043 decision 5) ─────────────
-
-/// One node whose suppression would change if the deployment moved to the derived graph.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub(crate) struct ShadowAlert {
-    /// The node whose active alert is affected.
-    pub node_id: Uuid,
-    /// The node the derived graph blames, when it has one.
-    pub root_cause: Option<Uuid>,
-}
-
-/// One node whose parent set differs between the two graphs.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub(crate) struct ShadowEdge {
-    /// The downstream node.
-    pub child: Uuid,
-    /// The upstream node.
-    pub parent: Uuid,
-}
-
-/// What the derived dependency graph would do, against what the manual one does.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub(crate) struct TopologyShadow {
-    /// `manual`, `shadow` or `derived`.
-    pub mode: yagra_base::repo::topology_mode::TopologyMode,
-    /// Edges in the hand-authored graph.
-    pub manual_edges: usize,
-    /// Edges in the derived graph.
-    pub derived_edges: usize,
-    /// Parent edges only the hand-authored graph has.
-    pub only_in_manual: Vec<ShadowEdge>,
-    /// Parent edges only the derived graph has.
-    pub only_in_derived: Vec<ShadowEdge>,
-    /// Active alerts the derived graph **would suppress** and the manual one does not.
-    ///
-    /// The number to review before enabling `derived`: each of these is an alert that would stop
-    /// being raised.
-    pub would_suppress: Vec<ShadowAlert>,
-    /// Active alerts the manual graph suppresses and the derived one would not — the noise
-    /// direction.
-    pub would_unsuppress: Vec<ShadowAlert>,
-    /// Nodes the derived graph treats as roots, because a poller sits on their segment.
-    pub anchors: Vec<Uuid>,
-    /// Pools with at least one poller whose location could not be resolved.
-    ///
-    /// **Non-empty blocks `derived`.** A pool with no anchor contributes no roots, so none of its
-    /// nodes would ever be suppressed while every screen showed the feature as on.
-    pub unresolved_pools: Vec<String>,
-    /// Poller ids that could not be placed, so an operator knows which to give an anchor.
-    pub unresolved_pollers: Vec<String>,
-    /// When the mode was last changed (RFC 3339), or `null` if it never has been.
-    pub mode_since: Option<String>,
-    /// How many nodes the derived graph gives at least one upstream.
-    ///
-    /// Read with `total_nodes`: a low ratio means most of the fleet would keep alerting exactly as
-    /// it does now, which is usually the point rather than a problem.
-    pub covered_nodes: usize,
-    /// Nodes in the inventory.
-    pub total_nodes: usize,
-    /// Nodes an operator has excluded from derived suppression entirely.
-    ///
-    /// A list rather than a count: the screen that shows the comparison is also where the exclusion
-    /// is toggled, and a count cannot tell a row whether it is the excluded one. Bounded by what an
-    /// operator typed in, not by the fleet.
-    pub opted_out: Vec<Uuid>,
-}
-
-/// Cap on how many differing edges or affected alerts are listed.
-///
-/// The counts above are exact; the lists are evidence. An unbounded diff on a fleet whose manual
-/// graph was never filled in is the whole fleet, which is a multi-megabyte response answering a
-/// question the count already answered.
-const SHADOW_LIST_CAP: usize = 500;
-
-/// What the derived dependency graph would do to alerting, compared with the hand-authored one.
-///
-/// This is the review surface for enabling derived suppression: `would_suppress` lists the active
-/// alerts that would stop being raised, and `unresolved_pools` lists the pollers that have no place
-/// in the graph yet. Both are computed on demand and neither affects alerting.
-#[utoipa::path(
-    get, path = "/api/v1/topology/shadow", tag = "topology",
-    responses(
-        (status = 200, description = "The comparison between the manual and derived dependency graphs", body = TopologyShadow),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the view permission", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode has no inventory to compare", body = super::error::ErrorBody),
-    ),
-)]
-async fn get_topology_shadow(
-    _perm: RequireView,
-    Scoped(scope): Scoped,
-    admin: Admin,
-    axum::extract::State(st): axum::extract::State<ApiState>,
-) -> ApiResult<Json<TopologyShadow>> {
-    Ok(Json(topology_shadow(&st, &admin, &scope).await?))
-}
-
-/// Compare the two dependency graphs — the seam the REST handler and the MCP `get_topology` tool
-/// both call, so an operator reviewing in the UI and a model reviewing over MCP are told the same
-/// thing.
-pub(crate) async fn topology_shadow(
-    st: &ApiState,
-    admin: &super::AdminState,
-    scope: &super::scope::NodeScope,
-) -> Result<TopologyShadow, ApiError> {
-    let nodes = admin.repo.list_nodes().await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "shadow list nodes",
-            "failed to load the topology",
-        )
-    })?;
-    let sources = crate::topology::topology_projection::TopologySources {
-        links: admin.topology_links.clone(),
-        pollers: admin.pollers.clone(),
-        l3: admin.l3.clone(),
-        nodes: admin.repo.clone(),
-    };
-    let manual = crate::topology::topology_projection::manual_topology(&nodes);
-    let (derived, resolution) =
-        crate::topology::topology_projection::derived_topology(&sources, &nodes).await;
-
-    // Both graphs are built over the whole fleet — a graph filtered to one operator's groups would
-    // attribute a root cause to the nearest *visible* node rather than the actual one. The scope is
-    // applied to what is *listed*, after the comparison.
-    let visible = |id: NodeId| scope.allows_node(st, id);
-    let mut only_in_manual = Vec::new();
-    let mut only_in_derived = Vec::new();
-    for node in &nodes {
-        let m = manual.parents_of(node.id);
-        let d = derived.parents_of(node.id);
-        if !visible(node.id) {
-            continue;
-        }
-        for p in m.difference(&d).copied().filter(|p| visible(*p)) {
-            only_in_manual.push(ShadowEdge {
-                child: node.id.as_uuid(),
-                parent: p.as_uuid(),
-            });
-        }
-        for p in d.difference(&m).copied().filter(|p| visible(*p)) {
-            only_in_derived.push(ShadowEdge {
-                child: node.id.as_uuid(),
-                parent: p.as_uuid(),
-            });
-        }
-    }
-
-    // The engine's own view of what is down, reused rather than recomputed: a second derivation of
-    // "which nodes are down" would let the preview and the engine disagree about the very thing the
-    // preview exists to predict.
-    let down: BTreeSet<NodeId> = st.alerts.down_set();
-    let mut would_suppress = Vec::new();
-    let mut would_unsuppress = Vec::new();
-    for alert in st.alerts.active_alerts() {
-        // Node subjects only: suppression is a statement about the dependency graph, and a
-        // pool-coverage alert is not a vertex in it (nor is it ever suppressed — it is raised
-        // with `root_cause: None`).
-        let Some(alert_node) = alert.node() else {
-            continue;
-        };
-        if !visible(alert_node) {
-            continue;
-        }
-        let m = manual.is_suppressed(alert_node, &down);
-        let d = derived.is_suppressed(alert_node, &down);
-        if d && !m {
-            would_suppress.push(ShadowAlert {
-                node_id: alert_node.as_uuid(),
-                root_cause: derived
-                    .root_cause(alert_node, &down)
-                    .filter(|c| visible(*c))
-                    .map(|c| c.as_uuid()),
-            });
-        } else if m && !d {
-            would_unsuppress.push(ShadowAlert {
-                node_id: alert_node.as_uuid(),
-                root_cause: manual
-                    .root_cause(alert_node, &down)
-                    .filter(|c| visible(*c))
-                    .map(|c| c.as_uuid()),
-            });
-        }
-    }
-
-    let manual_edges = manual.edge_count();
-    let derived_edges = derived.edge_count();
-    for v in [&mut only_in_manual, &mut only_in_derived] {
-        v.truncate(SHADOW_LIST_CAP);
-    }
-    for v in [&mut would_suppress, &mut would_unsuppress] {
-        v.truncate(SHADOW_LIST_CAP);
-    }
-    Ok(TopologyShadow {
-        mode: admin.repo.get_topology_mode().await,
-        manual_edges,
-        derived_edges,
-        only_in_manual,
-        only_in_derived,
-        would_suppress,
-        would_unsuppress,
-        anchors: resolution
-            .anchors
-            .iter()
-            .filter(|id| visible(**id))
-            .map(|id| id.as_uuid())
-            .collect(),
-        unresolved_pools: resolution.unresolved.keys().cloned().collect(),
-        unresolved_pollers: resolution.unresolved.values().flatten().cloned().collect(),
-        // The checklist below is **advisory and stays advisory**. Enforcing "shadow for 24 hours"
-        // would put approval back on a schedule, which is the input cost ADR-043 exists to remove;
-        // the one genuinely blocking condition is `unresolved_pools`, above.
-        mode_since: admin
-            .repo
-            .topology_mode_since()
-            .await
-            .map(|t| t.to_rfc3339()),
-        covered_nodes: nodes
-            .iter()
-            .filter(|n| visible(n.id) && !derived.parents_of(n.id).is_empty())
-            .count(),
-        total_nodes: nodes.iter().filter(|n| visible(n.id)).count(),
-        opted_out: admin
-            .repo
-            .suppression_opt_outs()
-            .await
-            .iter()
-            .filter(|id| visible(**id))
-            .map(|id| id.as_uuid())
-            .collect(),
-    })
-}
-
-/// The topology mode to move the deployment to.
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-pub(crate) struct TopologyModeRequest {
-    /// `manual`, `shadow` or `derived`.
-    pub mode: yagra_base::repo::topology_mode::TopologyMode,
-}
-
-/// Choose which dependency graph drives alert suppression.
-///
-/// `manual` uses each node's hand-authored parent. `shadow` changes nothing about alerting and only
-/// makes the comparison at `GET /api/v1/topology/shadow` meaningful. `derived` hands suppression to
-/// the graph derived from CDP/LLDP adjacency and shared subnets.
-///
-/// Moving to `derived` is **refused** while any pool that has nodes has a poller whose location
-/// could not be resolved: such a pool contributes no roots, so none of its nodes would ever be
-/// suppressed — the change would look like it worked and quietly do nothing.
-#[utoipa::path(
-    put, path = "/api/v1/settings/topology", tag = "settings",
-    request_body = TopologyModeRequest,
-    responses(
-        (status = 204, description = "The mode was changed"),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the manage-config permission", body = super::error::ErrorBody),
-        (status = 409, description = "`derived` was requested while a pool with nodes has an unplaced poller", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
-    ),
-)]
-async fn set_topology_mode(
-    _perm: RequireManageConfig,
-    admin: Admin,
-    Json(req): Json<TopologyModeRequest>,
-) -> ApiResult<axum::http::StatusCode> {
-    if req.mode.uses_derived() {
-        let nodes = admin.repo.list_nodes().await.map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "topology mode nodes",
-                "failed to load the fleet",
-            )
-        })?;
-        let sources = crate::topology::topology_projection::TopologySources {
-            links: admin.topology_links.clone(),
-            pollers: admin.pollers.clone(),
-            l3: admin.l3.clone(),
-            nodes: admin.repo.clone(),
-        };
-        let resolution = crate::topology::topology_projection::resolve(&sources, &nodes).await;
-        // Only pools that actually have nodes block. An idle pool with a misconfigured poller is a
-        // problem for that pool, not a reason to refuse a fleet the operator has already reviewed.
-        // A node with no explicit pool belongs to `default` — the same fallback the coordinator
-        // applies. Reading `None` as "no pool" here would let the fleet's unassigned majority slip
-        // past the block entirely.
-        let populated: BTreeSet<&str> = nodes
-            .iter()
-            .map(|n| n.pool.as_deref().unwrap_or("default"))
-            .collect();
-        let blocking: Vec<&str> = resolution
-            .unresolved
-            .keys()
-            .map(String::as_str)
-            .filter(|pool| populated.contains(pool))
-            .collect();
-        if !blocking.is_empty() {
-            return Err(ApiError::conflict(
-                "anchor_unresolved",
-                format!(
-                    "these pools have nodes but no placed poller, so nothing in them would ever \
-                     be suppressed: {}. Set an anchor node for their pollers first.",
-                    blocking.join(", ")
-                ),
-            ));
-        }
-    }
-    admin.repo.set_topology_mode(req.mode).await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "set topology mode",
-            "failed to change the topology mode",
-        )
-    })?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::router;
     use crate::api::tests_support::{private_state, public_state, status_with};
-    use axum::body::{to_bytes, Body};
-    use axum::http::{Request, StatusCode};
-    use tower::ServiceExt;
-
-    async fn status_of(st: ApiState) -> StatusCode {
-        status_of_path(st, "/api/v1/topology").await
-    }
+    use axum::http::StatusCode;
 
     async fn status_of_path(st: ApiState, path: &str) -> StatusCode {
         status_with(st, "GET", path, None, None).await
@@ -1330,8 +871,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_links_endpoint_is_gated_before_its_subsystem_is_consulted() {
-        // Same ordering property as the dependency graph: an anonymous caller learns only that it
-        // is unauthenticated, never whether this deployment has a write side.
+        // An anonymous caller learns only that it is unauthenticated, never whether this
+        // deployment has a write side.
         assert_eq!(
             status_of_path(private_state(), "/api/v1/topology/links").await,
             StatusCode::UNAUTHORIZED
@@ -1393,63 +934,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn an_anonymous_caller_is_told_only_that_it_is_unauthorized() {
-        // `RequireView` runs before `Admin`, so a private skeleton deployment answers 401 rather
-        // than 503 — an unauthenticated caller must not learn whether the write side exists.
-        assert_eq!(status_of(private_state()).await, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn a_public_dashboard_reaches_the_availability_check() {
-        // Reads are open on a public dashboard, so the request gets past the permission guard and
-        // stops at `Admin` instead — proving the two guards are ordered, not merged.
-        assert_eq!(
-            status_of(public_state()).await,
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-    }
-
-    #[tokio::test]
-    async fn the_page_shape_is_an_object_with_a_cursor_not_a_bare_array() {
-        // The DTO is the contract for both the WebUI and the MCP tool: a bare array would leave a
-        // client unable to tell a full page from the end of the graph.
-        let page = TopologyPage {
-            nodes: vec![TopologyNode {
-                id: Uuid::nil(),
-                name: "edge-router-1".to_owned(),
-                parent_id: None,
-                state: NodeState::Ok,
-                root_cause: None,
-            }],
-            next_cursor: Some(Uuid::nil().to_string()),
-        };
-        let json = serde_json::to_value(&page).unwrap();
-        assert!(json["nodes"].is_array());
-        assert_eq!(json["nodes"][0]["name"], "edge-router-1");
-        assert_eq!(json["nodes"][0]["state"], "ok");
-        assert!(json["nodes"][0]["parent_id"].is_null());
-        assert_eq!(json["next_cursor"], Uuid::nil().to_string());
-    }
-
-    #[tokio::test]
-    async fn body_is_serialized_by_the_dto_not_a_json_macro() {
-        // Guards the migration itself: the handler must return `Json<TopologyPage>`, so a field
-        // added to the DTO reaches the wire without anyone editing a `json!` literal.
-        let resp = router(public_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/topology")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        // Skeleton mode has no write side, so this is the typed 503 — not an empty 200.
-        assert_eq!(json["error"]["code"], "admin_unavailable");
-    }
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
 
     /// An operator's decision about a link is stored — the one topology table that is a source of
@@ -1605,6 +1089,7 @@ mod tests {
                     ..TopologyLinkSummary::default()
                 },
                 4,
+                &std::collections::BTreeSet::new(),
             )
             .await
             .expect("record the run");

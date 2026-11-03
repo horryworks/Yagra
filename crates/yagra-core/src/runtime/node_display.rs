@@ -52,7 +52,7 @@ pub(crate) fn state_or_fallback(known: Option<NodeState>, fresh: bool) -> NodeSt
 
 /// The **whole fleet's** fresh set, for the rollups that hold counts rather than a page of ids.
 ///
-/// `api::nodes::fresh_fallback_ids` pushes its id set into the query selector, which is right for a
+/// `api::nodes::display_states` pushes its id set into the query selector, which is right for a
 /// page and wrong for a rollup: the fleet tally, the per-group summary and the inventory report each
 /// cover every visible node, and a selector carrying 50,000 UUIDs is not a query. So they share one
 /// unscoped freshness query instead — and every caller skips it entirely unless something is

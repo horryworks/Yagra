@@ -31,7 +31,6 @@ import type {
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { TextInput, Select, RequiredMark, FieldError } from '../ui/Field';
-import { NodePicker } from '../NodePicker/NodePicker';
 import {
   createRequest,
   duplicateWarning,
@@ -60,8 +59,6 @@ export function AddNodeModal({
   const { t } = useTranslation('nodes');
   const [kind, setKind] = useState<AddableKind>('device');
   const [form, setForm] = useState<AddNodeForm>(EMPTY_ADD_NODE_FORM);
-  /** The parent picker's display label — UI only, so it is not part of the request payload. */
-  const [parentName, setParentName] = useState('');
   /** Folder the node will be filed into. Seeded from the launch context, then editable: the dialog
    *  is reached from the page header, the tree, the + menu and a group's detail pane, and only the
    *  operator knows where the node belongs. Deliberately NOT part of `AddNodeForm` — that type maps
@@ -369,20 +366,6 @@ export function AddNodeModal({
           <TextInput value={form.name} onChange={(e) => set('name', e.target.value)} autoFocus />
         </label>
         {targetFields[kind]}
-        <label className="form-label">
-          {t('add.parentNodeOptional')}
-          {/* Server-side typeahead (A-2) — the parent can be any node in the fleet, not just the
-              lazily-loaded ones, so this never needs the whole inventory in the browser. */}
-          <NodePicker
-            value={form.parentId || null}
-            valueLabel={parentName || undefined}
-            onChange={(n) => {
-              set('parentId', n?.id ?? '');
-              setParentName(n?.name ?? '');
-            }}
-            placeholder={t('add.none')}
-          />
-        </label>
         {trailingFields[kind]}
         <label className="form-label">
           {t('add.poolOptional')}

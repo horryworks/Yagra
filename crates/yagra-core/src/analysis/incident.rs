@@ -149,36 +149,17 @@ impl Engine {
         Ok(Some((findings, summary)))
     }
 
-    /// One-hop neighbours per node, restricted to `authorized`, labelled upstream/downstream.
+    /// One-hop neighbours per node over the connectivity graph's links, restricted to `authorized`.
     ///
-    /// **Not gated on [`yagra_base::repo::topology_mode::TopologyMode`], deliberately.** That gate exists
-    /// because a wrong derived edge *suppresses a real outage*, and silence is unrecoverable;
-    /// `incident_correlate` suppresses nothing, so a wrong edge here only adds a peer to a
-    /// diagnostic — the noisy direction. Gating on it would ship this dead on every default
-    /// deployment (`manual` is the default and is where upgrades land), which is the "built it and
-    /// nobody used it" failure ADR-043 exists to fix. `topology_mode.rs` says the same thing from
-    /// the other side: nothing outside the read endpoint should branch on the mode.
-    ///
-    /// Both graphs are unioned, so a hand-authored `parent_id` counts as an edge alongside a
-    /// derived one. A node with the "never suppress" opt-out gets no parents from
-    /// [`crate::topology::topology_projection::derived_topology`], and that is kept rather than worked
-    /// around: "do not reason about this node's upstream" is an operator statement.
+    /// A failed read of the links degrades to no expansion rather than failing the job:
+    /// single-node correlation is exactly the behaviour this analysis had before, so it is a safe
+    /// floor.
     async fn incident_neighbourhood(
         &self,
         authorized: &HashSet<Uuid>,
     ) -> HashMap<Uuid, Vec<(Uuid, &'static str)>> {
-        let nodes = match self.inventory.list_nodes().await {
-            Ok(n) => n,
-            Err(e) => {
-                // Degrade to no expansion rather than failing the job: single-node correlation is
-                // exactly the behaviour this analysis had before, so it is a safe floor.
-                tracing::warn!(error = %e, "incident correlation: reading the inventory failed");
-                return HashMap::new();
-            }
-        };
-        let derived = self.graph.derived(&nodes).await;
-        let manual = crate::topology::topology_projection::manual_topology(&nodes);
-        one_hop_neighbours(&derived, &manual, authorized)
+        let graph = self.graph.links().await;
+        one_hop_neighbours(&graph, authorized)
     }
 
     /// `incident_signals` for one node, memoized for the job.
@@ -480,9 +461,9 @@ mod tests {
                 .expect("lock")
                 .push(event(n, 200, "link down"));
         }
-        let mut topo = Topology::new();
-        topo.add_dependency(NodeId::from(subject), NodeId::from(upstream));
-        h.graph.set(topo);
+        let mut graph = LinkGraph::default();
+        graph.add_link(NodeId::from(subject), NodeId::from(upstream), true);
+        h.graph.set(graph);
 
         let (findings, _) = h
             .engine()
@@ -506,6 +487,6 @@ mod tests {
             leaf.detail["peers"][0]["node_id"],
             serde_json::json!(upstream)
         );
-        assert_eq!(leaf.detail["peers"][0]["relation"], "upstream");
+        assert_eq!(leaf.detail["peers"][0]["relation"], "linked");
     }
 }

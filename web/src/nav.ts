@@ -193,12 +193,6 @@ export const NAV: NavSection[] = [
             path: '/topology/geo',
             implemented: true,
           },
-          {
-            labelKey: 'topology.dependency',
-            descKey: 'descriptions.topologyDependency',
-            path: '/topology/dependency',
-            implemented: true,
-          },
         ],
       },
     ],

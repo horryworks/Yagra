@@ -15,8 +15,6 @@ export interface AddNodeForm {
   name: string;
   /** Poll-pool; blank ⇒ inherit from the folder the node lands in (or the default pool). */
   pool: string;
-  /** Optional parent node, for topology-based dependency suppression. */
-  parentId: string;
   // Device.
   address: string;
   profileId: string;
@@ -37,7 +35,6 @@ export interface AddNodeForm {
 export const EMPTY_ADD_NODE_FORM: AddNodeForm = {
   name: '',
   pool: '',
-  parentId: '',
   address: '',
   profileId: '',
   credentialId: '',
@@ -78,7 +75,6 @@ export function createRequest<K extends AddableKind>(
 ): Extract<CreateRequest, { kind: K }>;
 export function createRequest(kind: AddableKind, f: AddNodeForm): CreateRequest {
   const pool = f.pool.trim() || undefined;
-  const parent_id = f.parentId || undefined;
   switch (kind) {
     case 'url':
       return {
@@ -88,7 +84,6 @@ export function createRequest(kind: AddableKind, f: AddNodeForm): CreateRequest 
           url: f.url,
           method: f.urlMethod,
           verify_tls: f.verifyTls,
-          parent_id,
           pool,
         },
       };
@@ -101,7 +96,6 @@ export function createRequest(kind: AddableKind, f: AddNodeForm): CreateRequest 
           record_type: f.dnsRecordType,
           // Blank ⇒ the poller's system resolver.
           resolver: f.dnsResolver.trim() || undefined,
-          parent_id,
           pool,
         },
       };
@@ -113,7 +107,6 @@ export function createRequest(kind: AddableKind, f: AddNodeForm): CreateRequest 
           address: f.address,
           profile_id: f.profileId || undefined,
           credential_id: f.credentialId || undefined,
-          parent_id,
           vendor: f.vendor.trim() || undefined,
           model: f.model.trim() || undefined,
           pool,

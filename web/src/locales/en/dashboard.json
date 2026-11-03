@@ -196,10 +196,6 @@
         "title": "Geo map",
         "blurb": "Sites plotted by coordinates, pin colored by worst state."
       },
-      "dependency-view": {
-        "title": "Dependency / root cause",
-        "blurb": "Parent→child dependency tree showing the upstream node blamed as root cause."
-      },
       "maintenance": {
         "title": "Maintenance windows",
         "blurb": "What’s suppressed now + upcoming windows."
@@ -466,14 +462,6 @@
     "audit": {
       "forbidden": "Recent changes require an admin role to view.",
       "empty": "No recent changes."
-    },
-    "dependency": {
-      "empty": "No nodes in the inventory.",
-      "allClear": "Nothing is down.",
-      "explains_one": "explains {{count}} alert",
-      "explains_other": "explains {{count}} alerts",
-      "andMore_one": "… and {{count}} more",
-      "andMore_other": "… and {{count}} more"
     },
     "eventFeed": {
       "empty": "No events received yet.",

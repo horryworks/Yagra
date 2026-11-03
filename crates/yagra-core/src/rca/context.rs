@@ -40,9 +40,6 @@ use yagra_base::repo::NodeRepo;
 /// Dependents named individually before the rest become a count. Twenty is enough for the model to
 /// see the shape of a cascade ("all of rack 3") without the list crowding out the timeline.
 const MAX_NAMED_DEPENDENTS: usize = 20;
-/// How far up the inventory to walk. A depth cap rather than a visited-set because the inventory is
-/// a tree; the cap is belt-and-braces against a cycle introduced by a bad edit.
-const MAX_UPSTREAM_DEPTH: usize = 8;
 /// Config changes carried into the context. "Someone changed this 20 minutes ago" is high-signal;
 /// the twenty-first is not.
 const MAX_RECENT_CHANGES: usize = 5;
@@ -75,9 +72,6 @@ pub struct IncidentContext {
     pub alert: AlertFacts,
     /// Alerts rolled up under this one.
     pub dependents: Dependents,
-    /// Inventory ancestors, nearest first. Present even when healthy: "the parent is fine" is
-    /// evidence that the failure is local to this node.
-    pub upstream: Vec<NodeFacts>,
     /// Cross-signal timeline for the window, oldest first.
     pub timeline: Vec<IncidentSignal>,
     /// Recent audited configuration changes touching this node.
@@ -127,9 +121,6 @@ impl IncidentContext {
             self.dependents.total,
             self.dependents.named.join(",")
         );
-        for up in &self.upstream {
-            let _ = writeln!(s, "up {}", fp_node(up));
-        }
         for sig in &self.timeline {
             let _ = writeln!(s, "sig {} {} {}", sig.at_s, sig.kind, sig.label);
         }
@@ -347,7 +338,6 @@ pub async fn gather(
         }
     };
     let dependents = roll_up_dependents(&active, root_id, &names_of(src, &active).await);
-    let upstream = upstream_chain(src.nodes, &root_node, &tags).await;
     let timeline = src
         .analysis
         .incident_signals(
@@ -367,7 +357,6 @@ pub async fn gather(
         node: NodeFacts::from_node(&root_node, &tags),
         alert,
         dependents,
-        upstream,
         timeline,
         recent_changes,
     })
@@ -441,28 +430,6 @@ fn roll_up_dependents(
     }
     named.sort();
     Dependents { named, total }
-}
-
-/// Walk the inventory upward from `node`, nearest ancestor first.
-///
-/// Depth-capped rather than cycle-detected: the inventory is a tree, and the cap keeps a bad edit
-/// from turning an operator's click into an unbounded query loop.
-async fn upstream_chain(
-    nodes: &NodeRepo,
-    node: &Node,
-    tags: &crate::inventory::tagres::TagResolver,
-) -> Vec<NodeFacts> {
-    let mut chain = Vec::new();
-    let mut next = node.parent;
-    for _ in 0..MAX_UPSTREAM_DEPTH {
-        let Some(parent_id) = next else { break };
-        let Ok(Some(parent)) = nodes.get_node(uuid_of(parent_id)).await else {
-            break;
-        };
-        next = parent.parent;
-        chain.push(NodeFacts::from_node(&parent, tags));
-    }
-    chain
 }
 
 /// Recent audited config changes mentioning this node.

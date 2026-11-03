@@ -51,12 +51,11 @@ pub(super) struct DiscoveredEndpointsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct TopologyParams {
-    /// Which view: "dependency" (default), "links", "map", "overrides" or "shadow".
+    /// Which view: "links" (default), "map" or "overrides".
     kind: Option<String>,
     /// For kind=map: the folder (node group) UUID to draw. Omit for the whole network.
     group: Option<Uuid>,
-    /// Keyset cursor. For kind=dependency this is a node UUID; for kind=links it is the numeric
-    /// `next_cursor` from the previous page.
+    /// Keyset cursor for kind=links: the numeric `next_cursor` from the previous page.
     after: Option<String>,
     /// Max rows to return (1–1000, default 200).
     limit: Option<i64>,
@@ -66,24 +65,25 @@ pub(crate) struct TopologyParams {
 ///
 /// Split out of the tool body so the folding decision is testable without a `RequestContext` — the
 /// `*_in` shape `api-conventions.md` asks for. `Unknown` is deliberately distinct from the default:
-/// a caller who typed `kind="Links"` should be told, not silently handed the dependency graph.
+/// a caller who typed `kind="Links"` should be told, not silently handed another view.
+///
+/// `dependency` and `shadow` are gone with the dependency graph (ADR-236), and a caller still
+/// asking for either is told so by name rather than handed the links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TopologyKind {
-    Dependency,
     Links,
     Map,
     Overrides,
-    Shadow,
+    Retired,
     Unknown,
 }
 
 pub(super) fn topology_kind(kind: Option<&str>) -> TopologyKind {
     match kind {
-        None | Some("dependency") => TopologyKind::Dependency,
-        Some("links") => TopologyKind::Links,
+        None | Some("links") => TopologyKind::Links,
         Some("map") => TopologyKind::Map,
         Some("overrides") => TopologyKind::Overrides,
-        Some("shadow") => TopologyKind::Shadow,
+        Some("dependency" | "shadow") => TopologyKind::Retired,
         Some(_) => TopologyKind::Unknown,
     }
 }
@@ -263,10 +263,8 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "How the network is connected, in keyset pages. `kind=dependency` (default) \
-                       is the alert-suppression graph: each node with its upstream parent, current \
-                       state, and the upstream node blamed for its alert (root_cause). \
-                       `kind=links` is the physical/logical connectivity graph derived from \
+        description = "How the network is connected. `kind=links` (default, keyset pages) is \
+                       the physical/logical connectivity graph derived from \
                        CDP/LLDP adjacency and shared IP subnets: undirected links between nodes, \
                        each with the evidence that produced it (`sources`) and the subnet behind a \
                        shared-subnet link. `kind=map` is one folder of the network map, the same \
@@ -284,15 +282,11 @@ impl YagraMcp {
                        a router or firewall, `l3_switch`, `l2_switch`, `access_point`, `other`) \
                        that decides its row, the `role_reason` behind it, and `subnet_count`. \
                        `kind=overrides` lists the decisions an operator has \
-                       recorded about links (pin, hide, or which end is upstream), which always \
-                       beat what was derived. `kind=shadow` compares the two dependency graphs and \
-                       is what answers whether derived suppression is safe to enable here: it \
-                       reports which active alerts the derived graph would newly suppress \
-                       (`would_suppress` — the risky direction) or stop suppressing, plus any \
-                       pools whose poller has no place in the graph yet (`unresolved_pools`, which \
-                       block enabling it). Dependency and links return `next_cursor` for the \
-                       following page; `after` is that cursor (a node UUID for dependency, a \
-                       number for links) and `limit` is 1–1000 (default 200). Requires live mode."
+                       recorded about links (pin or hide), which always beat what was derived. \
+                       Links return `next_cursor` for the following page; `after` is that cursor \
+                       and `limit` is 1–1000 (default 200). Which alerts were rolled up into which \
+                       node's outage is on each alert (`root_cause` in get_active_alerts). \
+                       Requires live mode."
     )]
     async fn get_topology(
         &self,
@@ -319,24 +313,6 @@ impl YagraMcp {
         // wants a handful of edges where the graph view wants the fleet.
         let limit = crate::api::util::page_limit(p.limit, 200, 1000);
         match topology_kind(p.kind.as_deref()) {
-            TopologyKind::Dependency => {
-                let after = match p.after.as_deref().map(str::parse::<Uuid>) {
-                    Some(Ok(id)) => Some(id),
-                    Some(Err(_)) => {
-                        return tool_bad_params(
-                            TOOL,
-                            "`after` must be a node UUID when kind is dependency",
-                        )
-                    }
-                    None => None,
-                };
-                match crate::api::topology::topology_page(&self.state, admin, scope, after, limit)
-                    .await
-                {
-                    Ok(page) => ok_json(TOOL, &page),
-                    Err(e) => tool_api_error(TOOL, &e),
-                }
-            }
             TopologyKind::Links => {
                 let after = match p.after.as_deref().map(str::parse::<i64>) {
                     Some(Ok(id)) => Some(id),
@@ -364,16 +340,15 @@ impl YagraMcp {
                     Err(e) => tool_api_error(TOOL, &e),
                 }
             }
-            TopologyKind::Shadow => {
-                match crate::api::topology::topology_shadow(&self.state, admin, scope).await {
-                    Ok(s) => ok_json(TOOL, &s),
-                    Err(e) => tool_api_error(TOOL, &e),
-                }
-            }
-            TopologyKind::Unknown => tool_bad_params(
+            TopologyKind::Retired => tool_bad_params(
                 TOOL,
-                "`kind` must be one of: dependency, links, map, overrides, shadow",
+                "the dependency graph is gone: alerts are rolled up when an outage happens, and \
+                 each alert's `root_cause` in get_active_alerts names the node it was rolled up \
+                 into. `kind` must be one of: links, map, overrides",
             ),
+            TopologyKind::Unknown => {
+                tool_bad_params(TOOL, "`kind` must be one of: links, map, overrides")
+            }
         }
     }
 }
@@ -383,13 +358,13 @@ mod tests {
     use super::*;
     use crate::mcp::tools::testkit::*;
 
-    /// The fold's dispatch, tested without a `RequestContext`. Two properties matter: the default
-    /// is the graph that existed before the fold (so an existing client's call is unchanged), and a
-    /// misspelled kind is an error rather than a silent fallback to that default.
+    /// The fold's dispatch, tested without a `RequestContext`. A misspelled kind is an error rather
+    /// than a silent fallback to the default, and a retired one says so.
     #[test]
-    fn the_topology_kind_defaults_to_dependency_and_rejects_a_typo() {
-        assert_eq!(topology_kind(None), TopologyKind::Dependency);
-        assert_eq!(topology_kind(Some("dependency")), TopologyKind::Dependency);
+    fn the_topology_kind_defaults_to_links_and_rejects_a_typo() {
+        assert_eq!(topology_kind(None), TopologyKind::Links);
+        assert_eq!(topology_kind(Some("dependency")), TopologyKind::Retired);
+        assert_eq!(topology_kind(Some("shadow")), TopologyKind::Retired);
         assert_eq!(topology_kind(Some("links")), TopologyKind::Links);
         assert_eq!(topology_kind(Some("map")), TopologyKind::Map);
         for bad in ["Links", "link", "LINKS", "", "edges", "Map", "maps"] {

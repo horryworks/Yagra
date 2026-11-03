@@ -36,6 +36,22 @@
   color: var(--text-secondary);
 }
 
+/* The grouping level above its folder table (ADR-236): the heading with its ⓘ, the four levels, and
+   what the chosen one would do to the outage open now. */
+.routing-grouping {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.routing-grouping .table-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Channel multi-select inside the add-rule modal. */
 .routing-picks {
   display: flex;

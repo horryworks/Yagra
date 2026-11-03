@@ -30,6 +30,7 @@
 //!    (which would still compile) nor leave the published contract describing it.
 //!  - [`openapi`] — the generated document (ADR-035); the WebUI's types come from it.
 
+pub(crate) mod alert_grouping;
 pub(crate) mod alerts;
 pub(crate) mod analysis;
 mod api_tokens;
@@ -521,6 +522,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(discovery::routes())
         .merge(notifications::routes())
         .merge(delivery_hours::routes())
+        .merge(alert_grouping::routes())
         .merge(rca::routes())
         .merge(forwarding::routes())
         .merge(groups::routes())

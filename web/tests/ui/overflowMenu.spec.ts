@@ -47,6 +47,8 @@ const SCREENS: Record<string, string> = {
  *  of these becomes reachable by a path, the reason is what tells the next person the exemption has
  *  expired (the shape `NOTE_EXEMPT` uses in `screens.ts`). */
 const EXEMPT: Record<string, string> = {
+  'pages/AlertGroupingSection.tsx':
+    'A section of /alerts/routing, which RoutingPage.tsx already walks: one route is opened once, and its rows use the same menu (ADR-236).',
   'pages/DeliveryHoursSection.tsx':
     'A section of /alerts/routing, which RoutingPage.tsx already walks: one route is opened once, and its rows use the same menu (ADR-226).',
   'components/NodeDetail/CheckConfigActions.tsx':

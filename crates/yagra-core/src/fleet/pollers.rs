@@ -253,6 +253,11 @@ impl PollerRepo {
     /// Separate from [`Self::upsert_seen`] on purpose: this column is written by an operator and
     /// that one by a heartbeat arriving every ten seconds. One statement writing both would make the
     /// poller the last writer, and the anchor would revive its old value within one beat.
+    ///
+    /// Test-only since ADR-236: nothing reads an anchor any more, but the column stays until it is
+    /// dropped (decision 8) and an older core still reads it, so the heartbeat must keep leaving it
+    /// alone — which is what the tests that call this hold it to.
+    #[cfg(test)]
     pub async fn set_anchor(&self, id: &str, node_id: Option<Uuid>) -> anyhow::Result<bool> {
         let res = sqlx::query("UPDATE pollers SET anchor_node_id = $2 WHERE id = $1")
             .bind(id)

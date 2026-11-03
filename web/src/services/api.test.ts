@@ -1127,18 +1127,23 @@ describe('api client', () => {
     });
   });
 
-  it("sets a node's dependency upstream (and can clear it with null)", async () => {
+  it('sets the alert grouping level and a folder level, and takes the folder level away', async () => {
     const spy = vi
       .fn()
       .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
     globalThis.fetch = spy;
-    await api.setNodeParent('n1', 'n2');
-    expect(spy.mock.calls[0][0]).toBe('/api/v1/nodes/n1/parent');
+    await api.setAlertGroupingLevel('certain');
+    expect(spy.mock.calls[0][0]).toBe('/api/v1/alert-grouping/level');
     expect(spy.mock.calls[0][1].method).toBe('PUT');
-    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ parent_id: 'n2' });
+    expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ level: 'certain' });
 
-    await api.setNodeParent('n1', null);
-    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ parent_id: null });
+    await api.setFolderGroupingLevel('g1', 'site');
+    expect(spy.mock.calls[1][0]).toBe('/api/v1/alert-grouping/folders/g1');
+    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ level: 'site' });
+
+    await api.clearFolderGroupingLevel('g1');
+    expect(spy.mock.calls[2][0]).toBe('/api/v1/alert-grouping/folders/g1');
+    expect(spy.mock.calls[2][1].method).toBe('DELETE');
   });
 
   it('drag-reorders nodes before a sibling through the bulk move (placement)', async () => {
@@ -1413,15 +1418,6 @@ describe('api client', () => {
     mockFetch(200, null);
     const layout = await api.getDashboard();
     expect(layout).toBeNull();
-  });
-
-  it('requests the dependency topology', async () => {
-    const spy = vi
-      .fn()
-      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ nodes: [] }) } as Response);
-    globalThis.fetch = spy;
-    await api.getTopology();
-    expect(spy).toHaveBeenCalledWith('/api/v1/topology');
   });
 
   it('requests fleet coverage', async () => {

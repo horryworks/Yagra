@@ -12,7 +12,6 @@
     "serialNumber": "シリアル番号",
     "osVersion": "OS バージョン",
     "group": "グループ",
-    "parentNode": "上流ノード",
     "uptime": "稼働時間",
     "makerPlaceholder": "例: Cisco",
     "modelPlaceholder": "例: C2960",
@@ -142,7 +141,6 @@
     "verifyTls": "TLS 証明書を検証",
     "deviceProfileOptional": "デバイスプロファイル（任意）",
     "snmpCredentialOptional": "SNMP 認証情報（任意 — 指定すると SNMP ポーリングが有効になります）",
-    "parentNodeOptional": "上流ノード（任意 — 依存関係による抑制に使います）",
     "makerOptional": "メーカー（任意）",
     "modelOptional": "モデル（任意）",
     "dnsMonitor": "DNS 監視を追加",
@@ -221,7 +219,6 @@
     "deleteNode": "ノードの削除に失敗しました",
     "deleteNodes": "ノードの一括削除に失敗しました",
     "saveNode": "ノードの保存に失敗しました",
-    "setDependency": "依存関係の設定に失敗しました",
     "addDnsMonitor": "DNS 監視の追加に失敗しました",
     "movePreview": "アドレスとグループの IP レンジの照合に失敗しました",
     "moveByPrefix": "移動に失敗しました。1 台も移動していません",
@@ -238,7 +235,6 @@
   "detail": {
     "polling": "ポーリング中…",
     "pollNow": "今すぐポーリング",
-    "dependency": "上流ノード…",
     "move": "グループへ移動…",
     "openDetail": "詳細を開く",
     "editNode": "ノードを編集",
@@ -374,13 +370,13 @@
   "deleteNodes": {
     "title_one": "{{count}} 件のノードを削除",
     "title_other": "{{count}} 件のノードを削除",
-    "body": "次のノードを削除しますか？インベントリの項目とインターフェースが消え、上流ノードだったものは下流のノードを抑制しなくなります。元に戻せません。",
+    "body": "次のノードを削除しますか？インベントリの項目とインターフェースが消えます。元に戻せません。",
     "more": "ほか {{count}} 件",
     "partial": "{{requested}} 件のうち {{deleted}} 件を削除しました。残りは既に無いか、見えないグループにあります。"
   },
   "deleteNode": {
     "title": "ノードを削除",
-    "body": "ノード <b>{{name}}</b> を削除しますか？インベントリの項目とインターフェースが消え、このノードに依存するノードは以後このノードでは抑制されません。この操作は取り消せません。"
+    "body": "ノード <b>{{name}}</b> を削除しますか？インベントリの項目とインターフェースが消えます。この操作は取り消せません。"
   },
   "overview": {
     "collectionFault": "{{org}} の Meraki API が応答していません（{{reason}}）。ここに表示している状態は、最後に取得したときのものです。{{since}} に、この組織についてのアラートが出ています。",
@@ -951,14 +947,6 @@
     "title": "{{name}} のポーラープール",
     "titleMany": "選択した {{count}} 件のポーラープール",
     "partial": "{{requested}} 台のうち {{applied}} 台にプールを設定しました。残りは削除済みか、スコープの外です。"
-  },
-  "setParent": {
-    "title": "{{name}} の依存関係",
-    "dependsOn": "上流ノード",
-    "currentUnnamed": "現在の上流ノード（名前を読み込めていません）",
-    "loadFailed": "依存関係のマップを読み込めませんでした。上流ノードの名前が表示されず、循環になる選択肢もここでは除外されません。循環はサーバーが拒否します。",
-    "noUpstream": "— 上流ノードなし（トップレベル） —",
-    "info": "上流ノードがダウンしている間、このノードのアラートは抑制し、上流ノード側にまとめて表示します。"
   },
   "checkEdit": {
     "urlTitle": "URL 監視を編集",

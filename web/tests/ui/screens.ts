@@ -129,7 +129,6 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/pollers': 113,
   '/settings/relocation': 1393,
   '/settings/upgrade': 300,
-  '/topology/dependency': 62,
   '/topology/map': 103,
   '/troubleshoot': 1319,
 };
@@ -179,7 +178,6 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/nodes/collection/mib': MARKER,
   // An SVG box has no text a query reaches reliably (labels are cut to fit), so the box itself.
   '/topology/map': { kind: 'locator', sel: '.topomap-node' },
-  '/topology/dependency': MARKER,
   // The one testid in the tree. An SVG `<g>` has no text for a query to reach, so without it the
   // walk could not tell "plotted the groups it was given" from "drew an empty world map".
   '/topology/geo': { kind: 'locator', sel: `[data-testid="${TEST_IDS.geoMapPin}"]` },

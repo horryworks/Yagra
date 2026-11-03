@@ -378,7 +378,6 @@ async fn delete_check<K: CheckKind>(
 struct NewMonitor {
     /// Display name for the node.
     name: String,
-    parent_id: Option<Uuid>,
     pool: Option<String>,
 }
 
@@ -419,7 +418,8 @@ async fn create_monitor<K: CheckKind>(
             pool.as_deref(),
             profile,
             None,
-            node.parent_id,
+            // A node has no parent since ADR-236; the column stays until it is dropped.
+            None,
             None,
             None,
         )
@@ -580,13 +580,11 @@ async fn delete_dns_check(
 
 // ── URL monitoring ───────────────────────────────────────────────────────────
 
-/// `name`/`parent_id`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;
+/// `name`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;
 /// everything else defaults).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateUrlMonitor {
     name: String,
-    #[serde(default)]
-    parent_id: Option<Uuid>,
     #[serde(default)]
     pool: Option<String>,
     #[serde(flatten)]
@@ -613,7 +611,6 @@ async fn create_url_monitor(
         &admin,
         NewMonitor {
             name: body.name,
-            parent_id: body.parent_id,
             pool: body.pool,
         },
         body.config,
@@ -867,8 +864,6 @@ pub(super) struct CreateDnsMonitor {
     /// The DNS name to resolve.
     dns_name: String,
     #[serde(default)]
-    parent_id: Option<Uuid>,
-    #[serde(default)]
     pool: Option<String>,
     #[serde(default)]
     record_type: yagra_common::DnsRecordType,
@@ -920,7 +915,6 @@ async fn create_dns_monitor(
         &admin,
         NewMonitor {
             name: body.name,
-            parent_id: body.parent_id,
             pool: body.pool,
         },
         config,

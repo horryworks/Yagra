@@ -24,7 +24,6 @@ import type {
   NodeGroup,
   NodeState,
   NodeStatus,
-  NodeSummary,
 } from '../../types/api';
 import { Button } from '../ui/Button';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
@@ -47,7 +46,6 @@ import {
   type NodeDetailTab,
   type NodeDetailTabStats,
 } from './tabs';
-import { SetParentModal } from '../SetParentModal/SetParentModal';
 import { ActionMenu, type ActionMenuItem } from '../ui/ActionMenu';
 import { AddMaintenanceWindowModal } from '../suppression/AddMaintenanceWindowModal';
 import { SetPoolModal } from '../SetPoolModal/SetPoolModal';
@@ -81,10 +79,8 @@ interface Props {
    *  (This used to say the split kept local state; it has been URL-backed since ADR-055.) */
   tab: string;
   onTabChange: (tab: string) => void;
-  /** Group + node lists for the breadcrumb / parent-name resolution (the split already has them;
-   *  the page wrapper fetches groups, and parent name falls back to a targeted fetch). */
+  /** The folder list for the breadcrumb (the split already has it; the page wrapper fetches it). */
   groups: NodeGroup[];
-  nodes?: NodeSummary[];
   /** Open the move-to-group picker; without it the pane opens its own. Handed the node this pane
    *  has loaded. 🚨 The host
    *  used to look the node up among its own loaded rows instead, and the button did nothing
@@ -120,7 +116,6 @@ export function NodeDetail({
   tab,
   onTabChange,
   groups,
-  nodes,
   onMove,
   onOpenDetail,
   onOpenGroup,
@@ -181,7 +176,6 @@ export function NodeDetail({
     [],
   );
   const [editingBindings, setEditingBindings] = useState(false);
-  const [editingParent, setEditingParent] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // The dialogs the header opens that used to be reachable only from the tree's right-click menu
   // (ADR-209 decision 8). Held here, like the three above, so the pane and the full page have them
@@ -389,8 +383,6 @@ export function NodeDetail({
               setPollMsg({ text: errMsg(e, t('tree.pinFailed')), tone: 'error' }),
             ),
         };
-      case 'upstream':
-        return { key, label: t('detail.dependency'), onSelect: () => setEditingParent(true) };
       case 'move':
         return {
           key,
@@ -426,7 +418,6 @@ export function NodeDetail({
       <OverviewTab
         node={node}
         groups={groups}
-        nodes={nodes}
         status={status}
         unreachable={state === 'unreachable'}
         canEdit={canEdit}
@@ -588,18 +579,6 @@ export function NodeDetail({
             // Both, not either: the nonce refetches this pane, `onChanged` tells the page that the
             // row it is drawing on the left is now stale too.
             onChanged?.();
-          }}
-        />
-      )}
-      {editingParent && (
-        <SetParentModal
-          nodeId={nodeId}
-          nodeName={node.name}
-          currentParentId={node.parent_id ?? null}
-          onClose={() => setEditingParent(false)}
-          onSaved={() => {
-            setEditingParent(false);
-            setQuietNonce((v) => v + 1);
           }}
         />
       )}

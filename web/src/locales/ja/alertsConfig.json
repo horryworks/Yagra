@@ -6,7 +6,8 @@
   "noun": {
     "channel_other": "チャネル",
     "source_other": "ソース",
-    "schedule_other": "件"
+    "schedule_other": "件",
+    "folder_other": "フォルダ"
   },
   "routing": {
     "channels": {
@@ -745,6 +746,39 @@
     "how": {
       "thresholds": "狭い対象が勝つ",
       "events": "当たれば全部効く"
+    }
+  },
+  "grouping": {
+    "title": "まとめ方",
+    "info": "一緒に落ちたノードのうち、生きている隣を持たないものの通知を、障害の境目のノードにまとめます。アラートは残り、境目が先に戻ればそれぞれ通知されます。",
+    "level": {
+      "off": "まとめない",
+      "certain": "確実なものだけ",
+      "links": "線から読めるもの",
+      "site": "拠点ごと"
+    },
+    "levelWithCount": "{{level}} · {{count}}",
+    "now": "いま応答なし {{down}} 台 → 通知 {{count}} 件",
+    "nowNone": "いま応答のないノードはありません。",
+    "folders": "フォルダごとの段",
+    "add": "+ フォルダの段を追加",
+    "empty": "すべてのフォルダが上の段に従います。",
+    "remove": "上の段に従う",
+    "cols": {
+      "folder": "フォルダ",
+      "level": "段",
+      "actions": "操作"
+    },
+    "modal": {
+      "title": "フォルダの段を追加",
+      "pickFolder": "フォルダを選ぶ",
+      "add": "追加"
+    },
+    "err": {
+      "level": "まとめ方の段を変えられませんでした。",
+      "remove": "フォルダの段を外せませんでした。",
+      "save": "フォルダの段を追加できませんでした。",
+      "noFolder": "フォルダを選んでください。"
     }
   }
 }

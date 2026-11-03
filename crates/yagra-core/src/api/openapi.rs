@@ -133,6 +133,7 @@ fn fragments() -> Vec<(&'static str, utoipa::openapi::OpenApi)> {
         ("discovery", super::discovery::Doc::openapi()),
         ("notifications", super::notifications::Doc::openapi()),
         ("delivery_hours", super::delivery_hours::Doc::openapi()),
+        ("alert_grouping", super::alert_grouping::Doc::openapi()),
         ("rca", super::rca::Doc::openapi()),
         ("forwarding", super::forwarding::Doc::openapi()),
         ("groups", super::groups::Doc::openapi()),

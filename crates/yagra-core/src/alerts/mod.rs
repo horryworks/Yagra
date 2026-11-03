@@ -59,6 +59,7 @@ pub(crate) mod availability;
 pub(crate) mod config;
 pub(crate) mod deleted;
 pub(crate) mod delivery_hours;
+pub(crate) mod grouping;
 pub(crate) mod history;
 pub(crate) mod maintenance;
 pub(crate) mod notification_log;

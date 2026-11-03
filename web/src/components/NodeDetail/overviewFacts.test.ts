@@ -43,7 +43,6 @@ describe('overview fact rows', () => {
       'osVersion',
       'profile',
       'credential',
-      'parent',
       'uptime',
     ]);
     expect([...visibleFactRows('meraki', true)]).toEqual([
@@ -56,7 +55,6 @@ describe('overview fact rows', () => {
       'serialNumber',
       'profile',
       'credential',
-      'parent',
     ]);
     // An AP carries no row of its own: `polledBy` is relabelled to name its controller.
     expect([...visibleFactRows('wireless_ap', true)]).toEqual([
@@ -67,15 +65,13 @@ describe('overview fact rows', () => {
       'maker',
       'model',
       'profile',
-      'parent',
     ]);
-    expect([...visibleFactRows('url', true)]).toEqual(['group', 'pool', 'polledBy', 'profile', 'parent']);
+    expect([...visibleFactRows('url', true)]).toEqual(['group', 'pool', 'polledBy', 'profile']);
     expect([...visibleFactRows('dns', true)]).toEqual([
       'group',
       'pool',
       'polledBy',
       'profile',
-      'parent',
       'resolver',
     ]);
   });
@@ -84,7 +80,7 @@ describe('overview fact rows', () => {
   it('keeps the placement facts for every kind', () => {
     for (const kind of NODE_KINDS) {
       const rows = visibleFactRows(kind, true);
-      for (const r of ['group', 'pool', 'polledBy', 'profile', 'parent'] as const) {
+      for (const r of ['group', 'pool', 'polledBy', 'profile'] as const) {
         expect(rows, `${kind}/${r}`).toContain(r);
       }
     }

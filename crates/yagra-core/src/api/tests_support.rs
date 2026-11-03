@@ -408,12 +408,7 @@ async fn live_state_with(
             logs: None,
             flows: None,
             ipasn: crate::passive::ipasn::empty_handle(),
-            topo: crate::topology::topology_projection::TopologySources {
-                links: topo_link_repo.clone(),
-                pollers: poller_repo.clone(),
-                l3: l3_repo.clone(),
-                nodes: repo.clone(),
-            },
+            links: topo_link_repo.clone(),
         },
     ));
 

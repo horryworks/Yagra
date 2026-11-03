@@ -287,6 +287,30 @@ const PENDING_STREAM: Mcp = Pending(
 /// Every `(method, path, scoping, mcp)` the router serves, sorted by path. Axum path params keep
 /// their `:name` form; the test substitutes a value that parses for every extractor in use.
 pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
+    (
+        "GET",
+        "/api/v1/alert-grouping",
+        ADMIN_CFG,
+        Tool("get_config"),
+    ),
+    (
+        "PUT",
+        "/api/v1/alert-grouping/level",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
+        "/api/v1/alert-grouping/folders/:group_id",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "DELETE",
+        "/api/v1/alert-grouping/folders/:group_id",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
     ("GET", "/api/v1/alerts", PostFiltered, Tool("get_active_alerts")),
     (
         "GET",
@@ -1443,12 +1467,6 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "PUT",
-        "/api/v1/nodes/:node_id/parent",
-        NodeScoped,
-        NO_MCP_WRITE,
-    ),
-    (
-        "PUT",
         "/api/v1/nodes/:node_id/placement",
         NodeScoped,
         NO_MCP_WRITE,
@@ -1786,14 +1804,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("GET", "/api/v1/poller-health", INFRA, Tool("get_system_health")),
     ("GET", "/api/v1/pollers", INFRA, Tool("get_system_health")),
-    (
-        "PUT",
-        "/api/v1/nodes/:node_id/suppression-opt-out",
-        NodeScoped,
-        NO_MCP_WRITE,
-    ),
     ("DELETE", "/api/v1/pollers/:id", INFRA, NO_MCP_WRITE),
-    ("PUT", "/api/v1/pollers/:id/anchor", INFRA, NO_MCP_WRITE),
     // A write despite reading like a download: it mints a credential and stores its digest. The
     // archive is the *response*, not the resource, which is why there is no matching GET — the
     // token exists only at this instant and nothing can serve it a second time.
@@ -2026,16 +2037,6 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/settings/neighbors",
-        ADMIN_CFG,
-        NO_MCP_WRITE,
-    ),
-    // ⚠️ Write-only, and there is deliberately no `GET` beside it. The mode is already reported by
-    // `GET /api/v1/topology/shadow`, which has a tool — so the read exists without a second route
-    // to serve it. Adding the symmetric GET "for consistency" would mean either a new `get_config`
-    // kind nobody asked for or a fresh `Pending`, and `MCP_PENDING` only moves down.
-    (
-        "PUT",
-        "/api/v1/settings/topology",
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
@@ -2347,12 +2348,6 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("DELETE", "/api/v1/thresholds/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",
-        "/api/v1/topology",
-        GroupFiltered,
-        Tool("get_topology"),
-    ),
-    (
-        "GET",
         "/api/v1/topology/links",
         // Both endpoints must be visible, not either — a link with one visible end would tell a
         // scoped operator that a node exists outside their scope.
@@ -2394,16 +2389,6 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/topology/link-overrides/:id",
         NodeScoped,
         NO_MCP_WRITE,
-    ),
-    (
-        "GET",
-        "/api/v1/topology/shadow",
-        GroupFiltered,
-        // **Not exempt.** Asked "should derived suppression be enabled here", a model cannot
-        // synthesize this from the other two tools without reimplementing `is_suppressed` over the
-        // fleet's live down-set — which is exactly the kind of question read parity exists for.
-        // Folded as `get_topology(kind="shadow")`.
-        Tool("get_topology"),
     ),
     ("POST", "/api/v1/url-monitors", ADMIN_CFG, NO_MCP_WRITE),
     (

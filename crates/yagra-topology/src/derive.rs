@@ -66,6 +66,10 @@ pub struct DeriveOutput {
     pub links: Vec<DerivedLink>,
     /// Counters for everything that did not become a link.
     pub summary: TopologyLinkSummary,
+    /// The nodes that reported a CDP/LLDP row naming no node, or a node it could not tell apart
+    /// from another (ADR-236). Such a node may have a link nobody can see, so the most careful
+    /// grouping level never judges it to sit behind another node.
+    pub unsure: BTreeSet<NodeId>,
 }
 
 /// The one node an address identifies, or `None` when it identifies nobody.
@@ -92,6 +96,7 @@ pub fn sole_claimant<T: Copy + Ord>(claimants: &BTreeSet<T>) -> Option<T> {
 #[must_use]
 pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     let mut summary = TopologyLinkSummary::default();
+    let mut unsure = BTreeSet::new();
 
     // ── Who owns which address ───────────────────────────────────────────────
     // Both the inventory address and every observed interface address, because a CDP row may name
@@ -282,6 +287,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
                 Some(ip) => {
                     if contested.contains(&ip) {
                         summary.ambiguous_mgmt_addrs += 1;
+                        unsure.insert(*id);
                         continue;
                     }
                     owner.get(&ip).copied()
@@ -293,6 +299,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
             };
             let Some(peer) = peer else {
                 unmatched(&mut summary);
+                unsure.insert(*id);
                 continue;
             };
             // A device that advertises its own address as a peer's is describing a loop, not a link.
@@ -396,6 +403,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     DeriveOutput {
         links: out,
         summary,
+        unsure,
     }
 }
 
@@ -824,6 +832,7 @@ mod tests {
         assert_eq!(out.links[0].sources, vec![LinkSource::Lldp]);
         assert_eq!(out.summary.lldp_links, 1);
         assert_eq!(out.summary.unmatched_lldp_rows, 0);
+        assert!(out.unsure.is_empty());
         // The reporting switch's port lands on the switch's end, whichever end that is.
         let l = &out.links[0];
         let side = if l.a_node == n[0] {
@@ -873,6 +882,8 @@ mod tests {
         );
         assert!(out.links.is_empty());
         assert_eq!(out.summary.unmatched_lldp_rows, 1);
+        // The switch that heard it may have a link nobody can see (ADR-236).
+        assert_eq!(out.unsure, BTreeSet::from([n[0]]));
     }
 
     #[test]

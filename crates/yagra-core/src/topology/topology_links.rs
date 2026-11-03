@@ -12,6 +12,10 @@
 //! node and re-add it a cycle later. That is migration 0062's "everything disappeared" failure,
 //! one level up.
 
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+
 use chrono::{DateTime, Utc};
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
@@ -24,6 +28,40 @@ use yagra_common::{DerivedLink, LinkSource, NodeId, TopologyLinkSummary};
 /// a poller that restarted), and deleting on the first miss would make the map flicker in step with
 /// the network's noise rather than its topology.
 pub const STALE_CYCLES: i64 = 3;
+
+/// Moves each time a derivation produces a different graph than the one before it, so the alert
+/// engine's config is rebuilt when the links it groups by change (ADR-236) without the config
+/// generation moving — that one also makes every poller's working set be resolved again, and a
+/// link appearing changes nothing any poller does.
+static LINKS_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// A fingerprint of the last graph [`note_derived`] saw.
+static LAST_DERIVED: Mutex<Option<u64>> = Mutex::new(None);
+
+/// The current links generation.
+pub(crate) fn links_generation() -> u64 {
+    LINKS_GENERATION.load(Ordering::Relaxed)
+}
+
+/// Tell the alert engine's refresh that a derivation finished, and with what. The generation moves
+/// only when the links (their ends and sources) or the unsure nodes differ from the last run's —
+/// `last_seen` moves on every run and says nothing about the graph.
+pub(crate) fn note_derived(links: &[DerivedLink], unsure: &BTreeSet<NodeId>) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for l in links {
+        l.a_node.hash(&mut h);
+        l.b_node.hash(&mut h);
+        l.sources.hash(&mut h);
+    }
+    unsure.hash(&mut h);
+    let fingerprint = h.finish();
+    let mut last = LAST_DERIVED.lock().expect("last derived mutex poisoned");
+    if *last != Some(fingerprint) {
+        *last = Some(fingerprint);
+        LINKS_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 /// One stored link, as read back for the API.
 #[derive(Debug, Clone)]
@@ -169,17 +207,34 @@ impl TopoLinkRepo {
         &self,
         summary: &TopologyLinkSummary,
         link_count: usize,
+        unsure: &BTreeSet<NodeId>,
     ) -> anyhow::Result<()> {
+        let unsure: Vec<Uuid> = unsure.iter().map(NodeId::as_uuid).collect();
         sqlx::query(
-            "INSERT INTO topology_derivation (id, derived_at, summary, link_count) \
-             VALUES (TRUE, now(), $1, $2) \
-             ON CONFLICT (id) DO UPDATE SET derived_at = now(), summary = $1, link_count = $2",
+            "INSERT INTO topology_derivation (id, derived_at, summary, link_count, unsure_nodes) \
+             VALUES (TRUE, now(), $1, $2, $3) \
+             ON CONFLICT (id) DO UPDATE SET derived_at = now(), summary = $1, link_count = $2, \
+             unsure_nodes = $3",
         )
         .bind(Json(summary))
         .bind(i32::try_from(link_count).unwrap_or(i32::MAX))
+        .bind(&unsure)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// The nodes the last run could not be sure about (ADR-236): each reported a neighbour row
+    /// that named no node. Empty before the first run.
+    pub async fn unsure_nodes(&self) -> anyhow::Result<Vec<NodeId>> {
+        let row = sqlx::query("SELECT unsure_nodes FROM topology_derivation WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
+            return Ok(Vec::new());
+        };
+        let ids: Vec<Uuid> = row.try_get("unsure_nodes")?;
+        Ok(ids.into_iter().map(NodeId::from).collect())
     }
 
     /// What the last derivation run saw, or `None` before the first run.
@@ -671,7 +726,9 @@ mod tests {
             unmatched_lldp_rows: 7,
             ..TopologyLinkSummary::default()
         };
-        repo.record_run(&first_summary, 3).await.expect("record");
+        repo.record_run(&first_summary, 3, &std::collections::BTreeSet::new())
+            .await
+            .expect("record");
         let first = repo
             .last_run()
             .await
@@ -687,7 +744,9 @@ mod tests {
             l3_links: 9,
             ..TopologyLinkSummary::default()
         };
-        repo.record_run(&next_summary, 9).await.expect("record");
+        repo.record_run(&next_summary, 9, &std::collections::BTreeSet::new())
+            .await
+            .expect("record");
         assert_eq!(
             pgtest::rows(&pool, "topology_derivation").await,
             1,

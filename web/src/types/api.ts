@@ -101,7 +101,7 @@ const schemaEnumPins: {
   LinkSource: AssertEqual<LinkSource, components['schemas']['LinkSource']>;
   LinkOverrideAction: AssertEqual<LinkOverrideAction, components['schemas']['LinkOverrideAction']>;
   LinkDirection: AssertEqual<LinkDirection, components['schemas']['LinkDirection']>;
-  TopologyMode: AssertEqual<TopologyMode, components['schemas']['TopologyMode']>;
+  GroupingLevel: AssertEqual<GroupingLevel, components['schemas']['GroupingLevel']>;
   RcaConfidence: AssertEqual<RcaConfidence, components['schemas']['RcaConfidence']>;
   TlsCertSource: AssertEqual<TlsCertSource, components['schemas']['TlsCertSource']>;
   // The runtime array `i18nEnumKeys` and the AP filter iterate — a fourth backend state would
@@ -177,7 +177,7 @@ const schemaEnumPins: {
   LinkSource: true,
   LinkOverrideAction: true,
   LinkDirection: true,
-  TopologyMode: true,
+  GroupingLevel: true,
   RcaConfidence: true,
   TlsCertSource: true,
   WlanApState: true,
@@ -1571,8 +1571,6 @@ export type FleetWatch = components['schemas']['FleetWatch'];
  *  sums descendants for the region rollup. */
 export type FleetGroupSummary = components['schemas']['FleetGroupSummary'];
 
-/** One node in the dependency/topology graph (`GET /api/v1/topology`). */
-export type TopologyNode = components['schemas']['TopologyNode'];
 
 
 /** One folder level of the network map (`GET /api/v1/topology/map`, ADR-191). */
@@ -1653,16 +1651,14 @@ export type LinkOverrideAction = (typeof LINK_OVERRIDE_ACTIONS)[number];
 export const LINK_DIRECTIONS = ['a_parent', 'b_parent'] as const;
 export type LinkDirection = (typeof LINK_DIRECTIONS)[number];
 
-/** Which dependency graph drives alert suppression (`PUT /api/v1/settings/topology`).
- *
- *  `manual` uses each node's hand-authored parent; `shadow` changes nothing about alerting and only
- *  makes the comparison meaningful; `derived` hands suppression to the derived graph. */
-export const TOPOLOGY_MODES = ['manual', 'shadow', 'derived'] as const;
-export type TopologyMode = (typeof TOPOLOGY_MODES)[number];
+/** How strongly an outage's alerts are grouped (ADR-236), weakest first. `as const` because the
+ *  settings section iterates it, and the order is the order of the preview's `notified`. */
+export const GROUPING_LEVELS = ['off', 'certain', 'links', 'site'] as const;
+export type GroupingLevel = (typeof GROUPING_LEVELS)[number];
 
-/** The manual-vs-derived comparison (`GET /api/v1/topology/shadow`) — the review surface for
- *  enabling derived suppression. */
-export type TopologyShadow = components['schemas']['TopologyShadow'];
+/** The deployment's grouping level, each folder's own, and what each level would do now
+ *  (`GET /api/v1/alert-grouping`). */
+export type AlertGroupingConfig = components['schemas']['AlertGroupingConfig'];
 
 /** The fixed error envelope (ADR-019). */
 export type ApiErrorBody = components['schemas']['ApiErrorBody'];

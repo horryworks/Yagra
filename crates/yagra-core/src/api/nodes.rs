@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The node domain: the inventory itself.
 //!
-//! Everything about a node's identity and its place in the two trees it belongs to — the
-//! **folder tree** (`group_id`, `sort_order`, drag placement) and the **dependency tree**
-//! (`parent_id`, the edge alert suppression walks). Those are genuinely different graphs over the
-//! same nodes, which is why `PUT /nodes/:id/group` and `PUT /nodes/:id/parent` are separate
-//! endpoints rather than one "move" — conflating them would make reordering the sidebar rewire
-//! root-cause attribution.
+//! Everything about a node's identity and its place in the folder tree (`group_id`, `sort_order`,
+//! drag placement). A node has no parent node any more (ADR-236): an outage's alerts are grouped
+//! when it happens, from the links around it, not from an edge someone wrote down.
 //!
 //! Two things here are shared rather than local, and both are shared for the same reason: they
 //! answer a question more than one surface asks, and the surfaces had drifted.
@@ -28,7 +25,7 @@ use super::util::CreatedId;
 use super::{AdminState, ApiError, ApiResult, ApiState};
 use crate::runtime::node_display::{state_or_fallback, FALLBACK_FRESH_SECS, FALLBACK_METRICS};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,
@@ -37,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
-use yagra_base::groups::{placement_order, would_create_cycle};
+use yagra_base::groups::placement_order;
 use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -65,8 +62,6 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     preview_name_from_device,
     apply_name_from_device,
     poll_nodes_now,
-    set_node_parent,
-    set_node_suppression_opt_out,
     place_node
 ))]
 pub(super) struct Doc;
@@ -106,11 +101,6 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
         .route("/api/v1/nodes/:node_id/pool", put(set_node_pool))
-        .route("/api/v1/nodes/:node_id/parent", put(set_node_parent))
-        .route(
-            "/api/v1/nodes/:node_id/suppression-opt-out",
-            put(set_node_suppression_opt_out),
-        )
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
 }
 
@@ -179,22 +169,6 @@ pub(crate) async fn display_states(st: &ApiState, nodes: &[NodeId]) -> HashMap<N
                 state_or_fallback(known.get(n).copied(), fresh.contains(&n.as_uuid())),
             )
         })
-        .collect()
-}
-
-/// The subset of `unobserved` with a recent RTT sample (⇒ `ok`).
-///
-/// The raw form of the batched probe, for a caller that already has its own state map and only
-/// needs the fallback (the topology graph).
-pub(crate) async fn fresh_fallback_ids(st: &ApiState, unobserved: &[NodeId]) -> HashSet<Uuid> {
-    if unobserved.is_empty() {
-        return HashSet::new();
-    }
-    let scope: Vec<Uuid> = unobserved.iter().map(NodeId::as_uuid).collect();
-    st.store
-        .fresh_node_ids_scoped(&FALLBACK_METRICS, FALLBACK_FRESH_SECS, &scope)
-        .await
-        .into_iter()
         .collect()
 }
 
@@ -1086,7 +1060,6 @@ pub(crate) struct NodeDetail {
     address: String,
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
-    parent_id: Option<Uuid>,
     /// Descriptive maker/model, editable from the node detail.
     vendor: Option<String>,
     model: Option<String>,
@@ -1297,7 +1270,6 @@ async fn get_node(
         address: node.address.to_string(),
         profile_id: node.profile.map(|p| p.0),
         credential_id: node.credential.map(|c| c.as_uuid()),
-        parent_id: node.parent.map(|p| p.as_uuid()),
         vendor: node.vendor,
         model: node.model,
         os_version,
@@ -1454,7 +1426,7 @@ async fn get_node_status(
 
 // ── Writes ───────────────────────────────────────────────────────────────────
 
-/// Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.
+/// Create-node request body. `profile_id`/`credential_id` are optional.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateNode {
     name: String,
@@ -1462,7 +1434,6 @@ pub(super) struct CreateNode {
     pool: Option<String>,
     profile_id: Option<Uuid>,
     credential_id: Option<Uuid>,
-    parent_id: Option<Uuid>,
     #[serde(default)]
     vendor: Option<String>,
     #[serde(default)]
@@ -1636,7 +1607,8 @@ async fn create_node(
             pool.as_deref(),
             body.profile_id,
             body.credential_id,
-            body.parent_id,
+            // A node has no parent since ADR-236; the column stays until it is dropped.
+            None,
             trimmed(body.vendor.as_ref()),
             trimmed(body.model.as_ref()),
         )
@@ -2528,136 +2500,6 @@ async fn preview_move_by_subtree(
         nodes,
         any_prefixes,
     }))
-}
-
-/// Whether this node is excluded from derived alert suppression.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct NodeSuppressionOptOut {
-    /// `true` ⇒ this node's alerts always stand on their own, whatever the derived graph says.
-    opt_out: bool,
-}
-
-/// Exclude a node from derived alert suppression, or put it back.
-///
-/// An excluded node keeps its place in the connectivity graph — everything behind it still resolves
-/// through it — but is given no upstream of its own, so its alert is never rolled up under
-/// something else. Use it for the one box that must page whatever else is happening.
-///
-/// This only ever *removes* suppression, so it cannot cause an outage to go unreported. It has no
-/// effect while the deployment is on the hand-authored graph.
-#[utoipa::path(
-    put, path = "/api/v1/nodes/{node_id}/suppression-opt-out", tag = "nodes",
-    params(("node_id" = Uuid, Path, description = "Node id")),
-    request_body = NodeSuppressionOptOut,
-    responses(
-        (status = 204, description = "The exclusion was set or cleared"),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node", body = super::error::ErrorBody),
-        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn set_node_suppression_opt_out(
-    _perm: RequireManageConfig,
-    _visible: VisibleNode,
-    admin: Admin,
-    Path(id): Path<Uuid>,
-    Json(body): Json<NodeSuppressionOptOut>,
-) -> ApiResult<StatusCode> {
-    match admin.repo.set_suppression_opt_out(id, body.opt_out).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(ApiError::not_found(
-            "node_not_found",
-            format!("no node {id}"),
-        )),
-        Err(e) => Err(ApiError::from_internal(
-            e.as_ref(),
-            "set suppression opt-out",
-            "failed to update the node",
-        )),
-    }
-}
-
-/// Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
-/// dependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —
-/// distinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.
-#[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct NodeParentAssignment {
-    parent_id: Option<Uuid>,
-}
-
-#[utoipa::path(
-    put, path = "/api/v1/nodes/{node_id}/parent", tag = "nodes",
-    params(("node_id" = Uuid, Path, description = "Node id")),
-    request_body = NodeParentAssignment,
-    responses(
-        (status = 204, description = "Dependency edge set or cleared"),
-        (status = 400, description = "Self-dependency, a parent that does not exist or is outside the caller's scope, or an edge that would close a cycle", body = super::error::ErrorBody),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
-        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn set_node_parent(
-    _perm: RequireManageConfig,
-    _visible: VisibleNode,
-    Scoped(scope): Scoped,
-    State(st): State<ApiState>,
-    admin: Admin,
-    Path(id): Path<Uuid>,
-    Json(body): Json<NodeParentAssignment>,
-) -> ApiResult<StatusCode> {
-    // Validate the requested edge before persisting: no self-dependency, the parent must exist,
-    // and the new edge must not close a cycle (the dependency graph is a single-parent forest).
-    if let Some(parent) = body.parent_id {
-        if parent == id {
-            return Err(ApiError::bad_request(
-                "invalid_dependency",
-                "a node cannot depend on itself",
-            ));
-        }
-        // A parent this caller cannot see answers exactly as one that does not exist, so the
-        // refusal teaches them nothing about another site's inventory (ADR-158 A8).
-        if !scope.allows_node(&st, yagra_common::NodeId::from(parent)) {
-            return Err(ApiError::bad_request(
-                "parent_not_found",
-                format!("no node {parent}"),
-            ));
-        }
-        let nodes = admin.repo.list_nodes().await.map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "load nodes for dependency check",
-                "failed to set dependency",
-            )
-        })?;
-        if !nodes.iter().any(|n| n.id.as_uuid() == parent) {
-            return Err(ApiError::bad_request(
-                "parent_not_found",
-                format!("no node {parent}"),
-            ));
-        }
-        // Reuse the folder-tree cycle guard: the dependency edges have the same (id, parent) shape.
-        let edges: Vec<(Uuid, Option<Uuid>)> = nodes
-            .iter()
-            .map(|n| (n.id.as_uuid(), n.parent.map(|p| p.as_uuid())))
-            .collect();
-        if would_create_cycle(&edges, id, Some(parent)) {
-            return Err(ApiError::bad_request(
-                "invalid_dependency",
-                "that dependency would create a cycle",
-            ));
-        }
-    }
-    let found = admin
-        .repo
-        .set_node_parent(id, body.parent_id)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "set node parent", "failed to set dependency")
-        })?;
-    node_write_result(found, id)
 }
 
 /// Drag-reorder a node within (or into) a group, positioning it relative to a sibling.
@@ -3564,7 +3406,6 @@ mod tests {
             ("PUT", format!("/api/v1/nodes/{id}/bindings")),
             ("PUT", format!("/api/v1/nodes/{id}/group")),
             ("PUT", format!("/api/v1/nodes/{id}/pool")),
-            ("PUT", format!("/api/v1/nodes/{id}/parent")),
             ("PUT", format!("/api/v1/nodes/{id}/placement")),
             ("POST", format!("/api/v1/nodes/{id}/poll")),
         ]
@@ -5014,12 +4855,6 @@ mod tests {
                 ),
                 (
                     "PUT",
-                    format!("{node}/parent"),
-                    Some(json!({ "parent_id": null })),
-                    StatusCode::NO_CONTENT,
-                ),
-                (
-                    "PUT",
                     format!("{node}/placement"),
                     Some(json!({ "group_id": mine })),
                     StatusCode::NO_CONTENT,
@@ -5065,7 +4900,7 @@ mod tests {
         };
 
         let refused = writes(other, other, other);
-        assert_eq!(refused.len(), 11, "every single-node write is exercised");
+        assert_eq!(refused.len(), 10, "every single-node write is exercised");
         for (method, path, body, _) in refused {
             let (status, out) =
                 send(&st, method, &format!("/api/v1/nodes/{path}"), &tok, body).await;
@@ -5108,17 +4943,6 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{out}");
         assert_eq!(out["error"]["code"], "group_not_found", "{out}");
-        // …and so is a parent the caller cannot see, answered as one that does not exist.
-        let (status, out) = send(
-            &st,
-            "PUT",
-            &format!("/api/v1/nodes/{own_url}/parent"),
-            &tok,
-            Some(json!({ "parent_id": other })),
-        )
-        .await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
-        assert_eq!(out["error"]["code"], "parent_not_found", "{out}");
     }
 
     /// Over the ceiling is refused outright, as the bulk move is.

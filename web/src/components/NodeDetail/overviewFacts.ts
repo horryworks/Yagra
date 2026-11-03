@@ -29,7 +29,6 @@ export const FACT_ROWS = [
   'osVersion',
   'profile',
   'credential',
-  'parent',
   'uptime',
   'resolver',
 ] as const;
@@ -38,7 +37,7 @@ export type FactRow = (typeof FACT_ROWS)[number];
 
 /** Rows every kind shows. "Where is this filed, and who polls it" is true of a URL monitor exactly
  *  as it is of a switch — a monitor is assigned to a poller pool like anything else. */
-const PLACEMENT: readonly FactRow[] = ['group', 'pool', 'polledBy', 'profile', 'parent'];
+const PLACEMENT: readonly FactRow[] = ['group', 'pool', 'polledBy', 'profile'];
 
 /** Rows that come from an SNMP walk of the node itself, plus its management address. Only an
  *  ordinary device has them; a Meraki node keeps the descriptive ones because the org collector

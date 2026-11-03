@@ -174,12 +174,10 @@ import type {
   ThresholdPage,
   ThresholdQuery,
   RankedNodes,
-  TopologyNode,
-  TopologyMode,
-  TopologyShadow,
   LinkOverrideRow,
   LinkOverrideAction,
-  LinkDirection,
+  AlertGroupingConfig,
+  GroupingLevel,
   MapLevel,
   UrlCheckConfig,
   DnsCheckConfig,
@@ -1604,24 +1602,6 @@ export const api = {
       body: { moves: destinations.map((d) => ({ group_id: d.groupId, node_ids: d.nodeIds })) },
     }),
 
-  /** Set (or clear with `null`) a node's dependency parent (upstream) — the alert-suppression
-   *  edge (parent down ⇒ suppress children, ADR-015). Distinct from `setNodeGroup` (the folder
-   *  tree). The server rejects self-dependencies and cycles. */
-  setNodeParent: (id: string, parentId: string | null): Promise<void> =>
-    apiPut('/api/v1/nodes/{node_id}/parent', {
-      path: { node_id: id },
-      body: { parent_id: parentId },
-    }),
-
-  /** Exclude a node from derived alert suppression, or put it back. Only ever removes suppression,
-   *  so it cannot cause an outage to go unreported. No effect while the deployment uses the
-   *  hand-authored graph. */
-  setNodeSuppressionOptOut: (id: string, optOut: boolean): Promise<void> =>
-    apiPut('/api/v1/nodes/{node_id}/suppression-opt-out', {
-      path: { node_id: id },
-      body: { opt_out: optOut },
-    }),
-
   // `placeNode` (`PUT /nodes/{node_id}/placement`) was here until ADR-124 Inc.8 and is gone, for
   // the same reason `setNodeGroup` above went in Inc.4: the drag was its only caller, and a drop
   // beside a sibling now sends `moveNodes` with `before`/`after` whether it carries one node or
@@ -2286,31 +2266,13 @@ export const api = {
   getAlertTransitions: (limit?: number): Promise<AlertTransition[]> =>
     apiGet('/api/v1/alerts/transitions', { query: { limit } }),
 
-  /** The dependency graph: nodes + parent edges + state + active root-cause attribution. The
-   *  endpoint is keyset-paginated (S7) — this pages through `next_cursor` and assembles the whole
-   *  graph, so callers keep the same `{ nodes }` shape. Views fetch this once and keep node state
-   *  fresh via the node-state SSE stream (`useNodeStates`) rather than re-fetching every 15s. */
-  getTopology: async (): Promise<{ nodes: TopologyNode[] }> => {
-    const nodes: TopologyNode[] = [];
-    let cursor: string | undefined;
-    // Bounded loop: pages are ≤5000 server-side, so even a 50k fleet is ~10 iterations. The guard
-    // caps a pathological run at 100k nodes (200 pages) rather than looping unbounded.
-    for (let i = 0; i < 200; i++) {
-      const page = await apiGet('/api/v1/topology', { query: { cursor } });
-      nodes.push(...page.nodes);
-      if (!page.next_cursor) break;
-      cursor = page.next_cursor;
-    }
-    return { nodes };
-  },
-
   /** One folder level of the network map (ADR-191): the folder's own linked nodes, its subfolders
    *  as boxes, bundled links, and stubs for links leaving it. `null` is the whole network. Not
    *  paged: the server bounds a level and answers `overflow` past the bound. */
   getTopologyMap: async (group: string | null): Promise<MapLevel> =>
     apiGet('/api/v1/topology/map', { query: { group: group ?? undefined } }),
 
-  /** Operator decisions that override the derived graph (pin / hide / which end is upstream).
+  /** Operator decisions that override the derived graph (pin / hide).
    *  Not paged — the number of decisions is bounded by what an operator typed in, not by the fleet. */
   getLinkOverrides: async (): Promise<LinkOverrideRow[]> =>
     (await apiGet('/api/v1/topology/link-overrides')).overrides,
@@ -2321,27 +2283,12 @@ export const api = {
     a_node: string;
     b_node: string;
     action: LinkOverrideAction;
-    direction?: LinkDirection | null;
     note?: string | null;
   }): Promise<{ id: string }> => apiPost('/api/v1/topology/link-overrides', { body }),
 
   /** Remove a decision, letting the derivation's own answer stand again. */
   deleteLinkOverride: (id: string): Promise<void> =>
     apiDelete('/api/v1/topology/link-overrides/{id}', { path: { id } }),
-
-  /** What the derived dependency graph would do to alerting, against what the manual one does —
-   *  including the alerts that would newly be suppressed, and any pollers with no place in the
-   *  graph yet (which block enabling derived mode). */
-  getTopologyShadow: (): Promise<TopologyShadow> => apiGet('/api/v1/topology/shadow'),
-
-  /** Choose which dependency graph drives suppression. Moving to `derived` is refused while a pool
-   *  that has nodes has an unplaced poller. */
-  setTopologyMode: (mode: TopologyMode): Promise<void> =>
-    apiPut('/api/v1/settings/topology', { body: { mode } }),
-
-  /** Name the node a poller attaches to, rooting the derived graph. `null` clears it. */
-  setPollerAnchor: (id: string, nodeId: string | null): Promise<void> =>
-    apiPut('/api/v1/pollers/{id}/anchor', { path: { id }, body: { node_id: nodeId } }),
 
   /** Move a poller to another pool (ADR-107 Inc.2). Takes effect immediately; nothing restarts.
    *
@@ -2506,6 +2453,22 @@ export const api = {
   /** Set the zone a node with no zoned folder above it keeps time in. `null` ⇒ UTC. */
   setDefaultTimeZone: (time_zone: string | null): Promise<void> =>
     apiPut('/api/v1/delivery-hours/default-time-zone', { body: { time_zone } }),
+
+  /** How strongly an outage's alerts are grouped, each folder's own level, and what each level
+   *  would do to the outage open now (ADR-236). */
+  getAlertGrouping: (): Promise<AlertGroupingConfig> => apiGet('/api/v1/alert-grouping'),
+
+  /** Set the deployment's grouping level. */
+  setAlertGroupingLevel: (level: GroupingLevel): Promise<void> =>
+    apiPut('/api/v1/alert-grouping/level', { body: { level } }),
+
+  /** Give a folder its own grouping level, which beats the deployment's beneath it. */
+  setFolderGroupingLevel: (groupId: string, level: GroupingLevel): Promise<void> =>
+    apiPut('/api/v1/alert-grouping/folders/{group_id}', { path: { group_id: groupId }, body: { level } }),
+
+  /** Take a folder's own level away, so it follows the deployment's again. */
+  clearFolderGroupingLevel: (groupId: string): Promise<void> =>
+    apiDelete('/api/v1/alert-grouping/folders/{group_id}', { path: { group_id: groupId } }),
 
   /** Notifications held until their node's delivery hours open (ADR-226). */
   listHeldNotifications: (): Promise<HeldNotification[]> =>

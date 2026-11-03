@@ -51,7 +51,6 @@ import {
   VpnSessionsWidget,
 } from './widgets/metrics';
 import { GeoMapWidget, RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
-import { DependencyWidget } from './widgets/topology';
 import {
   AggregateThroughputWidget,
   InterfaceHeatmapWidget,
@@ -675,21 +674,6 @@ export const REGISTRY: WidgetDefinition[] = [
       'GET /api/v1/node-groups',
     ],
     Component: GeoMapWidget,
-  },
-  {
-    type: 'dependency-view',
-    title: 'registry.widgets.dependency-view.title',
-    section: SECTION.sites,
-    blurb: 'registry.widgets.dependency-view.blurb',
-    backing: 'rollup',
-    defaultSpan: 6,
-    allowedSpans: [6, 8, 12],
-    allowedRowSpans: [1, 2, 3],
-    reads: [
-      'GET /api/v1/topology',
-      'GET /api/v1/stream/node-states',
-    ],
-    Component: DependencyWidget,
   },
   {
     type: 'maintenance',

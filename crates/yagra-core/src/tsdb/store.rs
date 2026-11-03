@@ -238,7 +238,7 @@ pub trait MetricStore: Send + Sync {
     async fn fresh_node_ids(&self, metrics: &[&str], within_secs: u64) -> Vec<Uuid>;
 
     /// Like [`fresh_node_ids`], but restricted to `scope` — the fresh subset of a **page** of nodes
-    /// rather than the whole fleet (S20). The paged fallback probe (`fresh_fallback_ids`) asks about
+    /// rather than the whole fleet (S20). The paged fallback probe (`display_states`) asks about
     /// at most a page of unobserved nodes, so it must not pull every fleet series back from the TSDB.
     /// The default fetches the fleet set and intersects (correct but unscoped); [`VmStore`] overrides
     /// it to push the id set into the query selector so only those series are returned. Empty `scope`

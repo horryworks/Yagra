@@ -38,12 +38,12 @@ use crate::alerts::notifications::NotificationRepo;
 use crate::alerts::thresholds::ThresholdStore;
 use crate::discover::classification;
 use crate::fleet::poolres;
-use crate::topology::topology_projection;
+use crate::topology::topology_links::{self, TopoLinkRepo};
 use crate::{alerts::maintenance, events};
 use yagra_alert::no_reading::{NoReadingHandle, NoReadingMarkers};
 use yagra_base::repo::NodeRepo;
 use yagra_base::{config_gen, groups};
-use yagra_topology::Topology;
+use yagra_topology::grouping::{Level, LinkGraph, Rank};
 
 /// The config-derived half of the alert config: all thresholds + a full node scan folded into the
 /// node-meta map and dependency topology. This is the expensive full-fleet work (a `list_nodes`
@@ -63,15 +63,8 @@ pub(crate) struct AlertConfigBase {
     /// see `AlertConfig::meraki_orgs` (ADR-164 decision 18). Built beside `pool_groups` for the same
     /// reason: this is the one place that already holds every node's folder.
     meraki_orgs: HashMap<Uuid, super::MerakiOrgScope>,
-    /// The graph the alert engine suppresses with.
-    ///
-    /// **This is the only topology in the struct, deliberately.** ADR-043 decision 5's shadow mode does
-    /// not put a second graph here for the engine to maybe-use: in `shadow` this field holds the
-    /// *manual* graph, exactly as in `manual`, and the derived alternative is computed on demand by
-    /// the read-side endpoint that displays the difference. There is therefore no runtime state in
-    /// which a shadow graph can suppress anything — not because a flag says so, but because the
-    /// engine is never given one.
-    topology: Topology,
+    /// The links and levels that decide whose notification is rolled up into whose (ADR-236).
+    grouping: Arc<LinkGraph>,
     /// Metric names that publish one series per interface, so each port gets its own check
     /// (ADR-076). Rebuilt on the same config-generation gate as everything else here.
     per_interface: std::collections::BTreeSet<String>,
@@ -95,11 +88,10 @@ pub(crate) struct AlertConfigBase {
 /// types expose are reachable from here; a seam sized to the types instead of to the questions was
 /// the reason ADR-092 deferred this as expensive when it is not.
 ///
-/// ⚠️ **`topology_mode` and `derived_topology` are two methods on purpose.** One `topology_for`
-/// would read better and would move ADR-043 decision 5's choice — *the derived graph reaches the engine
-/// only in `derived`* — out of the loader and into every implementation, fakes included. A test
-/// would then exercise the fake's copy of the rule. The same mistake ADR-092 caught in its own
-/// first draft.
+/// ⚠️ **`grouping_facts` returns raw facts, not a graph.** Turning them into a [`LinkGraph`] —
+/// which link is physical, which folder's level wins, which folder is a node's site — is the
+/// loader's job ([`build_link_graph`]), so a test exercises the real rule rather than a fake's copy
+/// of it. The same mistake ADR-092 caught in its own first draft.
 #[async_trait::async_trait]
 pub(crate) trait AlertConfigSources: Send + Sync {
     /// Every threshold rule in the deployment.
@@ -116,13 +108,71 @@ pub(crate) trait AlertConfigSources: Send + Sync {
     /// `(organization, name, nodes)` for every Cisco Meraki organization (ADR-164 decision 18): who may
     /// see an organization's collect alert, what it is called, and which nodes it is about.
     async fn meraki_orgs(&self) -> anyhow::Result<Vec<(Uuid, String, Vec<Uuid>)>>;
-    /// Which graph the deployment is configured to suppress with.
-    ///
-    /// Not a `Result`: it degrades to `Manual` inside the repository, which is the mode that
-    /// changes nothing — see [`NodeRepo::get_topology_mode`] before copying that.
-    async fn topology_mode(&self) -> yagra_base::repo::topology_mode::TopologyMode;
-    /// The derived connectivity graph for these nodes (ADR-043). Only called when the mode says so.
-    async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology;
+    /// What the grouping graph is built from (ADR-236), for these nodes.
+    async fn grouping_facts(&self, nodes: &[yagra_common::Node]) -> anyhow::Result<GroupingFacts>;
+}
+
+/// The facts the grouping graph is built from (ADR-236).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GroupingFacts {
+    /// Every derived link with both ends in the inventory.
+    pub links: Vec<yagra_common::DerivedLink>,
+    /// The nodes the last derivation could not be sure about.
+    pub unsure: Vec<NodeId>,
+    /// What kind of node each is, for choosing who speaks for a region.
+    pub ranks: HashMap<NodeId, Rank>,
+    /// The folders that are Sites.
+    pub sites: std::collections::HashSet<Uuid>,
+    /// The deployment's level.
+    pub default_level: Level,
+    /// Each folder's own level.
+    pub folder_levels: HashMap<Uuid, Level>,
+}
+
+/// Whether a link is one a cable makes, rather than one inferred from addresses or routing: the
+/// grouping judges a node by these first, because the logical ones jump over the switches between
+/// two nodes (ADR-236 decision 2).
+fn is_physical(source: yagra_common::LinkSource) -> bool {
+    use yagra_common::LinkSource as S;
+    match source {
+        S::Manual | S::Lldp | S::Cdp => true,
+        S::Ospf | S::Route | S::Bgp | S::L3Subnet => false,
+    }
+}
+
+/// Turn the facts into the graph the engine groups by. Each node's level is the one its nearest
+/// folder sets, else the deployment's; its site is the nearest folder above it that is a Site.
+pub(crate) fn build_link_graph(
+    facts: &GroupingFacts,
+    meta: &HashMap<NodeId, NodeMeta>,
+) -> LinkGraph {
+    let mut g = LinkGraph::new(facts.default_level);
+    for l in &facts.links {
+        g.add_link(
+            l.a_node,
+            l.b_node,
+            l.sources.iter().any(|s| is_physical(*s)),
+        );
+    }
+    for n in &facts.unsure {
+        g.mark_unsure(*n);
+    }
+    for (n, r) in &facts.ranks {
+        g.set_rank(*n, *r);
+    }
+    for (node, m) in meta {
+        if let Some(level) = m
+            .folder_chain
+            .iter()
+            .find_map(|f| facts.folder_levels.get(f).copied())
+        {
+            g.set_level(*node, level);
+        }
+        if let Some(site) = m.folder_chain.iter().find(|f| facts.sites.contains(f)) {
+            g.set_site(*node, yagra_common::GroupId(*site));
+        }
+    }
+    g
 }
 
 /// The live sources: the four handles the loader used to take, behind the six questions it asks.
@@ -130,7 +180,7 @@ pub(crate) struct LiveConfigSources {
     pub(crate) repo: Arc<NodeRepo>,
     pub(crate) thresholds: Arc<ThresholdStore>,
     pub(crate) groups: Arc<groups::GroupRepo>,
-    pub(crate) topo: topology_projection::TopologySources,
+    pub(crate) links: Arc<TopoLinkRepo>,
 }
 
 #[async_trait::async_trait]
@@ -160,17 +210,62 @@ impl AlertConfigSources for LiveConfigSources {
             .alert_bindings()
             .await
     }
-    async fn topology_mode(&self) -> yagra_base::repo::topology_mode::TopologyMode {
-        self.repo.get_topology_mode().await
-    }
-    async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology {
-        topology_projection::derived_topology(&self.topo, nodes)
-            .await
-            .0
+    async fn grouping_facts(&self, nodes: &[yagra_common::Node]) -> anyhow::Result<GroupingFacts> {
+        let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
+        let pool = self.repo.pool();
+        let grouping = super::grouping::GroupingRepo::new(pool.clone());
+        let links = self.links.all_links().await?;
+        let unsure = self.links.unsure_nodes().await?;
+        let categories = self.repo.profile_categories(&ids).await?;
+        let products = yagra_meraki::MerakiDeviceRepo::new(pool.clone())
+            .product_types(&ids)
+            .await?;
+        let aps = crate::topology::wireless::WirelessRepo::new(pool.clone())
+            .filter_ap_nodes(&ids)
+            .await?;
+        let sites = self
+            .groups
+            .list()
+            .await?
+            .into_iter()
+            .filter(|g| g.group_type == "site")
+            .map(|g| g.id)
+            .collect();
+        let default_level = grouping.level().await?;
+        let folder_levels = grouping
+            .folder_levels()
+            .await?
+            .into_iter()
+            .map(|f| (f.group, f.level))
+            .collect();
+        // An imported access point first, then a Meraki device by its product, then the profile.
+        let ranks = ids
+            .iter()
+            .map(|id| {
+                let rank = if aps.contains(id) {
+                    Rank::AccessPoint
+                } else if let Some(p) = products.get(id) {
+                    Rank::for_category(yagra_common::category_for_product_type(&p.product_type))
+                } else {
+                    categories
+                        .get(id)
+                        .map_or(Rank::Other, |c| Rank::for_category(*c))
+                };
+                (NodeId::from(*id), rank)
+            })
+            .collect();
+        Ok(GroupingFacts {
+            links,
+            unsure,
+            ranks,
+            sites,
+            default_level,
+            folder_levels,
+        })
     }
 }
 
-/// Load the config-derived alert base (thresholds + node-meta + dependency topology).
+/// Load the config-derived alert base (thresholds + node-meta + the grouping graph).
 ///
 /// 🚨 **Every read here propagates its error; none of them degrades to an empty value** (ADR-080).
 /// Each one used to have its own `unwrap_or`, each justified as "the narrowing failure, so it is
@@ -183,9 +278,6 @@ impl AlertConfigSources for LiveConfigSources {
 /// One rule, no list of which reads are "critical": **if anything failed, the caller keeps the
 /// config it already has.** A list of exceptions is a thing that rots; a single `?` is not.
 ///
-/// The one deliberate exception is [`NodeRepo::get_topology_mode`], which keeps its own fallback —
-/// and for the opposite reason: it degrades to the mode that *changes nothing* (`Manual`), so it
-/// cannot silence or redirect anything. Read its doc comment before copying the pattern.
 pub(crate) async fn load_alert_config_base(
     sources: &dyn AlertConfigSources,
 ) -> anyhow::Result<AlertConfigBase> {
@@ -257,19 +349,13 @@ pub(crate) async fn load_alert_config_base(
         );
     }
 
-    // ADR-043 decision 5. The engine gets the derived graph only in `derived`; `shadow` is byte-for-byte
-    // `manual` here, and the comparison an operator reviews is computed by the read-side endpoint.
-    //
-    // 🚨 The *choice* stays here rather than behind one `topology_for` method, and that is what
-    // makes it testable: a seam that answered "the topology" would put this branch in the live
-    // implementation and in every fake, so a test would exercise the fake's copy of the rule
-    // instead of this one (ADR-092's lesson, ADR-093's application of it).
-    let topology = if sources.topology_mode().await.uses_derived() {
-        sources.derived_topology(&nodes).await
-    } else {
-        // Dependency edge child → parent feeds parent-down suppression (ADR-015).
-        topology_projection::manual_topology(&nodes)
-    };
+    // ADR-236. A failed read keeps the previous config like every other one here: an empty graph
+    // would quietly page every node of an outage on its own.
+    let facts = sources
+        .grouping_facts(&nodes)
+        .await
+        .map_err(|e| anyhow::anyhow!("load grouping facts: {e}"))?;
+    let grouping = Arc::new(build_link_graph(&facts, &meta));
 
     // A failed read propagates like every other one here (ADR-080): an empty map would hide an
     // organization's alert from every scoped operator and un-label every stale node, silently.
@@ -306,7 +392,7 @@ pub(crate) async fn load_alert_config_base(
         meta,
         pool_groups,
         meraki_orgs,
-        topology,
+        grouping,
         per_interface,
         no_reading,
     })
@@ -467,7 +553,7 @@ pub(crate) async fn load_alert_config(
     let coverage = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
     Ok((
         AlertConfig::new(base.rules, base.meta)
-            .with_topology(base.topology)
+            .with_grouping(base.grouping)
             .with_maintenance(coverage.maintenance)
             .with_pause(coverage.paused_until, coverage.pause_exempt)
             .with_pool_groups(base.pool_groups)
@@ -576,8 +662,9 @@ pub(crate) async fn run_alert_config_refresh(
     classifier: Arc<classification::Classifier>,
     classification: Arc<classification::ClassificationRepo>,
     event_engine: Arc<events::EventEngine>,
-    topo_sources: topology_projection::TopologySources,
+    links: Arc<TopoLinkRepo>,
     no_reading: NoReadingHandle,
+    sink: Arc<dyn yagra_alert::action::AlertSink>,
 ) {
     // Cache the config-derived alert base keyed by the config generation, so the full node scan +
     // meta/topology rebuild runs only after an actual config change (S6). Maintenance windows are
@@ -590,13 +677,15 @@ pub(crate) async fn run_alert_config_refresh(
         repo: repo.clone(),
         thresholds: thresholds.clone(),
         groups: group_repo.clone(),
-        topo: topo_sources.clone(),
+        links,
     };
-    let mut cached_base: Option<(u64, AlertConfigBase)> = None;
+    // Keyed by the config generation and the links generation together: a derivation that finds a
+    // new link moves only the second (ADR-236), and the grouping graph has to follow it.
+    let mut cached_base: Option<((u64, u64), AlertConfigBase)> = None;
     let mut last_coverage: Option<Coverage> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
-        let generation = config_gen::current();
+        let generation = (config_gen::current(), topology_links::links_generation());
         let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
         if base_changed {
             // 🚨 A failed rebuild installs nothing (ADR-080 decision 2). `cached_base` keeps its old
@@ -634,7 +723,7 @@ pub(crate) async fn run_alert_config_refresh(
         let coverage = resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
         if swap_needed(base_changed, last_coverage.as_ref(), &coverage) {
             let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
-                .with_topology(base.topology.clone())
+                .with_grouping(base.grouping.clone())
                 .with_maintenance(coverage.maintenance.clone())
                 .with_pause(coverage.paused_until, coverage.pause_exempt.clone())
                 .with_pool_groups(base.pool_groups.clone())
@@ -642,6 +731,14 @@ pub(crate) async fn run_alert_config_refresh(
                 .with_per_interface(base.per_interface.clone());
             alerts.set_config(config);
             last_coverage = Some(coverage);
+            if base_changed {
+                // A new level or a new link changes who is rolled up into whom for an outage that
+                // is already open, so the open alerts are judged again now rather than at the next
+                // node that happens to go down or come back (ADR-236).
+                for action in alerts.regroup() {
+                    sink.dispatch(action).await;
+                }
+            }
         }
         // Pick up classification-rule edits without a restart (also reloaded inline by the
         // rule-edit handlers; this catches any drift / multi-instance future).
@@ -656,8 +753,7 @@ pub(crate) async fn run_alert_config_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use yagra_common::{Node, NodeId};
+    use yagra_common::{LinkSource, Node, NodeId};
 
     /// This module's own source, read through [`crate::module_source`]: it removes each test-only
     /// item rather than truncating at the first one, so a test-only declaration added here later
@@ -682,27 +778,26 @@ mod tests {
         GroupEdges,
         CollectionItems,
         MerakiOrgs,
+        GroupingFacts,
     }
 
     /// Every fallible read. A seventh added to the trait makes this list wrong in a way the
     /// compiler cannot see, which is why the walk below also counts against the trait's own text.
-    const FALLIBLE: [Fails; 6] = [
+    const FALLIBLE: [Fails; 7] = [
         Fails::Thresholds,
         Fails::Nodes,
         Fails::FolderPools,
         Fails::GroupEdges,
         Fails::CollectionItems,
         Fails::MerakiOrgs,
+        Fails::GroupingFacts,
     ];
 
     struct FakeSources {
         fails: Fails,
         nodes: Vec<Node>,
-        mode: yagra_base::repo::topology_mode::TopologyMode,
-        /// The graph `derived_topology` hands back…
-        derived: Topology,
-        /// …and whether it was asked for at all, which is half of ADR-043 decision 5's property.
-        derived_asked: Mutex<bool>,
+        /// What `grouping_facts` answers.
+        facts: GroupingFacts,
         /// What `collection_items` answers.
         items: Vec<yagra_common::CollectionItem>,
         /// What `thresholds` answers.
@@ -710,17 +805,11 @@ mod tests {
     }
 
     impl FakeSources {
-        fn new(
-            fails: Fails,
-            nodes: Vec<Node>,
-            mode: yagra_base::repo::topology_mode::TopologyMode,
-        ) -> Self {
+        fn new(fails: Fails, nodes: Vec<Node>) -> Self {
             Self {
                 fails,
                 nodes,
-                mode,
-                derived: Topology::new(),
-                derived_asked: Mutex::new(false),
+                facts: GroupingFacts::default(),
                 items: Vec::new(),
                 rules: Vec::new(),
             }
@@ -759,12 +848,9 @@ mod tests {
             self.refuse(Fails::MerakiOrgs)?;
             Ok(Vec::new())
         }
-        async fn topology_mode(&self) -> yagra_base::repo::topology_mode::TopologyMode {
-            self.mode
-        }
-        async fn derived_topology(&self, _nodes: &[Node]) -> Topology {
-            *self.derived_asked.lock().expect("no panic holds this lock") = true;
-            self.derived.clone()
+        async fn grouping_facts(&self, _nodes: &[Node]) -> anyhow::Result<GroupingFacts> {
+            self.refuse(Fails::GroupingFacts)?;
+            Ok(self.facts.clone())
         }
     }
 
@@ -787,11 +873,7 @@ mod tests {
     /// (`rejection-only-tests-pass-when-everything-rejects`).
     #[tokio::test]
     async fn a_healthy_source_set_produces_the_base_it_was_given() {
-        let sources = FakeSources::new(
-            Fails::Nothing,
-            vec![node(1, None), node(2, Some(1))],
-            yagra_base::repo::topology_mode::TopologyMode::Manual,
-        );
+        let sources = FakeSources::new(Fails::Nothing, vec![node(1, None), node(2, Some(1))]);
         let base = load_alert_config_base(&sources)
             .await
             .expect("nothing failed, so nothing should refuse");
@@ -804,11 +886,7 @@ mod tests {
     /// from a state of the tables the other did not see.
     #[tokio::test]
     async fn one_collection_read_yields_the_per_interface_names_and_the_no_reading_table() {
-        let mut sources = FakeSources::new(
-            Fails::Nothing,
-            vec![node(1, None)],
-            yagra_base::repo::topology_mode::TopologyMode::Manual,
-        );
+        let mut sources = FakeSources::new(Fails::Nothing, vec![node(1, None)]);
         sources.items = yagra_common::builtin_templates()
             .into_iter()
             .flat_map(|t| t.items)
@@ -860,11 +938,7 @@ mod tests {
             ScopeLevel::Interface,
             vec![yagra_common::interface_scope_id(a.as_uuid(), 3)],
         );
-        let mut sources = FakeSources::new(
-            Fails::Nothing,
-            vec![node(1, None)],
-            yagra_base::repo::topology_mode::TopologyMode::Manual,
-        );
+        let mut sources = FakeSources::new(Fails::Nothing, vec![node(1, None)]);
         sources.rules = vec![on_node.clone(), on_port.clone()];
         let base = load_alert_config_base(&sources).await.expect("healthy");
         let got =
@@ -892,11 +966,7 @@ mod tests {
     #[tokio::test]
     async fn every_fallible_read_refuses_rather_than_narrowing() {
         for which in FALLIBLE {
-            let sources = FakeSources::new(
-                which,
-                vec![node(1, None)],
-                yagra_base::repo::topology_mode::TopologyMode::Manual,
-            );
+            let sources = FakeSources::new(which, vec![node(1, None)]);
             assert!(
                 load_alert_config_base(&sources).await.is_err(),
                 "{which:?} failed and the loader returned a base anyway; an empty ruleset is \
@@ -923,89 +993,80 @@ mod tests {
         );
     }
 
-    /// **In shadow mode the engine receives the manual graph, and the derived one is not even
-    /// computed.**
-    ///
-    /// ADR-043 decision 5's safety property, and the reason [`AlertConfigBase`] carries one topology
-    /// rather than two: there is no runtime state in which a preview graph could suppress a real
-    /// alert. Before ADR-093 this was a needle in this file's own text; now the loader runs.
-    #[tokio::test]
-    async fn only_the_derived_mode_hands_the_engine_a_derived_graph() {
-        // The manual graph says 2 → 1; the derived graph the fake offers says 3 → 1. The two are
-        // told apart by which child has a parent at all, so neither can be mistaken for the other.
-        let mut derived = Topology::new();
-        derived.add_dependency(nid(3), nid(1));
-        let nodes = vec![node(1, None), node(2, Some(1)), node(3, None)];
-
-        for mode in [
-            yagra_base::repo::topology_mode::TopologyMode::Manual,
-            yagra_base::repo::topology_mode::TopologyMode::Shadow,
-        ] {
-            let mut sources = FakeSources::new(Fails::Nothing, nodes.clone(), mode);
-            sources.derived = derived.clone();
-            let base = load_alert_config_base(&sources).await.expect("healthy");
-            assert_eq!(
-                base.topology.parents_of(nid(2)).len(),
-                1,
-                "{mode:?} must hand the engine the manual graph"
-            );
-            assert!(
-                base.topology.parents_of(nid(3)).is_empty(),
-                "{mode:?} handed the engine the derived graph"
-            );
-            assert!(
-                !*sources
-                    .derived_asked
-                    .lock()
-                    .expect("no panic holds this lock"),
-                "{mode:?} computed a graph it is not allowed to use"
-            );
-        }
-
-        // …and the derived graph really does reach the engine in `derived`, or the two assertions
-        // above would hold for a loader that never used it at all.
-        let mut sources = FakeSources::new(
-            Fails::Nothing,
-            nodes,
-            yagra_base::repo::topology_mode::TopologyMode::Derived,
+    /// **The grouping graph is built from the facts by the loader's own rule** (ADR-236): a node takes
+    /// the level of its nearest folder that has one, else the deployment's; its site is the nearest
+    /// Site folder above it; a CDP/LLDP link is physical and a subnet link is not.
+    #[test]
+    fn the_grouping_graph_takes_the_nearest_folder_level_and_site() {
+        let (site, floor, other) = (
+            Uuid::from_u128(900),
+            Uuid::from_u128(901),
+            Uuid::from_u128(902),
         );
-        sources.derived = derived;
-        let base = load_alert_config_base(&sources).await.expect("healthy");
-        assert_eq!(
-            base.topology.parents_of(nid(3)).len(),
-            1,
-            "derived mode must hand the engine the derived graph"
-        );
+        let meta: HashMap<NodeId, NodeMeta> = [
+            // On a floor inside a site: the floor's level wins over the site's.
+            (nid(1), vec![floor, site]),
+            // Directly in the site.
+            (nid(2), vec![site]),
+            // Nowhere with a level of its own.
+            (nid(3), vec![other]),
+        ]
+        .into_iter()
+        .map(|(n, chain)| {
+            (
+                n,
+                NodeMeta {
+                    folder_group: chain.first().copied(),
+                    folder_chain: chain,
+                    ..NodeMeta::default()
+                },
+            )
+        })
+        .collect();
+        let link = |a: u128, b: u128, s: LinkSource| {
+            let mut l = yagra_common::DerivedLink::new(nid(a), nid(b), s);
+            l.sources = vec![s];
+            l
+        };
+        let facts = GroupingFacts {
+            links: vec![
+                link(1, 2, LinkSource::Lldp),
+                link(2, 3, LinkSource::L3Subnet),
+            ],
+            sites: [site].into_iter().collect(),
+            default_level: Level::Off,
+            folder_levels: [(site, Level::Site), (floor, Level::Certain)]
+                .into_iter()
+                .collect(),
+            ..GroupingFacts::default()
+        };
+        let g = build_link_graph(&facts, &meta);
+        assert_eq!(g.level_of(nid(1)), Level::Certain);
+        assert_eq!(g.level_of(nid(2)), Level::Site);
+        assert_eq!(g.level_of(nid(3)), Level::Off);
+        // 1 and 2 share a physical link; 2 and 3 only a subnet, so 3 sees 2 but at Certain the
+        // subnet does not count.
+        assert_eq!(g.neighbours(nid(1)), [nid(2)].into_iter().collect());
+        assert_eq!(g.neighbours(nid(3)), [nid(2)].into_iter().collect());
+        let down: std::collections::BTreeSet<NodeId> = [nid(1), nid(2)].into_iter().collect();
+        // Node 3 is alive beside node 2, but only by subnet; 2 has a physical link, so it is judged
+        // by that one, whose far end is down. The region {1, 2} has no border, and the lower id
+        // speaks for it.
+        assert_eq!(g.root_cause(nid(2), &down), Some(nid(1)));
     }
 
-    /// **The derived graph reaches the engine from exactly one place.**
-    ///
-    /// Structural, and it stays structural: "how many call sites" is not something a type or a fake
-    /// can answer, and a second one is how a preview graph starts suppressing alerts. The
-    /// behavioural half of what this used to assert moved into the test above — its absence here is
-    /// not the property being dropped.
-    ///
-    /// The needles are assembled at runtime — a literal one would match this test's own source and
-    /// pass forever.
-    #[test]
-    fn the_derived_graph_has_one_call_site() {
-        let production = production_source();
-        let guard = format!("topology_mode().await.{}()", "uses_derived");
-        assert!(
-            production.contains(&guard),
-            "the topology choice is no longer gated on `uses_derived`"
-        );
-        let call = format!("sources.{}(&nodes)", "derived_topology");
-        assert_eq!(
-            production.matches(call.as_str()).count(),
-            1,
-            "the derived graph reaches the engine from exactly one place; a second call site is \
-             how a preview graph starts suppressing alerts"
-        );
-        assert!(
-            !production.contains("shadow_topology"),
-            "a shadow graph must not be a field the engine could be handed"
-        );
+    /// The facts reach the engine's config: a failed read keeps the previous config (the walk in
+    /// `every_failed_read_keeps_the_previous_config`), and a healthy one is installed as built.
+    #[tokio::test]
+    async fn the_grouping_facts_reach_the_base() {
+        let mut sources = FakeSources::new(Fails::Nothing, vec![node(1, None), node(2, None)]);
+        let mut l = yagra_common::DerivedLink::new(nid(1), nid(2), LinkSource::Cdp);
+        l.sources = vec![LinkSource::Cdp];
+        sources.facts.links = vec![l];
+        sources.facts.default_level = Level::Links;
+        let base = load_alert_config_base(&sources).await.expect("healthy");
+        assert_eq!(base.grouping.level_of(nid(1)), Level::Links);
+        assert_eq!(base.grouping.link_count(), 1);
     }
 
     // ── ADR-160: the fleet-wide window is split out of the operator scopes ───────────────────────

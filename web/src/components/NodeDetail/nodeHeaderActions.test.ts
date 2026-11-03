@@ -27,7 +27,6 @@ describe('nodeHeaderActions', () => {
       'map',
       'thresholds',
       'pin',
-      'upstream',
       'move',
       'moveByPrefix',
       'pool',

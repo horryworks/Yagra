@@ -13,6 +13,267 @@
     "version": "0.3.66"
   },
   "paths": {
+    "/api/v1/alert-grouping": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "get_alert_grouping",
+        "responses": {
+          "200": {
+            "description": "The deployment's grouping level, each folder's own, and what each level would do to the outage open now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertGroupingConfig"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-grouping/folders/{group_id}": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "set_folder_grouping_level",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The folder",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LevelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The folder's own grouping level is set"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a grouping level",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "clear_folder_grouping_level",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The folder",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The folder follows the deployment's level again"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The folder had no level of its own",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-grouping/level": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "set_alert_grouping_level",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LevelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The deployment's grouping level is set"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a grouping level",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/alerts": {
       "get": {
         "tags": [
@@ -16624,91 +16885,6 @@
         }
       }
     },
-    "/api/v1/nodes/{node_id}/parent": {
-      "put": {
-        "tags": [
-          "nodes"
-        ],
-        "operationId": "set_node_parent",
-        "parameters": [
-          {
-            "name": "node_id",
-            "in": "path",
-            "description": "Node id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NodeParentAssignment"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Dependency edge set or cleared"
-          },
-          "400": {
-            "description": "Self-dependency, a parent that does not exist or is outside the caller's scope, or an edge that would close a cycle",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks ManageConfig",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such node, or the node is outside the caller's scope",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This deployment has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/nodes/{node_id}/placement": {
       "put": {
         "tags": [
@@ -17271,83 +17447,6 @@
           },
           "403": {
             "description": "Role lacks the View permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/nodes/{node_id}/suppression-opt-out": {
-      "put": {
-        "tags": [
-          "nodes"
-        ],
-        "summary": "Exclude a node from derived alert suppression, or put it back.",
-        "description": "An excluded node keeps its place in the connectivity graph — everything behind it still resolves\nthrough it — but is given no upstream of its own, so its alert is never rolled up under\nsomething else. Use it for the one box that must page whatever else is happening.\n\nThis only ever *removes* suppression, so it cannot cause an outage to go unreported. It has no\neffect while the deployment is on the hand-authored graph.",
-        "operationId": "set_node_suppression_opt_out",
-        "parameters": [
-          {
-            "name": "node_id",
-            "in": "path",
-            "description": "Node id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NodeSuppressionOptOut"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "The exclusion was set or cleared"
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks ManageConfig",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such node",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This deployment has no write side (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -19010,82 +19109,6 @@
           },
           "409": {
             "description": "The poller is online and would re-register on its next heartbeat",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Skeleton mode: no durable poller store",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pollers/{id}/anchor": {
-      "put": {
-        "tags": [
-          "pollers"
-        ],
-        "summary": "Name the node a poller attaches to, rooting the derived dependency graph.",
-        "description": "Direction in the derived graph comes from distance to a poller, so core has to know where each\npoller sits. It works that out from the addresses the poller reports — but a poller running in a\ncontainer reports a container-network address that matches no monitored node, which is the\ncommon case rather than the unusual one. This is how an operator says where it really is.\n\nUntil every pool that has nodes has a placed poller, derived suppression cannot be enabled.",
-        "operationId": "set_poller_anchor",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Poller id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PollerAnchorRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "The anchor was set or cleared"
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks ManageSystem",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such poller, or no such node",
             "content": {
               "application/json": {
                 "schema": {
@@ -23543,71 +23566,6 @@
         }
       }
     },
-    "/api/v1/settings/topology": {
-      "put": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Choose which dependency graph drives alert suppression.",
-        "description": "`manual` uses each node's hand-authored parent. `shadow` changes nothing about alerting and only\nmakes the comparison at `GET /api/v1/topology/shadow` meaningful. `derived` hands suppression to\nthe graph derived from CDP/LLDP adjacency and shared subnets.\n\nMoving to `derived` is **refused** while any pool that has nodes has a poller whose location\ncould not be resolved: such a pool contributes no roots, so none of its nodes would ever be\nsuppressed — the change would look like it worked and quietly do nothing.",
-        "operationId": "set_topology_mode",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TopologyModeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "The mode was changed"
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the manage-config permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "`derived` was requested while a pool with nodes has an unplaced poller",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Skeleton mode has no write side",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/shared-dashboard": {
       "get": {
         "tags": [
@@ -25766,123 +25724,6 @@
         }
       }
     },
-    "/api/v1/topology": {
-      "get": {
-        "tags": [
-          "topology"
-        ],
-        "summary": "The dependency graph: every node with its parent edge, current state, and any active root-cause\nattribution. Admin-only data source.",
-        "description": "The default page is large — the graph views assemble the whole fleet, so fewer round-trips is\nbetter — but bounded, so no single response is a multi-MB blob.",
-        "operationId": "get_topology",
-        "parameters": [
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "search",
-            "in": "query",
-            "description": "Case-insensitive substring of the node's name or address.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "address",
-            "in": "query",
-            "description": "Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).\nPair it with `kind=device,meraki` to ask whether a device is already monitored at an address.\nA value that is not an IP address is rejected.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "state",
-            "in": "query",
-            "description": "Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |\n`maintenance`); empty or absent means every state. An unknown token is rejected rather than\nignored.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "kind",
-            "in": "query",
-            "description": "Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);\nempty or absent means every kind.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "pool",
-            "in": "query",
-            "description": "Comma-separated **effective** poll pools — a node's own pool when it sets one, otherwise the\nnearest folder ancestor that does, otherwise the default pool. Filtering on the stored column\nalone would miss every node that inherits, which is most of them. Pools are named by the\noperator, so there is no vocabulary to reject against: an unknown name simply matches\nnothing.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "One keyset page of the dependency graph; `next_cursor` is null on the last page",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TopologyPage"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the view permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Skeleton mode has no inventory to build the graph from",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/topology/link-overrides": {
       "get": {
         "tags": [
@@ -25963,7 +25804,7 @@
             }
           },
           "400": {
-            "description": "The two endpoints are the same node, or `direction` disagrees with `action`",
+            "description": "The two endpoints are the same node, or the action is `direction`, which is no longer recorded",
             "content": {
               "application/json": {
                 "schema": {
@@ -26227,58 +26068,6 @@
           },
           "503": {
             "description": "Skeleton mode has no inventory to build the map from",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/topology/shadow": {
-      "get": {
-        "tags": [
-          "topology"
-        ],
-        "summary": "What the derived dependency graph would do to alerting, compared with the hand-authored one.",
-        "description": "This is the review surface for enabling derived suppression: `would_suppress` lists the active\nalerts that would stop being raised, and `unresolved_pools` lists the pollers that have no place\nin the graph yet. Both are computed on demand and neither affects alerting.",
-        "operationId": "get_topology_shadow",
-        "responses": {
-          "200": {
-            "description": "The comparison between the manual and derived dependency graphs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TopologyShadow"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks the view permission",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Skeleton mode has no inventory to compare",
             "content": {
               "application/json": {
                 "schema": {
@@ -27726,6 +27515,29 @@
           },
           "state": {
             "type": "string"
+          }
+        }
+      },
+      "AlertGroupingConfig": {
+        "type": "object",
+        "description": "The deployment's level, every folder's own, and the preview.",
+        "required": [
+          "level",
+          "folders",
+          "now"
+        ],
+        "properties": {
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FolderGroupingLevel"
+            }
+          },
+          "level": {
+            "$ref": "#/components/schemas/GroupingLevel"
+          },
+          "now": {
+            "$ref": "#/components/schemas/GroupingPreview"
           }
         }
       },
@@ -31296,13 +31108,6 @@
             "type": "string",
             "description": "Display name for the node."
           },
-          "parent_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
           "pool": {
             "type": [
               "string",
@@ -31466,7 +31271,7 @@
       },
       "CreateNode": {
         "type": "object",
-        "description": "Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional.",
+        "description": "Create-node request body. `profile_id`/`credential_id` are optional.",
         "required": [
           "name",
           "address"
@@ -31490,13 +31295,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "parent_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
           },
           "pool": {
             "type": [
@@ -31596,13 +31394,6 @@
               "name": {
                 "type": "string"
               },
-              "parent_id": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "format": "uuid"
-              },
               "pool": {
                 "type": [
                   "string",
@@ -31612,7 +31403,7 @@
             }
           }
         ],
-        "description": "`name`/`parent_id`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;\neverything else defaults)."
+        "description": "`name`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;\neverything else defaults)."
       },
       "CreateUser": {
         "type": "object",
@@ -34508,6 +34299,23 @@
           }
         }
       },
+      "FolderGroupingLevel": {
+        "type": "object",
+        "description": "One folder's own level, which beats the deployment's for everything beneath it.",
+        "required": [
+          "group_id",
+          "level"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "level": {
+            "$ref": "#/components/schemas/GroupingLevel"
+          }
+        }
+      },
       "ForwardDestination": {
         "type": "object",
         "description": "A destination as the API exposes it — no secrets, ever.",
@@ -35214,6 +35022,39 @@
           }
         }
       },
+      "GroupingLevel": {
+        "type": "string",
+        "description": "How strongly alerts are grouped, weakest first (ADR-236 decision 2).",
+        "enum": [
+          "off",
+          "certain",
+          "links",
+          "site"
+        ]
+      },
+      "GroupingPreview": {
+        "type": "object",
+        "description": "What would happen to the outage open now.",
+        "required": [
+          "down",
+          "notified"
+        ],
+        "properties": {
+          "down": {
+            "type": "integer",
+            "description": "Nodes down now.",
+            "minimum": 0
+          },
+          "notified": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "How many of them would page on their own with the deployment at each level, weakest first\n(`off`, `certain`, `links`, `site`), every folder keeping its own level."
+          }
+        }
+      },
       "HeldEvent": {
         "type": "string",
         "description": "What the notifier was handed when it held a notification.",
@@ -35759,7 +35600,6 @@
           "node",
           "alert",
           "dependents",
-          "upstream",
           "timeline",
           "recent_changes"
         ],
@@ -35799,13 +35639,6 @@
               "$ref": "#/components/schemas/IncidentSignal"
             },
             "description": "Cross-signal timeline for the window, oldest first."
-          },
-          "upstream": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NodeFacts"
-            },
-            "description": "Inventory ancestors, nearest first. Present even when healthy: \"the parent is fine\" is\nevidence that the failure is local to this node."
           },
           "window_secs": {
             "type": "integer",
@@ -36730,6 +36563,18 @@
           }
         }
       },
+      "LevelBody": {
+        "type": "object",
+        "description": "A level to set.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/GroupingLevel"
+          }
+        }
+      },
       "LinkDirection": {
         "type": "string",
         "description": "Which end of a link is upstream.",
@@ -36778,7 +36623,7 @@
           },
           "action": {
             "$ref": "#/components/schemas/LinkOverrideAction",
-            "description": "`pin`, `hide` or `direction`."
+            "description": "`pin` or `hide`. `direction` is refused (ADR-236)."
           },
           "b_node": {
             "type": "string",
@@ -36792,7 +36637,7 @@
               },
               {
                 "$ref": "#/components/schemas/LinkDirection",
-                "description": "Which endpoint is upstream. Required when `action` is `direction`, rejected otherwise."
+                "description": "Refused when present (ADR-236): a link's direction is no longer recorded."
               }
             ]
           },
@@ -40020,13 +39865,6 @@
             ],
             "description": "The OS / software version the device last reported over SNMP (ADR-138), e.g. `15.0(2a)EX5`;\n`null` ⇒ never read — the node is not SNMP-polled, the version table does not cover the\ndevice, or the poller that owns it predates the field.\n\n⚠️ **Observed, not configured.** Nothing writes it but the poll path: the poller re-reads it\nhourly, so it can trail an upgrade by up to an hour, and a poll that cannot read it leaves\nthe last value in place. Detail-only, like `notes`."
           },
-          "parent_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
           "pool": {
             "type": [
               "string",
@@ -40371,19 +40209,6 @@
           }
         }
       },
-      "NodeParentAssignment": {
-        "type": "object",
-        "description": "Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the\ndependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —\ndistinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.",
-        "properties": {
-          "parent_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          }
-        }
-      },
       "NodePlacement": {
         "type": "object",
         "description": "Drag-reorder a node within (or into) a group, positioning it relative to a sibling.\n`group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to\nland next to (both omitted ⇒ append to the end). At most one of before/after may be set.\n\n⚠️ **A sibling is a folder OR a node** (ADR-162). Under one group the two are one ordered list,\nso `before`/`after` may carry a folder id and the node lands at that row's edge. An id that\nnames neither appends.",
@@ -40657,19 +40482,6 @@
               "null"
             ],
             "description": "Descriptive maker/model for the \"name (addr) (vendor) (model)\" display."
-          }
-        }
-      },
-      "NodeSuppressionOptOut": {
-        "type": "object",
-        "description": "Whether this node is excluded from derived alert suppression.",
-        "required": [
-          "opt_out"
-        ],
-        "properties": {
-          "opt_out": {
-            "type": "boolean",
-            "description": "`true` ⇒ this node's alerts always stand on their own, whatever the derived graph says."
           }
         }
       },
@@ -41484,20 +41296,6 @@
           }
         }
       },
-      "PollerAnchorRequest": {
-        "type": "object",
-        "description": "Where a poller attaches to the monitored network.",
-        "properties": {
-          "node_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "The node the poller sits behind. `null` clears the anchor, returning the poller to being\nplaced by its own reported addresses."
-          }
-        }
-      },
       "PollerInfo": {
         "type": "object",
         "description": "One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current\nstatus/telemetry) and the durable inventory (so an offline poller still lists). No secrets.",
@@ -41515,14 +41313,6 @@
           "has_token"
         ],
         "properties": {
-          "anchor_node_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "The node this poller attaches to, naming where it sits in the derived dependency graph.\n`null` ⇒ core places it from `mgmt_addrs` instead."
-          },
           "can_change_pool": {
             "type": "boolean",
             "description": "Whether this poller can be moved to another pool from the WebUI (ADR-107 Inc.2).\n\n`true` when the build advertises `pool-follow`: it reads its pool off the working set,\nre-points the three pool-derived subjects and reconnects the bus, so a move takes effect\nwithout anyone touching the site.\n\n⚠️ **`false` for every poller that is offline, and for every build older than this one.**\nDerived here rather than left to the client to look for in `caps`, so the token itself is\nwritten down once — and because \"cannot\" and \"cannot be asked right now\" are the same\nanswer to the only question the UI has, which is whether to offer the control."
@@ -45915,48 +45705,6 @@
           "critical"
         ]
       },
-      "ShadowAlert": {
-        "type": "object",
-        "description": "One node whose suppression would change if the deployment moved to the derived graph.",
-        "required": [
-          "node_id"
-        ],
-        "properties": {
-          "node_id": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The node whose active alert is affected."
-          },
-          "root_cause": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "The node the derived graph blames, when it has one."
-          }
-        }
-      },
-      "ShadowEdge": {
-        "type": "object",
-        "description": "One node whose parent set differs between the two graphs.",
-        "required": [
-          "child",
-          "parent"
-        ],
-        "properties": {
-          "child": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The downstream node."
-          },
-          "parent": {
-            "type": "string",
-            "format": "uuid",
-            "description": "The upstream node."
-          }
-        }
-      },
       "SiteGapStatus": {
         "type": "string",
         "description": "Where one site stands - the screen's four tabs, in their order.",
@@ -47783,197 +47531,6 @@
             "format": "int32",
             "description": "Routing adjacencies whose peer address matched no monitored node.",
             "minimum": 0
-          }
-        }
-      },
-      "TopologyMode": {
-        "type": "string",
-        "description": "Which dependency graph the alert engine uses.",
-        "enum": [
-          "manual",
-          "shadow",
-          "derived"
-        ]
-      },
-      "TopologyModeRequest": {
-        "type": "object",
-        "description": "The topology mode to move the deployment to.",
-        "required": [
-          "mode"
-        ],
-        "properties": {
-          "mode": {
-            "$ref": "#/components/schemas/TopologyMode",
-            "description": "`manual`, `shadow` or `derived`."
-          }
-        }
-      },
-      "TopologyNode": {
-        "type": "object",
-        "description": "One node in the dependency/topology graph.",
-        "required": [
-          "id",
-          "name",
-          "state"
-        ],
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "name": {
-            "type": "string"
-          },
-          "parent_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "Upstream parent in the dependency graph (`null` ⇒ a root)."
-          },
-          "root_cause": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid",
-            "description": "Upstream node currently identified as the root cause of this node's alert (dependency\nsuppression), if any — lets a client collapse downstream alerts under the cause."
-          },
-          "state": {
-            "$ref": "#/components/schemas/NodeState"
-          }
-        }
-      },
-      "TopologyPage": {
-        "type": "object",
-        "description": "One keyset page of the dependency graph.",
-        "required": [
-          "nodes"
-        ],
-        "properties": {
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Pass back as `cursor` for the next page; `null` ⇒ this was the last one."
-          },
-          "nodes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TopologyNode"
-            }
-          }
-        }
-      },
-      "TopologyShadow": {
-        "type": "object",
-        "description": "What the derived dependency graph would do, against what the manual one does.",
-        "required": [
-          "mode",
-          "manual_edges",
-          "derived_edges",
-          "only_in_manual",
-          "only_in_derived",
-          "would_suppress",
-          "would_unsuppress",
-          "anchors",
-          "unresolved_pools",
-          "unresolved_pollers",
-          "covered_nodes",
-          "total_nodes",
-          "opted_out"
-        ],
-        "properties": {
-          "anchors": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "Nodes the derived graph treats as roots, because a poller sits on their segment."
-          },
-          "covered_nodes": {
-            "type": "integer",
-            "description": "How many nodes the derived graph gives at least one upstream.\n\nRead with `total_nodes`: a low ratio means most of the fleet would keep alerting exactly as\nit does now, which is usually the point rather than a problem.",
-            "minimum": 0
-          },
-          "derived_edges": {
-            "type": "integer",
-            "description": "Edges in the derived graph.",
-            "minimum": 0
-          },
-          "manual_edges": {
-            "type": "integer",
-            "description": "Edges in the hand-authored graph.",
-            "minimum": 0
-          },
-          "mode": {
-            "$ref": "#/components/schemas/TopologyMode",
-            "description": "`manual`, `shadow` or `derived`."
-          },
-          "mode_since": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "When the mode was last changed (RFC 3339), or `null` if it never has been."
-          },
-          "only_in_derived": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ShadowEdge"
-            },
-            "description": "Parent edges only the derived graph has."
-          },
-          "only_in_manual": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ShadowEdge"
-            },
-            "description": "Parent edges only the hand-authored graph has."
-          },
-          "opted_out": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "Nodes an operator has excluded from derived suppression entirely.\n\nA list rather than a count: the screen that shows the comparison is also where the exclusion\nis toggled, and a count cannot tell a row whether it is the excluded one. Bounded by what an\noperator typed in, not by the fleet."
-          },
-          "total_nodes": {
-            "type": "integer",
-            "description": "Nodes in the inventory.",
-            "minimum": 0
-          },
-          "unresolved_pollers": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Poller ids that could not be placed, so an operator knows which to give an anchor."
-          },
-          "unresolved_pools": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Pools with at least one poller whose location could not be resolved.\n\n**Non-empty blocks `derived`.** A pool with no anchor contributes no roots, so none of its\nnodes would ever be suppressed while every screen showed the feature as on."
-          },
-          "would_suppress": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ShadowAlert"
-            },
-            "description": "Active alerts the derived graph **would suppress** and the manual one does not.\n\nThe number to review before enabling `derived`: each of these is an alert that would stop\nbeing raised."
-          },
-          "would_unsuppress": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ShadowAlert"
-            },
-            "description": "Active alerts the manual graph suppresses and the derived one would not — the noise\ndirection."
           }
         }
       },

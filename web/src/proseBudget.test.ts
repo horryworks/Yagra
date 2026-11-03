@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
   alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
-  alertsConfig: [8729, 4637], // + the delivery-hours section: its empty state, its delete confirmation and its four refusals (ADR-226, 2026-11-02)
+  alertsConfig: [8970, 4735], // + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03)
   auth: [79, 43],
   common: [871, 473], // + viewOnly.info, what a hidden write control needs and who you are (ADR-235, 2026-11-03)
   dashboard: [6280, 3469],
@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
   nav: [2634, 1206], // - the mute list menu item and its description (ADR-234, 2026-11-03)
-  nodes: [16107, 9167], // - every mute entry in the tree, its panel and the selection bar (ADR-234, 2026-11-03)
+  nodes: [15617, 8928], // - the set-parent dialog and the parent row and field (ADR-236, 2026-11-03)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],
@@ -86,7 +86,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   suppression: [514, 333], // - the mute list page and the add-mute dialog (ADR-234, 2026-11-03)
   system: [14178, 7939], // the sweep limit field's out-of-range error (ADR-219, 2026-10-28)
-  topology: [3104, 1758], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  topology: [1754, 1027], // - the Dependencies screen: its mode card, comparison verdicts and filters (ADR-236, 2026-11-03)
   troubleshoot: [3370, 1768], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
 };
 
@@ -158,7 +158,9 @@ const PAGE_NOTES: Record<string, PageNote> = {
 // tip 27 (Inc.33): the set-parent dialog said what an upstream does under the field, the same
 // sentence whatever the operator chose.
 // press 16 (ADR-228): the Interfaces headers sort when pressed, so their three ⓘ went.
-const INFO_COUNT = { tip: 27, press: 17 };
+// tip 26, press 15 (ADR-236): the set-parent dialog, the poller anchor and the two comparison
+// verdicts went with the dependency screen; the grouping level gained one ⓘ.
+const INFO_COUNT = { tip: 26, press: 15 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked

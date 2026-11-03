@@ -95,7 +95,6 @@
       "disk": "Disk",
       "firstSeen": "Registered",
       "lastSeen": "Last seen",
-      "anchor": "Anchor node",
       "actions": "Actions",
       "token": "Token"
     },
@@ -169,17 +168,8 @@
       },
       "manual": "Without the kit"
     },
-    "anchor": {
-      "title": "Anchor node for {{id}}",
-      "field": "This poller attaches behind",
-      "none": "Work it out from the poller's own addresses",
-      "set": "Set…",
-      "reported": "Reported by the poller: {{addrs}}",
-      "info": "Tells Yagra where this poller sits in the network. Needed when the poller runs in a container."
-    },
     "err": {
-      "remove": "failed to remove poller",
-      "anchor": "failed to set the anchor node"
+      "remove": "failed to remove poller"
     },
     "filter": {
       "allStatuses": "Online and offline",

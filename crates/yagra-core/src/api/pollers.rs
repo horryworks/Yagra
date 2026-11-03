@@ -44,7 +44,6 @@ use yagra_ops::upgrade::PollerUpgradeProgress;
     delete_poller,
     node_assignment,
     list_monitoring_gaps,
-    set_poller_anchor,
     set_poller_pool,
     issue_poller_token,
     revoke_poller_token
@@ -58,10 +57,6 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/pollers", get(list_pollers))
         .route("/api/v1/pollers/:id/nodes", get(poller_nodes))
         .route("/api/v1/pollers/:id", delete(delete_poller))
-        .route(
-            "/api/v1/pollers/:id/anchor",
-            axum::routing::put(set_poller_anchor),
-        )
         .route(
             "/api/v1/pollers/:id/pool",
             axum::routing::put(set_poller_pool),
@@ -129,9 +124,6 @@ pub(crate) struct PollerInfo {
     /// Interface addresses the poller reported for itself. Empty for an older poller build, and
     /// empty for a containerized poller whose only address is a container-network one.
     mgmt_addrs: Vec<String>,
-    /// The node this poller attaches to, naming where it sits in the derived dependency graph.
-    /// `null` ⇒ core places it from `mgmt_addrs` instead.
-    anchor_node_id: Option<Uuid>,
     /// Whether this poller can be moved to another pool from the WebUI (ADR-107 Inc.2).
     ///
     /// `true` when the build advertises `pool-follow`: it reads its pool off the working set,
@@ -274,7 +266,6 @@ fn build_pollers_response(
                 // From the durable row only: the live registry does not carry the poller's
                 // addresses, and the anchor is not the poller's to report at all.
                 mgmt_addrs: inv.map(|r| r.mgmt_addrs.clone()).unwrap_or_default(),
-                anchor_node_id: inv.and_then(|r| r.anchor_node_id),
                 // Live-only, like `caps` below and for the same reason: it is a fact about the
                 // process that is running. An offline poller cannot be moved, because nothing
                 // would receive the snapshot that tells it where it went.
@@ -1286,73 +1277,6 @@ async fn set_poller_pool(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// Where a poller attaches to the monitored network.
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-pub(super) struct PollerAnchorRequest {
-    /// The node the poller sits behind. `null` clears the anchor, returning the poller to being
-    /// placed by its own reported addresses.
-    node_id: Option<Uuid>,
-}
-
-/// Name the node a poller attaches to, rooting the derived dependency graph.
-///
-/// Direction in the derived graph comes from distance to a poller, so core has to know where each
-/// poller sits. It works that out from the addresses the poller reports — but a poller running in a
-/// container reports a container-network address that matches no monitored node, which is the
-/// common case rather than the unusual one. This is how an operator says where it really is.
-///
-/// Until every pool that has nodes has a placed poller, derived suppression cannot be enabled.
-#[utoipa::path(
-    put, path = "/api/v1/pollers/{id}/anchor", tag = "pollers",
-    params(("id" = String, Path, description = "Poller id")),
-    request_body = PollerAnchorRequest,
-    responses(
-        (status = 204, description = "The anchor was set or cleared"),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
-        (status = 404, description = "No such poller, or no such node", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
-    ),
-)]
-async fn set_poller_anchor(
-    _guard: RequireManageSystem,
-    admin: Admin,
-    Path(id): Path<String>,
-    Json(req): Json<PollerAnchorRequest>,
-) -> ApiResult<StatusCode> {
-    // Check the node exists before storing the reference. The column has a foreign key, so a bad id
-    // would fail anyway — as a 500 naming a constraint, which tells the operator nothing about what
-    // they got wrong.
-    if let Some(node_id) = req.node_id {
-        if admin
-            .repo
-            .get_node(node_id)
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(e.as_ref(), "anchor node lookup", "failed to read the node")
-            })?
-            .is_none()
-        {
-            return Err(ApiError::not_found(
-                "node_not_found",
-                format!("no node {node_id}"),
-            ));
-        }
-    }
-    match admin.pollers.set_anchor(&id, req.node_id).await {
-        Ok(true) => Ok(StatusCode::NO_CONTENT),
-        Ok(false) => Err(ApiError::not_found(
-            "poller_not_found",
-            format!("no poller {id}"),
-        )),
-        Err(e) => Err(ApiError::from_internal(
-            e.as_ref(),
-            "set poller anchor",
-            "failed to set the poller anchor",
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2334,39 +2258,6 @@ mod tests {
         );
     }
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────
-
-    /// A poller's anchor node is stored against its inventory row.
-    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
-    #[ignore = "needs DATABASE_URL"]
-    async fn anchoring_a_poller_stores_the_node_against_its_row(pool: sqlx::PgPool) {
-        use crate::api::tests_support::{live_state, send, token};
-        let st = live_state(pool.clone()).await;
-        let tok = token(&st, yagra_common::Role::Admin);
-        let admin = st.admin.clone().expect("live state");
-        admin
-            .pollers
-            .ensure_registered(&["site-a".to_owned()], "default")
-            .await
-            .expect("register");
-        let node = yagra_base::pgtest::node(&pool, "anchor", 3, None).await;
-
-        let (status, body) = send(
-            &st,
-            "PUT",
-            "/api/v1/pollers/site-a/anchor",
-            &tok,
-            Some(serde_json::json!({ "node_id": node })),
-        )
-        .await;
-        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
-
-        let (status, list) = send(&st, "GET", "/api/v1/pollers", &tok, None).await;
-        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
-        assert!(
-            list.to_string().contains(&node.to_string()),
-            "the anchor is not on the poller row: {list}"
-        );
-    }
 
     /// ADR-158 B4. Moving `siteA`'s only live poller away is refused while a node still inherits
     /// `siteA` from its folder. With the folder tree unreadable that node resolved to `default`,

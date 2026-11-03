@@ -21,7 +21,6 @@ export const NODE_HEADER_MORE = [
   'map',
   'thresholds',
   'pin',
-  'upstream',
   'move',
   'moveByPrefix',
   'pool',
@@ -67,7 +66,6 @@ export function nodeHeaderActions(
     // this is the way there, drawn for whoever may read them.
     thresholds: caps.canConfig,
     pin: caps.pinsReady,
-    upstream: caps.canConfig,
     move: caps.canConfig,
     moveByPrefix: canMoveByPrefix(groups, caps.canConfig),
     pool: caps.canConfig,

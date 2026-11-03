@@ -1565,7 +1565,6 @@ export function NodesPage() {
               tab={tab}
               onTabChange={setTab}
               groups={groups}
-              nodes={treeNodes}
               // The pane hands over the node it loaded by id — see `NodeDetail`'s `onMove`.
               onMove={(n) => setMoving([n])}
               onOpenDetail={() => navigate(nodeHref(selected.id))}

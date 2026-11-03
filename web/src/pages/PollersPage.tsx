@@ -41,9 +41,6 @@ import { useClientSort } from '../lib/useClientSort';
 import { pollerFilters } from './pollerFilters';
 import { FunnelIcon, TrashIcon, WarningIcon } from '../components/ui/icons';
 import { ActionMenu } from '../components/ui/ActionMenu';
-import { NodePicker } from '../components/NodePicker/NodePicker';
-import { EntityName } from '../components/ui/EntityName';
-import { useEntityNames } from '../components/ui/entityNames';
 import {
   dateOnly,
   formatCount,
@@ -619,7 +616,7 @@ function DeletePoolModal({
 /** The grip that drags one poller onto a pool card (ADR-107 Inc.2).
  *
  *  A handle rather than the whole row: the row's other cells hold their own controls (the id opens
- *  the node drill-down, the anchor opens a picker), and making the row itself draggable would
+ *  the node drill-down), and making the row itself draggable would
  *  swallow those clicks. `activationConstraint` on the sensor does the rest — a click stays a
  *  click until the pointer has actually moved. */
 function PoolDragHandle({ poller }: { poller: PollerInfo }) {
@@ -807,89 +804,6 @@ function DeletePollerModal({
         components={{ code: <strong className="mono" /> }}
       />
     </ConfirmDeleteModal>
-  );
-}
-
-/** Point a poller at the node it attaches to, or clear it (ADR-043).
- *
- *  Why this exists at all: the derived dependency graph gets its direction from distance to a
- *  poller, so core has to know where each poller sits. It works that out from the addresses the
- *  poller reports — but a poller running in a container reports a container-network address that
- *  matches no monitored node, which is the *common* deployment rather than an edge case. Until every
- *  pool that has nodes has a placed poller, derived suppression stays blocked. */
-function SetAnchorModal({
-  poller,
-  onClose,
-  onDone,
-}: {
-  poller: PollerInfo;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation('system');
-  const [node, setNode] = useState<{ id: string; name: string } | null>(null);
-  const form = useSubmit({ errorFallback: t('pollers.err.anchor'), onDone });
-
-  // Resolve the current anchor's name for the picker's trigger. `getNodeNames` is the fleet-wide
-  // resolver (a bounded `listNodes()` would miss an anchor outside the first page).
-  useEffect(() => {
-    let cancelled = false;
-    if (!poller.anchor_node_id) return;
-    api
-      .getNodeNames([poller.anchor_node_id])
-      .then((rows) => {
-        const hit = rows[0];
-        if (!cancelled && hit) setNode({ id: hit.id, name: hit.name });
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [poller.anchor_node_id]);
-
-  const save = () => {
-    form.submit(() =>
-      api
-        .setPollerAnchor(poller.id, node?.id ?? null)
-        .then(() => done()),
-    );
-  };
-
-  return (
-    <Modal
-      title={t('pollers.anchor.title', { id: poller.id })}
-      onClose={onClose}
-      footer={
-        <FormFooter
-          form={form}
-          onClose={onClose}
-          onSubmit={save}
-          submitLabel={t('common:actions.save')}
-        />
-      }
-    >
-      <div className="form-stack">
-        <Field
-          label={t('pollers.anchor.field')}
-          htmlFor="poller-anchor-node"
-          infoKey="system:pollers.anchor.info"
-        >
-          <NodePicker
-            id="poller-anchor-node"
-            value={node?.id ?? null}
-            valueLabel={node?.name}
-            onChange={setNode}
-            placeholder={t('pollers.anchor.none')}
-          />
-        </Field>
-        {poller.mgmt_addrs.length > 0 && (
-          <p className="form-status mono">
-            {t('pollers.anchor.reported', { addrs: poller.mgmt_addrs.join(', ') })}
-          </p>
-        )}
-        <FormError form={form} />
-      </div>
-    </Modal>
   );
 }
 
@@ -1370,14 +1284,12 @@ export function PollersPage() {
   }, [fleetReload, gapsReload]);
   const [registering, setRegistering] = useState(false);
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
-  const [anchoring, setAnchoring] = useState<PollerInfo | null>(null);
   const [tokenFor, setTokenFor] = useState<PollerInfo | null>(null);
   const [movingPoller, setMovingPoller] = useState<PollerInfo | null>(null);
   const [creatingPool, setCreatingPool] = useState(false);
   /** The pool a ⋮ action is open for, and which action. One state rather than three booleans so
    *  two dialogs can never be open at once. */
   const [poolAction, setPoolAction] = useState<{ pool: PoolSummary; kind: 'edit' | 'rename' | 'delete' | 'cover' | 'restore' } | null>(null);
-  const { nodeName } = useEntityNames();
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
   // The open drill-down follows the same cadence as the fleet table, so a reassignment shows up
@@ -1594,28 +1506,6 @@ export function PollersPage() {
         render: (p) => lastSeenLabel(p.last_seen ?? null, p.status === 'online', t),
       },
       {
-        // Editable even while the poller is online, unlike Remove: this is the operator's column,
-        // not the poller's, and it is what unblocks derived suppression.
-        key: 'anchor',
-        sortValue: (p) => (p.anchor_node_id ? nodeName(p.anchor_node_id) : null),
-        header: t('pollers.cols.anchor'),
-        width: '130px',
-        render: (p) =>
-          canSystem ? (
-            <button type="button" className="poller-drill" onClick={() => setAnchoring(p)}>
-              {p.anchor_node_id ? (
-                <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
-              ) : (
-                t('pollers.anchor.set')
-              )}
-            </button>
-          ) : p.anchor_node_id ? (
-            <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
-          ) : (
-            '—'
-          ),
-      },
-      {
         // Which sites still share one credential (ADR-065 Inc.3). Worth a column rather than a
         // detail: "shared" is the state that makes one site's leaked `.env` everyone's problem, and
         // an operator cannot otherwise tell the two apart.
@@ -1664,7 +1554,7 @@ export function PollersPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, canSystem, pools, coreVersion, nodeName]);
+  }, [t, canSystem, pools, coreVersion]);
 
   // URL-backed: the pollers table is the only filtered table on this route — the gap and
   // drill-down subsections below carry no filters of their own.
@@ -1972,16 +1862,6 @@ export function PollersPage() {
           // Reload rather than close: after issuing, the dialog stays open showing that the
           // download happened, and the row behind it has to stop saying "shared".
           onChanged={load}
-        />
-      )}
-      {anchoring && (
-        <SetAnchorModal
-          poller={anchoring}
-          onClose={() => setAnchoring(null)}
-          onDone={() => {
-            setAnchoring(null);
-            load();
-          }}
         />
       )}
       {deleting && (

@@ -53,7 +53,7 @@ import {
   MAP_ENDPOINT_KINDS,
   MAP_ROLES,
   MAP_ROLE_REASONS,
-  TOPOLOGY_MODES,
+  GROUPING_LEVELS,
   TLS_CERT_SOURCES,
   METRIC_STATUSES,
   METRIC_DIMENSIONS,
@@ -119,7 +119,6 @@ import {
   TIMELINE_LANES,
   TTE_UNITS,
 } from './troubleshoot/report/format';
-import { DIFF_VERDICTS, VERDICT_INFO } from './pages/topologyDiff';
 import { SKIES } from './pages/geoDayNight';
 import { MERAKI_TIERS } from './pages/merakiTiers';
 import { PREVIEW_SAMPLES, TEMPLATE_EVENTS, UNSUPPORTED_REASONS } from './pages/templateModel';
@@ -1196,32 +1195,15 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('geo sky', { en: enTopology, ja: jaTopology }, 'geo.dayNight.sky.', SKIES);
   });
 
-  it('every topology mode has strings (topology:dependency.mode.*)', () => {
-    // The Dependencies mode card builds `dependency.mode.${mode}` and `${mode}Note` from a value the
-    // server returns. A fourth mode would reach both locales missing, and the screen that decides
-    // how the whole fleet suppresses alerts would render the raw token.
-    const locales = { en: enTopology, ja: jaTopology };
-    expectKeys('topology mode', locales, 'dependency.mode.', TOPOLOGY_MODES);
+  it('every grouping level has a label (alertsConfig:grouping.level.*)', () => {
+    // The Routing section builds `grouping.level.${level}` for each stop of its switch and for each
+    // folder's row, from a value the server returns (ADR-236).
     expectKeys(
-      'topology mode note',
-      locales,
-      'dependency.mode.',
-      TOPOLOGY_MODES.map((m) => `${m}Note`),
+      'grouping level',
+      { en: enAlertsConfig, ja: jaAlertsConfig },
+      'grouping.level.',
+      GROUPING_LEVELS,
     );
-  });
-
-  it('every comparison verdict has strings (topology:dependency.verdict.*)', () => {
-    // Built as `dependency.verdict.${row.verdict}` from the pure classifier. A verdict that changes
-    // something on switching also opens an explanation (`VERDICT_INFO`, ADR-200); a `Record`, so a
-    // new verdict has to answer whether it has one, and the ones that do must have the strings.
-    const locales = { en: enTopology, ja: jaTopology };
-    expectKeys('diff verdict', locales, 'dependency.verdict.', DIFF_VERDICTS);
-    const info = DIFF_VERDICTS.flatMap((v) => {
-      const key = VERDICT_INFO[v];
-      return key ? [key.replace(/^topology:/, '')] : [];
-    });
-    expect(info.length).toBeGreaterThan(0);
-    expectKeys('diff verdict info', locales, '', info);
   });
 
   it('every retention subject has strings (system:settings.retention.subject.*)', () => {

@@ -43,7 +43,6 @@ import { auditFilters } from '../pages/auditQuery';
 import { classificationRuleFilters } from '../pages/classificationFilters';
 import { CREDENTIAL_TABLE_PREFIX, credentialFilters } from '../pages/credentialList';
 import { CREDENTIAL_GROUPS } from './credentialKinds';
-import { dependencyFilters } from '../pages/dependencyFilters';
 import { candidateFilters, endpointFilters } from '../pages/discoveryFilters';
 import { eventRuleFilters, eventSourceFilters } from '../pages/eventConfigFilters';
 import { forwardingFilters } from '../pages/forwardingListFilters';
@@ -158,17 +157,6 @@ const REGISTRY: readonly Entry[] = [
     module: 'pages/credentialList.ts',
     name: 'credentialFilters',
     build: () => specColumns(credentialFilters(t, [], none)),
-  },
-  {
-    module: 'pages/dependencyFilters.ts',
-    name: 'dependencyFilters',
-    build: () => specColumns(dependencyFilters(t, new Map(), false)),
-  },
-  {
-    // The three comparison columns only exist while a derived graph is being compared.
-    module: 'pages/dependencyFilters.ts',
-    name: 'dependencyFilters (comparing)',
-    build: () => specColumns(dependencyFilters(t, new Map(), true)),
   },
   {
     module: 'pages/discoveryFilters.ts',
@@ -467,11 +455,6 @@ const ROUTES: readonly Route[] = [
         wiredIn: { file: 'reports/ReportsPage.tsx', spelling: 'REPORT_TABLE_PREFIX.schedules' },
       },
     ],
-  },
-  {
-    path: '/topology/dependency',
-    own: [],
-    tables: [{ entries: ['dependencyFilters', 'dependencyFilters (comparing)'], prefix: '' }],
   },
   { path: '/settings/pollers', own: [], tables: [{ entries: ['pollerFilters'], prefix: '' }] },
   { path: '/nodes/subnet-overlaps', own: [], tables: [{ entries: ['overlapFilters'], prefix: '' }] },

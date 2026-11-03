@@ -4,6 +4,54 @@
  */
 
 export interface paths {
+    "/api/v1/alert-grouping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_alert_grouping"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alert-grouping/folders/{group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_folder_grouping_level"];
+        post?: never;
+        delete: operations["clear_folder_grouping_level"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alert-grouping/level": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_alert_grouping_level"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/alerts": {
         parameters: {
             query?: never;
@@ -3329,22 +3377,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/nodes/{node_id}/parent": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: operations["set_node_parent"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/nodes/{node_id}/placement": {
         parameters: {
             query?: never;
@@ -3460,31 +3492,6 @@ export interface paths {
         };
         get: operations["get_node_status"];
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/nodes/{node_id}/suppression-opt-out": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Exclude a node from derived alert suppression, or put it back.
-         * @description An excluded node keeps its place in the connectivity graph — everything behind it still resolves
-         *     through it — but is given no upstream of its own, so its alert is never rolled up under
-         *     something else. Use it for the one box that must page whatever else is happening.
-         *
-         *     This only ever *removes* suppression, so it cannot cause an outage to go unreported. It has no
-         *     effect while the deployment is on the hand-authored graph.
-         */
-        put: operations["set_node_suppression_opt_out"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3871,31 +3878,6 @@ export interface paths {
          *     on its next heartbeat. Better to say so than to appear to work.
          */
         delete: operations["delete_poller"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/pollers/{id}/anchor": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Name the node a poller attaches to, rooting the derived dependency graph.
-         * @description Direction in the derived graph comes from distance to a poller, so core has to know where each
-         *     poller sits. It works that out from the addresses the poller reports — but a poller running in a
-         *     container reports a container-network address that matches no monitored node, which is the
-         *     common case rather than the unusual one. This is how an operator says where it really is.
-         *
-         *     Until every pool that has nodes has a placed poller, derived suppression cannot be enabled.
-         */
-        put: operations["set_poller_anchor"];
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4797,32 +4779,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/settings/topology": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Choose which dependency graph drives alert suppression.
-         * @description `manual` uses each node's hand-authored parent. `shadow` changes nothing about alerting and only
-         *     makes the comparison at `GET /api/v1/topology/shadow` meaningful. `derived` hands suppression to
-         *     the graph derived from CDP/LLDP adjacency and shared subnets.
-         *
-         *     Moving to `derived` is **refused** while any pool that has nodes has a poller whose location
-         *     could not be resolved: such a pool contributes no roots, so none of its nodes would ever be
-         *     suppressed — the change would look like it worked and quietly do nothing.
-         */
-        put: operations["set_topology_mode"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/shared-dashboard": {
         parameters: {
             query?: never;
@@ -5342,28 +5298,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/topology": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * The dependency graph: every node with its parent edge, current state, and any active root-cause
-         *     attribution. Admin-only data source.
-         * @description The default page is large — the graph views assemble the whole fleet, so fewer round-trips is
-         *     better — but bounded, so no single response is a multi-MB blob.
-         */
-        get: operations["get_topology"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/topology/link-overrides": {
         parameters: {
             query?: never;
@@ -5452,28 +5386,6 @@ export interface paths {
          *     node itself, since the site draws it. A flat drawing over the bounds falls back to boxes.
          */
         get: operations["get_topology_map"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/topology/shadow": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * What the derived dependency graph would do to alerting, compared with the hand-authored one.
-         * @description This is the review surface for enabling derived suppression: `would_suppress` lists the active
-         *     alerts that would stop being raised, and `unresolved_pools` lists the pollers that have no place
-         *     in the graph yet. Both are computed on demand and neither affects alerting.
-         */
-        get: operations["get_topology_shadow"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5891,6 +5803,12 @@ export interface components {
             metric: string;
             severity: string;
             state: string;
+        };
+        /** @description The deployment's level, every folder's own, and the preview. */
+        AlertGroupingConfig: {
+            folders: components["schemas"]["FolderGroupingLevel"][];
+            level: components["schemas"]["GroupingLevel"];
+            now: components["schemas"]["GroupingPreview"];
         };
         /** @description One alert-history row for the API. */
         AlertHistoryRow: {
@@ -7578,8 +7496,6 @@ export interface components {
             max_depth?: number | null;
             /** @description Display name for the node. */
             name: string;
-            /** Format: uuid */
-            parent_id?: string | null;
             pool?: string | null;
             record_type?: components["schemas"]["DnsRecordType"];
             resolver?: string | null;
@@ -7633,15 +7549,13 @@ export interface components {
             /** @description The API token. **Sealed on arrival and never returned by any endpoint.** */
             token: string;
         };
-        /** @description Create-node request body. `profile_id`/`credential_id`/`parent_id` are optional. */
+        /** @description Create-node request body. `profile_id`/`credential_id` are optional. */
         CreateNode: {
             address: string;
             /** Format: uuid */
             credential_id?: string | null;
             model?: string | null;
             name: string;
-            /** Format: uuid */
-            parent_id?: string | null;
             pool?: string | null;
             /** Format: uuid */
             profile_id?: string | null;
@@ -7668,13 +7582,11 @@ export interface components {
             name: string;
         };
         /**
-         * @description `name`/`parent_id`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;
+         * @description `name`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;
          *     everything else defaults).
          */
         CreateUrlMonitor: components["schemas"]["UrlCheckConfig"] & {
             name: string;
-            /** Format: uuid */
-            parent_id?: string | null;
             pool?: string | null;
         };
         /** @description Create-user request body. The password is hashed before storage and never logged. */
@@ -8985,6 +8897,12 @@ export interface components {
              */
             packets: number;
         };
+        /** @description One folder's own level, which beats the deployment's for everything beneath it. */
+        FolderGroupingLevel: {
+            /** Format: uuid */
+            group_id: string;
+            level: components["schemas"]["GroupingLevel"];
+        };
         /** @description A destination as the API exposes it — no secrets, ever. */
         ForwardDestination: {
             /**
@@ -9407,6 +9325,21 @@ export interface components {
             time_zone?: string | null;
         };
         /**
+         * @description How strongly alerts are grouped, weakest first (ADR-236 decision 2).
+         * @enum {string}
+         */
+        GroupingLevel: "off" | "certain" | "links" | "site";
+        /** @description What would happen to the outage open now. */
+        GroupingPreview: {
+            /** @description Nodes down now. */
+            down: number;
+            /**
+             * @description How many of them would page on their own with the deployment at each level, weakest first
+             *     (`off`, `certain`, `links`, `site`), every folder keeping its own level.
+             */
+            notified: number[];
+        };
+        /**
          * @description What the notifier was handed when it held a notification.
          * @enum {string}
          */
@@ -9720,11 +9653,6 @@ export interface components {
             root_node_id: string;
             /** @description Cross-signal timeline for the window, oldest first. */
             timeline: components["schemas"]["IncidentSignal"][];
-            /**
-             * @description Inventory ancestors, nearest first. Present even when healthy: "the parent is fine" is
-             *     evidence that the failure is local to this node.
-             */
-            upstream: components["schemas"]["NodeFacts"][];
             /**
              * Format: int64
              * @description How far back the timeline reaches.
@@ -10147,6 +10075,10 @@ export interface components {
             name: string;
             ok: boolean;
         };
+        /** @description A level to set. */
+        LevelBody: {
+            level: components["schemas"]["GroupingLevel"];
+        };
         /**
          * @description Which end of a link is upstream.
          * @enum {string}
@@ -10169,7 +10101,7 @@ export interface components {
              *     `direction` is re-expressed to match.
              */
             a_node: string;
-            /** @description `pin`, `hide` or `direction`. */
+            /** @description `pin` or `hide`. `direction` is refused (ADR-236). */
             action: components["schemas"]["LinkOverrideAction"];
             /**
              * Format: uuid
@@ -11884,8 +11816,6 @@ export interface components {
              *     the last value in place. Detail-only, like `notes`.
              */
             os_version?: string | null;
-            /** Format: uuid */
-            parent_id?: string | null;
             /**
              * @description The node's **own** poll-pool (ADR-009/020); `null` ⇒ it inherits from its folder, else the
              *     default pool. Deliberately the raw stored value, not the effective one, so the edit form can
@@ -12084,15 +12014,6 @@ export interface components {
             truncated: boolean;
         };
         /**
-         * @description Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
-         *     dependency. This is the alert-suppression edge (parent down ⇒ suppress children, ADR-015) —
-         *     distinct from `PUT /nodes/:id/group`, which moves the node in the inventory folder tree.
-         */
-        NodeParentAssignment: {
-            /** Format: uuid */
-            parent_id?: string | null;
-        };
-        /**
          * @description Drag-reorder a node within (or into) a group, positioning it relative to a sibling.
          *     `group_id` is the destination group (`null` ⇒ ungrouped); `before`/`after` name the sibling to
          *     land next to (both omitted ⇒ append to the end). At most one of before/after may be set.
@@ -12248,11 +12169,6 @@ export interface components {
             state: components["schemas"]["NodeState"];
             /** @description Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
             vendor?: string | null;
-        };
-        /** @description Whether this node is excluded from derived alert suppression. */
-        NodeSuppressionOptOut: {
-            /** @description `true` ⇒ this node's alerts always stand on their own, whatever the derived graph says. */
-            opt_out: boolean;
         };
         /** @description What a node is to the wireless inventory. */
         NodeWireless: {
@@ -12588,26 +12504,11 @@ export interface components {
              */
             state: string;
         };
-        /** @description Where a poller attaches to the monitored network. */
-        PollerAnchorRequest: {
-            /**
-             * Format: uuid
-             * @description The node the poller sits behind. `null` clears the anchor, returning the poller to being
-             *     placed by its own reported addresses.
-             */
-            node_id?: string | null;
-        };
         /**
          * @description One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current
          *     status/telemetry) and the durable inventory (so an offline poller still lists). No secrets.
          */
         PollerInfo: {
-            /**
-             * Format: uuid
-             * @description The node this poller attaches to, naming where it sits in the derived dependency graph.
-             *     `null` ⇒ core places it from `mgmt_addrs` instead.
-             */
-            anchor_node_id?: string | null;
             /**
              * @description Whether this poller can be moved to another pool from the WebUI (ADR-107 Inc.2).
              *
@@ -14613,32 +14514,6 @@ export interface components {
          * @enum {string}
          */
         Severity: "info" | "warning" | "critical";
-        /** @description One node whose suppression would change if the deployment moved to the derived graph. */
-        ShadowAlert: {
-            /**
-             * Format: uuid
-             * @description The node whose active alert is affected.
-             */
-            node_id: string;
-            /**
-             * Format: uuid
-             * @description The node the derived graph blames, when it has one.
-             */
-            root_cause?: string | null;
-        };
-        /** @description One node whose parent set differs between the two graphs. */
-        ShadowEdge: {
-            /**
-             * Format: uuid
-             * @description The downstream node.
-             */
-            child: string;
-            /**
-             * Format: uuid
-             * @description The upstream node.
-             */
-            parent: string;
-        };
         /**
          * @description Where one site stands - the screen's four tabs, in their order.
          * @enum {string}
@@ -15608,95 +15483,6 @@ export interface components {
             unmatched_routing_peers?: number;
         };
         /**
-         * @description Which dependency graph the alert engine uses.
-         * @enum {string}
-         */
-        TopologyMode: "manual" | "shadow" | "derived";
-        /** @description The topology mode to move the deployment to. */
-        TopologyModeRequest: {
-            /** @description `manual`, `shadow` or `derived`. */
-            mode: components["schemas"]["TopologyMode"];
-        };
-        /** @description One node in the dependency/topology graph. */
-        TopologyNode: {
-            /** Format: uuid */
-            id: string;
-            name: string;
-            /**
-             * Format: uuid
-             * @description Upstream parent in the dependency graph (`null` ⇒ a root).
-             */
-            parent_id?: string | null;
-            /**
-             * Format: uuid
-             * @description Upstream node currently identified as the root cause of this node's alert (dependency
-             *     suppression), if any — lets a client collapse downstream alerts under the cause.
-             */
-            root_cause?: string | null;
-            state: components["schemas"]["NodeState"];
-        };
-        /** @description One keyset page of the dependency graph. */
-        TopologyPage: {
-            /** @description Pass back as `cursor` for the next page; `null` ⇒ this was the last one. */
-            next_cursor?: string | null;
-            nodes: components["schemas"]["TopologyNode"][];
-        };
-        /** @description What the derived dependency graph would do, against what the manual one does. */
-        TopologyShadow: {
-            /** @description Nodes the derived graph treats as roots, because a poller sits on their segment. */
-            anchors: string[];
-            /**
-             * @description How many nodes the derived graph gives at least one upstream.
-             *
-             *     Read with `total_nodes`: a low ratio means most of the fleet would keep alerting exactly as
-             *     it does now, which is usually the point rather than a problem.
-             */
-            covered_nodes: number;
-            /** @description Edges in the derived graph. */
-            derived_edges: number;
-            /** @description Edges in the hand-authored graph. */
-            manual_edges: number;
-            /** @description `manual`, `shadow` or `derived`. */
-            mode: components["schemas"]["TopologyMode"];
-            /** @description When the mode was last changed (RFC 3339), or `null` if it never has been. */
-            mode_since?: string | null;
-            /** @description Parent edges only the derived graph has. */
-            only_in_derived: components["schemas"]["ShadowEdge"][];
-            /** @description Parent edges only the hand-authored graph has. */
-            only_in_manual: components["schemas"]["ShadowEdge"][];
-            /**
-             * @description Nodes an operator has excluded from derived suppression entirely.
-             *
-             *     A list rather than a count: the screen that shows the comparison is also where the exclusion
-             *     is toggled, and a count cannot tell a row whether it is the excluded one. Bounded by what an
-             *     operator typed in, not by the fleet.
-             */
-            opted_out: string[];
-            /** @description Nodes in the inventory. */
-            total_nodes: number;
-            /** @description Poller ids that could not be placed, so an operator knows which to give an anchor. */
-            unresolved_pollers: string[];
-            /**
-             * @description Pools with at least one poller whose location could not be resolved.
-             *
-             *     **Non-empty blocks `derived`.** A pool with no anchor contributes no roots, so none of its
-             *     nodes would ever be suppressed while every screen showed the feature as on.
-             */
-            unresolved_pools: string[];
-            /**
-             * @description Active alerts the derived graph **would suppress** and the manual one does not.
-             *
-             *     The number to review before enabling `derived`: each of these is an alert that would stop
-             *     being raised.
-             */
-            would_suppress: components["schemas"]["ShadowAlert"][];
-            /**
-             * @description Active alerts the manual graph suppresses and the derived one would not — the noise
-             *     direction.
-             */
-            would_unsuppress: components["schemas"]["ShadowAlert"][];
-        };
-        /**
          * @description A credential the current KEK cannot open. Carries identity only — never a length, a `key_id`,
          *     or anything derived from the ciphertext.
          */
@@ -16242,6 +16028,238 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_alert_grouping: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The deployment's grouping level, each folder's own, and what each level would do to the outage open now */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertGroupingConfig"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_folder_grouping_level: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The folder */
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LevelBody"];
+            };
+        };
+        responses: {
+            /** @description The folder's own grouping level is set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such folder */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not a grouping level */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    clear_folder_grouping_level: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The folder */
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The folder follows the deployment's level again */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The folder had no level of its own */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_alert_grouping_level: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LevelBody"];
+            };
+        };
+        responses: {
+            /** @description The deployment's grouping level is set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not a grouping level */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     list_alerts: {
         parameters: {
             query?: never;
@@ -29173,76 +29191,6 @@ export interface operations {
             };
         };
     };
-    set_node_parent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Node id */
-                node_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NodeParentAssignment"];
-            };
-        };
-        responses: {
-            /** @description Dependency edge set or cleared */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Self-dependency, a parent that does not exist or is outside the caller's scope, or an edge that would close a cycle */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks ManageConfig */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such node, or the node is outside the caller's scope */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This deployment has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     place_node: {
         parameters: {
             query?: never;
@@ -29693,67 +29641,6 @@ export interface operations {
             };
             /** @description Role lacks the View permission */
             403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    set_node_suppression_opt_out: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Node id */
-                node_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NodeSuppressionOptOut"];
-            };
-        };
-        responses: {
-            /** @description The exclusion was set or cleared */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks ManageConfig */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such node */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This deployment has no write side (skeleton mode) */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -31130,67 +31017,6 @@ export interface operations {
             };
             /** @description The poller is online and would re-register on its next heartbeat */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Skeleton mode: no durable poller store */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    set_poller_anchor: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Poller id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PollerAnchorRequest"];
-            };
-        };
-        responses: {
-            /** @description The anchor was set or cleared */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks ManageSystem */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such poller, or no such node */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -35018,64 +34844,6 @@ export interface operations {
             };
         };
     };
-    set_topology_mode: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TopologyModeRequest"];
-            };
-        };
-        responses: {
-            /** @description The mode was changed */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the manage-config permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description `derived` was requested while a pool with nodes has an unplaced poller */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Skeleton mode has no write side */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     get_shared_dashboard: {
         parameters: {
             query?: never;
@@ -36954,83 +36722,6 @@ export interface operations {
             };
         };
     };
-    get_topology: {
-        parameters: {
-            query?: {
-                cursor?: string;
-                limit?: number;
-                /** @description Case-insensitive substring of the node's name or address. */
-                search?: string;
-                /**
-                 * @description Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).
-                 *     Pair it with `kind=device,meraki` to ask whether a device is already monitored at an address.
-                 *     A value that is not an IP address is rejected.
-                 */
-                address?: string;
-                /**
-                 * @description Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
-                 *     `maintenance`); empty or absent means every state. An unknown token is rejected rather than
-                 *     ignored.
-                 */
-                state?: string;
-                /**
-                 * @description Comma-separated monitoring kinds (`wireless_ap` | `meraki` | `url` | `dns` | `device`);
-                 *     empty or absent means every kind.
-                 */
-                kind?: string;
-                /**
-                 * @description Comma-separated **effective** poll pools — a node's own pool when it sets one, otherwise the
-                 *     nearest folder ancestor that does, otherwise the default pool. Filtering on the stored column
-                 *     alone would miss every node that inherits, which is most of them. Pools are named by the
-                 *     operator, so there is no vocabulary to reject against: an unknown name simply matches
-                 *     nothing.
-                 */
-                pool?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description One keyset page of the dependency graph; `next_cursor` is null on the last page */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopologyPage"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the view permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Skeleton mode has no inventory to build the graph from */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     get_link_overrides: {
         parameters: {
             query?: never;
@@ -37100,7 +36791,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description The two endpoints are the same node, or `direction` disagrees with `action` */
+            /** @description The two endpoints are the same node, or the action is `direction`, which is no longer recorded */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -37305,53 +36996,6 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no inventory to build the map from */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    get_topology_shadow: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The comparison between the manual and derived dependency graphs */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TopologyShadow"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the view permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Skeleton mode has no inventory to compare */
             503: {
                 headers: {
                     [name: string]: unknown;

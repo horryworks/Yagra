@@ -681,12 +681,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let maintenance = Arc::new(MaintenanceRepo::new(repo.pool()));
     // Priming: snapshot the alert config now so `GET /alerts` reads populated thresholds/topology
     // from the first request. The 30s refresh loop that follows edits is leader-only (`leader_work`).
-    let topo_sources = topology::topology_projection::TopologySources {
-        links: topo_link_repo.clone(),
-        pollers: poller_repo.clone(),
-        l3: l3_repo.clone(),
-        nodes: repo.clone(),
-    };
     // A failed priming load leaves the engine with its empty starting config rather than
     // installing a degraded one (ADR-080 decision 3); the leader's 30s refresh installs the real one.
     // Refusing to start would be worse — a transient query failure right after migrations would
@@ -703,7 +697,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             repo: repo.clone(),
             thresholds: thresholds.clone(),
             groups: group_repo.clone(),
-            topo: topo_sources.clone(),
+            links: topo_link_repo.clone(),
         },
         &maintenance,
         &group_repo,
@@ -767,12 +761,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             logs: logs.clone(),
             flows: flows.clone(),
             ipasn: ipasn.clone(),
-            topo: topology::topology_projection::TopologySources {
-                links: topo_link_repo.clone(),
-                pollers: poller_repo.clone(),
-                l3: l3_repo.clone(),
-                nodes: repo.clone(),
-            },
+            links: topo_link_repo.clone(),
         },
     ));
 
@@ -1648,13 +1637,9 @@ impl LeaderTasks {
                 self.classifier.clone(),
                 self.classification.clone(),
                 self.event_engine.clone(),
-                topology::topology_projection::TopologySources {
-                    links: self.topology_links.clone(),
-                    pollers: self.pollers.clone(),
-                    l3: self.l3.clone(),
-                    nodes: self.repo.clone(),
-                },
+                self.topology_links.clone(),
                 self.no_reading.clone(),
+                self.alert_sink(delivery, "a grouping change"),
             ),
         );
         spawn_cancellable(
@@ -2160,9 +2145,16 @@ async fn derive_cycle(stores: &TopologyStores) -> DeriveCycle {
         Ok(_) => {}
         Err(e) => tracing::warn!(error = %e, "topology derivation: pruning stale links failed"),
     }
-    if let Err(e) = stores.links.record_run(&out.summary, out.links.len()).await {
+    if let Err(e) = stores
+        .links
+        .record_run(&out.summary, out.links.len(), &out.unsure)
+        .await
+    {
         tracing::warn!(error = %e, "topology derivation: recording the run failed");
     }
+    // After the write, so the alert engine's refresh never reads a graph older than the one this
+    // generation announces (ADR-236).
+    topology::topology_links::note_derived(&out.links, &out.unsure);
 
     metrics::gauge!("yagra_topology_links_total").set(out.links.len() as f64);
     metrics::histogram!("yagra_topology_derive_seconds").record(started.elapsed().as_secs_f64());

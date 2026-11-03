@@ -30,6 +30,8 @@ const MOVES: { from: string; to: string; what: string }[] = [
   { from: '/alerts/event-rules', to: '/alerts/rules/events', what: 'event rules' },
   // ADR-234: the mute list is gone; a maintenance window is the one way to silence alerts.
   { from: '/alerts/mutes', to: '/alerts/maintenance', what: 'maintenance windows' },
+  { from: '/topology/dependency', to: '/alerts/routing', what: 'alert grouping' },
+  { from: '/nodes/dependencies', to: '/alerts/routing', what: 'alert grouping' },
 ];
 
 for (const { from, to, what } of MOVES) {

@@ -524,16 +524,27 @@ impl AlertManager {
     ///
     /// `down` is empty for a deleted node's alerts — see [`Self::restore_deleted`].
     fn seed_active(&self, alerts: Vec<Alert>, down: &BTreeSet<NodeId>) -> usize {
+        // ADR-236: a liveness alert's roll-up is re-derived too. It used to come back unrolled and
+        // stay so until some node flipped, which after a restart in the middle of an outage meant
+        // the next flip anywhere paged nothing for it but also never rolled it up again.
+        let attribution = self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .grouping
+            .attribute(down);
         let mut active = self.active.lock().expect("alerts mutex poisoned");
         for mut a in alerts {
             // The attribution is not stored (`alert_history` has no `root_cause` column), so it is
             // re-derived rather than dropped. Without this, every restart erased the "part of this
             // node's outage" marker ADR-087 put on an alert until that node next transitioned —
             // and a node that stays down never transitions again.
-            if a.metric != LIVENESS {
-                if let Some(node) = a.node().filter(|n| down.contains(n)) {
-                    a.root_cause = Some(node);
+            if a.metric == LIVENESS {
+                if let Some(node) = a.node() {
+                    a.root_cause = attribution.get(&node).copied();
                 }
+            } else if let Some(node) = a.node().filter(|n| down.contains(n)) {
+                a.root_cause = Some(node);
             }
             active.entry(a.check).or_insert(a);
         }
@@ -1517,7 +1528,7 @@ impl AlertManager {
                     self.config
                         .read()
                         .expect("config rwlock poisoned")
-                        .topology
+                        .grouping
                         .root_cause(node, &down)
                 })
                 .flatten()
@@ -1705,19 +1716,51 @@ impl AlertManager {
     /// one paging standalone forever. Reconsidering it here turns that into "page once, then close",
     /// which is exactly what a child alert that beat its parent's dwell already does.
     fn resweep_suppression(&self, changed: NodeId) -> Vec<NotifyAction> {
+        self.reattribute(Some(changed))
+    }
+
+    /// Judge every open liveness alert's roll-up again against the config now installed (ADR-236):
+    /// a new grouping level, or a link the derivation just found, changes who is rolled up into whom
+    /// for an outage that is already open. The caller delivers the returned actions — a `Suppress`
+    /// for an alert now rolled up, a `Fire` for one that pages on its own again.
+    pub fn regroup(&self) -> Vec<NotifyAction> {
+        self.reattribute(None)
+    }
+
+    /// How many nodes are down now, and how many of them would page on their own at each grouping
+    /// level of the deployment (`[Off, Certain, Links, Site]`), with every folder's own level kept
+    /// (ADR-236 decision 6). What the settings screen shows beside each level.
+    #[must_use]
+    pub fn grouping_preview(&self) -> (usize, [usize; 4]) {
         let down = self.down_set();
-        // A flip of `changed` can only change the root-cause attribution of nodes with `changed` on
-        // an ancestor path — its descendants. Scope the re-sweep to them (S3): before, every flip
-        // re-ran `root_cause` for the *entire* active liveness set, so a parent-down cascade cost
-        // O(down × active). `descendants` excludes `changed` itself, matching the old `!= changed`.
-        let affected = self
+        let graph = self
             .config
             .read()
             .expect("config rwlock poisoned")
-            .topology
-            .descendants(changed);
+            .grouping
+            .clone();
+        let notified = yagra_topology::grouping::Level::ALL
+            .map(|level| graph.with_default_level(level).notified_count(&down));
+        (down.len(), notified)
+    }
+
+    /// The body of [`Self::resweep_suppression`] and [`Self::regroup`]. With `changed`, that node's
+    /// own non-liveness alerts are reconsidered too (ADR-087); without it, only liveness alerts.
+    fn reattribute(&self, changed: Option<NodeId>) -> Vec<NotifyAction> {
+        let down = self.down_set();
+        // ADR-236: who a down node's alert is rolled up into depends on the whole region it sits
+        // in, and any node going down or coming back can move a region's border — not only the
+        // nodes "below" `changed`, because nothing is below anything until an outage happens. So
+        // every down node is reconsidered, with each region computed once (`attribute`), and so
+        // is every alert still carrying a marker, whose node may have just come back.
+        let attribution = self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .grouping
+            .attribute(&down);
         // Snapshot the liveness alerts to reconsider, then release the lock before the
-        // per-alert topology read / broadcast (keeps lock ordering flat, no nesting).
+        // broadcast (keeps lock ordering flat, no nesting).
         let candidates: Vec<Alert> = {
             let active = self.active.lock().expect("alerts mutex poisoned");
             active
@@ -1728,12 +1771,12 @@ impl AlertManager {
                 .filter(|a| {
                     a.node().is_some_and(|n| {
                         if a.metric == LIVENESS {
-                            affected.contains(&n)
+                            Some(n) != changed && (down.contains(&n) || a.root_cause.is_some())
                         } else {
                             // ADR-087: everything else this node is complaining about belongs to
                             // this node's outage. Only `changed` 's own — a sibling's threshold
                             // alert is unaffected by `changed` flipping.
-                            n == changed
+                            Some(n) == changed
                         }
                     })
                 })
@@ -1745,14 +1788,10 @@ impl AlertManager {
             let Some(alert_node) = alert.node() else {
                 continue;
             };
-            // A liveness alert climbs the dependency graph; anything else rolls up into its own
+            // A liveness alert is rolled up into its region's speaker; anything else rolls up into its own
             // node's outage, which is present or absent exactly as that node is in the down set.
             let new_rc = if alert.metric == LIVENESS {
-                self.config
-                    .read()
-                    .expect("config rwlock poisoned")
-                    .topology
-                    .root_cause(alert_node, &down)
+                attribution.get(&alert_node).copied()
             } else {
                 down.contains(&alert_node).then_some(alert_node)
             };
@@ -3047,7 +3086,24 @@ mod tests {
     use crate::rules::NodeMeta;
     use crate::testkit::*;
     use yagra_common::{ScopeLevel, ThresholdBounds};
-    use yagra_topology::Topology;
+    use yagra_topology::grouping::{Level, LinkGraph};
+
+    /// Physical links standing for what these tests used to write as parent edges (ADR-236):
+    /// each `(behind, in_front)` pair is linked, and every node that is in front of something but
+    /// behind nothing is linked to a node that never goes down, so it is a border when it fails.
+    fn linked(edges: &[(NodeId, NodeId)]) -> Arc<LinkGraph> {
+        let alive = NodeId::new();
+        let mut g = LinkGraph::new(Level::Certain);
+        for (behind, in_front) in edges {
+            g.add_link(*behind, *in_front, true);
+        }
+        for (_, in_front) in edges {
+            if !edges.iter().any(|(behind, _)| behind == in_front) {
+                g.add_link(*in_front, alive, true);
+            }
+        }
+        Arc::new(g)
+    }
     /// ADR-075, the half that is easy to get wrong: with no `__liveness__` rule the engine must
     /// still commit the node's state, keep the down-set current and run dependency suppression —
     /// only the paging stops. Deleting an *alert rule* is not a request to blank the Nodes page.
@@ -5278,12 +5334,11 @@ mod tests {
     fn a_parent_entering_maintenance_does_not_repage_its_down_children() {
         let parent = NodeId::new();
         let child = NodeId::new();
-        let mut topo = Topology::new();
-        topo.add_dependency(child, parent);
+        let topo = linked(&[(child, parent)]);
         let mut meta = meta_for(parent);
         meta.insert(child, NodeMeta::default());
         let mgr = AlertManager::new(untitled);
-        mgr.set_config(cfg(Vec::new(), meta.clone()).with_topology(topo.clone()));
+        mgr.set_config(cfg(Vec::new(), meta.clone()).with_grouping(topo.clone()));
 
         // Both down, the child rolled up under the parent's outage.
         for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
@@ -5302,7 +5357,7 @@ mod tests {
         window.insert(parent);
         mgr.set_config(
             cfg(Vec::new(), meta)
-                .with_topology(topo)
+                .with_grouping(topo)
                 .with_maintenance(window),
         );
         let mut fires = Vec::new();
@@ -5799,10 +5854,9 @@ mod tests {
         let child = NodeId::new();
         let mut meta = meta_for(parent);
         meta.extend(meta_for(child));
-        let mut topo = Topology::new();
-        topo.add_dependency(child, parent);
+        let topo = linked(&[(child, parent)]);
         let mgr = AlertManager::new(untitled);
-        mgr.set_config(cfg(vec![liveness_rule()], meta).with_topology(topo));
+        mgr.set_config(cfg(vec![liveness_rule()], meta).with_grouping(topo));
         for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
             mgr.observe(&result(parent, CheckOutcome::Unreachable, i));
             mgr.observe(&result(child, CheckOutcome::Unreachable, i));
@@ -5891,11 +5945,10 @@ mod tests {
     fn parent_down_suppresses_child_and_attributes_root_cause() {
         let parent = NodeId::new();
         let child = NodeId::new();
-        let mut topo = Topology::new();
-        topo.add_dependency(child, parent);
+        let topo = linked(&[(child, parent)]);
 
         let mgr = manager();
-        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(topo));
 
         // Helper: drive a node Unreachable until it commits and return the fired alert.
         let drive_down = |node: NodeId, base: i64| -> Alert {
@@ -5931,17 +5984,55 @@ mod tests {
         assert_eq!(states.get(&child), Some(&NodeState::Unreachable));
     }
 
+    /// ADR-236: raising the grouping level while an outage is open rolls it up there and then,
+    /// rather than at the next node that happens to flip, and lowering it again pages each node on
+    /// its own. The preview counts the same thing for every level.
+    #[test]
+    fn a_new_grouping_config_regroups_the_outage_already_open() {
+        let parent = NodeId::new();
+        let child = NodeId::new();
+        let mgr = manager();
+        let graph = linked(&[(child, parent)]);
+        let off = Arc::new(graph.with_default_level(Level::Off));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(off.clone()));
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(parent, CheckOutcome::Unreachable, i));
+            mgr.observe(&result(child, CheckOutcome::Unreachable, i));
+        }
+        assert!(
+            mgr.active_alerts().iter().all(|a| a.root_cause.is_none()),
+            "with grouping off both page"
+        );
+        // The preview answers for every level whatever the current one is.
+        assert_eq!(mgr.grouping_preview(), (2, [2, 1, 1, 1]));
+
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(graph.clone()));
+        assert_eq!(mgr.grouping_preview(), (2, [2, 1, 1, 1]));
+        let actions = mgr.regroup();
+        assert!(
+            matches!(actions.as_slice(), [NotifyAction::Suppress(a)] if a.node() == Some(child) && a.root_cause == Some(parent)),
+            "{actions:?}"
+        );
+        assert!(mgr.regroup().is_empty(), "a second regroup changes nothing");
+
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(off));
+        let actions = mgr.regroup();
+        assert!(
+            matches!(actions.as_slice(), [NotifyAction::Fire(a)] if a.node() == Some(child) && a.root_cause.is_none()),
+            "{actions:?}"
+        );
+    }
+
     #[test]
     fn child_down_before_parent_rolls_up_when_parent_falls() {
         // The ordering gap: a child that goes down *before* its parent fires standalone, then must
         // be rolled up (its standalone incident closed) once the parent falls — event-driven.
         let parent = NodeId::new();
         let child = NodeId::new();
-        let mut topo = Topology::new();
-        topo.add_dependency(child, parent);
+        let topo = linked(&[(child, parent)]);
 
         let mgr = manager();
-        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(topo));
 
         // Collect every action produced while driving `node` to `outcome` across the dwell window.
         let drive = |node: NodeId, outcome: CheckOutcome, base: i64| -> Vec<NotifyAction> {
@@ -5997,11 +6088,10 @@ mod tests {
         // the parent recovers while the child is still down.
         let parent = NodeId::new();
         let child = NodeId::new();
-        let mut topo = Topology::new();
-        topo.add_dependency(child, parent);
+        let topo = linked(&[(child, parent)]);
 
         let mgr = manager();
-        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(topo));
 
         let drive = |node: NodeId, outcome: CheckOutcome, base: i64| -> Vec<NotifyAction> {
             let mut out = Vec::new();
@@ -6046,12 +6136,10 @@ mod tests {
         let gp = NodeId::new();
         let parent = NodeId::new();
         let child = NodeId::new();
-        let mut topo = Topology::new();
-        topo.add_dependency(parent, gp);
-        topo.add_dependency(child, parent);
+        let topo = linked(&[(parent, gp), (child, parent)]);
 
         let mgr = manager();
-        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(topo));
 
         let drive = |node: NodeId, outcome: CheckOutcome, base: i64| {
             for i in 0..DEFAULT_LIVENESS_DWELL {

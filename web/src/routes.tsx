@@ -123,12 +123,9 @@ export function AppRoutes() {
         <Route path="nodes/config-backups" element={<ConfigBackupsPage />} />
         <Route path="nodes/subnet-overlaps" element={<SubnetOverlapsPage />} />
         <Route path="nodes/missing-prefixes" element={<MissingPrefixesPage />} />
-        {/* Dependencies live under Topology now; keep this path as a redirect so old links/bookmarks
-            resolve (and don't get captured by the nodes/:nodeId dynamic segment below). */}
-        <Route
-          path="nodes/dependencies"
-          element={<Navigate to="/topology/dependency" replace />}
-        />
+        {/* The dependency screen is gone (ADR-236); how alerts are grouped is set on Routing. Kept as
+            a redirect so old links resolve (and are not captured by nodes/:nodeId below). */}
+        <Route path="nodes/dependencies" element={<MovedTo to="/alerts/routing" />} />
         {/* Collection setup: five screens as path tabs of one page (ADR-231). */}
         <Route path="nodes/collection" element={<CollectionSetupPage />}>
           <Route index element={<ProfilesPage />} />

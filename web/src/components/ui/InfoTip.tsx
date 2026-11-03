@@ -6,7 +6,7 @@
 // screen is the prose ADR-200 removes. So the text is behind a button, opened by a click, a tap,
 // Enter or Space, and closed by a second press, Escape or a press elsewhere.
 //
-// The text is a **namespaced key** (`infoKey="system:pollers.anchor.info"`), never children: a
+// The text is a **namespaced key** (`infoKey="alertsConfig:grouping.info"`), never children: a
 // component that took its sentence as children would take any sentence, and the `.info` keys are
 // what `proseBudget.test.ts` (G8) counts, caps at two sentences and holds to one call site each.
 //

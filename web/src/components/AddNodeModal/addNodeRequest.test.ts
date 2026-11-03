@@ -104,13 +104,6 @@ describe('createRequest', () => {
     }
   });
 
-  it('omits a blank parent rather than sending an empty id', () => {
-    for (const kind of ADDABLE_KINDS) {
-      expect(createRequest(kind, form()).body.parent_id).toBeUndefined();
-      expect(createRequest(kind, form({ parentId: 'p1' })).body.parent_id).toBe('p1');
-    }
-  });
-
   it('omits a blank DNS resolver so the poller uses its system resolver', () => {
     expect(createRequest('dns', form()).body.resolver).toBeUndefined();
     expect(createRequest('dns', form({ dnsResolver: ' 1.1.1.1 ' })).body.resolver).toBe('1.1.1.1');

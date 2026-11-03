@@ -880,7 +880,6 @@ mod tests {
                 asked_about: None,
             },
             dependents: Dependents::default(),
-            upstream: Vec::new(),
             timeline: Vec::new(),
             recent_changes: Vec::new(),
         }

@@ -53,7 +53,6 @@ import type {
   NodeDetail,
   NodeGroup,
   NodeStatus,
-  NodeSummary,
 } from '../../types/api';
 import { MetricChart } from '../MetricChart/MetricChart';
 import {
@@ -117,7 +116,6 @@ import { addressText, hasAddress } from '../../lib/nodeAddress';
 interface Props {
   node: NodeDetail;
   groups: NodeGroup[];
-  nodes?: NodeSummary[];
   status: NodeStatus | null;
   unreachable: boolean;
   /** Whether the viewer may reconfigure monitoring (ManageConfig). Gates the check-config edit. */
@@ -129,7 +127,6 @@ interface Props {
 export function OverviewTab({
   node,
   groups,
-  nodes,
   status,
   unreachable,
   canEdit = false,
@@ -137,7 +134,7 @@ export function OverviewTab({
 }: Props) {
   // 'system' holds the failure reasons the stale-state notice quotes; named here so it is loaded.
   const { t } = useTranslation(['nodes', 'system']);
-  const facts = useFacts(node, groups, nodes, unreachable);
+  const facts = useFacts(node, groups, unreachable);
   const fault = collectionFaultNotice(status);
   return (
     <div className="nd-overview">
@@ -1009,14 +1006,12 @@ interface Fact {
 function useFacts(
   node: NodeDetail,
   groups: NodeGroup[],
-  nodes: NodeSummary[] | undefined,
   unreachable: boolean,
 ): Record<FactRow, Fact> {
   const { t } = useTranslation('nodes');
   const [profile, setProfile] = useState<NodeProfile | null>(null);
   const canConfig = useCan('manage_config');
   const [credentialName, setCredentialName] = useState<string | null>(null);
-  const [parentName, setParentName] = useState<string | null>(null);
   const [uptime, setUptime] = useState<string | null>(null);
   const [assignment, setAssignment] = useState<NodeAssignment | undefined>(undefined);
 
@@ -1047,27 +1042,6 @@ function useFacts(
       cancelled = true;
     };
   }, [node.profile_id, node.credential_id, wantsCredential]);
-
-  // Parent node name: from the already-loaded inventory list if present, else a targeted fetch.
-  useEffect(() => {
-    let cancelled = false;
-    if (!node.parent_id) {
-      setParentName(null);
-      return;
-    }
-    const known = nodes?.find((n) => n.id === node.parent_id)?.name;
-    if (known) {
-      setParentName(known);
-      return;
-    }
-    api
-      .getNode(node.parent_id)
-      .then((n) => !cancelled && setParentName(n.name))
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [node.parent_id, nodes]);
 
   // Uptime from the SNMP sysUpTime scalar (TimeTicks). Only asked for when the row is shown — the
   // monitor kinds and a device with no SNMP binding are never SNMP-walked, so this could only ever
@@ -1156,7 +1130,6 @@ function useFacts(
       ),
     },
     credential: { label: t('field.snmpCredential'), value: credentialName ?? '—' },
-    parent: { label: t('field.parentNode'), value: parentName ?? '—', mono: !!parentName },
     uptime: {
       label: t('field.uptime'),
       value: unreachable ? t('overview.unreachableDash') : (uptime ?? '—'),

@@ -12,7 +12,6 @@
     "serialNumber": "Serial number",
     "osVersion": "OS version",
     "group": "Group",
-    "parentNode": "Parent node",
     "uptime": "Uptime",
     "makerPlaceholder": "e.g. Cisco",
     "modelPlaceholder": "e.g. C2960",
@@ -142,7 +141,6 @@
     "verifyTls": "Verify TLS certificate",
     "deviceProfileOptional": "Device profile (optional)",
     "snmpCredentialOptional": "SNMP credential (optional — enables SNMP polling)",
-    "parentNodeOptional": "Parent node (optional — for dependency suppression)",
     "makerOptional": "Maker (optional)",
     "modelOptional": "Model (optional)",
     "dnsMonitor": "Add DNS monitor",
@@ -221,7 +219,6 @@
     "deleteNode": "failed to delete node",
     "deleteNodes": "failed to delete nodes",
     "saveNode": "failed to save node",
-    "setDependency": "failed to set dependency",
     "addDnsMonitor": "failed to add DNS monitor",
     "movePreview": "failed to match addresses against folder ranges",
     "moveByPrefix": "failed to move the nodes — none of them moved",
@@ -238,7 +235,6 @@
   "detail": {
     "polling": "Polling…",
     "pollNow": "Poll now",
-    "dependency": "Upstream node…",
     "move": "Move to group…",
     "openDetail": "Open detail",
     "editNode": "Edit node",
@@ -375,13 +371,13 @@
   "deleteNodes": {
     "title_one": "Delete {{count}} node",
     "title_other": "Delete {{count}} nodes",
-    "body": "Delete these nodes? Their inventory entries and interfaces are removed, and a parent in a dependency chain stops suppressing its dependents. This cannot be undone.",
+    "body": "Delete these nodes? Their inventory entries and interfaces are removed. This cannot be undone.",
     "more": "and {{count}} more",
     "partial": "Deleted {{deleted}} of {{requested}} nodes. The rest no longer existed or are in folders you cannot see."
   },
   "deleteNode": {
     "title": "Delete node",
-    "body": "Delete node <b>{{name}}</b>? Its inventory entry and interfaces go, and nodes that depend on it are no longer suppressed by it. This cannot be undone."
+    "body": "Delete node <b>{{name}}</b>? Its inventory entry and interfaces go. This cannot be undone."
   },
   "overview": {
     "collectionFault": "The Meraki API is not answering for {{org}} ({{reason}}). The state shown here is the last one collected — an alert was raised for the organization at {{since}}.",
@@ -955,14 +951,6 @@
     "title": "Poller pool for {{name}}",
     "titleMany": "Poller pool for {{count}} selected nodes",
     "partial": "Set the pool on {{applied}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
-  },
-  "setParent": {
-    "title": "Dependency for {{name}}",
-    "dependsOn": "Depends on (upstream)",
-    "noUpstream": "— No upstream (top-level) —",
-    "currentUnnamed": "The current upstream (name not loaded)",
-    "loadFailed": "The dependency map could not be loaded, so upstream names are missing and choices that would form a loop are not filtered out here. The server still refuses a loop.",
-    "info": "While the upstream is down, this node's alerts are suppressed and shown under it."
   },
   "checkEdit": {
     "urlTitle": "Edit URL monitor",

@@ -192,15 +192,6 @@ fn render_context(ctx: &IncidentContext) -> String {
         );
     }
 
-    s.push_str("\n# Upstream path\n");
-    if ctx.upstream.is_empty() {
-        s.push_str("This node has no parent in the inventory.\n");
-    } else {
-        for (i, up) in ctx.upstream.iter().enumerate() {
-            let _ = write!(s, "{}. {}", i + 1, render_node(up));
-        }
-    }
-
     s.push_str("\n# Timeline\n");
     let _ = writeln!(
         s,
@@ -387,7 +378,6 @@ mod tests {
                 asked_about: None,
             },
             dependents: Dependents::default(),
-            upstream: Vec::new(),
             timeline: Vec::new(),
             recent_changes: Vec::new(),
         }
@@ -506,7 +496,6 @@ mod tests {
             named: (0..20).map(|i| format!("srv-{i:03}")).collect(),
             total: 380,
         };
-        c.upstream = vec![node("dist-sw-01"), node("core-rtr-01")];
         c.timeline = (0..10)
             .map(|i| signal("event", "link down on Gi1/0/24", 999_000 - i * 10))
             .collect();
@@ -547,7 +536,6 @@ mod tests {
             out.seed_user().contains("No other alert was attributed")
                 || out.seed_user().contains("None —")
         );
-        assert!(out.seed_user().contains("no parent in the inventory"));
         assert!(out.seed_user().contains("No signals were recorded"));
     }
 

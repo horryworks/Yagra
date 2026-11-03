@@ -60,7 +60,6 @@ pub struct NodeSummaryDto {
     /// DNS monitor has `dns_*`, and neither is ever pinged — so an absent `icmp_rtt_ms` on one of
     /// them is the design, not an outage.
     pub kind: String,
-    pub parent: Option<Uuid>,
     pub group: Option<Uuid>,
     pub vendor: Option<String>,
     pub model: Option<String>,
@@ -107,7 +106,6 @@ impl NodeSummaryDto {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "device".to_owned()),
-            parent: node.parent.map(|p| p.0),
             group: node.group.map(|g| g.0),
             vendor: node.vendor.clone(),
             model: node.model.clone(),

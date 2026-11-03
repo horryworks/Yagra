@@ -12,6 +12,7 @@
 //! one over the same inputs and demand the same answer.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use crate::Subject;
 use uuid::Uuid;
@@ -19,7 +20,7 @@ use yagra_common::{
     resolve_effective, CheckId, Direction, EffectiveThreshold, IfIndex, NodeId, NodeState,
     ScopeLevel, ScopedThreshold,
 };
-use yagra_topology::Topology;
+use yagra_topology::grouping::LinkGraph;
 
 use yagra_common::StoredThreshold;
 
@@ -96,9 +97,9 @@ pub struct MerakiOrgScope {
     pub nodes: BTreeSet<NodeId>,
 }
 
-/// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
-/// against. Rebuilt periodically from the database so threshold/topology edits take effect
-/// without a restart.
+/// A snapshot of thresholds + node metadata + the link graph the engine evaluates against.
+/// Rebuilt periodically from the database so threshold and grouping edits take effect without a
+/// restart.
 #[derive(Debug, Clone, Default)]
 pub struct AlertConfig {
     /// Thresholds bucketed by metric name so per-sample resolution scans only the rules for that
@@ -120,7 +121,10 @@ pub struct AlertConfig {
     /// [`Self::new`].
     pub(super) loaded: bool,
     pub(super) node_meta: HashMap<NodeId, NodeMeta>,
-    pub(super) topology: Topology,
+    /// The links between nodes and each node's grouping level, which decide whose notification
+    /// is rolled up into whose when several go down together (ADR-236). Shared, because the
+    /// snapshot is cloned on every maintenance change and the graph does not change with it.
+    pub(super) grouping: Arc<LinkGraph>,
     /// Nodes currently inside an active **operator** maintenance window (resolved at refresh time).
     ///
     /// ⚠️ A fleet-wide window an upgrade opens is deliberately **not** here — see
@@ -336,8 +340,8 @@ impl MetricRules {
 }
 
 impl AlertConfig {
-    /// Build a config from the stored thresholds and node metadata (no dependency edges;
-    /// add them with [`Self::with_topology`]).
+    /// Build a config from the stored thresholds and node metadata (no links, so nothing groups;
+    /// add them with [`Self::with_grouping`]).
     #[must_use]
     pub fn new(thresholds: Vec<StoredThreshold>, node_meta: HashMap<NodeId, NodeMeta>) -> Self {
         let row_rule_metrics: BTreeSet<String> = thresholds
@@ -360,7 +364,7 @@ impl AlertConfig {
             by_metric,
             loaded: true,
             node_meta,
-            topology: Topology::new(),
+            grouping: Arc::new(LinkGraph::default()),
             maintenance: BTreeSet::new(),
             paused_until: None,
             pause_exempt: BTreeSet::new(),
@@ -372,10 +376,11 @@ impl AlertConfig {
         }
     }
 
-    /// Attach the dependency topology used for parent-down suppression / root-cause roll-up.
+    /// Attach the link graph that decides which down node's notification is rolled up into which
+    /// (ADR-236).
     #[must_use]
-    pub fn with_topology(mut self, topology: Topology) -> Self {
-        self.topology = topology;
+    pub fn with_grouping(mut self, grouping: Arc<LinkGraph>) -> Self {
+        self.grouping = grouping;
         self
     }
 

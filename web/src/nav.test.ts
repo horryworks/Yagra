@@ -49,7 +49,7 @@ describe('nav IA', () => {
   });
 
   it('keeps the (redirected) nodes/dependencies path within Nodes', () => {
-    // The route redirects to /topology/dependency, but the path must still resolve to a section
+    // The route redirects to /alerts/routing, but the path must still resolve to a section
     // so nothing off-nav lights the wrong tab in transit.
     expect(sectionForPath('/nodes/dependencies').key).toBe('nodes');
   });

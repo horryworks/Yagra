@@ -9,7 +9,9 @@
     "source_one": "source",
     "source_other": "sources",
     "schedule_one": "schedule",
-    "schedule_other": "schedules"
+    "schedule_other": "schedules",
+    "folder_one": "folder",
+    "folder_other": "folders"
   },
   "routing": {
     "channels": {
@@ -750,6 +752,39 @@
     "how": {
       "thresholds": "Narrowest target wins",
       "events": "Every match applies"
+    }
+  },
+  "grouping": {
+    "title": "Alert grouping",
+    "info": "When nodes go down together, those with no live neighbour are rolled up into the node at the outage's edge, which alone pages. Their alerts stay open and page again if the edge recovers first.",
+    "level": {
+      "off": "Off",
+      "certain": "Certain only",
+      "links": "From links",
+      "site": "Whole site"
+    },
+    "levelWithCount": "{{level}} · {{count}}",
+    "now": "{{down}} down now → {{count}} notifications",
+    "nowNone": "Nothing is down now.",
+    "folders": "Folder levels",
+    "add": "+ Add folder level",
+    "empty": "Every folder follows the level above.",
+    "remove": "Follow the level above",
+    "cols": {
+      "folder": "Folder",
+      "level": "Level",
+      "actions": "Actions"
+    },
+    "modal": {
+      "title": "Add folder level",
+      "pickFolder": "Choose a folder",
+      "add": "Add"
+    },
+    "err": {
+      "level": "Could not change the grouping level.",
+      "remove": "Could not remove the folder level.",
+      "save": "Could not add the folder level.",
+      "noFolder": "Choose a folder."
     }
   }
 }

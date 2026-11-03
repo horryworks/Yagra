@@ -157,6 +157,7 @@ pub(super) enum ConfigKind {
     RoutingRules,
     NotificationDefaultRoute,
     DeliveryHours,
+    AlertGrouping,
     Profiles,
     ProfileTemplates,
     CollectionTemplates,
@@ -196,6 +197,7 @@ yagra_base::stored_enum::token_enum!(ConfigKind, [
     RoutingRules => "routing_rules",
     NotificationDefaultRoute => "notification_default_route",
     DeliveryHours => "delivery_hours",
+    AlertGrouping => "alert_grouping",
     Profiles => "profiles",
     ProfileTemplates => "profile_templates",
     CollectionTemplates => "collection_templates",
@@ -256,6 +258,7 @@ impl ConfigKind {
             | Self::RoutingRules
             | Self::NotificationDefaultRoute
             | Self::DeliveryHours
+            | Self::AlertGrouping
             | Self::Profiles
             | Self::CollectionTemplates
             | Self::ClassificationRules
@@ -290,6 +293,7 @@ impl ConfigKind {
             Self::RoutingRules => "routing_rules",
             Self::NotificationDefaultRoute => "notification_default_route",
             Self::DeliveryHours => "delivery_hours",
+            Self::AlertGrouping => "alert_grouping",
             Self::Profiles => "profiles",
             Self::ProfileTemplates => "profile_templates",
             Self::CollectionTemplates => "collection_templates",
@@ -339,7 +343,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 36 values.
+    /// Which configuration to read. Required; see the tool description for the 37 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -881,7 +885,10 @@ impl YagraMcp {
                        — webhook, email — it sends to, never where), delivery_hours (the \
                        schedules outside which notifications are held: weekdays, start and end \
                        in minutes after local midnight, the folders each applies to, \
-                       and the default time zone); **collection** — profiles, \
+                       and the default time zone), alert_grouping (how strongly the alerts of \
+                       nodes that go down together are rolled up into one: the deployment's level, \
+                       each folder's own, and how many of the nodes down now would page at each \
+                       level); **collection** — profiles, \
                        profile_templates (needs `profile_id`), collection_templates, \
                        template_items (needs `template_id`), node_collection (one node's collected \
                        metrics — needs `node_id`; `resolved=true` for the effective set the poller \
@@ -951,7 +958,7 @@ impl YagraMcp {
                        kind=metric_meanings. \
                        Kinds require different permissions: oidc and ldap need manage-users; \
                        notification_channels, routing_rules, notification_default_route, \
-                       delivery_hours, forward_destinations and llm need manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
+                       delivery_hours, alert_grouping, forward_destinations and llm need manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
                        discovery_candidates, the four meraki kinds, the two report kinds, \
                        retention, adjacency_settings and roles need view; the rest need \
                        manage-config. This reads configuration only — no tool changes it. No \
@@ -1086,6 +1093,12 @@ impl YagraMcp {
                 Ok(c) => ok_json(TOOL, &c),
                 Err(e) => tool_api_error(TOOL, &e),
             },
+            ConfigKind::AlertGrouping => {
+                match crate::api::alert_grouping::config(&self.state.alerts, a).await {
+                    Ok(c) => ok_json(TOOL, &c),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
             // ── collection ───────────────────────────────────────────────────
             ConfigKind::Profiles => match a.repo.list_profiles().await {
                 Ok(list) => ok_json(TOOL, &list),
@@ -1639,7 +1652,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            36,
+            37,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }
