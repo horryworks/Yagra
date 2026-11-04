@@ -20,6 +20,10 @@
 - **A world clock tile no longer lets "Yesterday" or "Tomorrow" run out of it.** On a narrow tile the date line now puts the word under the date instead of past the tile's edge, and every tile keeps its time on the bottom line so the times stay level.
 - **A Cisco device no longer reads as "Unsaved configuration" just because it rebooted.** After a reload IOS records loading its startup configuration as a running change, and on some models that happens nearly three minutes in, past the two minutes Yagra allowed for it. The allowance is now ten minutes, measured on 810 devices. A change made within ten minutes of boot is missed until the next one.
 
+
+### Security
+
+- **The bundled VictoriaMetrics moves to v1.155.0.** v1.154.0's image carried a zlib with a High-severity fix available (CVE-2026-85091). The upgrade keeps the stored metrics; nothing to do beyond taking the release.
 ## v0.3.67 — Group an outage's alerts at its border, hold pages outside delivery hours, and drop acknowledgements and mutes
 
 ### Breaking changes

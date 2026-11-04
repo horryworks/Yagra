@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-03
-# counts: MA-L=40330 MA-L-repeats-dropped=3 MA-M=6587 MA-S=7227 withheld=3
+# fetched: 2026-11-04
+# counts: MA-L=40331 MA-L-repeats-dropped=3 MA-M=6589 MA-S=7230 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -36778,6 +36778,7 @@
 8C1F6446A	Pharsighted LLC
 8C1F6446B	PERSOL EXCEL HR PARTNERS CO., LTD.
 8C1F6446D	MB connect line GmbH
+8C1F6446E	Optima Engineering INC.
 8C1F6446F	inomatic GmbH
 8C1F64470	Canfield Scientific Inc
 8C1F64471	Apantac LLC
@@ -36844,6 +36845,7 @@
 8C1F644C7	SBS SpA
 8C1F644C9	Apantac LLC
 8C1F644CA	North Building Technologies Limited
+8C1F644CB	Haoyu Intelligent Technonlogy
 8C1F644CC	Carestream Healthcare International Company Limited
 8C1F644CD	Guan Show Technologe Co., Ltd.
 8C1F644CF	Sicon srl
@@ -37165,6 +37167,7 @@
 8C1F64686	Pazzk
 8C1F64687	Lamontec
 8C1F64689	AUREKA SMART LIVING W.L.L
+8C1F6468A	PCN Co., Ltd.
 8C1F6468C	GuangZhou HOKO Electric CO.,LTD
 8C1F6468E	Oriental Electronics, Inc.
 8C1F64690	Potter Electric Signal Co. LLC
@@ -45087,6 +45090,8 @@ B8F4531	GANZHOU DEHUIDA TECHNOLOGY CO., LTD
 B8F4532	Hamamatsu Photonics K.K.
 B8F4533	Annapurna labs
 B8F4534	Ontic Engineering & Manufacturing
+B8F4535	EMPIRETECH HK LIMITED
+B8F4536	Hanque(Chengdu) Information Technology Co.,Ltd.
 B8F4537	Valthor, s.r.o.
 B8F4538	ViewSonic Corp
 B8F4539	PA Technology Solutions Ltd
@@ -46941,6 +46946,7 @@ C86340	Cisco Meraki
 C863F1	Sony Interactive Entertainment Inc.
 C863FC	Commscope
 C864C7	zte corporation
+C86594	IP Yusupov Nargiz Nakibovich
 C8662C	Beijing Haitai Fangyuan High Technology Co,.Ltd.
 C8664B	Aperion Technologies LLC
 C8665D	Extreme Networks, Inc.

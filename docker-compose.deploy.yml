@@ -761,7 +761,7 @@ services:
     # deliberately, with a backup. Settings > Upgrade takes that backup by itself: a release whose
     # line here differs from the running image is the one upgrade that snapshots the metrics
     # (ADR-050 decision 22). Keep it a plain unquoted `image:` line — that is what it reads.
-    image: victoriametrics/victoria-metrics:v1.154.0
+    image: victoriametrics/victoria-metrics:v1.155.0
     # Retention (months). This flag is the ONLY way to change it: VictoriaMetrics has no runtime
     # retention API, so Yagra reports this value (read back from /flags) but cannot set it —
     # ADR-040. Edit here, then `up -d victoriametrics` to recreate just this container.

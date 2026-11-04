@@ -341,7 +341,7 @@ services:
     # never lose or corrupt data" a top-tier policy. A floating tag lets an unrelated `docker
     # compose pull` swap the storage engine underneath it, which is the same class of trap as the
     # `rust:<x>-slim` GLIBC pin documented in CLAUDE.md. Bump this deliberately, with a backup.
-    image: victoriametrics/victoria-metrics:v1.154.0
+    image: victoriametrics/victoria-metrics:v1.155.0
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
