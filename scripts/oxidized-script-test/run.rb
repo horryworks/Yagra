@@ -57,7 +57,8 @@ class FakeDevice
         text = if @saved
                  'Info: The current configuration is the same as the next startup configuration.'
                else
-                 "Warning: The current configuration is not the same as the next startup configuration file.\r\n+ sysname sw-01-new"
+                 "Warning: The current configuration is not the same as the next startup configuration file.\r\n" \
+                 "+ sysname sw-01-new\r\n+ local-user admin password irreversible-cipher %^%#S3cret%^%#"
                end
         client.write("\r\n#{text}\r\n#{PROMPT}")
       when 'display saved-configuration'
@@ -214,6 +215,11 @@ check.call('a refused login sends no save', !heard.include?('save'), heard)
 r, heard = run(home, 'check', :ok, action: 'check')
 check.call('a check reports what it saw', r['action'] == 'check' && r['unsaved_before'] == 'true', r)
 check.call('a check sends no save', !heard.include?('save'), heard)
+check.call('a check reports what the comparison printed', r['compare'].to_s.include?('+ sysname sw-01-new'), r)
+check.call('the comparison it reports went through the secret filter',
+           r['compare'].to_s.include?('<secret hidden>') && !r['compare'].to_s.include?('S3cret'), r)
+check.call('the comparison it reports carries neither the command echo nor the prompt',
+           !r['compare'].to_s.include?(PROMPT), r)
 
 r, heard = run(home, 'auto, unsaved', :ok, action: 'auto')
 check.call('automatic save of an unsaved device saves in the same login',
@@ -223,6 +229,8 @@ check.call('automatic save compares before it saves',
            heard.index('compare configuration') && heard.index('save') &&
              heard.index('compare configuration') < heard.index('save'), heard)
 check.call('automatic save keeps the startup it replaced', r['startup'].to_s.include?('sysname sw-01'), r)
+check.call('after a save the comparison reported is the one read after it',
+           r['compare'].to_s.include?('is the same as the next startup'), r)
 
 r, heard = run(home, 'auto, saved', :already_saved, action: 'auto')
 check.call('automatic save of a saved device reports it saved',

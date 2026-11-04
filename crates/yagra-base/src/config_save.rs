@@ -13,6 +13,35 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// The longest comparison output kept (Inc.9). A device prints only a few lines from its first
+/// difference, so this is a bound on an input that has none, not a size anything is expected to
+/// reach.
+pub const COMPARE_OUTPUT_MAX: usize = 32 * 1024;
+
+/// `text` cut to at most [`COMPARE_OUTPUT_MAX`] bytes, on a character boundary.
+#[must_use]
+pub fn cap_compare_output(text: &str) -> &str {
+    if text.len() <= COMPARE_OUTPUT_MAX {
+        return text;
+    }
+    let mut end = COMPARE_OUTPUT_MAX;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// What the save script last saw on one node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsavedState {
+    /// The first time running and startup were seen to differ; `None` while they agree.
+    pub since: Option<DateTime<Utc>>,
+    /// When the script last compared them.
+    pub checked_at: DateTime<Utc>,
+    /// What the device printed for the comparison, while they differ.
+    pub compare_output: Option<String>,
+}
+
 /// Who asked for a save.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -330,20 +359,50 @@ impl ConfigSaveRepo {
     }
 
     /// Record whether the script found running and startup different. `since` keeps the first
-    /// time they were seen to differ, so the grace counts from then.
-    pub async fn record_unsaved(&self, node: Uuid, unsaved: bool) -> anyhow::Result<()> {
+    /// time they were seen to differ, so the grace counts from then. `compare` is what the device
+    /// printed for that comparison (Inc.9): kept, capped at [`COMPARE_OUTPUT_MAX`], only while the
+    /// two differ, and cleared once they agree.
+    pub async fn record_unsaved(
+        &self,
+        node: Uuid,
+        unsaved: bool,
+        compare: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let kept = compare
+            .filter(|_| unsaved)
+            .map(|c| cap_compare_output(c).to_owned());
         sqlx::query(
-            "INSERT INTO config_unsaved (node_id, since, checked_at) \
-             VALUES ($1, CASE WHEN $2 THEN now() END, now()) \
+            "INSERT INTO config_unsaved (node_id, since, checked_at, compare_output) \
+             VALUES ($1, CASE WHEN $2 THEN now() END, now(), $3) \
              ON CONFLICT (node_id) DO UPDATE SET \
                since = CASE WHEN $2 THEN COALESCE(config_unsaved.since, now()) END, \
-               checked_at = now()",
+               checked_at = now(), \
+               compare_output = $3",
         )
         .bind(node)
         .bind(unsaved)
+        .bind(kept)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// What the script last saw on one node; `None` when it has never checked it.
+    pub async fn unsaved_of(&self, node: Uuid) -> anyhow::Result<Option<UnsavedState>> {
+        let row = sqlx::query(
+            "SELECT since, checked_at, compare_output FROM config_unsaved WHERE node_id = $1",
+        )
+        .bind(node)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| {
+            Ok(UnsavedState {
+                since: r.try_get("since")?,
+                checked_at: r.try_get("checked_at")?,
+                compare_output: r.try_get("compare_output")?,
+            })
+        })
+        .transpose()
     }
 
     /// Every node the script has checked: `Some(since)` while unsaved, `None` while saved.
@@ -493,11 +552,34 @@ mod tests {
     async fn unsaved_keeps_the_first_time_it_was_seen(pool: PgPool) {
         let node = crate::pgtest::node(&pool, "sw-01", 1, None).await;
         let repo = ConfigSaveRepo::new(pool);
-        repo.record_unsaved(node, true).await.unwrap();
+        assert_eq!(repo.unsaved_of(node).await.unwrap(), None);
+        repo.record_unsaved(node, true, Some("vcmp role client"))
+            .await
+            .unwrap();
         let first = repo.unsaved_all().await.unwrap()[&node].expect("unsaved");
-        repo.record_unsaved(node, true).await.unwrap();
+        repo.record_unsaved(node, true, Some("vlan batch 10"))
+            .await
+            .unwrap();
         assert_eq!(repo.unsaved_all().await.unwrap()[&node], Some(first));
-        repo.record_unsaved(node, false).await.unwrap();
+        // The text is the latest comparison's, while the first time stays.
+        let state = repo.unsaved_of(node).await.unwrap().expect("checked");
+        assert_eq!(state.since, Some(first));
+        assert_eq!(state.compare_output.as_deref(), Some("vlan batch 10"));
+        // Saved: the time and the text both go, even when the script sent text.
+        repo.record_unsaved(node, false, Some("same"))
+            .await
+            .unwrap();
         assert_eq!(repo.unsaved_all().await.unwrap()[&node], None);
+        let state = repo.unsaved_of(node).await.unwrap().expect("checked");
+        assert_eq!((state.since, state.compare_output), (None, None));
+    }
+
+    #[test]
+    fn a_long_comparison_is_cut_on_a_character_boundary() {
+        assert_eq!(cap_compare_output("short"), "short");
+        let long = "é".repeat(COMPARE_OUTPUT_MAX);
+        let cut = cap_compare_output(&long);
+        assert!(cut.len() <= COMPARE_OUTPUT_MAX && cut.len() > COMPARE_OUTPUT_MAX - 2);
+        assert!(cut.chars().all(|c| c == 'é'));
     }
 }

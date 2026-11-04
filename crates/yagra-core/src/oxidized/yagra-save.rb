@@ -7,7 +7,8 @@
 # before oxidized is even loaded. When there is work, core hands back the login the fetch used and
 # the commands for the device's model, taken from its fixed table - this script has no command of
 # its own and sends nothing else. It reports a kind of outcome, never what the device printed,
-# except the startup configuration it was asked to keep, filtered by oxidized's secret rules.
+# except the startup configuration it was asked to keep and the output of the comparison, both
+# filtered by oxidized's secret rules.
 #
 # oxidized's own Node, Input and Model classes do the logging in, so prompts, paging and enable
 # work exactly as in the fetch that just succeeded. They are oxidized's internals, not a published
@@ -104,20 +105,26 @@ rescue StandardError, Timeout::Error => e
   exit 0
 end
 
-# Whether running and startup differ, or nil when the model cannot say.
-def unsaved?(input, cmds)
+form = base.dup
+
+# Whether running and startup differ, or nil when the model cannot say. Run through the model, as
+# the startup read is, so oxidized's secret filter runs over the output; that output goes in the
+# report as `compare`, and each call replaces it, so it is always the comparison the reading came
+# from.
+def unsaved?(node, cmds, form)
   return nil unless cmds['compare']
 
-  out = input.cmd(cmds['compare']).to_s
+  # `cmd` answers false when the input returned nothing; that reads as different, as it always has.
+  out = (node.model.cmd(cmds['compare']) || '').to_s
+  form['compare'] = out
   !out.match?(Regexp.new(cmds['same']))
 end
 
-form = base.dup
 # Whether the save command has been sent. Once it has, an error must not read as a plain check or
 # as a failure before anything was written: its answer is unknown.
 sent = false
 begin
-  before = unsaved?(input, cmds)
+  before = unsaved?(node, cmds, form)
   form['unsaved_before'] = before.to_s
   if job['action'] == 'save' || (job['action'] == 'auto' && before == true)
     # The startup configuration about to be replaced, through the model so its secret filter runs.
@@ -141,7 +148,7 @@ begin
                       else
                         'no_answer'
                       end
-    form['unsaved_after'] = unsaved?(input, cmds).to_s if form['failure'].empty?
+    form['unsaved_after'] = unsaved?(node, cmds, form).to_s if form['failure'].empty?
   end
 rescue StandardError, Timeout::Error
   # A save whose answer never came back is the one outcome that must not read as saved; an error

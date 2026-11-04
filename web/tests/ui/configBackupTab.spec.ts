@@ -241,3 +241,38 @@ test.describe('a node Yagra can save (ADR-222)', () => {
     await posted;
   });
 });
+
+// A VRP device the save script read as unsaved, with what `compare configuration` printed
+// (ADR-222 Inc.9).
+const unsaved = {
+  ...working,
+  unsaved: { since: '2026-11-01T02:06:47Z', checked_at: '2026-11-04T14:06:06Z', has_output: true },
+} satisfies Schemas['ConfigBackupView'];
+const COMPARE =
+  ' ====== Current configuration line 12 ======\nvlan batch 500 905 1000\n\n' +
+  ' ====== Configuration file line 12 ======\nvlan batch 500 1000';
+
+test.describe('a node read as unsaved (ADR-222 Inc.9)', () => {
+  test.use({
+    mockConfig: {
+      overrides: {
+        ...overrides(unsaved),
+        '/api/v1/nodes/{node_id}/config-backup/unsaved': {
+          since: '2026-11-01T02:06:47Z',
+          checked_at: '2026-11-04T14:06:06Z',
+          text: COMPARE,
+        } as unknown as Json,
+      },
+    },
+  });
+
+  test('says since when, and shows what the comparison printed', async ({ page, errors }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await expect(page.locator('.cfgb-unsaved')).toContainText('Unsaved since');
+    await page.getByRole('button', { name: 'View differences' }).click();
+    const viewer = page.locator('.cfgb-viewer');
+    await expect(viewer).toContainText('vlan batch 500 905 1000');
+    await expect(viewer).toContainText('Configuration file line 12');
+    expect(errors.uncaught).toEqual([]);
+  });
+});

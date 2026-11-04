@@ -178,6 +178,33 @@ pub(crate) struct ConfigBackupSummary {
     last_outcome: Option<AttemptOutcome>,
     /// The newest save Yagra made or was asked to make (ADR-222); `null` ⇒ none.
     last_save: Option<SaveRecord>,
+    /// Running and startup differ, from the last time the save script compared them (Inc.9);
+    /// `null` ⇒ they agreed, or this model is not compared over the command line.
+    unsaved: Option<UnsavedView>,
+}
+
+/// A node the save script read as unsaved (ADR-222 Inc.9). Only a model compared over the command
+/// line has one; a Cisco device read over SNMP does not.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct UnsavedView {
+    /// The first time running and startup were seen to differ.
+    since: DateTime<Utc>,
+    /// When the script last compared them.
+    checked_at: DateTime<Utc>,
+    /// What the device printed for that comparison is kept, and
+    /// `GET …/config-backup/unsaved` returns it.
+    has_output: bool,
+}
+
+impl UnsavedView {
+    fn of(state: Option<yagra_base::config_save::UnsavedState>) -> Option<Self> {
+        let s = state?;
+        Some(Self {
+            since: s.since?,
+            checked_at: s.checked_at,
+            has_output: s.compare_output.is_some(),
+        })
+    }
 }
 
 impl ConfigBackupSummary {
@@ -198,6 +225,11 @@ impl ConfigBackupSummary {
                 requested_at: DateTime::<Utc>::UNIX_EPOCH,
                 finished_at: Some(DateTime::<Utc>::UNIX_EPOCH),
                 kept_startup: true,
+            }),
+            unsaved: Some(UnsavedView {
+                since: DateTime::<Utc>::UNIX_EPOCH,
+                checked_at: DateTime::<Utc>::UNIX_EPOCH,
+                has_output: true,
             }),
         }
     }
@@ -233,6 +265,7 @@ pub(crate) async fn summary_of(
     let status = admin.config_backup.status(node).await.ok()?;
     let last = admin.config_backup.attempts_of(node, 1).await.ok()?;
     let saves = admin.config_saves.recent(node).await.ok()?;
+    let unsaved = admin.config_saves.unsaved_of(node).await.ok()?;
     Some(ConfigBackupSummary {
         readiness,
         last_status: status.as_ref().map(|s| s.status.clone()),
@@ -240,6 +273,7 @@ pub(crate) async fn summary_of(
         login_confirmed: row.is_some_and(|(_, r)| r.login_confirmed),
         last_outcome: last.first().map(|a| a.outcome),
         last_save: saves.into_iter().next(),
+        unsaved: UnsavedView::of(unsaved),
     })
 }
 
@@ -309,6 +343,9 @@ pub(crate) struct ConfigBackupView {
     save_supported: bool,
     /// The newest saves, newest first.
     saves: Vec<SaveRecord>,
+    /// Running and startup differ, from the save script's last comparison (Inc.9); `null` ⇒ they
+    /// agreed, or this model is not compared over the command line.
+    unsaved: Option<UnsavedView>,
 }
 
 #[utoipa::path(
@@ -340,6 +377,11 @@ async fn get_config_backup(
     let saves = admin
         .config_saves
         .recent(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    let unsaved = admin
+        .config_saves
+        .unsaved_of(node_id)
         .await
         .map_err(|e| read_failed(&e))?;
     let attempts = repo
@@ -407,6 +449,7 @@ async fn get_config_backup(
         )
         .is_some_and(|m| yagra_common::config_save::commands_for(&m).is_some()),
         saves,
+        unsaved: UnsavedView::of(unsaved),
     }))
 }
 

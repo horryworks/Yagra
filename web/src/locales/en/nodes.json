@@ -1415,6 +1415,10 @@
       "viewStartup": "Replaced startup",
       "err": "Could not ask for the save"
     },
+    "unsaved": {
+      "since": "Unsaved since {{time}}",
+      "view": "View differences"
+    },
     "autoSave": {
       "title": "Automatic save",
       "on": "On",

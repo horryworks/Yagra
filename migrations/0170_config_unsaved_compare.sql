@@ -1,0 +1,11 @@
+-- 0170_config_unsaved_compare — keep what the device said when it compared running with startup
+-- (ADR-222 Inc.9).
+--
+-- The save script used to read `compare configuration` only for "same or different" and drop the
+-- text, so nobody could tell from Yagra why a device read as unsaved. The text is kept while the
+-- device reads as unsaved and cleared when it reads as saved. It is device configuration, filtered
+-- by oxidized's secret rules exactly like a stored version.
+--
+-- reversible: additive only — one nullable column on `config_unsaved`. An older core never names
+-- it and writes its rows without it. No `schema_compat` floor, for the reason 0108 records.
+ALTER TABLE config_unsaved ADD COLUMN IF NOT EXISTS compare_output TEXT;

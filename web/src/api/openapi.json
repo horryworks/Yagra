@@ -14568,6 +14568,68 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/config-backup/unsaved": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "get_unsaved",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter applied. Only a model Yagra compares over the command line has one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsavedText"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node the caller can see, or it is not read as unsaved with a comparison kept (`config_unsaved_not_found`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/config-backup/versions": {
       "get": {
         "tags": [
@@ -30601,6 +30663,17 @@
             ],
             "format": "date-time",
             "description": "When the lockout limits allow the next try; `null` when one may be tried now, or none is due."
+          },
+          "unsaved": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UnsavedView",
+                "description": "Running and startup differ, from the save script's last comparison (Inc.9); `null` ⇒ they\nagreed, or this model is not compared over the command line."
+              }
+            ]
           }
         }
       },
@@ -45059,6 +45132,10 @@
             "type": "string",
             "description": "`save`, `auto` or `check`."
           },
+          "compare": {
+            "type": "string",
+            "description": "What the device printed for the comparison the reading above was taken from (the later one\nafter a save that worked, the earlier one otherwise), through oxidized's secret filter.\nKept only while the two differ (Inc.9)."
+          },
           "failure": {
             "type": "string",
             "description": "A `SaveFailure` token; empty when it succeeded."
@@ -47558,6 +47635,56 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "UnsavedText": {
+        "type": "object",
+        "description": "How running differed from startup when the save script last compared them (Inc.9).",
+        "required": [
+          "since",
+          "checked_at",
+          "text"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the script last compared them."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The first time the two were seen to differ."
+          },
+          "text": {
+            "type": "string",
+            "description": "What the device printed for that comparison."
+          }
+        }
+      },
+      "UnsavedView": {
+        "type": "object",
+        "description": "A node the save script read as unsaved (ADR-222 Inc.9). Only a model compared over the command\nline has one; a Cisco device read over SNMP does not.",
+        "required": [
+          "since",
+          "checked_at",
+          "has_output"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the script last compared them."
+          },
+          "has_output": {
+            "type": "boolean",
+            "description": "What the device printed for that comparison is kept, and\n`GET …/config-backup/unsaved` returns it."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The first time running and startup were seen to differ."
           }
         }
       },

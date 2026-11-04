@@ -1564,6 +1564,16 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/nodes/:node_id/config-backup/unsaved",
+        NodeScoped,
+        Exempt(
+            "device configuration text from comparing running with startup, off MCP for the \
+             reason a version's text is (ADR-210 decision 16); that the node reads as unsaved, \
+             and since when, are in get_node_status",
+        ),
+    ),
+    (
+        "GET",
         "/api/v1/config-backups",
         GroupFiltered,
         Tool("get_system_health"),

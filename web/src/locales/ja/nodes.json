@@ -1405,6 +1405,10 @@
       "viewStartup": "置き換えた startup",
       "err": "保存を依頼できませんでした"
     },
+    "unsaved": {
+      "since": "{{time}} から未保存",
+      "view": "差分を見る"
+    },
     "autoSave": {
       "title": "自動保存",
       "on": "オン",

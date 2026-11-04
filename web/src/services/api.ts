@@ -1288,6 +1288,11 @@ export const api = {
       path: { node_id: id, save_id: save },
     }),
 
+  /** What the device printed the last time running and startup were compared and differed
+   *  (ADR-222 Inc.9). */
+  getConfigUnsaved: (id: string): Promise<{ since: string; checked_at: string; text: string }> =>
+    apiGet('/api/v1/nodes/{node_id}/config-backup/unsaved', { path: { node_id: id } }),
+
   /** Cut the fetch that is out for a node; it is recorded as unreachable (ADR-210 stage 5). */
   cancelConfigFetch: (id: string): Promise<void> =>
     apiPost('/api/v1/nodes/{node_id}/config-backup/cancel', { path: { node_id: id } }),

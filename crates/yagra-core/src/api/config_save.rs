@@ -8,6 +8,8 @@
 //!   `audit_mw` like every write.
 //! - `GET …/config-backup/saves/{save_id}/startup` — the startup configuration a save replaced.
 //!   `ManageConfig`, and off MCP, for the reason a version's text is (ADR-210 decision 16).
+//! - `GET …/config-backup/unsaved` — what the device printed the last time the save script found
+//!   running and startup different (Inc.9). Same permission and the same reason to stay off MCP.
 //! - `PUT /api/v1/config-save-settings` — automatic save on or off (decision 8): when on, a device
 //!   a fetch finds unsaved is saved right after that fetch (decision 13). `SaveDeviceConfig` and a
 //!   fleet-wide caller: it lets Yagra save every device on its own. Read back in
@@ -20,8 +22,8 @@
 //!   save, with the node's login and its model's commands from `config_save::SAVE_COMMANDS`. **It
 //!   returns a device login in plaintext**, like `GET /internal/oxidized/nodes`, for the same reader.
 //! - `POST /internal/oxidized/save` — how it went: a failure kind, whether running and startup
-//!   differed, and the startup configuration kept before a save. Never the device's output beyond
-//!   that one copy.
+//!   differed, the startup configuration kept before a save, and the comparison's output. Never
+//!   the device's output beyond those two.
 
 use axum::{
     extract::{Path, Query, State},
@@ -45,7 +47,14 @@ use crate::oxidized::{self, save::Action};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(save_now, get_startup, put_auto_save, save_job, save_report))]
+#[openapi(paths(
+    save_now,
+    get_startup,
+    get_unsaved,
+    put_auto_save,
+    save_job,
+    save_report
+))]
 pub(super) struct Doc;
 
 /// The save routes, merged by [`super::router`].
@@ -55,6 +64,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/nodes/:node_id/config-backup/saves/:save_id/startup",
             get(get_startup),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/config-backup/unsaved",
+            get(get_unsaved),
         )
         .route(
             "/api/v1/config-save-settings",
@@ -179,6 +192,55 @@ async fn get_startup(
             ApiError::not_found("config_save_not_found", "no startup configuration was kept")
         })?;
     Ok(Json(StartupText { text }))
+}
+
+/// How running differed from startup when the save script last compared them (Inc.9).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct UnsavedText {
+    /// The first time the two were seen to differ.
+    since: chrono::DateTime<Utc>,
+    /// When the script last compared them.
+    checked_at: chrono::DateTime<Utc>,
+    /// What the device printed for that comparison.
+    text: String,
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/config-backup/unsaved", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    responses(
+        (status = 200, description = "What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter applied. Only a model Yagra compares over the command line has one", body = UnsavedText),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node the caller can see, or it is not read as unsaved with a comparison kept (`config_unsaved_not_found`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_unsaved(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+) -> ApiResult<Json<UnsavedText>> {
+    let state = admin
+        .config_saves
+        .unsaved_of(node_id)
+        .await
+        .map_err(|e| failed(&e, "config unsaved read"))?;
+    let (since, text) = state
+        .as_ref()
+        .and_then(|s| Some((s.since?, s.compare_output.clone()?)))
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "config_unsaved_not_found",
+                "no unsaved comparison is kept for this node",
+            )
+        })?;
+    let checked_at = state.map_or(since, |s| s.checked_at);
+    Ok(Json(UnsavedText {
+        since,
+        checked_at,
+        text,
+    }))
 }
 
 #[utoipa::path(
@@ -450,6 +512,11 @@ pub(super) struct SaveReport {
     /// The startup configuration read just before a save.
     #[serde(default)]
     startup: String,
+    /// What the device printed for the comparison the reading above was taken from (the later one
+    /// after a save that worked, the earlier one otherwise), through oxidized's secret filter.
+    /// Kept only while the two differ (Inc.9).
+    #[serde(default)]
+    compare: String,
 }
 
 fn flag(text: &str) -> Option<bool> {
@@ -492,8 +559,9 @@ async fn save_report(
         flag(&r.unsaved_before)
     };
     if let Some(unsaved) = unsaved {
+        let compare = Some(r.compare.as_str()).filter(|s| !s.is_empty());
         saves
-            .record_unsaved(r.node, unsaved)
+            .record_unsaved(r.node, unsaved, compare)
             .await
             .map_err(|e| failed(&e, "config unsaved record"))?;
     }
@@ -618,12 +686,40 @@ mod tests {
             Some("hostname sw-01")
         );
 
-        let check = format!("node={node}&action=check&unsaved_before=true");
+        let check = format!(
+            "node={node}&action=check&unsaved_before=true&compare=+%3D%3D%3D+Current+configuration+line+9%0Avcmp+role+client"
+        );
         assert_eq!(
             post_report(&st, &ox_token, &check).await,
             StatusCode::NO_CONTENT
         );
         assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_some());
+        // What the device printed for the comparison is kept beside the reading (Inc.9), and is
+        // configuration text: an Operator reads it, a Viewer sees only that the node is unsaved.
+        let state = saves
+            .unsaved_of(node)
+            .await
+            .expect("read")
+            .expect("checked");
+        assert_eq!(
+            state.compare_output.as_deref(),
+            Some(" === Current configuration line 9\nvcmp role client")
+        );
+        let unsaved_path = format!("/api/v1/nodes/{node}/config-backup/unsaved");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, body) = send(&st, "GET", &unsaved_path, &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["text"],
+            " === Current configuration line 9\nvcmp role client"
+        );
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let (status, _) = send(&st, "GET", &unsaved_path, &viewer, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let view_path = format!("/api/v1/nodes/{node}/config-backup");
+        let (status, body) = send(&st, "GET", &view_path, &viewer, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["unsaved"]["has_output"], true);
 
         // An automatic run that found the device saved records no save; one that found it unsaved
         // and saved it records a finished automatic save with the startup it replaced.
@@ -634,6 +730,15 @@ mod tests {
         );
         assert_eq!(saves.recent(node).await.expect("recent").len(), 1);
         assert!(saves.unsaved_all().await.expect("unsaved")[&node].is_none());
+        let state = saves
+            .unsaved_of(node)
+            .await
+            .expect("read")
+            .expect("checked");
+        assert_eq!(state.compare_output, None);
+        let (status, body) = send(&st, "GET", &unsaved_path, &operator, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "config_unsaved_not_found");
         let auto = format!(
             "node={node}&action=auto&failure=&unsaved_before=true&unsaved_after=false&startup=hostname+sw-01"
         );

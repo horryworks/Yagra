@@ -64,12 +64,14 @@ import {
 } from './configBackupForm';
 import './ConfigBackupTab.css';
 
-/** What the viewer pane shows: one version's text, a version beside the one before it, or the
- *  startup configuration a save replaced. */
+/** What the viewer pane shows: one version's text, a version beside the one before it, the
+ *  startup configuration a save replaced, or how running differed from startup when the device
+ *  last compared them (ADR-222 Inc.9). */
 type Shown =
   | { kind: 'text'; oid: string }
   | { kind: 'diff'; from: string; to: string }
-  | { kind: 'startup'; save: string };
+  | { kind: 'startup'; save: string }
+  | { kind: 'unsaved' };
 
 export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
@@ -337,6 +339,18 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               </div>
             )}
           </div>
+          {v.unsaved && (
+            <div className="cfgb-unsaved">
+              <p className="cfgb-state cfgb-tone-bad">
+                {t('config.unsaved.since', { time: formatExactTime(v.unsaved.since) })}
+              </p>
+              {canConfig && v.unsaved.has_output && (
+                <Button variant="outline" onClick={() => setShown({ kind: 'unsaved' })}>
+                  {t('config.unsaved.view')}
+                </Button>
+              )}
+            </div>
+          )}
           {error && (
             <p className="form-error" role="alert">
               {error}
@@ -519,14 +533,18 @@ function ConfigViewer({
       ? shown.oid
       : shown.kind === 'startup'
         ? `startup:${shown.save}`
-        : `${shown.from}:${shown.to}`;
+        : shown.kind === 'unsaved'
+          ? 'unsaved'
+          : `${shown.from}:${shown.to}`;
   const loaded = useLoad<string | ConfigDiff | null>(
     () =>
       shown.kind === 'text'
         ? api.getConfigVersion(nodeId, shown.oid).then((r) => r.text)
         : shown.kind === 'startup'
           ? api.getConfigSaveStartup(nodeId, shown.save).then((r) => r.text)
-          : api.diffConfigVersions(nodeId, shown.from, shown.to),
+          : shown.kind === 'unsaved'
+            ? api.getConfigUnsaved(nodeId).then((r) => r.text)
+            : api.diffConfigVersions(nodeId, shown.from, shown.to),
     [nodeId, key],
     { initial: null, errorFallback: t('config.err.text') },
   );
@@ -539,7 +557,9 @@ function ConfigViewer({
             ? shortOid(shown.oid)
             : shown.kind === 'startup'
               ? t('config.saves.viewStartup')
-              : `${shortOid(shown.from)} → ${shortOid(shown.to)}`}
+              : shown.kind === 'unsaved'
+                ? t('config.unsaved.view')
+                : `${shortOid(shown.from)} → ${shortOid(shown.to)}`}
         </span>
         <Button variant="outline" onClick={onClose}>
           {t('common:actions.close')}

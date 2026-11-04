@@ -3005,6 +3005,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/config-backup/unsaved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_unsaved"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/config-backup/versions": {
         parameters: {
             query?: never;
@@ -7308,6 +7324,7 @@ export interface components {
              * @description When the lockout limits allow the next try; `null` when one may be tried now, or none is due.
              */
             try_after?: string | null;
+            unsaved?: null | components["schemas"]["UnsavedView"];
         };
         ConfigBody: {
             /** Format: int32 */
@@ -14206,6 +14223,12 @@ export interface components {
         SaveReport: {
             /** @description `save`, `auto` or `check`. */
             action: string;
+            /**
+             * @description What the device printed for the comparison the reading above was taken from (the later one
+             *     after a save that worked, the earlier one otherwise), through oxidized's secret filter.
+             *     Kept only while the two differ (Inc.9).
+             */
+            compare?: string;
             /** @description A `SaveFailure` token; empty when it succeeded. */
             failure?: string;
             /** Format: uuid */
@@ -15491,6 +15514,42 @@ export interface components {
             id: string;
             kind: string;
             name: string;
+        };
+        /** @description How running differed from startup when the save script last compared them (Inc.9). */
+        UnsavedText: {
+            /**
+             * Format: date-time
+             * @description When the script last compared them.
+             */
+            checked_at: string;
+            /**
+             * Format: date-time
+             * @description The first time the two were seen to differ.
+             */
+            since: string;
+            /** @description What the device printed for that comparison. */
+            text: string;
+        };
+        /**
+         * @description A node the save script read as unsaved (ADR-222 Inc.9). Only a model compared over the command
+         *     line has one; a Cisco device read over SNMP does not.
+         */
+        UnsavedView: {
+            /**
+             * Format: date-time
+             * @description When the script last compared them.
+             */
+            checked_at: string;
+            /**
+             * @description What the device printed for that comparison is kept, and
+             *     `GET …/config-backup/unsaved` returns it.
+             */
+            has_output: boolean;
+            /**
+             * Format: date-time
+             * @description The first time running and startup were seen to differ.
+             */
+            since: string;
         };
         /**
          * @description Update body. `name` is required; `secret` is optional — see the module doc for why omitting it
@@ -27649,6 +27708,56 @@ export interface operations {
                 };
             };
             /** @description No such node the caller can see, no such save, or none was kept (`config_save_not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_unsaved: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter applied. Only a model Yagra compares over the command line has one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnsavedText"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node the caller can see, or it is not read as unsaved with a comparison kept (`config_unsaved_not_found`) */
             404: {
                 headers: {
                     [name: string]: unknown;

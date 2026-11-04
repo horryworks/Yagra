@@ -39,6 +39,14 @@
   color: var(--text-secondary);
 }
 
+/* Running and startup differ (ADR-222 Inc.9): the line, and the button that shows how. */
+.cfgb-unsaved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
 /* Two short choices side by side at a width that fits their values, not stretched across the pane;
    the tops line up so the two labels sit on one line. */
 .cfgb-settings {
