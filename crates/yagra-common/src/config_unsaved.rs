@@ -30,9 +30,12 @@ pub const UPTIME: &str = "snmp_sys_uptime_ticks";
 /// edit. After a reload the startup history is `0` and the running history is a few ticks later,
 /// so without this every rebooted device would read as unsaved.
 ///
-/// ⚠️ Not measured on a real device yet (ADR-222): two minutes is a conservative guess at "the
-/// boot-time load is over". A genuine edit inside it is missed until the next one.
-pub const BOOT_LOAD_TICKS: f64 = 12_000.0;
+/// Ten minutes, measured (ADR-222 Inc.8): on 810 Cisco devices of the PoC with no save since boot,
+/// the boot-time load was recorded 0 to 197 seconds in, and the next-latest change was 9,527
+/// seconds in. The two-minute guess this replaced put 28 rebooted devices in alert. The length of
+/// any outage before the boot does not matter: all three readings count from boot. A genuine edit
+/// inside the window is missed until the next one.
+pub const BOOT_LOAD_TICKS: f64 = 60_000.0;
 
 /// `TimeTicks` is a 32-bit counter of hundredths of a second; it wraps after about 497 days.
 const TICKS_WRAP: f64 = 4_294_967_296.0;
@@ -78,6 +81,15 @@ mod tests {
         // After a reload: startup never written since boot, running loaded a moment in.
         assert_eq!(unsaved_seconds(9_000_000.0, 3_100.0, 0.0), 0.0);
         assert_eq!(unsaved_seconds(9_000_000.0, BOOT_LOAD_TICKS, 0.0), 0.0);
+    }
+
+    /// The boot-time loads measured on the PoC's Cisco devices (175.67 s before and after a
+    /// reload on one, 197 s the latest of 810) are not edits; a change 9,527 s in still is.
+    #[test]
+    fn the_measured_boot_loads_are_not_edits() {
+        assert_eq!(unsaved_seconds(27_000_000.0, 17_567.0, 0.0), 0.0);
+        assert_eq!(unsaved_seconds(27_000_000.0, 19_700.0, 0.0), 0.0);
+        assert!(unsaved_seconds(27_000_000.0, 952_700.0, 0.0) > 0.0);
     }
 
     #[test]
