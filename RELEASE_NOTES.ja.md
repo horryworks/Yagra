@@ -12,6 +12,7 @@
 
 ### 改善
 
+- **Config タブの 3 つの表に名前を付けた。** 「保存した版」「startup への保存」「取得の記録」の順に並べ、それぞれに件数を出す。残した版を先に、ログインの試みの記録を最後に置いた。
 - **コマンドで比べる機器（Huawei VRP）が「保存されていない」と出たとき、その理由が見えるようになった。** ノードの Config タブに、running と startup がいつから違うかを出す。**差分を見る** を押すと、その行のすぐ下に `compare configuration` の出力が開く。running-config と保存ファイルを左右に並べ、違う行に色を付ける。出力には、保存した版と同じ秘密の置き換えがかかる。この出力を読むには、版の本文と同じく ManageConfig が要る。新しい `GET /api/v1/nodes/{node_id}/config-backup/unsaved` が出力を返し、`GET …/config-backup` には `unsaved` の欄が増えた。SNMP で読む Cisco の機器には、見せる比較の出力がない。
 
 ### バグ修正

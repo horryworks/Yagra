@@ -240,6 +240,15 @@ test.describe('a node Yagra can save (ADR-222)', () => {
     await dialog.getByRole('button', { name: 'Save', exact: true }).click();
     await posted;
   });
+
+  // Each of the three records says what it is and how many rows it holds, in the order they are
+  // looked for (ADR-222 Inc.9 decision 6).
+  test('names the three records, versions first and the fetch log last', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const titles = page.locator('.cfgb-record .nd-section-t');
+    await expect(titles).toHaveText(['Stored versions 2', 'Saves to startup 1', 'Fetch log 1']);
+    await page.screenshot({ path: 'test-results/config-records.png', fullPage: true });
+  });
 });
 
 // A VRP device the save script read as unsaved, with what `compare configuration` printed

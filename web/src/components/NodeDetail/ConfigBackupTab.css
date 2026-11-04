@@ -81,6 +81,18 @@
   gap: 6px;
 }
 
+/* One named record (stored versions, saves, the fetch log): its heading sits on the table. */
+.cfgb-record .nd-section-t {
+  margin-bottom: 6px;
+}
+
+/* The count beside a record's name: the number, not a second label. */
+.cfgb-record-n {
+  margin-left: 4px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Running beside the saved file, opened under the line that says the node is unsaved (ADR-222
    Inc.9). Two equal columns; a long line wraps inside its own column rather than pushing the
    other off the pane. */

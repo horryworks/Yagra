@@ -1412,6 +1412,11 @@
       "running": "running-config · {{n}} 行目から",
       "saved": "保存ファイル · {{n}} 行目から"
     },
+    "records": {
+      "versions": "保存した版",
+      "saves": "startup への保存",
+      "attempts": "取得の記録"
+    },
     "autoSave": {
       "title": "自動保存",
       "on": "オン",

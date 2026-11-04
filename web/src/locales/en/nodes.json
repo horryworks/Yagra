@@ -1422,6 +1422,11 @@
       "running": "Running · from line {{n}}",
       "saved": "Saved file · from line {{n}}"
     },
+    "records": {
+      "versions": "Stored versions",
+      "saves": "Saves to startup",
+      "attempts": "Fetch log"
+    },
     "autoSave": {
       "title": "Automatic save",
       "on": "On",

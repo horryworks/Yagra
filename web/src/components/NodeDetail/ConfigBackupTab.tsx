@@ -474,31 +474,54 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             </div>
           )}
 
-          {v.attempts.length > 0 && (
-            <DataTable
-              tableId="node.configAttempts"
-              rows={v.attempts}
-              columns={attemptColumns}
-              rowKey={(a) => `${a.at}:${a.outcome}`}
-            />
+          {/* The three records, each named, in the order they are looked for: what was stored, what
+              was written to the device, then how each fetch went (ADR-222 Inc.9 decision 6). */}
+          {v.available && (
+            <section className="cfgb-record">
+              <div className="nd-section-head">
+                <div className="nd-section-t">
+                  {t('config.records.versions')} <span className="cfgb-record-n">{versions.data.length}</span>
+                </div>
+              </div>
+              <DataTable
+                tableId="node.configVersions"
+                rows={versions.data}
+                columns={columns}
+                rowKey={(r) => r.oid}
+                loading={versions.loading}
+                empty={versions.error ?? <EmptyState text={t('config.noVersions')} />}
+              />
+            </section>
           )}
           {v.saves.length > 0 && (
-            <DataTable
-              tableId="node.configSaves"
-              rows={v.saves}
-              columns={saveColumns}
-              rowKey={(r) => r.id}
-            />
+            <section className="cfgb-record">
+              <div className="nd-section-head">
+                <div className="nd-section-t">
+                  {t('config.records.saves')} <span className="cfgb-record-n">{v.saves.length}</span>
+                </div>
+              </div>
+              <DataTable
+                tableId="node.configSaves"
+                rows={v.saves}
+                columns={saveColumns}
+                rowKey={(r) => r.id}
+              />
+            </section>
           )}
-          {v.available && (
-            <DataTable
-              tableId="node.configVersions"
-              rows={versions.data}
-              columns={columns}
-              rowKey={(r) => r.oid}
-              loading={versions.loading}
-              empty={versions.error ?? <EmptyState text={t('config.noVersions')} />}
-            />
+          {v.attempts.length > 0 && (
+            <section className="cfgb-record">
+              <div className="nd-section-head">
+                <div className="nd-section-t">
+                  {t('config.records.attempts')} <span className="cfgb-record-n">{v.attempts.length}</span>
+                </div>
+              </div>
+              <DataTable
+                tableId="node.configAttempts"
+                rows={v.attempts}
+                columns={attemptColumns}
+                rowKey={(a) => `${a.at}:${a.outcome}`}
+              />
+            </section>
           )}
           {shown && canConfig && (
             <ConfigViewer nodeId={node.id} shown={shown} onClose={() => setShown(null)} />
