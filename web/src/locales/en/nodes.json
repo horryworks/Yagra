@@ -1417,7 +1417,10 @@
     },
     "unsaved": {
       "since": "Unsaved since {{time}}",
-      "view": "View differences"
+      "view": "View differences",
+      "hide": "Hide differences",
+      "running": "Running · from line {{n}}",
+      "saved": "Saved file · from line {{n}}"
     },
     "autoSave": {
       "title": "Automatic save",

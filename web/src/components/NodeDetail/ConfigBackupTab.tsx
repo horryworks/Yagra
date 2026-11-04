@@ -62,16 +62,15 @@ import {
   stateLine,
   type ConfigBackupForm,
 } from './configBackupForm';
+import { compareColumns, compareRows } from './compareOutput';
 import './ConfigBackupTab.css';
 
-/** What the viewer pane shows: one version's text, a version beside the one before it, the
- *  startup configuration a save replaced, or how running differed from startup when the device
- *  last compared them (ADR-222 Inc.9). */
+/** What the viewer pane shows: one version's text, a version beside the one before it, or the
+ *  startup configuration a save replaced. */
 type Shown =
   | { kind: 'text'; oid: string }
   | { kind: 'diff'; from: string; to: string }
-  | { kind: 'startup'; save: string }
-  | { kind: 'unsaved' };
+  | { kind: 'startup'; save: string };
 
 export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
@@ -113,6 +112,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
   const [orderOpen, setOrderOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
 
   const candidates = view.data?.candidates;
   const loginText = useMemo(
@@ -345,11 +345,18 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                 {t('config.unsaved.since', { time: formatExactTime(v.unsaved.since) })}
               </p>
               {canConfig && v.unsaved.has_output && (
-                <Button variant="outline" onClick={() => setShown({ kind: 'unsaved' })}>
-                  {t('config.unsaved.view')}
+                <Button
+                  variant="outline"
+                  aria-expanded={diffOpen}
+                  onClick={() => setDiffOpen((o) => !o)}
+                >
+                  {diffOpen ? t('config.unsaved.hide') : t('config.unsaved.view')}
                 </Button>
               )}
             </div>
+          )}
+          {v.unsaved && canConfig && v.unsaved.has_output && diffOpen && (
+            <UnsavedDiff nodeId={node.id} checkedAt={v.unsaved.checked_at} />
           )}
           {error && (
             <p className="form-error" role="alert">
@@ -533,18 +540,14 @@ function ConfigViewer({
       ? shown.oid
       : shown.kind === 'startup'
         ? `startup:${shown.save}`
-        : shown.kind === 'unsaved'
-          ? 'unsaved'
-          : `${shown.from}:${shown.to}`;
+        : `${shown.from}:${shown.to}`;
   const loaded = useLoad<string | ConfigDiff | null>(
     () =>
       shown.kind === 'text'
         ? api.getConfigVersion(nodeId, shown.oid).then((r) => r.text)
         : shown.kind === 'startup'
           ? api.getConfigSaveStartup(nodeId, shown.save).then((r) => r.text)
-          : shown.kind === 'unsaved'
-            ? api.getConfigUnsaved(nodeId).then((r) => r.text)
-            : api.diffConfigVersions(nodeId, shown.from, shown.to),
+          : api.diffConfigVersions(nodeId, shown.from, shown.to),
     [nodeId, key],
     { initial: null, errorFallback: t('config.err.text') },
   );
@@ -557,9 +560,7 @@ function ConfigViewer({
             ? shortOid(shown.oid)
             : shown.kind === 'startup'
               ? t('config.saves.viewStartup')
-              : shown.kind === 'unsaved'
-                ? t('config.unsaved.view')
-                : `${shortOid(shown.from)} → ${shortOid(shown.to)}`}
+              : `${shortOid(shown.from)} → ${shortOid(shown.to)}`}
         </span>
         <Button variant="outline" onClick={onClose}>
           {t('common:actions.close')}
@@ -580,6 +581,47 @@ function ConfigViewer({
             </div>
           ))}
         </pre>
+      )}
+    </div>
+  );
+}
+
+/** How running differed from startup the last time the device compared them, opened right under
+ *  the line that says so (ADR-222 Inc.9): the two sides side by side, a changed row marked. Output
+ *  in any other shape is shown as it came. Read again when the script compares again. */
+function UnsavedDiff({ nodeId, checkedAt }: { nodeId: string; checkedAt: string }) {
+  const { t } = useTranslation('nodes');
+  const loaded = useLoad(() => api.getConfigUnsaved(nodeId).then((r) => r.text), [nodeId, checkedAt], {
+    initial: null as string | null,
+    errorFallback: t('config.err.text'),
+  });
+  const columns = useMemo(() => (loaded.data === null ? null : compareColumns(loaded.data)), [loaded.data]);
+  const rows = useMemo(() => (columns ? compareRows(columns) : []), [columns]);
+  return (
+    <div className="cfgb-udiff">
+      {loaded.error && (
+        <p className="form-error" role="alert">
+          {loaded.error}
+        </p>
+      )}
+      {loaded.data !== null && !columns && <pre className="cfgb-text mono">{loaded.data}</pre>}
+      {columns && (
+        <div className="cfgb-udiff-grid mono" role="table">
+          <div className="cfgb-udiff-head" role="row">
+            <span role="columnheader">{t('config.unsaved.running', { n: columns.running.line })}</span>
+            <span role="columnheader">{t('config.unsaved.saved', { n: columns.saved.line })}</span>
+          </div>
+          {rows.map((r, i) => (
+            <div key={i} role="row" className={`cfgb-udiff-row${r.differs ? ' cfgb-udiff-differs' : ''}`}>
+              <span role="cell" className={r.differs && r.running !== undefined ? 'cfgb-line-added' : ''}>
+                {r.running ?? ''}
+              </span>
+              <span role="cell" className={r.differs && r.saved !== undefined ? 'cfgb-line-removed' : ''}>
+                {r.saved ?? ''}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

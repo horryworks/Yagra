@@ -266,13 +266,31 @@ test.describe('a node read as unsaved (ADR-222 Inc.9)', () => {
     },
   });
 
-  test('says since when, and shows what the comparison printed', async ({ page, errors }) => {
+  test('opens the two sides under the line, the changed row marked', async ({ page, errors }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    await expect(page.locator('.cfgb-unsaved')).toContainText('Unsaved since');
+    const line = page.locator('.cfgb-unsaved');
+    await expect(line).toContainText('Unsaved since');
     await page.getByRole('button', { name: 'View differences' }).click();
-    const viewer = page.locator('.cfgb-viewer');
-    await expect(viewer).toContainText('vlan batch 500 905 1000');
-    await expect(viewer).toContainText('Configuration file line 12');
+    const panel = page.locator('.cfgb-udiff');
+    await expect(panel).toContainText('Running · from line 12');
+    await expect(panel).toContainText('Saved file · from line 12');
+    // One changed row, the running side on the left, the saved side on the right.
+    const changed = panel.locator('.cfgb-udiff-differs');
+    await expect(changed).toHaveCount(1);
+    await expect(changed.locator('[role="cell"]').first()).toHaveText('vlan batch 500 905 1000');
+    await expect(changed.locator('[role="cell"]').last()).toHaveText('vlan batch 500 1000');
+    // It opens directly under the line, above the settings, not at the bottom of the tab.
+    const lineBox = await line.boundingBox();
+    const panelBox = await panel.boundingBox();
+    const settingsBox = await page.locator('.cfgb-settings').boundingBox();
+    expect(lineBox && panelBox && settingsBox).toBeTruthy();
+    if (lineBox && panelBox && settingsBox) {
+      expect(panelBox.y).toBeGreaterThan(lineBox.y);
+      expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(settingsBox.y);
+    }
+    await page.screenshot({ path: 'test-results/config-unsaved.png' });
+    await page.getByRole('button', { name: 'Hide differences' }).click();
+    await expect(panel).toHaveCount(0);
     expect(errors.uncaught).toEqual([]);
   });
 });

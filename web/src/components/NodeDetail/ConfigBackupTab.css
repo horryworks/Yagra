@@ -81,6 +81,58 @@
   gap: 6px;
 }
 
+/* Running beside the saved file, opened under the line that says the node is unsaved (ADR-222
+   Inc.9). Two equal columns; a long line wraps inside its own column rather than pushing the
+   other off the pane. */
+.cfgb-udiff {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.cfgb-udiff-grid {
+  font-size: var(--font-sm);
+}
+
+.cfgb-udiff-head,
+.cfgb-udiff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.cfgb-udiff-head {
+  position: sticky;
+  top: 0;
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+}
+
+.cfgb-udiff-head > span,
+.cfgb-udiff-row > span {
+  padding: 2px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.cfgb-udiff-head > span {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.cfgb-udiff-head > span + span,
+.cfgb-udiff-row > span + span {
+  border-left: var(--border-width) solid var(--border-color);
+}
+
+.cfgb-udiff-differs {
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+}
+
 .cfgb-viewer {
   border: var(--border-width) solid var(--border-color);
   border-radius: 6px;

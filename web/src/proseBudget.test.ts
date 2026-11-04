@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
   nav: [2634, 1206], // - the mute list menu item and its description (ADR-234, 2026-11-03)
-  nodes: [15617, 8928], // - the set-parent dialog and the parent row and field (ADR-236, 2026-11-03)
+  nodes: [15645, 8947], // + the Config tab's "unsaved since" state line and its two column headings (ADR-222 Inc.9, 2026-11-04)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

@@ -12,7 +12,7 @@
 
 ### Improvements
 
-- **A device Yagra compares over the command line (Huawei VRP) now shows why it reads as unsaved.** The node's Config tab says since when running and startup have differed, and **View differences** shows what `compare configuration` printed, through the same secret filter as a stored version. Reading that text takes ManageConfig, like a version's text; a new `GET /api/v1/nodes/{node_id}/config-backup/unsaved` serves it, and `GET …/config-backup` carries an `unsaved` field. A Cisco device read over SNMP has no comparison to show.
+- **A device Yagra compares over the command line (Huawei VRP) now shows why it reads as unsaved.** The node's Config tab says since when running and startup have differed, and **View differences** opens what `compare configuration` printed right under that line, running and the saved file side by side with the changed rows marked, through the same secret filter as a stored version. Reading that text takes ManageConfig, like a version's text; a new `GET /api/v1/nodes/{node_id}/config-backup/unsaved` serves it, and `GET …/config-backup` carries an `unsaved` field. A Cisco device read over SNMP has no comparison to show.
 
 ### Bug Fixes
 
