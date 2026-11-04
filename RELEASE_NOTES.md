@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **An upgrade no longer fills the disk copying the metrics.** When a release changes VictoriaMetrics, the pre-upgrade backup copies the whole metrics store, and the free-space check never counted it: on a 19 GB host with 4.7 GB of metrics the copy nearly filled the disk under the running stores. The upgrade now measures both first and, when the copy would not leave the 3 GiB floor, upgrades without it and says so. Takes effect on the upgrade after the one that installs it.
+
 ## v0.3.68 — See why a Huawei device reads as unsaved, and stop flagging Cisco devices that only rebooted
 
 ### Improvements
@@ -25,7 +29,7 @@
 
 ### Security
 
-- **The bundled VictoriaMetrics moves to v1.155.0.** v1.154.0's image carried a zlib with a High-severity fix available (CVE-2026-85091). The upgrade keeps the stored metrics; nothing to do beyond taking the release.
+- **The bundled VictoriaMetrics moves to v1.155.0.** v1.154.0's image carried a zlib with a High-severity fix available (CVE-2026-85091). The upgrade keeps the stored metrics. ⚠️ Because VictoriaMetrics changes, Settings ▸ Upgrade copies the whole metrics store into its pre-upgrade backup, on the same disk: check that the host has at least that much free space beyond 3 GiB before pressing upgrade (`docker exec yagra-victoriametrics-1 du -sh /victoria-metrics-data` gives the size).
 ## v0.3.67 — Group an outage's alerts at its border, hold pages outside delivery hours, and drop acknowledgements and mutes
 
 ### Breaking changes

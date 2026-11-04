@@ -3590,6 +3590,48 @@ pub mod tests {
         );
     }
 
+    /// When the target release changes VictoriaMetrics, the metrics copy has to fit (ADR-050 Inc.7).
+    ///
+    /// The fixed floor in step 0b says nothing about it: the copy is the whole metrics store, on
+    /// the same disk, and on a PoC deployment it was racing a full disk under the running stores
+    /// (4.7 GB against 3.7 GB free). So, only on the branch that would take the metrics, both
+    /// sizes are measured after the pull, and the metrics are left out when the copy would not
+    /// leave the floor standing. Skipping needs both measurements; an unmeasured size keeps them.
+    #[test]
+    fn the_metrics_are_left_out_only_when_measured_not_to_fit() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let at = |what: &str, needle: &str| {
+            apply
+                .find(needle)
+                .unwrap_or_else(|| panic!("{what} is gone from the apply procedure"))
+        };
+        let takes = at("the branch that takes the metrics", "SKIPM=0");
+        let measure = at(
+            "measuring the metrics store",
+            "du -sk /victoria-metrics-data",
+        );
+        let decide = at(
+            "the fit decision",
+            r#"if [ -n "$$VM_KB" ] && [ -n "$$ROOM_KB" ] && [ $$((ROOM_KB - VM_KB)) -lt "$$KEEP_KB" ]; then"#,
+        );
+        let backup = at(
+            "the pre-upgrade backup",
+            "YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh",
+        );
+        assert!(
+            takes < measure && measure < decide && decide < backup,
+            "the metrics store is measured somewhere other than between deciding to take it and \
+             the backup"
+        );
+        assert_eq!(
+            apply[takes..backup].matches("SKIPM=1").count(),
+            1,
+            "the copy is left out on more than one condition"
+        );
+    }
+
     /// A floor that is not a number must not reach the arithmetic that divides it.
     ///
     /// 🚨 The failure this pins is worse than "the check is weakened". `$$(( ))` resolves a bare

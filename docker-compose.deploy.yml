@@ -1211,7 +1211,31 @@ services:
           say running backup "backing up the keys and the database; metrics are left out because VictoriaMetrics stays at $$VM_NOW"
         else
           SKIPM=0
-          say running backup "backing up the keys, the database and the metrics, because VictoriaMetrics changes from $${VM_NOW:-unknown} to $${VM_NEXT:-unknown}"
+          # 2b'. The metrics have to fit (ADR-050 Inc.7, decisions 23-24). Step 0b checked a fixed
+          #      floor, which says nothing about the copy below: it is the whole metrics store,
+          #      which gzip shrinks by about a third at best, written to the same disk. Measured
+          #      2026-11-05 on a PoC deployment: 4.7 GB of metrics against 3.7 GB free, the copy
+          #      growing 110 MB a minute toward a full disk under the running stores. So measure
+          #      both, after the pull, and leave the metrics out when the copy would not leave the
+          #      floor standing — the upgrade itself never touches them (decision 21).
+          #      Anything unmeasurable keeps the copy, for decision 22's reason.
+          VM_CID=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=victoriametrics" | head -1)
+          VM_KB=
+          [ -n "$$VM_CID" ] && VM_KB=$$(docker exec "$$VM_CID" du -sk /victoria-metrics-data 2>/dev/null | awk 'NR==1 && $$1 ~ /^[0-9]+$$/ {print $$1}')
+          ROOM_KB=
+          for p in / "$$WORKDIR"; do
+            V=$$(free_kb "$$p")
+            [ -n "$$V" ] || continue
+            { [ -z "$$ROOM_KB" ] || [ "$$V" -lt "$$ROOM_KB" ]; } && ROOM_KB=$$V
+          done
+          KEEP_KB=0
+          [ "$$MINFREE" != "0" ] && KEEP_KB=$$((MINFREE / 1024))
+          if [ -n "$$VM_KB" ] && [ -n "$$ROOM_KB" ] && [ $$((ROOM_KB - VM_KB)) -lt "$$KEEP_KB" ]; then
+            SKIPM=1
+            say running backup "backing up the keys and the database; the metrics are left out because copying them needs about $$((VM_KB / 1024)) MB and $$((ROOM_KB / 1024)) MB is free (VictoriaMetrics changes from $${VM_NOW:-unknown} to $${VM_NEXT:-unknown})"
+          else
+            say running backup "backing up the keys, the database and the metrics, because VictoriaMetrics changes from $${VM_NOW:-unknown} to $${VM_NEXT:-unknown}"
+          fi
         fi
         ( cd "$$WORKDIR" && YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
 
