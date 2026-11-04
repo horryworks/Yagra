@@ -136,3 +136,58 @@ test.describe('on a board holding all three layouts', () => {
     expect(errors.uncaught).toEqual([]);
   });
 });
+
+/** A wide card whose tiles carry "Yesterday" or "Tomorrow". The viewer is pinned to Tokyo (UTC+9):
+ *  Pago Pago (UTC-11) is the day before until 20:00 there and Kiritimati (UTC+14) the day after from
+ *  19:00, so at least one shift is on screen whatever the time of the run. */
+const SHIFTED_BOARD: Json = {
+  version: 3,
+  boards: [
+    {
+      id: 'b1',
+      name: 'Board',
+      widgets: [
+        {
+          instanceId: 'shifted',
+          type: 'world-clock',
+          span: 8,
+          settings: {
+            zones: ['UTC', 'America/New_York', 'America/Los_Angeles', 'Pacific/Pago_Pago', 'Pacific/Kiritimati'].map(
+              (tz) => ({ tz, label: '' }),
+            ),
+          },
+        },
+      ],
+    },
+  ],
+};
+
+test.describe('a tile whose date differs from the viewer', () => {
+  test.use({
+    timezoneId: 'Asia/Tokyo',
+    mockConfig: { overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/dashboard': () => SHIFTED_BOARD } },
+  });
+
+  test('keeps Yesterday and Tomorrow inside the tile', async ({ page, errors }) => {
+    // 2026-11-03, measured: "Tue, 11/3 · UTC-8 · Yesterday" on one unbreakable line ran out of a
+    // 150px tile and into the next. The card body did not scroll, so the check above missed it.
+    await page.goto('/dashboard/my');
+    const zones = page.locator('.wclock-zone');
+    await expect(zones).toHaveCount(5);
+    await expect(page.locator('.wclock-shift').first()).toBeVisible();
+
+    const spill = await zones.evaluateAll((els) =>
+      els.flatMap((zone) => {
+        const box = zone.getBoundingClientRect();
+        return [...zone.querySelectorAll<HTMLElement>('.wclock-when, .wclock-shift, .wclock-label')]
+          .filter((el) => el.getBoundingClientRect().right > box.right + 0.5)
+          .map((el) => `${el.className}: ${el.textContent}`);
+      }),
+    );
+    expect(spill, 'text running past its tile').toEqual([]);
+    if (process.env.WCLOCK_SHOTS) {
+      await page.locator('.mydash-cell').first().screenshot({ path: `${process.env.WCLOCK_SHOTS}/shifted.png` });
+    }
+    expect(errors.uncaught).toEqual([]);
+  });
+});

@@ -106,13 +106,10 @@ function ZoneFace({
   );
   const meta = (
     <span className="wclock-meta">
-      {date} · {r.offset}
-      {shift && (
-        <>
-          {' · '}
-          <span className="wclock-shift">{shift}</span>
-        </>
-      )}
+      <span className="wclock-when">
+        {date} · {r.offset}
+      </span>
+      {shift && <span className="wclock-shift">{shift}</span>}
     </span>
   );
 

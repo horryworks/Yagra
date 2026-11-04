@@ -566,16 +566,31 @@ html[data-viewport='mobile'] .vpnsess-rm {
   white-space: nowrap;
 }
 
+/* Two pieces that wrap as wholes: "date · offset" stays on one line, and "Yesterday" moves under it
+   when the tile is too narrow for both. No separator before the shift, so neither line starts or
+   ends with a stray dot. */
 .wclock-meta {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  min-width: 0;
   color: var(--text-tertiary);
   font-size: var(--font-xs);
   font-variant-numeric: tabular-nums;
+}
+
+.wclock-when,
+.wclock-shift {
   white-space: nowrap;
 }
 
 .wclock-shift {
   color: var(--accent-color);
   font-weight: 500;
+}
+
+.wclock-solo .wclock-meta {
+  justify-content: center;
 }
 
 .wclock-time {
@@ -633,6 +648,10 @@ html[data-viewport='mobile'] .vpnsess-rm {
 
   .wclock-zone {
     grid-template-columns: minmax(0, 1fr) 16px;
+    /* The time sits on the tile's bottom edge, so a tile whose date line wrapped onto a second line
+       ("Yesterday") still lines its time up with its neighbours'. */
+    grid-template-rows: 1fr auto;
+    align-items: start;
     grid-template-areas:
       'name ico'
       'time time';
