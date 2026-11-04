@@ -219,6 +219,16 @@ impl LinkGraph {
             / 2
     }
 
+    /// The nodes `node` is judged by at its own level — the neighbours whose being alive makes it a
+    /// border. Empty when its level is [`Level::Off`] or it has no link the level accepts. What the
+    /// engine looks at before holding a notification (ADR-236 decision 9).
+    #[must_use]
+    pub fn judging_neighbours(&self, node: NodeId) -> Vec<NodeId> {
+        self.links_at(node, self.level_of(node))
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
     /// The links `node` is judged by at `level`. `None` when the level says nothing about it.
     fn links_at(&self, node: NodeId, level: Level) -> Option<&BTreeSet<NodeId>> {
         let physical = self.physical.get(&node).filter(|s| !s.is_empty());
@@ -356,6 +366,166 @@ impl LinkGraph {
     #[must_use]
     pub fn notified_count(&self, down: &BTreeSet<NodeId>) -> usize {
         down.len() - self.attribute(down).len()
+    }
+}
+
+/// One stretch of time a node was down, as the alert history recorded it: from the fire that
+/// committed it to the resolve that closed it, or still open (ADR-236 decision 13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Outage {
+    pub node: NodeId,
+    /// When it committed, unix ms.
+    pub from_ms: i64,
+    /// When it recovered, unix ms, or `None` while it is still down.
+    pub to_ms: Option<i64>,
+}
+
+impl Outage {
+    fn down_at(&self, t: i64) -> bool {
+        self.from_ms <= t && self.to_ms.is_none_or(|to| t < to)
+    }
+}
+
+/// What one level would have done to the replayed fires (ADR-236 decision 13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayLevel {
+    pub level: Level,
+    /// Fires that would have paged, sending each one the moment it committed.
+    pub notified: usize,
+    /// Fires that would have paged waiting for a failing neighbour to commit first.
+    pub notified_waiting: usize,
+    /// Of the fires that waited and then paged, the median and the longest wait, ms.
+    pub delay_median_ms: Option<i64>,
+    pub delay_max_ms: Option<i64>,
+}
+
+/// [`LinkGraph::replay`]'s answer: how many fires there were, and what each level made of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaySummary {
+    pub fired: usize,
+    /// One per [`Level::ALL`], weakest first.
+    pub levels: Vec<ReplayLevel>,
+}
+
+/// The nodes down at each of `times`, in the order given: one pass over the outages' starts and
+/// ends, so a week of history costs a sort rather than a scan per fire. `times` must be sorted.
+fn sweep(outages: &[Outage], times: &[i64], mut at: impl FnMut(usize, &BTreeSet<NodeId>)) {
+    let mut edges: Vec<(i64, NodeId, bool)> = Vec::with_capacity(outages.len() * 2);
+    for o in outages {
+        edges.push((o.from_ms, o.node, true));
+        if let Some(to) = o.to_ms {
+            edges.push((to, o.node, false));
+        }
+    }
+    edges.sort_by_key(|e| e.0);
+    // A count per node rather than a set: two recorded outages of one node can touch.
+    let mut count: BTreeMap<NodeId, u32> = BTreeMap::new();
+    let mut down: BTreeSet<NodeId> = BTreeSet::new();
+    let mut next = 0;
+    for (i, &t) in times.iter().enumerate() {
+        while next < edges.len() && edges[next].0 <= t {
+            let (_, node, starts) = edges[next];
+            let c = count.entry(node).or_default();
+            if starts {
+                *c += 1;
+                down.insert(node);
+            } else {
+                *c = c.saturating_sub(1);
+                if *c == 0 {
+                    down.remove(&node);
+                }
+            }
+            next += 1;
+        }
+        at(i, &down);
+    }
+}
+
+impl LinkGraph {
+    /// Replay recorded outages against this graph at every level (ADR-236 decision 13): for each
+    /// fire at or after `since_ms`, whether it would have paged, judged with every node down at
+    /// that moment — and, waiting, judged again when the last neighbour it is judged by that was
+    /// failing commits. A neighbour counts as failing at `t` when it commits within
+    /// `lookahead_ms(neighbour)` after `t`, which is how long its run had left at most.
+    ///
+    /// ⚠️ An approximation, and the screen must not call it more: the links are today's, the
+    /// history keeps commit times only, and a page re-sent when a border recovers is not counted.
+    #[must_use]
+    pub fn replay(
+        &self,
+        outages: &[Outage],
+        since_ms: i64,
+        lookahead_ms: impl Fn(NodeId) -> i64,
+    ) -> ReplaySummary {
+        let mut fires: Vec<usize> = (0..outages.len())
+            .filter(|&i| outages[i].from_ms >= since_ms)
+            .collect();
+        fires.sort_by_key(|&i| outages[i].from_ms);
+        let times: Vec<i64> = fires.iter().map(|&i| outages[i].from_ms).collect();
+        let mut starts: BTreeMap<NodeId, Vec<i64>> = BTreeMap::new();
+        for o in outages {
+            starts.entry(o.node).or_default().push(o.from_ms);
+        }
+        for s in starts.values_mut() {
+            s.sort_unstable();
+        }
+        // The first commit of `n` in (t, t + lookahead].
+        let commits_soon = |n: NodeId, t: i64| -> Option<i64> {
+            let s = starts.get(&n)?;
+            let first = s.get(s.partition_point(|&x| x <= t)).copied()?;
+            (first <= t.saturating_add(lookahead_ms(n))).then_some(first)
+        };
+
+        let levels = Level::ALL
+            .iter()
+            .map(|&level| {
+                let g = self.with_default_level(level);
+                let mut notified = 0;
+                // (fire, when to judge it again) for each one that would have waited.
+                let mut waits: Vec<(usize, i64)> = Vec::new();
+                sweep(outages, &times, |k, down| {
+                    let o = &outages[fires[k]];
+                    if g.root_cause(o.node, down).is_some() {
+                        return;
+                    }
+                    notified += 1;
+                    let until = g
+                        .judging_neighbours(o.node)
+                        .into_iter()
+                        .filter(|n| !down.contains(n))
+                        .filter_map(|n| commits_soon(n, o.from_ms))
+                        .max();
+                    if let Some(t2) = until {
+                        waits.push((fires[k], t2));
+                    }
+                });
+                waits.sort_by_key(|w| w.1);
+                let again: Vec<i64> = waits.iter().map(|w| w.1).collect();
+                let mut silenced = 0;
+                let mut delays: Vec<i64> = Vec::new();
+                sweep(outages, &again, |k, down| {
+                    let (i, t2) = waits[k];
+                    let o = &outages[i];
+                    if !o.down_at(t2) || g.root_cause(o.node, down).is_some() {
+                        silenced += 1;
+                    } else {
+                        delays.push(t2 - o.from_ms);
+                    }
+                });
+                delays.sort_unstable();
+                ReplayLevel {
+                    level,
+                    notified,
+                    notified_waiting: notified - silenced,
+                    delay_median_ms: delays.get(delays.len() / 2).copied(),
+                    delay_max_ms: delays.last().copied(),
+                }
+            })
+            .collect();
+        ReplaySummary {
+            fired: fires.len(),
+            levels,
+        }
     }
 }
 
@@ -592,5 +762,103 @@ mod tests {
             assert_eq!(Level::from_u8(level.as_u8()), Some(level));
         }
         assert_eq!(Level::from_u8(4), None);
+    }
+    // -- replay (ADR-236 decision 13) --------------------------------------------------------------
+
+    const LOOK: i64 = 600_000;
+
+    /// core (never down) -- sw -- ap1, ap2. The access points commit first, the switch 200 s later.
+    fn cascade() -> (LinkGraph, NodeId, NodeId, NodeId) {
+        let (core, sw, ap1, ap2) = (id(1), id(10), id(20), id(21));
+        let mut g = LinkGraph::new(Level::Off);
+        g.add_link(sw, core, true);
+        g.add_link(ap1, sw, true);
+        g.add_link(ap2, sw, true);
+        (g, sw, ap1, ap2)
+    }
+
+    fn down_from(node: NodeId, from_ms: i64) -> Outage {
+        Outage {
+            node,
+            from_ms,
+            to_ms: None,
+        }
+    }
+
+    fn at(s: &ReplaySummary, level: Level) -> ReplayLevel {
+        *s.levels.iter().find(|l| l.level == level).unwrap()
+    }
+
+    #[test]
+    fn replaying_a_cascade_counts_the_early_pages_and_waiting_removes_them() {
+        let (g, sw, ap1, ap2) = cascade();
+        let outages = [
+            down_from(ap1, 1_000),
+            down_from(ap2, 1_000),
+            down_from(sw, 201_000),
+        ];
+        let s = g.replay(&outages, 0, |_| LOOK);
+        assert_eq!(s.fired, 3);
+        assert_eq!(s.levels.len(), 4);
+        let off = at(&s, Level::Off);
+        assert_eq!((off.notified, off.notified_waiting), (3, 3));
+        // The access points were borders when they committed, so they paged; waiting for the
+        // switch rolls them up and only the switch pages, at once.
+        let certain = at(&s, Level::Certain);
+        assert_eq!((certain.notified, certain.notified_waiting), (3, 1));
+        assert_eq!(certain.delay_max_ms, None, "nothing waited and then paged");
+    }
+
+    #[test]
+    fn a_node_back_before_its_neighbour_commits_is_not_counted_waiting() {
+        let (g, sw, ap1, _) = cascade();
+        let outages = [
+            Outage {
+                node: ap1,
+                from_ms: 1_000,
+                to_ms: Some(150_000),
+            },
+            down_from(sw, 201_000),
+        ];
+        let c = at(&g.replay(&outages, 0, |_| LOOK), Level::Certain);
+        assert_eq!((c.notified, c.notified_waiting), (2, 1));
+    }
+
+    #[test]
+    fn a_wait_that_ends_as_a_border_pages_late_and_the_delay_is_reported() {
+        let (mut g, sw, ap1, ap2) = cascade();
+        // ap1 has a second way out that stays alive, so it is still a border when sw commits.
+        g.add_link(ap1, id(2), true);
+        let outages = [
+            down_from(ap1, 1_000),
+            down_from(ap2, 51_000),
+            down_from(sw, 201_000),
+        ];
+        let c = at(&g.replay(&outages, 0, |_| LOOK), Level::Certain);
+        assert_eq!(
+            (c.notified, c.notified_waiting),
+            (3, 2),
+            "ap1 late, sw at once; ap2 rolled up"
+        );
+        assert_eq!(c.delay_max_ms, Some(200_000));
+        assert_eq!(c.delay_median_ms, Some(200_000));
+    }
+
+    #[test]
+    fn a_neighbour_committing_past_its_lookahead_is_not_waited_for() {
+        let (g, sw, ap1, _) = cascade();
+        let outages = [down_from(ap1, 1_000), down_from(sw, 1_000 + LOOK + 1)];
+        let c = at(&g.replay(&outages, 0, |_| LOOK), Level::Certain);
+        assert_eq!((c.notified, c.notified_waiting), (2, 2));
+    }
+
+    #[test]
+    fn a_fire_before_since_is_not_counted_but_its_outage_still_counts_as_down() {
+        let (g, sw, ap1, _) = cascade();
+        let outages = [down_from(sw, 0), down_from(ap1, 10_000)];
+        let s = g.replay(&outages, 5_000, |_| LOOK);
+        assert_eq!(s.fired, 1);
+        let c = at(&s, Level::Certain);
+        assert_eq!(c.notified, 0, "ap1 sits behind the switch already down");
     }
 }

@@ -16,6 +16,31 @@ export function notifiedAt(cfg: AlertGroupingConfig, level: GroupingLevel): numb
   return cfg.now.notified[GROUPING_LEVELS.indexOf(level)] ?? cfg.now.down;
 }
 
+/** What the last seven days would have paged at `level`, sending at once and waiting, or `null`
+ *  when the server could not replay them (the line is left out rather than shown as zeros). */
+export interface ReplayLine {
+  fired: number;
+  atOnce: number;
+  waiting: number;
+  /** The longest wait of a fire that waited and then paged, seconds; `null` when none did. */
+  maxDelaySecs: number | null;
+  truncated: boolean;
+}
+
+export function replayAt(cfg: AlertGroupingConfig, level: GroupingLevel): ReplayLine | null {
+  const r = cfg.last_7_days;
+  if (!r) return null;
+  const l = r.levels.find((x) => x.level === level);
+  return {
+    fired: r.fired,
+    // A level the server did not answer for pages everything, as grouping nothing does.
+    atOnce: l?.notified ?? r.fired,
+    waiting: l?.notified_waiting ?? r.fired,
+    maxDelaySecs: l?.delay_max_secs ?? null,
+    truncated: r.truncated,
+  };
+}
+
 /** One folder with a level of its own, named. */
 export interface FolderLevelRow {
   groupId: string;

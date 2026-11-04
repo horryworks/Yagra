@@ -2467,6 +2467,10 @@ export const api = {
   setAlertGroupingLevel: (level: GroupingLevel): Promise<void> =>
     apiPut('/api/v1/alert-grouping/level', { body: { level } }),
 
+  /** Whether a border's notification waits for a failing neighbour to commit (ADR-236 Inc.2). */
+  setAlertGroupingWait: (wait: boolean): Promise<void> =>
+    apiPut('/api/v1/alert-grouping/wait', { body: { wait } }),
+
   /** Give a folder its own grouping level, which beats the deployment's beneath it. */
   setFolderGroupingLevel: (groupId: string, level: GroupingLevel): Promise<void> =>
     apiPut('/api/v1/alert-grouping/folders/{group_id}', { path: { group_id: groupId }, body: { level } }),

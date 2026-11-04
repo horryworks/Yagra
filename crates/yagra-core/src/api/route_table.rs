@@ -311,6 +311,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
+    (
+        "PUT",
+        "/api/v1/alert-grouping/wait",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
     ("GET", "/api/v1/alerts", PostFiltered, Tool("get_active_alerts")),
     (
         "GET",

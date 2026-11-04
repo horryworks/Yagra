@@ -95,6 +95,20 @@ impl DwellTracker {
         self.candidate.is_some()
     }
 
+    /// The state a run of disagreeing samples is heading for, and how many samples it has held —
+    /// `None` when no run is under way. With [`Self::dwell`] it says how many more samples the run
+    /// needs before it commits (ADR-236 decision 11).
+    #[must_use]
+    pub const fn candidate(&self) -> Option<(NodeState, u32)> {
+        self.candidate
+    }
+
+    /// How many consecutive samples a flip needs.
+    #[must_use]
+    pub const fn dwell(&self) -> u32 {
+        self.dwell
+    }
+
     /// Change how many consecutive samples a flip needs, keeping the committed state and any
     /// candidate run in place.
     ///

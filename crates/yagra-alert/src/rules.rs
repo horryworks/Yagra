@@ -125,6 +125,9 @@ pub struct AlertConfig {
     /// is rolled up into whose when several go down together (ADR-236). Shared, because the
     /// snapshot is cloned on every maintenance change and the graph does not change with it.
     pub(super) grouping: Arc<LinkGraph>,
+    /// Whether a border's notification waits for a failing neighbour to commit (ADR-236 decision
+    /// 12). Off by default, which is how increment 1 behaved.
+    pub(super) grouping_wait: bool,
     /// Nodes currently inside an active **operator** maintenance window (resolved at refresh time).
     ///
     /// ⚠️ A fleet-wide window an upgrade opens is deliberately **not** here — see
@@ -365,6 +368,7 @@ impl AlertConfig {
             loaded: true,
             node_meta,
             grouping: Arc::new(LinkGraph::default()),
+            grouping_wait: false,
             maintenance: BTreeSet::new(),
             paused_until: None,
             pause_exempt: BTreeSet::new(),
@@ -381,6 +385,13 @@ impl AlertConfig {
     #[must_use]
     pub fn with_grouping(mut self, grouping: Arc<LinkGraph>) -> Self {
         self.grouping = grouping;
+        self
+    }
+
+    /// Whether a notification waits for a failing neighbour to commit (ADR-236 decision 12).
+    #[must_use]
+    pub fn with_grouping_wait(mut self, wait: bool) -> Self {
+        self.grouping_wait = wait;
         self
     }
 

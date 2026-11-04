@@ -79,6 +79,7 @@ impl Transition {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         })
     }
 }
@@ -141,6 +142,19 @@ impl CheckState {
     #[must_use]
     pub const fn pending(&self) -> bool {
         self.dwell.pending()
+    }
+
+    /// The state a pending run is heading for and its length so far — see
+    /// [`hysteresis::DwellTracker::candidate`].
+    #[must_use]
+    pub const fn candidate(&self) -> Option<(NodeState, u32)> {
+        self.dwell.candidate()
+    }
+
+    /// How many consecutive samples a flip needs now.
+    #[must_use]
+    pub const fn dwell(&self) -> u32 {
+        self.dwell.dwell()
     }
 
     /// Re-point the dwell at what the check's rule says now — see

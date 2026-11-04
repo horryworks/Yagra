@@ -23,3 +23,23 @@ test('each grouping level reads on one line', async ({ page }) => {
     expect(box.lines, await b.innerText()).toBe(1);
   }
 });
+
+test('the wait switch reads on one line and the last seven days are shown', async ({ page }) => {
+  await page.goto('/alerts/routing');
+  const wait = page.getByRole('group', { name: 'When a neighbour is failing' });
+  await expect(wait).toBeVisible();
+  const buttons = wait.getByRole('button');
+  await expect(buttons).toHaveCount(2);
+  await expect(buttons.nth(1)).toHaveText('Wait for the neighbour');
+  for (const b of await buttons.all()) {
+    const lines = await b.evaluate((el) => {
+      const line = parseFloat(getComputedStyle(el).lineHeight) || 16;
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return Math.round(range.getBoundingClientRect().height / line);
+    });
+    expect(lines, await b.innerText()).toBe(1);
+  }
+  // The mock answers a replay, so its line is drawn rather than left out.
+  await expect(page.getByText(/^Last 7 days: /)).toBeVisible();
+});

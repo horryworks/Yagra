@@ -370,6 +370,14 @@ pub struct Alert {
     /// no name yet or the alert is not about a row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_name: Option<String>,
+    /// While set, this liveness alert is open and shown but its notification is being held until
+    /// this instant (unix ms): a linked neighbour is failing and has not committed yet, and if it
+    /// does, this alert is rolled up into it instead of paging (ADR-236 decision 10). Nothing has
+    /// been sent or recorded for it while this is set.
+    //
+    // Same N-1 attributes as `ifindex`: an older reader ignores it, an older writer leaves it None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_held_until: Option<i64>,
 }
 
 impl Alert {
@@ -408,6 +416,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         }
     }
 

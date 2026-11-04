@@ -24,6 +24,7 @@ use yagra_topology::grouping::Level;
 #[openapi(paths(
     get_alert_grouping,
     set_alert_grouping_level,
+    set_alert_grouping_wait,
     set_folder_grouping_level,
     clear_folder_grouping_level
 ))]
@@ -41,6 +42,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/alert-grouping/folders/:group_id",
             put(set_folder_grouping_level).delete(clear_folder_grouping_level),
         )
+        .route("/api/v1/alert-grouping/wait", put(set_alert_grouping_wait))
 }
 
 /// How strongly alerts are grouped, weakest first (ADR-236 decision 2).
@@ -96,12 +98,62 @@ pub(crate) struct GroupingPreview {
     pub(crate) notified: Vec<usize>,
 }
 
+/// What one level would have done to the last seven days' fires.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct GroupingReplayLevel {
+    pub(crate) level: GroupingLevel,
+    /// Fires that would have paged, each sent the moment it committed.
+    pub(crate) notified: usize,
+    /// Fires that would have paged waiting for a failing neighbour to commit first.
+    pub(crate) notified_waiting: usize,
+    /// Of the fires that waited and then paged, the median wait in seconds.
+    pub(crate) delay_median_secs: Option<i64>,
+    /// Of the fires that waited and then paged, the longest wait in seconds.
+    pub(crate) delay_max_secs: Option<i64>,
+}
+
+/// The last seven days' node-down fires replayed against today's links and levels (ADR-236
+/// decision 13). An approximation: the links are today's, and the history keeps commit times only.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct GroupingReplay {
+    /// Node-down fires recorded in the last seven days.
+    pub(crate) fired: usize,
+    /// More history was recorded than is read, so the newest fires are missing.
+    pub(crate) truncated: bool,
+    /// One per level, weakest first (`off`, `certain`, `links`, `site`).
+    pub(crate) levels: Vec<GroupingReplayLevel>,
+}
+
 /// The deployment's level, every folder's own, and the preview.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct AlertGroupingConfig {
     pub(crate) level: GroupingLevel,
+    /// Whether a border's notification waits for a failing neighbour to commit (ADR-236 Inc.2).
+    pub(crate) wait: bool,
     pub(crate) folders: Vec<FolderGroupingLevel>,
     pub(crate) now: GroupingPreview,
+    /// `null` when the history could not be read; the rest of the answer stands.
+    pub(crate) last_7_days: Option<GroupingReplay>,
+}
+
+fn replay_dto(r: &crate::alerts::grouping_replay::Replayed) -> GroupingReplay {
+    let secs = |ms: Option<i64>| ms.map(|m| m / 1_000);
+    GroupingReplay {
+        fired: r.summary.fired,
+        truncated: r.truncated,
+        levels: r
+            .summary
+            .levels
+            .iter()
+            .map(|l| GroupingReplayLevel {
+                level: l.level.into(),
+                notified: l.notified,
+                notified_waiting: l.notified_waiting,
+                delay_median_secs: secs(l.delay_median_ms),
+                delay_max_secs: secs(l.delay_max_ms),
+            })
+            .collect(),
+    }
 }
 
 fn repo(admin: &super::AdminState) -> GroupingRepo {
@@ -123,6 +175,7 @@ pub(crate) async fn config(
         .level()
         .await
         .map_err(internal("read grouping level"))?;
+    let wait = repo.wait().await.map_err(internal("read grouping wait"))?;
     let mut folders: Vec<FolderGroupingLevel> = repo
         .folder_levels()
         .await
@@ -135,8 +188,18 @@ pub(crate) async fn config(
         .collect();
     folders.sort_by_key(|f| f.group_id);
     let (down, notified) = alerts.grouping_preview();
+    let history = crate::alerts::history::AlertHistoryStore::new(admin.repo.pool());
+    let last_7_days = match crate::alerts::grouping_replay::last_7_days(alerts, &history).await {
+        Ok(r) => Some(replay_dto(&r)),
+        Err(e) => {
+            tracing::warn!(error = %e, "replaying the last seven days of node-down alerts failed");
+            None
+        }
+    };
     Ok(AlertGroupingConfig {
         level: level.into(),
+        wait,
+        last_7_days,
         folders,
         now: GroupingPreview {
             down,
@@ -188,6 +251,35 @@ async fn set_alert_grouping_level(
         .set_level(body.level.into())
         .await
         .map_err(internal("set grouping level"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether to wait.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct WaitBody {
+    wait: bool,
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/alert-grouping/wait", tag = "notifications",
+    request_body = WaitBody,
+    responses(
+        (status = 204, description = "Whether a border's notification waits for a failing neighbour to commit is set"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 422, description = "Not a boolean (the body framework's own rejection, plain text)"),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_alert_grouping_wait(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Json(body): Json<WaitBody>,
+) -> ApiResult<StatusCode> {
+    repo(&admin)
+        .set_wait(body.wait)
+        .await
+        .map_err(internal("set grouping wait"))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -278,7 +370,11 @@ mod tests {
         );
         let viewer = token(&st, Role::Viewer);
         assert_eq!(
-            status_of(st, "GET", "/api/v1/alert-grouping", Some(&viewer)).await,
+            status_of(st.clone(), "GET", "/api/v1/alert-grouping", Some(&viewer)).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_of(st, "PUT", "/api/v1/alert-grouping/wait", Some(&viewer)).await,
             StatusCode::FORBIDDEN
         );
     }
@@ -291,7 +387,26 @@ mod tests {
         let (status, read) = send(&st, "GET", "/api/v1/alert-grouping", &admin, None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(read["level"], "off");
+        assert_eq!(read["wait"], false);
         assert_eq!(read["now"]["notified"].as_array().map(Vec::len), Some(4));
+        assert_eq!(read["last_7_days"]["fired"], 0);
+        assert_eq!(read["last_7_days"]["truncated"], false);
+        assert_eq!(
+            read["last_7_days"]["levels"].as_array().map(Vec::len),
+            Some(4)
+        );
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            "/api/v1/alert-grouping/wait",
+            &admin,
+            Some(serde_json::json!({ "wait": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, read) = send(&st, "GET", "/api/v1/alert-grouping", &admin, None).await;
+        assert_eq!(read["wait"], true);
 
         let (status, _) = send(
             &st,

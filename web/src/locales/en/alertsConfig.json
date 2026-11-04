@@ -784,7 +784,17 @@
       "level": "Could not change the grouping level.",
       "remove": "Could not remove the folder level.",
       "save": "Could not add the folder level.",
-      "noFolder": "Choose a folder."
-    }
+      "noFolder": "Choose a folder.",
+      "wait": "Could not change whether to wait."
+    },
+    "waitTitle": "When a neighbour is failing",
+    "wait": {
+      "now": "Send at once",
+      "wait": "Wait for the neighbour"
+    },
+    "last7": "Last 7 days: {{fired}} down → {{count}} notifications, {{waiting}} if waiting",
+    "last7Delay": "Last 7 days: {{fired}} down → {{count}} notifications, {{waiting}} if waiting (up to {{delay}} late)",
+    "last7None": "Nothing went down in the last 7 days.",
+    "last7Partial": "(oldest records only)"
   }
 }

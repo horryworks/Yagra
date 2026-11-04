@@ -223,6 +223,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         }
     }
 

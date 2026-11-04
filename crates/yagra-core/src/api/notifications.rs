@@ -1478,6 +1478,7 @@ at 2026-08-04T09:41:07+00:00"
             ifindex: Some(yagra_common::IfIndex(1)),
             row: Some(1),
             row_name: Some("r".to_owned()),
+            notify_held_until: None,
         };
         let written = serde_json::to_string(&alert).unwrap();
         let mut order: Vec<(usize, &str)> = listed

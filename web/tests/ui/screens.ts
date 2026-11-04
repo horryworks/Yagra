@@ -113,6 +113,7 @@ export const LONG_NOTE: Record<string, string> = {};
  * Blind spots: dialogs, tabs other than the default, Japanese, and phone width.
  */
 export const PROSE_CEILING: Record<string, number> = {
+  '/alerts/routing': 67,
   '/events': 93,
   '/events/forwarding': 97,
   '/nodes': 41,

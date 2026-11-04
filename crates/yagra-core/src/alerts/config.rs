@@ -65,6 +65,8 @@ pub(crate) struct AlertConfigBase {
     meraki_orgs: HashMap<Uuid, super::MerakiOrgScope>,
     /// The links and levels that decide whose notification is rolled up into whose (ADR-236).
     grouping: Arc<LinkGraph>,
+    /// Whether a border waits for a failing neighbour to commit before it pages (ADR-236 Inc.2).
+    grouping_wait: bool,
     /// Metric names that publish one series per interface, so each port gets its own check
     /// (ADR-076). Rebuilt on the same config-generation gate as everything else here.
     per_interface: std::collections::BTreeSet<String>,
@@ -127,6 +129,8 @@ pub(crate) struct GroupingFacts {
     pub default_level: Level,
     /// Each folder's own level.
     pub folder_levels: HashMap<Uuid, Level>,
+    /// Whether to wait for a failing neighbour (ADR-236 Inc.2).
+    pub wait: bool,
 }
 
 /// Whether a link is one a cable makes, rather than one inferred from addresses or routing: the
@@ -232,6 +236,7 @@ impl AlertConfigSources for LiveConfigSources {
             .map(|g| g.id)
             .collect();
         let default_level = grouping.level().await?;
+        let wait = grouping.wait().await?;
         let folder_levels = grouping
             .folder_levels()
             .await?
@@ -261,6 +266,7 @@ impl AlertConfigSources for LiveConfigSources {
             sites,
             default_level,
             folder_levels,
+            wait,
         })
     }
 }
@@ -356,6 +362,7 @@ pub(crate) async fn load_alert_config_base(
         .await
         .map_err(|e| anyhow::anyhow!("load grouping facts: {e}"))?;
     let grouping = Arc::new(build_link_graph(&facts, &meta));
+    let grouping_wait = facts.wait;
 
     // A failed read propagates like every other one here (ADR-080): an empty map would hide an
     // organization's alert from every scoped operator and un-label every stale node, silently.
@@ -393,6 +400,7 @@ pub(crate) async fn load_alert_config_base(
         pool_groups,
         meraki_orgs,
         grouping,
+        grouping_wait,
         per_interface,
         no_reading,
     })
@@ -554,6 +562,7 @@ pub(crate) async fn load_alert_config(
     Ok((
         AlertConfig::new(base.rules, base.meta)
             .with_grouping(base.grouping)
+            .with_grouping_wait(base.grouping_wait)
             .with_maintenance(coverage.maintenance)
             .with_pause(coverage.paused_until, coverage.pause_exempt)
             .with_pool_groups(base.pool_groups)
@@ -724,6 +733,7 @@ pub(crate) async fn run_alert_config_refresh(
         if swap_needed(base_changed, last_coverage.as_ref(), &coverage) {
             let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
                 .with_grouping(base.grouping.clone())
+                .with_grouping_wait(base.grouping_wait)
                 .with_maintenance(coverage.maintenance.clone())
                 .with_pause(coverage.paused_until, coverage.pause_exempt.clone())
                 .with_pool_groups(base.pool_groups.clone())

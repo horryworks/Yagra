@@ -201,6 +201,7 @@ fn alert_from_row(row: AlertHistoryRow) -> Option<Alert> {
         // the index of rows holding a state is rebuilt with it (ADR-143 decision 5).
         row: row.row,
         row_name: row.row_name,
+        notify_held_until: None,
     })
 }
 

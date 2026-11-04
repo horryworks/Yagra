@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
   alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
-  alertsConfig: [8970, 4735], // + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03)
+  alertsConfig: [9250, 4920], // + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03); + the wait switch, the last-7-days line in three states and one refusal (ADR-236 Inc.2, 2026-11-05)
   auth: [79, 43],
   common: [871, 473], // + viewOnly.info, what a hidden write control needs and who you are (ADR-235, 2026-11-03)
   dashboard: [6280, 3469],

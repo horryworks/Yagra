@@ -1734,6 +1734,16 @@ impl LeaderTasks {
                 self.alert_sink(delivery, "a deleted-node resolution"),
             ),
         );
+        // Notifications held for a failing neighbour (ADR-236 Inc.2): released when the neighbour
+        // comes back or the wait runs out, neither of which any poll of the held node reports.
+        // Leader-only for the same reason the loops above are.
+        spawn_cancellable(
+            &self.shutdown,
+            alerts::held::run_held_release_watch(
+                self.alerts.clone(),
+                self.alert_sink(delivery, "a held notification's release"),
+            ),
+        );
         // APs whose controller stopped reporting them, and ones it reported again (ADR-064 Inc.G):
         // told to the node-state stream, since going stale is not a transition anything observes.
         // Leader-only because the ledger it reads is filled by the leader's ingest.

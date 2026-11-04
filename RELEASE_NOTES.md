@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **Alert grouping can wait for a failing neighbour before it pages.** A node behind a switch often commits as down before the switch does, so for that moment it looks like the edge of the outage and pages — then closes when the switch goes down. Alerts ▸ Notification delivery now offers **Wait for the neighbour**: while a linked neighbour is failing but has not committed, the node's alert is shown (marked *waiting for a neighbour*) and nothing is sent or recorded. If the neighbour goes down the node is rolled up into it; if the neighbour recovers or the wait runs out (its remaining samples × its poll interval + 30 s, five minutes per sample when unknown) it pages as usual. A page can arrive up to about 10½ minutes late with the default dwell and a 5-minute interval. Off by default; one setting for the whole deployment, `PUT /api/v1/alert-grouping/wait`.
+- **The grouping section shows the last seven days.** Each node-down alert of the past week is replayed against today's links at the chosen level: how many would have paged, how many with waiting, and the longest wait. `GET /api/v1/alert-grouping` carries `wait` and `last_7_days` (an approximation: the links are today's), and an alert's JSON carries `notify_held_until` while it waits.
+
 ### Bug Fixes
 
 - **An upgrade no longer fills the disk copying the metrics.** When a release changes VictoriaMetrics, the pre-upgrade backup copies the whole metrics store, and the free-space check never counted it: on a 19 GB host with 4.7 GB of metrics the copy nearly filled the disk under the running stores. The upgrade now measures both first and, when the copy would not leave the 3 GiB floor, upgrades without it and says so. Takes effect on the upgrade after the one that installs it.

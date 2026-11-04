@@ -52,6 +52,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/alert-grouping/wait": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_alert_grouping_wait"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/alerts": {
         parameters: {
             query?: never;
@@ -5783,6 +5799,14 @@ export interface components {
             metric: string;
             /** @description What the alert is about: a node's UUID, or `pool:<name>` for a poller-pool alert. */
             node: string;
+            /**
+             * Format: int64
+             * @description While set, this liveness alert is open and shown but its notification is being held until
+             *     this instant (unix ms): a linked neighbour is failing and has not committed yet, and if it
+             *     does, this alert is rolled up into it instead of paging (ADR-236 decision 10). Nothing has
+             *     been sent or recorded for it while this is set.
+             */
+            notify_held_until?: number | null;
             root_cause?: null | components["schemas"]["NodeId"];
             /**
              * Format: int32
@@ -5823,8 +5847,11 @@ export interface components {
         /** @description The deployment's level, every folder's own, and the preview. */
         AlertGroupingConfig: {
             folders: components["schemas"]["FolderGroupingLevel"][];
+            last_7_days?: null | components["schemas"]["GroupingReplay"];
             level: components["schemas"]["GroupingLevel"];
             now: components["schemas"]["GroupingPreview"];
+            /** @description Whether a border's notification waits for a failing neighbour to commit (ADR-236 Inc.2). */
+            wait: boolean;
         };
         /** @description One alert-history row for the API. */
         AlertHistoryRow: {
@@ -9355,6 +9382,36 @@ export interface components {
              *     (`off`, `certain`, `links`, `site`), every folder keeping its own level.
              */
             notified: number[];
+        };
+        /**
+         * @description The last seven days' node-down fires replayed against today's links and levels (ADR-236
+         *     decision 13). An approximation: the links are today's, and the history keeps commit times only.
+         */
+        GroupingReplay: {
+            /** @description Node-down fires recorded in the last seven days. */
+            fired: number;
+            /** @description One per level, weakest first (`off`, `certain`, `links`, `site`). */
+            levels: components["schemas"]["GroupingReplayLevel"][];
+            /** @description More history was recorded than is read, so the newest fires are missing. */
+            truncated: boolean;
+        };
+        /** @description What one level would have done to the last seven days' fires. */
+        GroupingReplayLevel: {
+            /**
+             * Format: int64
+             * @description Of the fires that waited and then paged, the longest wait in seconds.
+             */
+            delay_max_secs?: number | null;
+            /**
+             * Format: int64
+             * @description Of the fires that waited and then paged, the median wait in seconds.
+             */
+            delay_median_secs?: number | null;
+            level: components["schemas"]["GroupingLevel"];
+            /** @description Fires that would have paged, each sent the moment it committed. */
+            notified: number;
+            /** @description Fires that would have paged waiting for a failing neighbour to commit first. */
+            notified_waiting: number;
         };
         /**
          * @description What the notifier was handed when it held a notification.
@@ -15824,6 +15881,10 @@ export interface components {
             /** Format: int32 */
             last: number;
         };
+        /** @description Whether to wait. */
+        WaitBody: {
+            wait: boolean;
+        };
         /** @description A certificate chain and its private key, in PEM. */
         WebTlsImport: {
             /**
@@ -16298,6 +16359,62 @@ export interface operations {
                 };
             };
             /** @description Not a grouping level (the body framework's own rejection, plain text) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_alert_grouping_wait: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaitBody"];
+            };
+        };
+        responses: {
+            /** @description Whether a border's notification waits for a failing neighbour to commit is set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not a boolean (the body framework's own rejection, plain text) */
             422: {
                 headers: {
                     [name: string]: unknown;

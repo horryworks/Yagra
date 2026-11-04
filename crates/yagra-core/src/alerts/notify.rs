@@ -2641,6 +2641,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         };
         Notification::for_alert(&alert, "node down", r#"{"metric":"event:test"}"#)
     }
@@ -3061,6 +3062,7 @@ mod delivery_tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         }
     }
 

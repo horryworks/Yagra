@@ -260,6 +260,62 @@
         }
       }
     },
+    "/api/v1/alert-grouping/wait": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "set_alert_grouping_wait",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WaitBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Whether a border's notification waits for a failing neighbour to commit is set"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a boolean (the body framework's own rejection, plain text)"
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/alerts": {
       "get": {
         "tags": [
@@ -27500,6 +27556,14 @@
             "type": "string",
             "description": "What the alert is about: a node's UUID, or `pool:<name>` for a poller-pool alert."
           },
+          "notify_held_until": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "While set, this liveness alert is open and shown but its notification is being held until\nthis instant (unix ms): a linked neighbour is failing and has not committed yet, and if it\ndoes, this alert is rolled up into it instead of paging (ADR-236 decision 10). Nothing has\nbeen sent or recorded for it while this is set."
+          },
           "root_cause": {
             "oneOf": [
               {
@@ -27591,6 +27655,7 @@
         "description": "The deployment's level, every folder's own, and the preview.",
         "required": [
           "level",
+          "wait",
           "folders",
           "now"
         ],
@@ -27601,11 +27666,26 @@
               "$ref": "#/components/schemas/FolderGroupingLevel"
             }
           },
+          "last_7_days": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GroupingReplay",
+                "description": "`null` when the history could not be read; the rest of the answer stands."
+              }
+            ]
+          },
           "level": {
             "$ref": "#/components/schemas/GroupingLevel"
           },
           "now": {
             "$ref": "#/components/schemas/GroupingPreview"
+          },
+          "wait": {
+            "type": "boolean",
+            "description": "Whether a border's notification waits for a failing neighbour to commit (ADR-236 Inc.2)."
           }
         }
       },
@@ -35131,6 +35211,73 @@
               "minimum": 0
             },
             "description": "How many of them would page on their own with the deployment at each level, weakest first\n(`off`, `certain`, `links`, `site`), every folder keeping its own level."
+          }
+        }
+      },
+      "GroupingReplay": {
+        "type": "object",
+        "description": "The last seven days' node-down fires replayed against today's links and levels (ADR-236\ndecision 13). An approximation: the links are today's, and the history keeps commit times only.",
+        "required": [
+          "fired",
+          "truncated",
+          "levels"
+        ],
+        "properties": {
+          "fired": {
+            "type": "integer",
+            "description": "Node-down fires recorded in the last seven days.",
+            "minimum": 0
+          },
+          "levels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupingReplayLevel"
+            },
+            "description": "One per level, weakest first (`off`, `certain`, `links`, `site`)."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More history was recorded than is read, so the newest fires are missing."
+          }
+        }
+      },
+      "GroupingReplayLevel": {
+        "type": "object",
+        "description": "What one level would have done to the last seven days' fires.",
+        "required": [
+          "level",
+          "notified",
+          "notified_waiting"
+        ],
+        "properties": {
+          "delay_max_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of the fires that waited and then paged, the longest wait in seconds."
+          },
+          "delay_median_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Of the fires that waited and then paged, the median wait in seconds."
+          },
+          "level": {
+            "$ref": "#/components/schemas/GroupingLevel"
+          },
+          "notified": {
+            "type": "integer",
+            "description": "Fires that would have paged, each sent the moment it committed.",
+            "minimum": 0
+          },
+          "notified_waiting": {
+            "type": "integer",
+            "description": "Fires that would have paged waiting for a failing neighbour to commit first.",
+            "minimum": 0
           }
         }
       },
@@ -48188,6 +48335,18 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "WaitBody": {
+        "type": "object",
+        "description": "Whether to wait.",
+        "required": [
+          "wait"
+        ],
+        "properties": {
+          "wait": {
+            "type": "boolean"
           }
         }
       },

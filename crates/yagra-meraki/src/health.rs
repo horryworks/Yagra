@@ -1028,6 +1028,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         };
         let active = [
             alert(Subject::MerakiOrg(ORG), COLLECT_METRIC),

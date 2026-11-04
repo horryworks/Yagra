@@ -2079,6 +2079,7 @@ mod tests {
                 ifindex: None,
                 row: Some(*row),
                 row_name: None,
+                notify_held_until: None,
             })
             .collect();
         assert_eq!(alerts.restore(restored), 12);

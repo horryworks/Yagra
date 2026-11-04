@@ -322,6 +322,7 @@ pub fn preview_sample(sample: PreviewSample) -> (Alert, HashMap<Uuid, NodeFacts>
         ifindex: declared.ifindex.map(yagra_common::IfIndex::from),
         row: None,
         row_name: None,
+        notify_held_until: None,
     };
     let mut resolved = HashMap::new();
     resolved.insert(
@@ -448,6 +449,7 @@ pub(crate) mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         }
     }
 

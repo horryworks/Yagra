@@ -157,6 +157,11 @@ function AlertRow({
         <span className="alertrow-cause muted">{t('row.partOfOutage')}</span>
       )}
       {a.flapping && <span className="alertrow-flap">{t('row.flapping')}</span>}
+      {/* Shown, not paged yet: a linked neighbour is failing and may be the real cause (ADR-236
+          Inc.2). Not the delivery-hours hold below, which is a different wait. */}
+      {a.notify_held_until != null && (
+        <span className="alertrow-muted">{t('row.waitingNeighbour')}</span>
+      )}
       {/* Outside its node's delivery hours the page waits (ADR-226 decision 11); the mark opens the
           screen where the hours are kept. */}
       {held && (

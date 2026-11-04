@@ -28,9 +28,23 @@ import { groupOptions } from '../lib/nodeTree';
 import { useSubmit } from '../lib/useSubmit';
 import { done } from '../lib/submitState';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
-import { folderLevelRows, isGroupingLevel, notifiedAt, type FolderLevelRow } from './alertGrouping';
+import { formatDuration } from '../lib/format';
+import {
+  folderLevelRows,
+  isGroupingLevel,
+  notifiedAt,
+  replayAt,
+  type FolderLevelRow,
+} from './alertGrouping';
 
-const EMPTY = { level: 'off' as GroupingLevel, folders: [], now: { down: 0, notified: [] } };
+const EMPTY = {
+  level: 'off' as GroupingLevel,
+  wait: false,
+  folders: [],
+  now: { down: 0, notified: [] },
+  last_7_days: null,
+};
+const WAIT_OPTIONS = ['now', 'wait'] as const;
 
 export function AlertGroupingSection({
   canSystem,
@@ -54,6 +68,12 @@ export function AlertGroupingSection({
       .then(grouping.reload)
       .catch((e: unknown) => onError(errMsg(e, t('grouping.err.level'))));
   };
+  const setWait = (v: string) =>
+    api
+      .setAlertGroupingWait(v === 'wait')
+      .then(grouping.reload)
+      .catch((e: unknown) => onError(errMsg(e, t('grouping.err.wait'))));
+  const replay = replayAt(cfg, cfg.level);
   const setFolder = (groupId: string, v: string) => {
     if (!isGroupingLevel(v)) return;
     api
@@ -148,11 +168,34 @@ export function AlertGroupingSection({
         ) : (
           <strong>{levelLabel(cfg.level)}</strong>
         )}
+        {canSystem ? (
+          <Segmented
+            ariaLabel={t('grouping.waitTitle')}
+            value={cfg.wait ? 'wait' : 'now'}
+            onChange={setWait}
+            options={WAIT_OPTIONS.map((w) => ({ value: w, label: t(`grouping.wait.${w}`) }))}
+          />
+        ) : (
+          <strong>{t(`grouping.wait.${cfg.wait ? 'wait' : 'now'}`)}</strong>
+        )}
         <p className="form-status">
           {cfg.now.down > 0
             ? t('grouping.now', { down: cfg.now.down, count: notifiedAt(cfg, cfg.level) })
             : t('grouping.nowNone')}
         </p>
+        {replay && (
+          <p className="form-status">
+            {replay.fired === 0
+              ? t('grouping.last7None')
+              : t(replay.maxDelaySecs == null ? 'grouping.last7' : 'grouping.last7Delay', {
+                  fired: replay.fired,
+                  count: replay.atOnce,
+                  waiting: replay.waiting,
+                  delay: formatDuration(replay.maxDelaySecs ?? 0, { units: 1, smallest: 'm' }),
+                })}
+            {replay.truncated && ` ${t('grouping.last7Partial')}`}
+          </p>
+        )}
       </div>
       <ListToolbar
         list={filtering}

@@ -954,6 +954,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         };
         let out = decorate_alerts(vec![alert]);
         let json = serde_json::to_value(&out[0]).unwrap();
@@ -1208,6 +1209,7 @@ mod tests {
             ifindex: ifindex.map(yagra_common::IfIndex),
             row: None,
             row_name: None,
+            notify_held_until: None,
         };
         let out = with_port_names(&st, vec![alert(Some(7)), alert(Some(8)), alert(None)]).await;
         let json: Vec<serde_json::Value> = out

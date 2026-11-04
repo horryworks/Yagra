@@ -642,6 +642,35 @@ impl AlertHistoryStore {
             .collect()
     }
 
+    /// Every node's liveness transitions committed at or after `since_ms`, oldest first and a fire
+    /// before a resolve at the same instant, at most `limit` of them — what the grouping replay
+    /// rebuilds each node's outages from (ADR-236 decision 13). Served by the `at_unix_ms` index.
+    pub async fn liveness_since(
+        &self,
+        since_ms: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<(Uuid, i64, bool)>> {
+        let rows = sqlx::query(
+            "SELECT node, at_unix_ms, resolved FROM alert_history \
+             WHERE subject_kind = 'node' AND metric = $1 AND at_unix_ms >= $2 \
+             ORDER BY at_unix_ms, resolved LIMIT $3",
+        )
+        .bind(yagra_alert::rules::LIVENESS)
+        .bind(since_ms)
+        .bind(limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                Ok((
+                    r.try_get("node")?,
+                    r.try_get("at_unix_ms")?,
+                    r.try_get("resolved")?,
+                ))
+            })
+            .collect()
+    }
+
     /// Delete history rows older than `older_than_secs` (retention), keeping every alert that is
     /// still open (see [`prune_sql`]). Returns rows removed.
     pub async fn prune_old(&self, older_than_secs: i64) -> anyhow::Result<u64> {
@@ -842,6 +871,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         }
     }
 
@@ -1319,6 +1349,7 @@ mod tests {
             ifindex: None,
             row: None,
             row_name: None,
+            notify_held_until: None,
         }
     }
 

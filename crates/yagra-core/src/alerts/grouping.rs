@@ -57,6 +57,30 @@ impl GroupingRepo {
         Ok(())
     }
 
+    /// Whether a border's notification waits for a failing neighbour to commit (ADR-236 decision
+    /// 12). `false` before the settings row exists.
+    pub(crate) async fn wait(&self) -> anyhow::Result<bool> {
+        let row = sqlx::query("SELECT alert_grouping_wait FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => r.try_get("alert_grouping_wait")?,
+            None => false,
+        })
+    }
+
+    /// Switch waiting on or off.
+    pub(crate) async fn set_wait(&self, wait: bool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, alert_grouping_wait) VALUES (TRUE, $1) \
+             ON CONFLICT (id) DO UPDATE SET alert_grouping_wait = $1",
+        )
+        .bind(wait)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Every folder's own level.
     pub(crate) async fn folder_levels(&self) -> anyhow::Result<Vec<FolderLevel>> {
         let rows = sqlx::query("SELECT group_id, level FROM alert_grouping_overrides")
@@ -117,6 +141,14 @@ mod tests {
         assert_eq!(repo.level().await.expect("level"), Level::Off);
         repo.set_level(Level::Certain).await.expect("set");
         assert_eq!(repo.level().await.expect("level"), Level::Certain);
+        assert!(!repo.wait().await.expect("wait"));
+        repo.set_wait(true).await.expect("set wait");
+        assert!(repo.wait().await.expect("wait"));
+        assert_eq!(
+            repo.level().await.expect("level"),
+            Level::Certain,
+            "the switch leaves the level alone"
+        );
 
         let site = yagra_base::pgtest::group(&pool, "Site A").await;
         assert!(repo.set_folder_level(site, Level::Site).await.expect("set"));
