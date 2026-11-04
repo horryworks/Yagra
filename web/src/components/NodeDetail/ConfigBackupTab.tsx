@@ -112,7 +112,9 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
   const [orderOpen, setOrderOpen] = useState(false);
-  const [diffOpen, setDiffOpen] = useState(false);
+  // Which unsaved spell the comparison was opened for: a node saved and then changed again starts
+  // a new one, so the panel does not reopen on its own.
+  const [diffOpenFor, setDiffOpenFor] = useState<string | null>(null);
 
   const candidates = view.data?.candidates;
   const loginText = useMemo(
@@ -347,15 +349,15 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               {canConfig && v.unsaved.has_output && (
                 <Button
                   variant="outline"
-                  aria-expanded={diffOpen}
-                  onClick={() => setDiffOpen((o) => !o)}
+                  aria-expanded={diffOpenFor === v.unsaved.since}
+                  onClick={() => setDiffOpenFor((o) => (o === v.unsaved?.since ? null : (v.unsaved?.since ?? null)))}
                 >
-                  {diffOpen ? t('config.unsaved.hide') : t('config.unsaved.view')}
+                  {diffOpenFor === v.unsaved.since ? t('config.unsaved.hide') : t('config.unsaved.view')}
                 </Button>
               )}
             </div>
           )}
-          {v.unsaved && canConfig && v.unsaved.has_output && diffOpen && (
+          {v.unsaved && canConfig && v.unsaved.has_output && diffOpenFor === v.unsaved.since && (
             <UnsavedDiff nodeId={node.id} checkedAt={v.unsaved.checked_at} />
           )}
           {error && (
@@ -480,7 +482,10 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             <section className="cfgb-record">
               <div className="nd-section-head">
                 <div className="nd-section-t">
-                  {t('config.records.versions')} <span className="cfgb-record-n">{versions.data.length}</span>
+                  {t('config.records.versions')}{' '}
+                  {!versions.loading && !versions.error && (
+                    <span className="cfgb-record-n">{versions.data.length}</span>
+                  )}
                 </div>
               </div>
               <DataTable
