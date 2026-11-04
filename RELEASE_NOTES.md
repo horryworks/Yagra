@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.68 — See why a Huawei device reads as unsaved, and stop flagging Cisco devices that only rebooted
+
 ### Improvements
 
 - **The Config tab names its three tables.** Stored versions, Saves to startup and Fetch log each carry their name and row count, in that order — what was kept first, the login attempts last.
