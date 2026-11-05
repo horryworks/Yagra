@@ -718,7 +718,7 @@ async fn set_node_group_tags(
     request_body = super::nodes::NotesBody,
     responses(
         (status = 204, description = "The folder's note was replaced (or cleared)"),
-        (status = 400, description = "A note over 2,000 characters, or no `notes` field", body = super::error::ErrorBody),
+        (status = 400, description = "A note over 2,000 characters", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such folder, or not one this caller may act on", body = super::error::ErrorBody),

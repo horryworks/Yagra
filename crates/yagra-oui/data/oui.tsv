@@ -4,7 +4,7 @@
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
 # fetched: 2026-11-05
-# counts: MA-L=40333 MA-L-repeats-dropped=3 MA-M=6590 MA-S=7231 withheld=3
+# counts: MA-L=40335 MA-L-repeats-dropped=3 MA-M=6591 MA-S=7233 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13536,6 +13536,7 @@
 0479FD	Ciena Corporation
 047A0B	Beijing Xiaomi Electronics Co., Ltd.
 047AAE	Huawei Device Co., Ltd.
+047B435	Shenzhen XJ-Micro Technology Co., Ltd.
 047BCB	Universal Global Scientific Industrial., Ltd
 047C16	Micro-Star INTL CO., LTD.
 047D50	Shenzhen Kang Ying Technology Co.Ltd.
@@ -26151,6 +26152,7 @@
 608CE6	Commscope
 608D17	Sentrus Government Systems Division, Inc
 608D26	Arcadyan Corporation
+608D28	Motorola Mobility LLC, a Lenovo Company
 608E08	Samsung Electronics Co.,Ltd
 608F5C	Samsung Electronics Co.,Ltd
 608FA4	Nokia Solutions and Networks GmbH & Co. KG
@@ -36219,6 +36221,7 @@
 8C1F6415C	TRON FUTURE TECH INC.
 8C1F6415D	Nhoa Energy Srl
 8C1F6415E	Dynomotion, Inc
+8C1F64162	Texas Space Communications, Inc
 8C1F64164	Revo - Tec GmbH
 8C1F64166	Hikari Alphax Inc.
 8C1F64168	JAPAN ID Co., Ltd.
@@ -37530,6 +37533,7 @@
 8C1F6486F	NewEdge Signal Solutions LLC
 8C1F64870	Chengdu Xiuwei TechnologyDevelopment Co., Ltd
 8C1F64871	ENTE Sp. z o.o.
+8C1F64873	Nav Wireless Technologies Pvt. Ltd.
 8C1F64875	EPC Power Corporation
 8C1F64876	fmad engineering
 8C1F64878	Green Access Ltd
@@ -50554,6 +50558,7 @@ E41F7B	Cisco Systems, Inc
 E41FD5	Intel Corporate
 E41FE9	Dunkermotoren GmbH
 E42150	Shanghai Chint low voltage electrical technology Co.,Ltd.
+E42224	Motorola Mobility LLC, a Lenovo Company
 E422A5	PLANTRONICS, INC.
 E4233C	Juniper Networks
 E42354	SHENZHEN FUZHI SOFTWARE TECHNOLOGY CO.,LTD

@@ -12318,8 +12318,8 @@ export interface components {
              * @description The new note. `""` (or whitespace) clears it. At most 2,000 characters, trimmed.
              *
              *     Required rather than optional: this body says nothing else, so there is no "leave it
-             *     alone" to express, and a missing field is a client mistake worth a 400 rather than a
-             *     silent clear.
+             *     alone" to express, and a missing field is a client mistake refused (the body framework's
+             *     own 422) rather than a silent clear.
              */
             notes: string;
         };
@@ -25522,7 +25522,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A note over 2,000 characters, or no `notes` field */
+            /** @description A note over 2,000 characters */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -29581,7 +29581,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description A note over 2,000 characters, or no `notes` field */
+            /** @description A note over 2,000 characters */
             400: {
                 headers: {
                     [name: string]: unknown;

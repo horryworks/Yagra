@@ -11708,7 +11708,7 @@
             "description": "The folder's note was replaced (or cleared)"
           },
           "400": {
-            "description": "A note over 2,000 characters, or no `notes` field",
+            "description": "A note over 2,000 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -17119,7 +17119,7 @@
             "description": "The note was replaced (or cleared)"
           },
           "400": {
-            "description": "A note over 2,000 characters, or no `notes` field",
+            "description": "A note over 2,000 characters",
             "content": {
               "application/json": {
                 "schema": {
@@ -40947,7 +40947,7 @@
         "properties": {
           "notes": {
             "type": "string",
-            "description": "The new note. `\"\"` (or whitespace) clears it. At most 2,000 characters, trimmed.\n\nRequired rather than optional: this body says nothing else, so there is no \"leave it\nalone\" to express, and a missing field is a client mistake worth a 400 rather than a\nsilent clear."
+            "description": "The new note. `\"\"` (or whitespace) clears it. At most 2,000 characters, trimmed.\n\nRequired rather than optional: this body says nothing else, so there is no \"leave it\nalone\" to express, and a missing field is a client mistake refused (the body framework's\nown 422) rather than a silent clear."
           }
         }
       },

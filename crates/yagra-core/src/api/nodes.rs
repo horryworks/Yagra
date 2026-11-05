@@ -1664,8 +1664,8 @@ pub(super) struct NotesBody {
     /// The new note. `""` (or whitespace) clears it. At most 2,000 characters, trimmed.
     ///
     /// Required rather than optional: this body says nothing else, so there is no "leave it
-    /// alone" to express, and a missing field is a client mistake worth a 400 rather than a
-    /// silent clear.
+    /// alone" to express, and a missing field is a client mistake refused (the body framework's
+    /// own 422) rather than a silent clear.
     pub(super) notes: String,
 }
 
@@ -1680,7 +1680,7 @@ pub(super) fn validated_notes(body: &NotesBody) -> ApiResult<Option<&str>> {
     request_body = NotesBody,
     responses(
         (status = 204, description = "The note was replaced (or cleared)"),
-        (status = 400, description = "A note over 2,000 characters, or no `notes` field", body = super::error::ErrorBody),
+        (status = 400, description = "A note over 2,000 characters", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
