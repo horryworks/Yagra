@@ -38,8 +38,6 @@ import {
   visibleNodeEditFields,
   visibleNodeEditSections,
   isValidNodeName,
-  isValidNotes,
-  NOTES_MAX,
   withProfileChoice,
   type NodeEditRequest,
 } from './nodeEditForm';
@@ -110,7 +108,6 @@ describe('node edit field registry', () => {
       'identity',
       'pool',
       'tags',
-      'notes',
     ]);
     expect([...visibleNodeEditFields('meraki')]).toEqual([
       'name',
@@ -119,7 +116,6 @@ describe('node edit field registry', () => {
       'identity',
       'pool',
       'tags',
-      'notes',
     ]);
     expect([...visibleNodeEditFields('url')]).toEqual([
       'urlCheck',
@@ -127,7 +123,6 @@ describe('node edit field registry', () => {
       'profile',
       'pool',
       'tags',
-      'notes',
     ]);
     expect([...visibleNodeEditFields('dns')]).toEqual([
       'dnsCheck',
@@ -135,7 +130,6 @@ describe('node edit field registry', () => {
       'profile',
       'pool',
       'tags',
-      'notes',
     ]);
   });
 
@@ -267,7 +261,6 @@ describe('nodeEditRequest bindings', () => {
         'credential_id',
         'model',
         'name',
-        'notes',
         'pool',
         'profile_id',
         'profile_locked',
@@ -283,7 +276,6 @@ describe('nodeEditRequest bindings', () => {
         model: 'C9300',
         pool: 'site-a',
         name: 'edge-1',
-        notes: 'in the ceiling void',
         // Sorted by the draft seeder, so the order here is the order that goes out.
         tags: ['core', 'JAPAN'],
         tags_excluded: [],
@@ -336,23 +328,20 @@ describe('nodeEditRequest bindings', () => {
     expect(draft).toMatchObject({ profileId: '', credentialId: '', pool: '' });
   });
 
-  it('reads an absent note and absent tags as empty rather than undefined', () => {
-    const draft = nodeEditDraftFrom(node({ notes: null, tags: [] }));
-    expect(draft.notes).toBe('');
+  it('reads absent tags as empty rather than undefined', () => {
+    const draft = nodeEditDraftFrom(node({ tags: [] }));
     expect(draft.tags).toEqual([]);
     expect(draft.tagsExcluded).toEqual([]);
   });
 
-  // Same reason the pool is always a string: the server reads an absent `notes` as "leave it
-  // alone", so blanking the box has to arrive as `''` or the operator's delete silently does
-  // nothing. `name` has no clear at all — the dialog refuses to submit an empty one.
-  it('sends the note as a string so blanking it means delete', () => {
+  // ADR-239: the note is written in place on the Overview tab. The server reads an absent `notes`
+  // as "leave it alone", so a dialog that does not send one cannot overwrite a note someone just
+  // wrote there — which a stale draft sent back would.
+  it('never sends the note, so a save leaves it as it is', () => {
     for (const kind of NODE_KINDS) {
-      const draft = { ...nodeEditDraftFrom(node()), notes: '   ' };
-      expect(req(nodeEditRequest(kind, draft)).bindings.notes, kind).toBe('');
+      const { bindings } = req(nodeEditRequest(kind, nodeEditDraftFrom(node())));
+      expect('notes' in bindings, kind).toBe(false);
     }
-    const kept = { ...nodeEditDraftFrom(node()), notes: '  two\nlines  ' };
-    expect(req(nodeEditRequest('device', kept)).bindings.notes).toBe('two\nlines');
   });
 
   it('sends both label lists even when they are empty, so removing the last one lands', () => {
@@ -383,16 +372,6 @@ describe('node name and note limits', () => {
     expect(isValidNodeName('')).toBe(false);
     expect(isValidNodeName('   ')).toBe(false);
     expect(isValidNodeName(' edge-1 ')).toBe(true);
-  });
-
-  // Counted in code points, as the backend counts it. `.length` counts UTF-16 units, so a note of
-  // astral characters would pass here and be refused by the server — a disagreement the operator
-  // would experience as "Save did nothing".
-  it('measures the note in code points, not UTF-16 units', () => {
-    expect(isValidNotes('a'.repeat(NOTES_MAX))).toBe(true);
-    expect(isValidNotes('a'.repeat(NOTES_MAX + 1))).toBe(false);
-    expect(isValidNotes('🙂'.repeat(NOTES_MAX))).toBe(true);
-    expect(isValidNotes(`  ${'a'.repeat(NOTES_MAX)}  `)).toBe(true);
   });
 
   // The label rules moved to `ui/labelRules.test.ts` with the control (ADR-135 inc. 2): three

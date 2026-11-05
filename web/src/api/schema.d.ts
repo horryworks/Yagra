@@ -2377,6 +2377,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-groups/{id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a folder's note (ADR-239). Scoped like `tags`: a group-scoped Operator holds
+         *     `manage_config` too, and may write only the folders they can reach.
+         */
+        put: operations["set_node_group_notes"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-groups/{id}/placement": {
         parameters: {
             query?: never;
@@ -3402,6 +3422,28 @@ export interface paths {
          */
         get: operations["list_neighbor_history"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace only this node's note, leaving every other field alone (ADR-239).
+         * @description The WebUI writes the note where it shows it, on the node's Overview tab. Not
+         *     `PUT /nodes/{id}/bindings`: that body *replaces* the profile, credential, vendor and model, so
+         *     sending it with only a note would unbind them.
+         */
+        put: operations["set_node_notes"];
         post?: never;
         delete?: never;
         options?: never;
@@ -9296,6 +9338,14 @@ export interface components {
              *     whenever it is set, and the editor shows it read-only (ADR-226 decision 6).
              */
             netbox_time_zone?: string | null;
+            /**
+             * @description The operator's free-text note about this folder, or null (ADR-239, migration 0173). At most
+             *     2,000 characters, written by `PUT /api/v1/node-groups/{id}/notes`.
+             *
+             *     🚨 **Null also means "you may not see it"**, exactly as `prefixes` above: a breadcrumb
+             *     ancestor a scoped caller receives only by name arrives with its note cleared.
+             */
+            notes?: string | null;
             origin?: null | components["schemas"]["GroupOrigin"];
             /** Format: uuid */
             parent_id?: string | null;
@@ -11990,6 +12040,11 @@ export interface components {
             /** Format: double */
             longitude?: number | null;
             name: string;
+            /**
+             * @description The operator's free-text note (ADR-239). Absent in a bundle written by an older
+             *     deployment, which reads as "no note" — the same call a node's note makes.
+             */
+            notes?: string | null;
             /** Format: uuid */
             parent_id?: string | null;
             pool?: string | null;
@@ -12257,6 +12312,17 @@ export interface components {
          * @enum {string}
          */
         NoteCode: "skipped_builtin" | "skipped_missing_reference" | "reference_dropped" | "secret_dropped_imported_disabled" | "webhook_token_reset" | "schedule_next_run_recomputed" | "skipped_invalid_value";
+        /** @description The whole note, as the one thing a request says (ADR-239). Shared by the node and the folder. */
+        NotesBody: {
+            /**
+             * @description The new note. `""` (or whitespace) clears it. At most 2,000 characters, trimmed.
+             *
+             *     Required rather than optional: this body says nothing else, so there is no "leave it
+             *     alone" to express, and a missing field is a client mistake worth a 400 rather than a
+             *     silent clear.
+             */
+            notes: string;
+        };
         /**
          * @description The env-configured default notification route (ADR-200 Inc.28): whether it exists, and which
          *     kinds of channel it is made of.
@@ -25433,6 +25499,76 @@ export interface operations {
             };
         };
     };
+    set_node_group_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotesBody"];
+            };
+        };
+        responses: {
+            /** @description The folder's note was replaced (or cleared) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A note over 2,000 characters, or no `notes` field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such folder, or not one this caller may act on */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     place_group: {
         parameters: {
             query?: never;
@@ -29412,6 +29548,76 @@ export interface operations {
                 };
             };
             /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_node_notes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotesBody"];
+            };
+        };
+        responses: {
+            /** @description The note was replaced (or cleared) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A note over 2,000 characters, or no `notes` field */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node, or the node is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

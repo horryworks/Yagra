@@ -1604,6 +1604,7 @@ export function NodesPage() {
               onPinError={(e) => setError(errMsg(e, t('tree.pinFailed')))}
               // The tree's folder menu, as buttons (ADR-209 decision 9): the same handlers.
               onAddSubgroup={() => setGroupModal({ mode: 'add', parentId: selectedGroup.id })}
+              onNotesSaved={() => void reload()}
               onRunDiscovery={() =>
                 navigate(`/nodes/discovery?group=${encodeURIComponent(selectedGroup.id)}`)
               }

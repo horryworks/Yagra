@@ -664,6 +664,11 @@ pub struct NodeGroupDto {
     /// answered. Not a new exposure either — the same labels already arrive on every `list_nodes`
     /// row once inheritance resolves.
     pub effective_tags: Vec<String>,
+    /// The operator's free-text note about this folder (ADR-239) — how to get in, who holds the
+    /// key. Kept for read parity (ADR-042): the WebUI shows it on the folder. Cleared before the
+    /// projection for a breadcrumb ancestor, as `prefixes` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
     /// `meraki` | `netbox` when an integration made this folder and still keeps it, else absent
     /// (ADR-164 Inc.7). Worth knowing before advising anyone to tidy the tree: a Meraki
     /// organization's folders are deleted with the organization, and a NetBox folder is renamed
@@ -691,6 +696,7 @@ impl NodeGroupDto {
             prefixes: g.prefixes.clone(),
             tags: g.tags.clone(),
             effective_tags: g.effective_tags.clone(),
+            notes: g.notes.clone(),
             origin: g.origin,
             state_counts: None,
         }
@@ -1472,6 +1478,7 @@ mod tests {
                 description: "Tokyo LAN".to_owned(),
                 source: yagra_base::groups::PrefixSource::Manual,
             }],
+            notes: Some("key at reception".to_owned()),
             origin: Some(yagra_base::groups::GroupOrigin::Meraki),
             time_zone: None,
             netbox_time_zone: None,

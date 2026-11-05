@@ -50,6 +50,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     get_node_status,
     poll_node_now,
     set_node_bindings,
+    set_node_notes,
     bulk_tag_nodes,
     set_node_group,
     move_nodes,
@@ -99,6 +100,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/nodes/:node_id/status", get(get_node_status))
         .route("/api/v1/nodes/:node_id/poll", post(poll_node_now))
         .route("/api/v1/nodes/:node_id/bindings", put(set_node_bindings))
+        .route("/api/v1/nodes/:node_id/notes", put(set_node_notes))
         .route("/api/v1/nodes/:node_id/group", put(set_node_group))
         .route("/api/v1/nodes/:node_id/pool", put(set_node_pool))
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
@@ -1654,6 +1656,54 @@ fn node_write_result(found: bool, id: Uuid) -> ApiResult<StatusCode> {
             format!("no node {id}"),
         ))
     }
+}
+
+/// The whole note, as the one thing a request says (ADR-239). Shared by the node and the folder.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct NotesBody {
+    /// The new note. `""` (or whitespace) clears it. At most 2,000 characters, trimmed.
+    ///
+    /// Required rather than optional: this body says nothing else, so there is no "leave it
+    /// alone" to express, and a missing field is a client mistake worth a 400 rather than a
+    /// silent clear.
+    pub(super) notes: String,
+}
+
+/// The note to store: `None` to clear, else the trimmed text — or the 400 for one too long.
+pub(super) fn validated_notes(body: &NotesBody) -> ApiResult<Option<&str>> {
+    Ok(free_text_update(Some(&body.notes), NOTES_MAX, "invalid_notes", "notes")?.flatten())
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/notes", tag = "nodes",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = NotesBody,
+    responses(
+        (status = 204, description = "The note was replaced (or cleared)"),
+        (status = 400, description = "A note over 2,000 characters, or no `notes` field", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such node, or the node is outside the caller's scope", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+/// Replace only this node's note, leaving every other field alone (ADR-239).
+///
+/// The WebUI writes the note where it shows it, on the node's Overview tab. Not
+/// `PUT /nodes/{id}/bindings`: that body *replaces* the profile, credential, vendor and model, so
+/// sending it with only a note would unbind them.
+async fn set_node_notes(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<NotesBody>,
+) -> ApiResult<StatusCode> {
+    let notes = validated_notes(&body)?;
+    let found = admin.repo.set_node_notes(id, notes).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "set node notes", "failed to update node")
+    })?;
+    node_write_result(found, id)
 }
 
 /// One "Edit node" save: the node's own name and note, its profile + bound credential and
@@ -3965,6 +4015,63 @@ mod tests {
             vec![a.to_string().as_str()],
             "the scope did not narrow the answer"
         );
+    }
+
+    /// Writing only the note is **accepted** (204) and touches nothing else on the node (ADR-239).
+    ///
+    /// 🚨 The vendor is the canary: `PUT /bindings` *replaces* it, so a handler that routed the
+    /// note through that statement would pass the first assertion and fail the second.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_note_alone_is_accepted_and_leaves_the_rest_of_the_node_alone(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let id = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        sqlx::query("UPDATE nodes SET vendor = 'Cisco' WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("vendor");
+        let path = format!("/api/v1/nodes/{id}/notes");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "notes": "needs a ladder" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+        assert_eq!(detail["notes"], "needs a ladder", "{detail}");
+        assert_eq!(
+            detail["vendor"], "Cisco",
+            "the note write touched another column: {detail}"
+        );
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "notes": "x".repeat(2001) })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "notes": " " })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+        let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+        assert_eq!(detail["notes"], serde_json::Value::Null, "{detail}");
     }
 
     /// Renaming a node and writing its note are **accepted**, and the detail shows both (ADR-135).

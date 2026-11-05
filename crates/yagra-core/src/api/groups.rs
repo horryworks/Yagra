@@ -41,6 +41,7 @@ use yagra_base::groups::{placement_order, would_create_cycle, GroupType, SortDir
     set_node_group_time_zone,
     set_node_group_prefixes,
     set_node_group_tags,
+    set_node_group_notes,
     get_prefix_gaps
 ))]
 pub(super) struct Doc;
@@ -70,6 +71,7 @@ pub(super) fn routes() -> Router<ApiState> {
         )
         .route("/api/v1/node-groups/:id/prefix-gaps", get(get_prefix_gaps))
         .route("/api/v1/node-groups/:id/tags", put(set_node_group_tags))
+        .route("/api/v1/node-groups/:id/notes", put(set_node_group_notes))
 }
 
 /// How many hand-made ranges one folder may carry.
@@ -126,8 +128,11 @@ pub(crate) async fn visible_groups(
         .into_iter()
         .filter(|g| scope.allows_group_row(g.id))
         .map(|mut g| {
-            if !g.prefixes.is_empty() && !scope.allows_group(Some(g.id)) {
+            if !scope.allows_group(Some(g.id)) {
                 g.prefixes.clear();
+                // A note is what a person wrote about the site — door codes, who holds the key —
+                // not a name, so it goes with the prefixes (ADR-239).
+                g.notes = None;
             }
             g
         })
@@ -700,6 +705,44 @@ async fn set_node_group_tags(
                 "failed to update node group",
             )
         })?;
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("group_not_found", "no such node group"))
+    }
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/node-groups/{id}/notes", tag = "groups",
+    params(("id" = String, Path, description = "Folder id")),
+    request_body = super::nodes::NotesBody,
+    responses(
+        (status = 204, description = "The folder's note was replaced (or cleared)"),
+        (status = 400, description = "A note over 2,000 characters, or no `notes` field", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such folder, or not one this caller may act on", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+/// Replace a folder's note (ADR-239). Scoped like `tags`: a group-scoped Operator holds
+/// `manage_config` too, and may write only the folders they can reach.
+async fn set_node_group_notes(
+    _guard: RequireManageConfig,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<super::nodes::NotesBody>,
+) -> ApiResult<StatusCode> {
+    super::scope::require_visible_group(&scope, id)?;
+    let notes = super::nodes::validated_notes(&body)?;
+    let found = admin.groups.set_notes(id, notes).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "set node group notes",
+            "failed to update node group",
+        )
+    })?;
     if found {
         Ok(StatusCode::NO_CONTENT)
     } else {
@@ -1761,6 +1804,130 @@ mod tests {
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    /// A folder's note is **accepted** (204), read back on the list, and cleared by `""` (ADR-239).
+    /// A scoped caller writes only its own folder, and a breadcrumb ancestor it is handed by name
+    /// arrives with its note cleared — the note is what a person wrote about a site the caller
+    /// was refused, like its prefixes.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_note_is_written_in_scope_and_hidden_on_a_breadcrumb(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send, token};
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let id_of = |row: &serde_json::Value| -> uuid::Uuid {
+            row["id"].as_str().expect("id").parse().expect("uuid")
+        };
+        let (_, row) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "Region", "group_type": "site" })),
+        )
+        .await;
+        let region = id_of(&row);
+        let (_, row) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(serde_json::json!({ "name": "Mine", "group_type": "site", "parent_id": region })),
+        )
+        .await;
+        let mine = id_of(&row);
+        let note_of = |list: &serde_json::Value, id: uuid::Uuid| -> serde_json::Value {
+            list.as_array()
+                .expect("a list")
+                .iter()
+                .find(|g| g["id"] == id.to_string())
+                .expect("row")["notes"]
+                .clone()
+        };
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{region}/notes"),
+            &admin,
+            Some(serde_json::json!({ "notes": "  key at reception  " })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        assert_eq!(
+            note_of(&list, region),
+            "key at reception",
+            "trimmed and stored"
+        );
+
+        let scoped = scoped_token(&st, &[mine]);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{mine}/notes"),
+            &scoped,
+            Some(serde_json::json!({ "notes": "rack R-04" })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::NO_CONTENT,
+            "in scope: {body}"
+        );
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{region}/notes"),
+            &scoped,
+            Some(serde_json::json!({ "notes": "overwritten" })),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::NOT_FOUND,
+            "a breadcrumb is not writable"
+        );
+
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &scoped, None).await;
+        assert_eq!(note_of(&list, mine), "rack R-04");
+        assert_eq!(
+            note_of(&list, region),
+            serde_json::Value::Null,
+            "a breadcrumb ancestor's note must not reach a scoped caller"
+        );
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        assert_eq!(
+            note_of(&list, region),
+            "key at reception",
+            "the refused write wrote nothing"
+        );
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{region}/notes"),
+            &admin,
+            Some(serde_json::json!({ "notes": "x".repeat(2001) })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/node-groups/{region}/notes"),
+            &admin,
+            Some(serde_json::json!({ "notes": "" })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+        let (_, list) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        assert_eq!(
+            note_of(&list, region),
+            serde_json::Value::Null,
+            "\"\" clears"
+        );
     }
 
     /// 🚨 A group-scoped caller cannot label a folder outside its scope.

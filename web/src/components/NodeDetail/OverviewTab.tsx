@@ -16,6 +16,7 @@ import { collectionFaultNotice } from './collectionFault';
 import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
 import { InfoPress } from '../ui/InfoTip';
+import { InlineNotes } from '../ui/InlineNotes';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
 import { nodesPageHref } from '../../lib/entityHref';
 import { api } from '../../services/api';
@@ -147,15 +148,15 @@ export function OverviewTab({
       {/* Above the facts grid, because a note is what a person wrote for the next person to read
           and the grid is what the machine knows. Two sections rather than one: a note and a set of
           labels are different things, and ui-conventions R8 is about not shelving them together.
-          Both are hidden when empty — the place you go to write one is the Edit node dialog, which
-          is one button away in the header above. */}
-      {node.notes && (
-        <section>
-          <div className="nd-section-t">{t('field.notes')}</div>
-          {/* Plain text. This is operator-supplied and rendered as written — never as markup. */}
-          <p className="nd-notes">{node.notes}</p>
-        </section>
-      )}
+          The note is written right here (ADR-239); an empty one shows only "Add note", and to a
+          reader who may not write, nothing. */}
+      <InlineNotes
+        value={node.notes}
+        canEdit={canEdit}
+        placeholder={t('field.notesPlaceholder')}
+        onSave={(notes) => api.setNodeNotes(node.id, notes)}
+        onSaved={onChanged}
+      />
 
       {/* Own labels and inherited ones as two marked groups, never one merged row: "why does this
           node carry JAPAN" has a different answer for each, and the answer for the second is a

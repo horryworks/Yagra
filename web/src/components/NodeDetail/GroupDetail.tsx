@@ -41,6 +41,7 @@ import { ActionMenu } from '../ui/ActionMenu';
 import { canRunDiscovery } from '../NodeTree/nodeTreeMenu';
 import { PrefixGaps } from './PrefixGapsSection';
 import { GroupMapSection } from './GroupMapSection';
+import { InlineNotes } from '../ui/InlineNotes';
 import { membersTrailer, type MemberFetch } from './groupMembers';
 import './NodeDetail.css';
 
@@ -70,6 +71,8 @@ interface Props {
   onAddSubgroup?: () => void;
   onRunDiscovery?: () => void;
   onSortChildren?: (direction: 'asc' | 'desc') => void;
+  /** After the folder's note was saved in place (ADR-239): re-read the folder list. */
+  onNotesSaved?: () => void;
 }
 
 export function GroupDetail({
@@ -88,6 +91,7 @@ export function GroupDetail({
   onAddSubgroup,
   onRunDiscovery,
   onSortChildren,
+  onNotesSaved,
 }: Props) {
   const { t } = useTranslation('nodes');
   // How many rules name this folder. Asked only of a caller who may read the ruleset; the link is
@@ -248,6 +252,15 @@ export function GroupDetail({
       </div>
 
       <div className="nd-grpbody">
+        {/* First in the body (ADR-239): how to get in and who holds the key is what a person opens
+            a site to find, and it is written right here rather than in the Edit folder dialog. */}
+        <InlineNotes
+          value={group.notes}
+          canEdit={canEdit}
+          placeholder={t('field.groupNotesPlaceholder')}
+          onSave={(notes) => api.setNodeGroupNotes(group.id, notes)}
+          onSaved={onNotesSaved}
+        />
         <section>
           <div className="nd-section-t">{t('groupDetail.health')}</div>
           <HealthBar tally={tally} className="nd-grp-healthbar" />

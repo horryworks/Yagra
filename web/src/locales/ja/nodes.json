@@ -48,7 +48,8 @@
     },
     "resolver": "リゾルバ",
     "poolInheritFolder": "グループから継承",
-    "sentWithAlerts": "アラートと一緒に送信"
+    "sentWithAlerts": "アラートと一緒に送信",
+    "groupNotesPlaceholder": "例: 入館は 1F 警備室で受付。ラックの鍵は総務"
   },
   "kind": {
     "wireless_ap": "無線 AP（コントローラ経由）",
@@ -1446,5 +1447,7 @@
   "profile": {
     "generic": "汎用",
     "makeOwn": "この機器用のプロファイルを作る"
-  }
+  },
+  "notesAdd": "メモを追加",
+  "notesEdit": "メモを編集"
 }

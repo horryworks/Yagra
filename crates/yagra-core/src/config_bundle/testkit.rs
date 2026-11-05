@@ -132,6 +132,8 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 // exists on a folder.
                 tags: vec!["JAPAN".to_owned()],
                 tags_excluded: Vec::new(),
+                // A folder note, so an import that dropped the column would show (ADR-239).
+                notes: Some("key at reception".to_owned()),
             },
             NodeGroupRow {
                 id: group_child,
@@ -146,6 +148,7 @@ pub(super) fn full_bundle() -> ConfigBundle {
                 // A refusal on a child folder, so an import that dropped this column would be
                 // visible rather than merely untested.
                 tags_excluded: vec!["JAPAN".to_owned()],
+                notes: None,
             },
         ],
         nodes: vec![

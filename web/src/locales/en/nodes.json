@@ -48,7 +48,8 @@
     },
     "resolver": "Resolver",
     "poolInheritFolder": "Inherited from the folder",
-    "sentWithAlerts": "Sent with alerts"
+    "sentWithAlerts": "Sent with alerts",
+    "groupNotesPlaceholder": "e.g. sign in at the front desk; facilities holds the rack key"
   },
   "kind": {
     "wireless_ap": "Wireless AP (via its controller)",
@@ -1456,5 +1457,7 @@
   "profile": {
     "generic": "Generic",
     "makeOwn": "Make a profile for this device"
-  }
+  },
+  "notesAdd": "Add note",
+  "notesEdit": "Edit note"
 }

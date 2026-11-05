@@ -168,6 +168,10 @@ pub struct NodeGroupRow {
     /// Labels this folder refuses to inherit from its own ancestors.
     #[serde(default, deserialize_with = "de_labels")]
     pub tags_excluded: Vec<String>,
+    /// The operator's free-text note (ADR-239). Absent in a bundle written by an older
+    /// deployment, which reads as "no note" — the same call a node's note makes.
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 /// Accept both shapes a bundle can carry for a label list: the key→value **object** every release

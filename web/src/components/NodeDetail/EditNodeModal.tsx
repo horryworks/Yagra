@@ -21,7 +21,7 @@ import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
 import { Modal } from '../ui/Modal';
-import { FieldError, Select, TextArea, TextInput } from '../ui/Field';
+import { FieldError, Select, TextInput } from '../ui/Field';
 import { DnsCheckFields, Row, UrlCheckFields } from './CheckFields';
 import {
   deviceNameOffer,
@@ -34,10 +34,8 @@ import {
   visibleNodeEditFields,
   visibleNodeEditSections,
   isValidNodeName,
-  isValidNotes,
   NODE_EDIT_FIELD_META,
   NODE_EDIT_KIND_SPEC,
-  NOTES_MAX,
   PARTIAL_SAVE_KEY,
   withProfileChoice,
   type NodeEditDraft,
@@ -73,7 +71,6 @@ export function EditNodeModal({
   const form = useSubmit({ errorFallback: t('err.saveNode'), onDone });
   const poolInvalid = !isValidPoolName(d.pool);
   const nameInvalid = !isValidNodeName(d.name);
-  const notesTooLong = !isValidNotes(d.notes);
   const tagsInvalid = !labelsAreValid(d.tags);
   // What the folder chain still supplies after this draft's refusals — recomputed from the draft
   // rather than from `node.inherited_tags` alone, so ✕-ing a chip removes it from this list at
@@ -306,19 +303,6 @@ export function EditNodeModal({
         )}
       </div>
     ),
-    notes: (
-      <Row label={t('field.notes')} sub={t('field.sentWithAlerts')}>
-        <TextArea
-          rows={4}
-          value={d.notes}
-          onChange={(e) => set('notes', e.target.value)}
-          placeholder={t('field.notesPlaceholder')}
-        />
-        {notesTooLong && (
-          <FieldError>{t('field.notesTooLong', { max: NOTES_MAX })}</FieldError>
-        )}
-      </Row>
-    ),
   };
 
   return (
@@ -331,7 +315,7 @@ export function EditNodeModal({
           onClose={onClose}
           onSubmit={save}
           submitLabel={t('common:actions.save')}
-          canSubmit={!(poolInvalid || nameInvalid || notesTooLong || tagsInvalid)}
+          canSubmit={!(poolInvalid || nameInvalid || tagsInvalid)}
         />
       }
     >

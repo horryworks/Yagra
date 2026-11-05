@@ -47,7 +47,6 @@ export const NODE_EDIT_FIELDS = [
   'identity',
   'pool',
   'tags',
-  'notes',
 ] as const;
 
 export type NodeEditField = (typeof NODE_EDIT_FIELDS)[number];
@@ -110,12 +109,9 @@ export const NODE_EDIT_FIELD_META: Record<
   // `custom_details` and JSM's own `tags` field, so this is where "page the Japan rota for this
   // one" is expressed (ADR-135).
   tags: { kinds: NODE_KINDS, section: 'node' },
-  // Last, because it is the tallest control and the only free-form one.
-  notes: { kinds: NODE_KINDS, section: 'node' },
+  // The note is not here since ADR-239: it is written in place on the Overview tab
+  // (`ui/InlineNotes.tsx`), and this dialog leaves it alone by not sending it.
 };
-
-/** The longest note the API accepts (ADR-135). Mirrors `api/nodes.rs::NOTES_MAX`. */
-export const NOTES_MAX = 2000;
 // Label limits and the rules over them live in `components/ui/labelRules.ts` since ADR-135 inc. 2 —
 // the same control is used by this dialog, the bulk dialog and the folder dialog, so the judgement
 // belongs beside the component rather than here.
@@ -124,13 +120,6 @@ export const NOTES_MAX = 2000;
  *  no "clear the name" — an empty box is a mistake to report, not an instruction. */
 export function isValidNodeName(name: string): boolean {
   return name.trim() !== '';
-}
-
-/** Whether the note is short enough. Counted in code points, as the backend counts it — `.length`
- *  counts UTF-16 units, so a note of emoji or CJK would be rejected by the server after passing
- *  here, which is the worst place to disagree. */
-export function isValidNotes(notes: string): boolean {
-  return [...notes.trim()].length <= NOTES_MAX;
 }
 
 /** Facts owned by the kind rather than by a field. */
@@ -243,7 +232,6 @@ export interface NodeEditDraft {
   vendor: string;
   model: string;
   pool: string;
-  notes: string;
   tags: string[];
   tagsExcluded: string[];
   url: UrlCheckDraft | null;
@@ -266,7 +254,6 @@ export function nodeEditDraftFrom(node: NodeDetail): NodeEditDraft {
     vendor: node.vendor ?? '',
     model: node.model ?? '',
     pool: node.pool ?? '',
-    notes: node.notes ?? '',
     // Sorted, so the chips do not reshuffle between two openings of the same dialog. ⚠️ The
     // node's OWN labels only — what it inherits from its folder is read-only here, and is refused
     // by adding to `tagsExcluded` rather than by editing this list (ADR-135 inc. 2).
@@ -304,9 +291,6 @@ export interface NodeEditBindings {
   /** Always a non-empty string. The server reads an absent `name` as "leave unchanged" and an
    *  empty one as a 400 — the dialog refuses to submit a blank name, so neither happens. */
   name: string;
-  /** Always a string, never null, for the same reason `pool` is: `''` is how an operator deletes
-   *  the note, and a JSON `null` would read server-side as "leave it alone". */
-  notes: string;
   /** Always sent, because the dialog shows every label and therefore knows the whole list.
    *  Omitting it would read as "leave them alone", so removing the last one would silently do
    *  nothing. The node's **own** labels — never the inherited ones. */
@@ -353,7 +337,6 @@ export function nodeEditRequest(
         model: d.model.trim() || null,
         pool: d.pool.trim(),
         name: d.name.trim(),
-        notes: d.notes.trim(),
         tags: d.tags,
         tags_excluded: d.tagsExcluded,
         profile_locked: d.profileLocked,

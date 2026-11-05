@@ -613,6 +613,21 @@ impl NodeRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with `None`) only this node's note (ADR-239). Returns whether the node exists.
+    ///
+    /// 🚨 **Not [`Self::set_node_bindings`] with everything else absent.** That statement
+    /// *replaces* `profile_id`/`credential_id`/`vendor`/`model`, so a body carrying only a note
+    /// would unbind the node's profile and credential. The note is written where it is shown, on
+    /// its own, so it gets a statement that cannot touch anything else.
+    pub async fn set_node_notes(&self, id: Uuid, notes: Option<&str>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE nodes SET notes = $2, updated_at = now() WHERE id = $1")
+            .bind(id)
+            .bind(notes)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Add and/or remove tags across MANY nodes at once, **merging** rather than replacing
     /// (ADR-135 decision 7). Returns `(requested, applied)`.
     ///

@@ -1,0 +1,63 @@
+/* A note written in place (ADR-239). */
+.inline-notes-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* The pencil sits in an uppercase section title, so it is drawn small and unpadded. */
+.inline-notes-pen {
+  padding: 0 2px;
+}
+
+/* The note itself is the button that starts editing, so it must still read as text. */
+.inline-notes-text {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  margin-left: -6px;
+  font: inherit;
+  cursor: text;
+}
+
+.inline-notes-text:hover,
+.inline-notes-text:focus-visible {
+  background: var(--bg-tertiary);
+}
+
+.inline-notes-add {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-sm);
+  color: var(--accent-color);
+  cursor: pointer;
+}
+
+.inline-notes-add:hover {
+  color: var(--accent-hover);
+}
+
+.inline-notes-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* The count is pushed left so Cancel and Save keep their place as it appears. */
+.inline-notes-count {
+  margin-right: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.inline-notes-count.over {
+  color: var(--status-critical);
+}

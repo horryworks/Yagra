@@ -188,6 +188,12 @@ pub struct GroupSummary {
     /// listed so the tree has a spine, and handing over the subnet layout of a site whose
     /// membership the caller cannot see would be a leak the folder's *name* does not constitute.
     pub prefixes: Vec<GroupPrefix>,
+    /// The operator's free-text note about this folder, or null (ADR-239, migration 0173). At most
+    /// 2,000 characters, written by `PUT /api/v1/node-groups/{id}/notes`.
+    ///
+    /// 🚨 **Null also means "you may not see it"**, exactly as `prefixes` above: a breadcrumb
+    /// ancestor a scoped caller receives only by name arrives with its note cleared.
+    pub notes: Option<String>,
     /// The integration that made this folder and still keeps it, or `null` for one a person made
     /// (ADR-164 Inc.7). See [`GroupOrigin`] for what "still keeps" means.
     pub origin: Option<GroupOrigin>,
@@ -922,7 +928,7 @@ impl GroupRepo {
     pub async fn list(&self) -> anyhow::Result<Vec<GroupSummary>> {
         let rows = sqlx::query(
             "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool, \
-                    tags, tags_excluded, time_zone, netbox_time_zone \
+                    tags, tags_excluded, time_zone, netbox_time_zone, notes \
              FROM node_groups ORDER BY sort_order, name, id",
         )
         .fetch_all(&self.pool)
@@ -953,6 +959,7 @@ impl GroupRepo {
                     // rather than a lateral join, because most deployments have no rows here at
                     // all and the empty answer is then a single index-less scan of nothing.
                     prefixes: Vec::new(),
+                    notes: row.try_get("notes")?,
                     // Filled by `attach_origin` below.
                     origin: None,
                     time_zone: row.try_get("time_zone")?,
@@ -1543,6 +1550,19 @@ scope_predicate(2, "p.group_id"),
         Ok(res.rows_affected() > 0)
     }
 
+    /// Set (or clear with `None`) this folder's note (ADR-239). Returns whether the folder exists.
+    ///
+    /// Its own statement rather than a field on a wider update, so writing a note can never touch
+    /// anything else on the row — the trap `PUT /nodes/{id}/bindings` sets for a node.
+    pub async fn set_notes(&self, id: Uuid, notes: Option<&str>) -> anyhow::Result<bool> {
+        let res = sqlx::query("UPDATE node_groups SET notes = $2 WHERE id = $1")
+            .bind(id)
+            .bind(notes)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// The `(id, parent_id, pool)` rows, for building a `poolres::PoolResolver`. Read
     /// whole (the table is small) so effective-pool resolution costs one query, not one per node.
     pub async fn pool_rows(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
@@ -1974,6 +1994,7 @@ mod tests {
             tags_excluded: Vec::new(),
             effective_tags: Vec::new(),
             prefixes: Vec::new(),
+            notes: None,
             origin: None,
             time_zone: None,
             netbox_time_zone: None,

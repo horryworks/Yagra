@@ -1146,6 +1146,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "PUT",
+        "/api/v1/node-groups/:id/notes",
+        // `GroupFiltered` for the reason `/tags` gives: a group-scoped Operator holds
+        // `manage_config` too, and must not write another site's note (ADR-239).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
         "/api/v1/node-groups/:id/tags",
         // `GroupFiltered`, the same call `/prefixes` above makes and deliberately not the
         // `ADMIN_CFG` its `geo` / `pool` / `placement` siblings claim (ADR-131 decision 8).
@@ -1300,6 +1308,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         NO_MCP_WRITE,
     ),
+    ("PUT", "/api/v1/nodes/:node_id/notes", NodeScoped, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/nodes/:node_id/collection",

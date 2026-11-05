@@ -203,13 +203,13 @@ pub(super) async fn write<'a>(
     for g in &bundle.node_groups {
         sqlx::query(
             "INSERT INTO node_groups (id, name, group_type, sort_order, latitude, longitude, \
-                                          pool, tags, tags_excluded) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                                          pool, tags, tags_excluded, notes) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
                  ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, \
                      group_type = EXCLUDED.group_type, sort_order = EXCLUDED.sort_order, \
                      latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude, \
                      pool = EXCLUDED.pool, tags = EXCLUDED.tags, \
-                     tags_excluded = EXCLUDED.tags_excluded",
+                     tags_excluded = EXCLUDED.tags_excluded, notes = EXCLUDED.notes",
         )
         .bind(g.id)
         .bind(&g.name)
@@ -222,6 +222,7 @@ pub(super) async fn write<'a>(
         // binds the wrong value into the wrong column at runtime.
         .bind(&g.tags)
         .bind(&g.tags_excluded)
+        .bind(&g.notes)
         .execute(&mut *tx)
         .await?;
         bump(c, &mut seen, g.id);

@@ -1,0 +1,12 @@
+-- 0173_node_group_notes - a folder carries the operator's own note, as a node does (ADR-239).
+--
+-- reversible: additive only - one nullable column on `node_groups`, nothing narrowed and nothing
+-- rewritten. An older core reads folders through an explicit column list (`GroupRepo::list`), so it
+-- never selects this column: rolling the binary back leaves the text in place, unread, and rolling
+-- forward again finds it. No `schema_compat` floor, for the reason 0108 records: every release from
+-- 0.2.2 on tolerates a database carrying migrations it does not embed.
+--
+-- Same shape as `nodes.notes` (0108) and for the same reasons: spelled `notes`, not `description`;
+-- nullable, so "no note" has one spelling; and no length CHECK, because the 2,000-character cap is
+-- enforced at the API edge, where a violation answers 400 instead of 500.
+ALTER TABLE node_groups ADD COLUMN notes TEXT;

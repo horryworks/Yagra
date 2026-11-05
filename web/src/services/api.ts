@@ -1439,6 +1439,12 @@ export const api = {
     },
   ): Promise<void> => apiPut('/api/v1/nodes/{node_id}/bindings', { path: { node_id: id }, body }),
 
+  /** Replace only this node's note; `''` clears it (ADR-239). Written where the note is shown, on
+   *  the Overview tab. Never `setNodeBindings({ notes })`: that body replaces the profile and the
+   *  credential, so a note sent through it alone would unbind both. */
+  setNodeNotes: (id: string, notes: string): Promise<void> =>
+    apiPut('/api/v1/nodes/{node_id}/notes', { path: { node_id: id }, body: { notes } }),
+
   /** Add and/or remove labels across many nodes at once (ADR-135).
    *
    *  🚨 **Merges.** `add` adds only the labels it names and `remove` deletes only the labels it
@@ -1793,6 +1799,10 @@ export const api = {
       path: { id },
       body: { tags, tags_excluded: tagsExcluded },
     }),
+
+  /** Replace a folder's note; `''` clears it (ADR-239). Group-scoped, like `setNodeGroupTags`. */
+  setNodeGroupNotes: (id: string, notes: string): Promise<void> =>
+    apiPut('/api/v1/node-groups/{id}/notes', { path: { id }, body: { notes } }),
 
   /** Delete a node group. Its child groups + member nodes re-parent up; nodes are never deleted. */
   deleteNodeGroup: (id: string): Promise<void> =>

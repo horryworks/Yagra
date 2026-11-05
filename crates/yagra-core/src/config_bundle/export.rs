@@ -154,7 +154,7 @@ impl ConfigBundleRepo {
         let mut node_groups = Vec::new();
         for row in sqlx::query(
             "SELECT id, name, group_type, parent_id, sort_order, latitude, longitude, pool, \
-                    tags, tags_excluded \
+                    tags, tags_excluded, notes \
              FROM node_groups ORDER BY sort_order, name",
         )
         .fetch_all(&mut *conn)
@@ -171,6 +171,7 @@ impl ConfigBundleRepo {
                 pool: row.try_get("pool")?,
                 tags: row.try_get("tags")?,
                 tags_excluded: row.try_get("tags_excluded")?,
+                notes: row.try_get("notes")?,
             });
         }
         cap("node_groups", node_groups.len())?;
