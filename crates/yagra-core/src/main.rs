@@ -816,6 +816,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         repo.pool(),
     ));
     let config_saves = Arc::new(yagra_base::config_save::ConfigSaveRepo::new(repo.pool()));
+    // What the save script last saw about each device it can compare (ADR-222 decision 4). One
+    // instance: the result pipeline reads it, and the save report writes a confirmed save into it.
+    let config_unsaved = Arc::new(tsdb::config_unsaved::UnsavedCache::default());
     let oxidized_settings = oxidized::Settings::from_env();
     let oxidized_client = oxidized_settings
         .as_ref()
@@ -829,6 +832,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .and_then(|s| oxidized::relay::host_of(&s.url)),
         config_backup: config_backup.clone(),
         config_saves: config_saves.clone(),
+        config_unsaved: config_unsaved.clone(),
         oxidized: oxidized_client.clone(),
         llm: llm_repo.clone(),
         audit: audit_repo.clone(),
@@ -905,6 +909,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let admin = Some(Arc::new(AdminState {
         config_backup,
         config_saves: config_saves.clone(),
+        config_unsaved,
         oxidized: oxidized_settings
             .zip(oxidized_client)
             .map(|(settings, client)| {
@@ -1217,6 +1222,8 @@ struct LeaderTasks {
     /// Config backup (ADR-210 stage 2): where the status loop records what oxidized reported.
     config_backup: Arc<yagra_base::config_backup::ConfigBackupRepo>,
     config_saves: Arc<yagra_base::config_save::ConfigSaveRepo>,
+    /// Shared with `AdminState`: the refresh loop and the save report both write it.
+    config_unsaved: Arc<tsdb::config_unsaved::UnsavedCache>,
     /// The bundled oxidized; `None` when this deployment has none, and the loop does not start.
     oxidized: Option<Arc<oxidized::client::OxidizedClient>>,
     /// The config-backup relay (ADR-210 stage 5), and the host oxidized's connections come from.
@@ -1385,7 +1392,7 @@ impl LeaderTasks {
         let ap_fanout = Arc::new(topology::wireless_fanout::ApFanout::new());
         // What the save script last saw about each device it can compare (ADR-222 decision 4),
         // re-read on a timer and added to that device's results as `config_unsaved_seconds`.
-        let unsaved = Arc::new(tsdb::config_unsaved::UnsavedCache::default());
+        let unsaved = self.config_unsaved.clone();
         spawn_cancellable(
             &self.shutdown,
             tsdb::config_unsaved::run_refresh(unsaved.clone(), self.config_saves.clone()),

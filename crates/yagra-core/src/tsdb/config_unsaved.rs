@@ -29,7 +29,7 @@ const REFRESH: Duration = Duration::from_secs(60);
 /// What the save script last saw per node: `Some(since)` while running and startup differ,
 /// `None` while they agree. Absent: never checked.
 #[derive(Default)]
-pub(crate) struct UnsavedCache {
+pub struct UnsavedCache {
     nodes: RwLock<HashMap<Uuid, Option<DateTime<Utc>>>>,
 }
 
@@ -37,6 +37,16 @@ impl UnsavedCache {
     fn replace(&self, nodes: HashMap<Uuid, Option<DateTime<Utc>>>) {
         if let Ok(mut held) = self.nodes.write() {
             *held = nodes;
+        }
+    }
+
+    /// Record at once that the save script just read `node` as saved, so a poll asked for right
+    /// after a save carries `0` rather than what the cache held up to [`REFRESH`] ago. Only a CLI
+    /// reading may say this: a node the script never checked must stay absent, or its results
+    /// would gain a `0` no device reported.
+    pub(crate) fn mark_saved(&self, node: Uuid) {
+        if let Ok(mut held) = self.nodes.write() {
+            held.insert(node, None);
         }
     }
 
@@ -169,6 +179,11 @@ mod tests {
         let mut r = result_of(Uuid::new_v4(), scalar());
         cache.add_to(&mut r, now);
         assert_eq!(r.samples.len(), 1);
+        // A save the script just confirmed reads 0 at once, before the next refresh.
+        cache.mark_saved(checked);
+        let mut r = result_of(checked, scalar());
+        cache.add_to(&mut r, now);
+        assert_eq!(r.samples[1].value, 0.0);
         // SNMP already answered: its reading stands.
         let mut r = result_of(
             checked,

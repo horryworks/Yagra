@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The Unsaved configuration warning clears right after a save.** Once Save to startup (or an automatic save) succeeds, Yagra polls the device twice straight away, so the alert closes within seconds instead of waiting up to two poll intervals.
+
 ## v0.3.69 — Wait for a failing neighbour before paging, see what grouping would have done last week, and keep an upgrade from filling the disk
 
 ### New Features

@@ -564,6 +564,9 @@ async fn save_report(
             .record_unsaved(r.node, unsaved, compare)
             .await
             .map_err(|e| failed(&e, "config unsaved record"))?;
+        if !unsaved {
+            admin.config_unsaved.mark_saved(r.node);
+        }
     }
     if r.action == "auto" && flag(&r.unsaved_before) == Some(true) {
         let startup = Some(r.startup.as_str()).filter(|s| !s.is_empty());
@@ -599,7 +602,38 @@ async fn save_report(
             }
         }
     }
+    if saved_just_now(&r, failure) {
+        recheck_after_save(admin.0.clone(), r.node);
+    }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Whether this report is of a save the device just took: one asked for, or an automatic one the
+/// comparison called for, that did not fail.
+fn saved_just_now(r: &SaveReport, failure: Option<SaveFailure>) -> bool {
+    failure.is_none()
+        && (r.action == "save" || (r.action == "auto" && flag(&r.unsaved_before) == Some(true)))
+}
+
+/// How far apart the two polls after a save are, so they arrive as two readings in order.
+const RECHECK_GAP: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Poll `node` twice, right after a save, rather than leave the Unsaved configuration alert open
+/// until the schedule polls it twice more (its dwell is 2, so up to two intervals). Each poll is a
+/// real reading: SNMP reads the device's own history again, and the CLI reading was written into
+/// the cache above. A poll that cannot be sent costs only that wait, so it never fails the report.
+fn recheck_after_save(admin: std::sync::Arc<super::AdminState>, node: Uuid) {
+    tokio::spawn(async move {
+        for i in 0..2 {
+            if i > 0 {
+                tokio::time::sleep(RECHECK_GAP).await;
+            }
+            if let Err(e) = super::nodes::poll_now(&admin, node).await {
+                tracing::warn!(node = %node, error = ?e, "could not poll the node after its save");
+                return;
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -607,6 +641,33 @@ mod tests {
     use super::*;
     use crate::api::tests_support::{send, token};
     use std::sync::Arc;
+
+    fn report(action: &str, unsaved_before: &str) -> SaveReport {
+        SaveReport {
+            node: Uuid::nil(),
+            action: action.to_owned(),
+            save: String::new(),
+            failure: String::new(),
+            unsaved_before: unsaved_before.to_owned(),
+            unsaved_after: String::new(),
+            startup: String::new(),
+            compare: String::new(),
+        }
+    }
+
+    /// Only a save the device took asks for the polls that close the alert at once: a check, an
+    /// automatic run that found nothing to save, and a failed save leave the schedule to it.
+    #[test]
+    fn only_a_save_that_worked_rechecks_at_once() {
+        assert!(saved_just_now(&report("save", ""), None));
+        assert!(saved_just_now(&report("auto", "true"), None));
+        assert!(!saved_just_now(&report("auto", "false"), None));
+        assert!(!saved_just_now(&report("check", "true"), None));
+        assert!(!saved_just_now(
+            &report("save", ""),
+            Some(SaveFailure::NoAnswer)
+        ));
+    }
 
     fn ox_state_home() -> std::path::PathBuf {
         let home = std::env::temp_dir().join(format!("yagra-ox-save-{}", Uuid::new_v4()));

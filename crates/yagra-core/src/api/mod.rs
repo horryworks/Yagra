@@ -162,6 +162,9 @@ pub struct AdminState {
     /// Saves Yagra made or was asked to make to a device, and what the save script last saw about
     /// whether a device is saved (ADR-222).
     pub config_saves: Arc<yagra_base::config_save::ConfigSaveRepo>,
+    /// What the save script last saw, as the result pipeline adds it to each poll. A save the
+    /// script reports is written here at once, so the poll asked for after it reads the new state.
+    pub config_unsaved: Arc<crate::tsdb::config_unsaved::UnsavedCache>,
     /// The bundled oxidized; `None` on a deployment without one, where its routes answer 503.
     pub oxidized: Option<Arc<config_backup::OxidizedHandle>>,
     /// Where config backups are pushed (ADR-210 stage 4).
