@@ -644,7 +644,8 @@ impl AlertHistoryStore {
 
     /// Every node's liveness transitions committed at or after `since_ms`, oldest first and a fire
     /// before a resolve at the same instant, at most `limit` of them — what the grouping replay
-    /// rebuilds each node's outages from (ADR-236 decision 13). Served by the `at_unix_ms` index.
+    /// rebuilds each node's outages from (ADR-236 decision 13). Served by `alert_history_liveness_idx` (migration 0172),
+    /// whose predicate is this statement's `subject_kind` and `metric` filter.
     pub async fn liveness_since(
         &self,
         since_ms: i64,

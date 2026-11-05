@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-04
-# counts: MA-L=40331 MA-L-repeats-dropped=3 MA-M=6589 MA-S=7230 withheld=3
+# fetched: 2026-11-05
+# counts: MA-L=40333 MA-L-repeats-dropped=3 MA-M=6590 MA-S=7231 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -12651,6 +12651,7 @@
 00CD90	MAS Elektronik AG
 00CDFE	Apple, Inc.
 00CE30	Express LUCK Industrial Ltd.
+00CE39	MeLE Technologies(Shenzhen)Co.,Ltd.
 00CF1C	Communication Machinery Corporation
 00CFC0	China Mobile Group Device Co.,Ltd.
 00D000	FERRAN SCIENTIFIC, INC.
@@ -15188,6 +15189,7 @@
 102279	ZeroDesktop, Inc.
 102381	Barrot Technology Co.,LTD
 102407	HUAWEI TECHNOLOGIES CO.,LTD
+102513	LG Electronics
 1025CE	ELKA - Torantriebe GmbH u. Co. Betriebs KG
 102779	Sadel S.p.A.
 1027BE	TVIP
@@ -37848,6 +37850,7 @@
 8C1F64A39	MG s.r.l.
 8C1F64A3B	Fujian Satlink Electronics Co., Ltd
 8C1F64A3C	Talleres de Escoriaza SAU
+8C1F64A3D	GPHY inc.
 8C1F64A3E	Hiwin Mikrosystem Corp.
 8C1F64A3F	ViewSonic Corp
 8C1F64A41	Guan Show Technologe Co., Ltd.
@@ -45099,6 +45102,7 @@ B8F453A	Skeleton Technologies OÜ
 B8F453B	SDMT Limited
 B8F453C	Wavin T&I
 B8F453D	Withusnet Co., Ltd
+B8F453E	Shenzhen Co-believe Technology limited
 B8F4A4	Google, Inc.
 B8F4D0	Herrmann Ultraschalltechnik GmbH & Co. Kg
 B8F5E7	WayTools, LLC

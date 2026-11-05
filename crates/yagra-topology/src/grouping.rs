@@ -852,6 +852,64 @@ mod tests {
         assert_eq!((c.notified, c.notified_waiting), (2, 2));
     }
 
+    /// Two recorded outages of one node that touch at an instant: the node is down across the
+    /// seam, so a fire behind it at that instant is rolled up. A set rather than a count would
+    /// drop it at the first outage's end.
+    #[test]
+    fn touching_outages_of_one_node_keep_it_down_across_the_seam() {
+        let (g, sw, ap1, _) = cascade();
+        let outages = [
+            Outage {
+                node: sw,
+                from_ms: 0,
+                to_ms: Some(5_000),
+            },
+            down_from(sw, 5_000),
+            down_from(ap1, 5_000),
+        ];
+        let c = at(&g.replay(&outages, 1, |_| LOOK), Level::Certain);
+        assert_eq!(
+            c.notified, 1,
+            "the switch's second fire pages, ap1 is behind it"
+        );
+    }
+
+    /// A waited fire whose own node came back before the neighbour committed is not a page at all.
+    #[test]
+    fn a_waited_fire_that_recovered_first_is_silenced() {
+        let (mut g, sw, ap1, _) = cascade();
+        g.add_link(ap1, id(2), true);
+        let outages = [
+            Outage {
+                node: ap1,
+                from_ms: 1_000,
+                to_ms: Some(100_000),
+            },
+            down_from(sw, 201_000),
+        ];
+        let c = at(&g.replay(&outages, 0, |_| LOOK), Level::Certain);
+        assert_eq!((c.notified, c.notified_waiting), (2, 1));
+        assert_eq!(c.delay_max_ms, None, "nothing waited and then paged");
+    }
+
+    /// An outage still open counts as down for every later fire, and its own fire is counted once.
+    #[test]
+    fn an_open_outage_stays_down_to_the_end_of_the_replay() {
+        let (g, sw, ap1, ap2) = cascade();
+        let outages = [
+            down_from(sw, 1_000),
+            down_from(ap1, 50_000),
+            down_from(ap2, 9_000_000),
+        ];
+        let s = g.replay(&outages, 0, |_| LOOK);
+        assert_eq!(s.fired, 3);
+        let c = at(&s, Level::Certain);
+        assert_eq!(
+            c.notified, 1,
+            "only the switch pages; both access points sit behind it"
+        );
+    }
+
     #[test]
     fn a_fire_before_since_is_not_counted_but_its_outage_still_counts_as_down() {
         let (g, sw, ap1, _) = cascade();

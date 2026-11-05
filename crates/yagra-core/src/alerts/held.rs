@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The loop that ends a held notification's wait (ADR-236 Inc.2 decision 5).
+//! The loop that ends a held notification's wait (ADR-236 Inc.2 decision 11).
 //!
 //! A border whose neighbour is failing without having committed is held rather than paged. When
 //! the neighbour commits, the poll path settles it at once; when the neighbour recovers or never
