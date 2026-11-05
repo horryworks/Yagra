@@ -6,13 +6,13 @@
 // pills + warning dots), and the Edit/Delete modals. Live data (status, RTT, interfaces) refreshes
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useConfigChanges } from '../../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { topologyMapHref } from '../../lib/entityHref';
 import { api, errMsg } from '../../services/api';
-import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
+import { pointsToSeries, relativeTime } from '../../lib/format';
 import { groupTrail } from '../../lib/nodeTree';
 import { GroupCrumbs } from './GroupCrumbs';
 import { POLL_NOW_REFRESH_MS } from './pollNowRefresh';
@@ -22,7 +22,6 @@ import type {
   InterfaceRow,
   NodeDetail as NodeDetailData,
   NodeGroup,
-  NodeState,
   NodeStatus,
 } from '../../types/api';
 import { Button } from '../ui/Button';
@@ -31,6 +30,8 @@ import { BoxIcon } from '../ui/icons';
 import { EditNodeModal } from './EditNodeModal';
 import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
+import { StateAlertsButton } from './StateAlertsButton';
+import type { PortFocus } from './alertJump';
 import { NeighborsTab } from './NeighborsTab';
 import { ApTab } from './ApTab';
 import { CollectionTab } from './CollectionTab';
@@ -158,6 +159,13 @@ export function NodeDetail({
   const [ifLoaded, setIfLoaded] = useState(false);
   const [ifError, setIfError] = useState<string | null>(null);
   const [collCount, setCollCount] = useState<number | null>(null);
+  /** The port an alert in the header asked the Interfaces tab to select (ADR-238 decision 3). */
+  const [portFocus, setPortFocus] = useState<PortFocus | null>(null);
+  // Counts every request, so it never repeats while the request itself is cleared after use.
+  const portFocusSeq = useRef(0);
+  const clearPortFocus = useCallback(() => setPortFocus(null), []);
+  // A request made on one node is not carried to the next one the split shows.
+  useEffect(() => setPortFocus(null), [nodeId]);
   const [polling, setPolling] = useState(false);
   const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   // A re-read that does NOT blank the pane — after **Poll now**, and since ADR-203 after an edit too.
@@ -436,7 +444,14 @@ export function NodeDetail({
       />
     ),
     interfaces: (
-      <InterfacesTab nodeId={node.id} rows={interfaces} loaded={ifLoaded} error={ifError} />
+      <InterfacesTab
+        nodeId={node.id}
+        rows={interfaces}
+        loaded={ifLoaded}
+        error={ifError}
+        focus={portFocus}
+        onFocusApplied={clearPortFocus}
+      />
     ),
     neighbors: <NeighborsTab node={node} />,
     collection: <CollectionTab node={node} canEdit={canEdit} />,
@@ -474,7 +489,22 @@ export function NodeDetail({
                 label={t(badge.labelKey)}
               />
             ))}
-            {status && <StatePill state={state} />}
+            {/* Opens the node's alerts on any tab, and takes the operator to the port or the tab
+                each one is read on (ADR-238). */}
+            {status && (
+              <StateAlertsButton
+                state={state}
+                alerts={status.alerts}
+                activeTab={activeTab}
+                onJump={(jump) => {
+                  if (jump.tab === 'interfaces') {
+                    portFocusSeq.current += 1;
+                    setPortFocus({ ifindex: jump.ifindex, seq: portFocusSeq.current });
+                  }
+                  onTabChange(jump.tab);
+                }}
+              />
+            )}
           </div>
           {/* The primary buttons and "More" (ADR-209 decision 8), the same set in the split and on the
               page. Which ones, and in what order, is `nodeHeaderActions` — tested, and gated on the
@@ -663,16 +693,6 @@ export function NodeDetail({
         />
       )}
     </div>
-  );
-}
-
-/** Rounded status pill (dot + label, bordered in the state color) shown beside the node name. */
-function StatePill({ state }: { state: NodeState }) {
-  return (
-    <span className="nd-statepill" style={{ color: stateColorVar(state) }}>
-      <span className="nd-statepill-dot" />
-      {stateLabel(state)}
-    </span>
   );
 }
 

@@ -16,6 +16,7 @@ import type { InterfaceAddress, InterfaceRow, InterfaceSeries, Neighbor } from '
 import { StatusDot } from '../ui/StatusDot';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/palette';
+import { portToSelect, type PortFocus } from './alertJump';
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useCan, useRangeStore } from '../../store';
@@ -126,6 +127,10 @@ interface Props {
   rows: InterfaceRow[];
   loaded: boolean;
   error: string | null;
+  /** A port the header's alert list asked to show (ADR-238). Selected once its row is loaded. */
+  focus?: PortFocus | null;
+  /** Called once `focus` is applied, so the request does not outlive this mount. */
+  onFocusApplied?: () => void;
 }
 
 /** Everything the dock needs to be resizable, or `null` where it is not (mobile). Bundled because
@@ -148,7 +153,14 @@ interface DockResize {
   };
 }
 
-export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
+export function InterfacesTab({
+  nodeId,
+  rows,
+  loaded,
+  error,
+  focus,
+  onFocusApplied,
+}: Props) {
   const { t } = useTranslation('nodes');
   // The predicate lives in `tabFilters.ts`: it was hand-rolled here and searched two fields
   // where the row shows five, and a `.tsx` is a file no test runs (testing.md).
@@ -159,6 +171,20 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // device) is about the SELECTED row below, which stays local.
   const { filters, setFilters } = useFilterParams(columns, nodeTabFilterPrefix('interfaces'));
   const [selected, setSelected] = useState<number | null>(null);
+  // A jump from an alert in the header selects its port, which opens the dock on it. Applied once
+  // per request (`seq`), and only when the row exists: the list may still be loading on arrival.
+  const appliedFocus = useRef(0);
+  useEffect(() => {
+    const port = portToSelect(
+      focus,
+      appliedFocus.current,
+      rows.map((r) => r.ifindex),
+    );
+    if (port == null || !focus) return;
+    appliedFocus.current = focus.seq;
+    setSelected(port);
+    onFocusApplied?.();
+  }, [focus, rows, onFocusApplied]);
   // Escape closes the dock (ADR-073). It was the one dismissal this tab lacked — re-clicking the
   // row and the dock's own ✕ were already there, and `keepSelectedInView` exists specifically to
   // keep the first of those one click away.

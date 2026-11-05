@@ -172,6 +172,75 @@
   flex: none;
 }
 
+/* While the node has alerts, the pill is a button that opens them (ADR-238). Same box as the
+   plain pill; the count sits behind a hairline in the state colour. */
+.nd-statewrap {
+  display: inline-flex;
+}
+
+.nd-statepill-btn {
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.nd-statepill-btn:hover,
+.nd-statepill-btn[aria-expanded='true'] {
+  background: var(--bg-tertiary);
+}
+
+.nd-statepill-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.nd-statepill-n {
+  padding-left: 6px;
+  border-left: var(--border-width) solid currentColor;
+  font-variant-numeric: tabular-nums;
+}
+
+.nd-statepill-chev {
+  font-size: var(--font-xs);
+  opacity: 0.8;
+}
+
+.nd-alertpop {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+  padding: 10px 14px;
+}
+
+.nd-alert-jump {
+  background: none;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  font: inherit;
+  font-size: var(--font-xs);
+  color: var(--accent-color);
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* The jump takes the free space, so it and the time sit together at the right. */
+.nd-alert-jump + .nd-alert-time {
+  margin-left: 0;
+}
+
+.nd-alert-jump:hover {
+  color: var(--accent-hover);
+  background: var(--bg-tertiary);
+}
+
+.nd-alert-jump:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
 /* ---------------- poll-now notice ---------------- */
 .nd-pollmsg {
   margin: 0;

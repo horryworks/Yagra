@@ -11,9 +11,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { ActiveAlertList } from './ActiveAlertList';
 import { collectionFaultNotice } from './collectionFault';
-import { rootCause, type HasSubject } from '../../lib/alertSubject';
-import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
 import { InfoPress } from '../ui/InfoTip';
@@ -23,7 +22,6 @@ import { api } from '../../services/api';
 import { nodeProfileOf, type NodeProfile } from '../../lib/nodeProfile';
 import { NEW_PROFILE_HREF } from '../../pages/collectionSetup';
 import {
-  alertWhatOf,
   deriveMem,
   formatBps,
   formatBytes,
@@ -41,7 +39,6 @@ import {
   scalarLabel,
   scalarValueFormat,
   severityColorVar,
-  stateLabel,
   withUnit,
 } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
@@ -239,32 +236,7 @@ export function OverviewTab({
       {status && status.alerts.length > 0 && (
         <section>
           <div className="nd-section-t">{t('nav:alerts.active')}</div>
-          <div className="nd-alerts">
-            {status.alerts.map((a) => (
-              <div className="nd-alert" key={`${a.check}|${a.severity}`}>
-                <span
-                  className="nd-alert-dot"
-                  style={{ background: severityColorVar(a.severity) }}
-                />
-                <span className="nd-alert-state">{stateLabel(a.state)}</span>
-                {/* WHY it fired — the metric, the bound it crossed and the sample that crossed it.
-                    The same span, on the same fact, as Alerts ▸ Active and Alerts ▸ History: this
-                    row used to render the severity word and the time and nothing else, so a node
-                    sitting in Warning gave an operator no way to learn what was wrong without
-                    leaving its page. `title` is the check id, matching the triage row — the words
-                    carry their own tooltip from inside AlertWhatText. */}
-                <span className="nd-alert-what" title={a.check}>
-                  <AlertWhatText what={alertWhatOf(a)} />
-                </span>
-                {/* `causedBy` used to interpolate the raw UUID, which `no-raw-uuids-in-tables`
-                    forbids and which ADR-087 made worse: on this very node's page the cause is
-                    often the node itself, so it read "caused by <this node's own uuid>". */}
-                <AlertCause alert={a} />
-                {a.flapping && <span className="nd-alert-flap">{t('alerts:row.flapping')}</span>}
-                <span className="nd-muted nd-alert-time">{formatTimestamp(a.at_unix_ms)}</span>
-              </div>
-            ))}
-          </div>
+          <ActiveAlertList alerts={status.alerts} />
         </section>
       )}
 
@@ -1673,26 +1645,5 @@ function OverviewSections({ node }: { node: NodeDetail }) {
         );
       })}
     </>
-  );
-}
-/** How an alert's cause reads on the node's own page (ADR-087).
- *
- * `self` is the common case here and the one that has no other node to name: this page *is* the
- * node whose outage the alert belongs to. `upstream` resolves the id to a name — the old copy
- * interpolated the raw UUID, which `no-raw-uuids-in-tables` forbids. */
-function AlertCause({ alert }: { alert: HasSubject & { root_cause?: string | null } }) {
-  const { t } = useTranslation('nodes');
-  // Hooks before the early returns: this component renders nothing for most alerts, and a hook
-  // after a conditional return is the classic React rules-of-hooks break.
-  const { nodeName } = useEntityNames();
-  const cause = rootCause(alert);
-  if (cause.kind === 'none') return null;
-  if (cause.kind === 'self') {
-    return <span className="nd-muted nd-alert-cause">{t('overview.partOfOutage')}</span>;
-  }
-  return (
-    <span className="nd-muted nd-alert-cause">
-      ← <EntityName name={nodeName(cause.nodeId)} id={cause.nodeId} />
-    </span>
   );
 }

@@ -12,6 +12,7 @@
 
 ### Improvements
 
+- **A node's alerts open from its state badge, on any tab.** While a node has alerts, the Warning / Critical badge beside its name shows how many and opens them as a list. A port alert takes you to the Interfaces tab with that port selected; any other takes you to Overview.
 - **The Unsaved configuration warning clears right after a save.** Once Save to startup (or an automatic save) succeeds, Yagra polls the device twice straight away, so the alert closes within seconds instead of waiting up to two poll intervals.
 
 ## v0.3.69 — Wait for a failing neighbour before paging, see what grouping would have done last week, and keep an upgrade from filling the disk
