@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.69 — Wait for a failing neighbour before paging, see what grouping would have done last week, and keep an upgrade from filling the disk
+
 ### New Features
 
 - **Alert grouping can wait for a failing neighbour before it pages.** A node behind a switch often commits as down before the switch does, so for that moment it looks like the edge of the outage and pages — then closes when the switch goes down. Alerts ▸ Notification delivery now offers **Wait for the neighbour**: while a linked neighbour is failing but has not committed, the node's alert is shown (marked *waiting for a neighbour*) and nothing is sent or recorded. If the neighbour goes down the node is rolled up into it; if the neighbour recovers or the wait runs out (its remaining samples × its poll interval + 30 s, five minutes per sample when unknown) it pages as usual. A page can arrive up to about 10½ minutes late with the default dwell and a 5-minute interval. Switching it off, or setting the node's folder to Off, sends whatever is held at once; a wait that runs out during an upgrade's pause is held over until the pause ends, since no neighbour can commit inside it. Off by default; one setting for the whole deployment, `PUT /api/v1/alert-grouping/wait`.
