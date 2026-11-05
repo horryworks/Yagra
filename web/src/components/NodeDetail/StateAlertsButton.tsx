@@ -42,7 +42,7 @@ export function StateAlertsButton({
     return (
       <span className="nd-statepill" style={color}>
         <span className="nd-statepill-dot" />
-        {stateLabel(state)}
+        <span className="nd-statepill-label">{stateLabel(state)}</span>
       </span>
     );
   }
@@ -58,7 +58,7 @@ export function StateAlertsButton({
         onClick={() => setOpen((v) => !v)}
       >
         <span className="nd-statepill-dot" />
-        {stateLabel(state)}
+        <span className="nd-statepill-label">{stateLabel(state)}</span>
         <span className="nd-statepill-n">{alerts.length}</span>
         <span className="nd-statepill-chev" aria-hidden>
           ▾

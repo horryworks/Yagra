@@ -103,7 +103,8 @@ test('a node’s state on the list is the state on its own page', async ({ page,
 
   for (const node of picked) {
     await page.goto(`/nodes/${node.id}`);
-    const pill = page.locator('.nd-statepill');
+    // The label alone: while the node has alerts the badge also carries their count (ADR-238).
+    const pill = page.locator('.nd-statepill .nd-statepill-label');
     await expect(pill, `${node.name} never showed a state`).toBeVisible();
     const shown = (await pill.innerText()).trim();
 

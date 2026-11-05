@@ -84,7 +84,9 @@ test('the badge opens the alerts on another tab, and a port alert opens that por
 }) => {
   await page.goto(`/nodes/${NODE_ID}?tab=events`);
   await expect(badge(page)).toBeVisible({ timeout: 15_000 });
-  await expect(badge(page)).toContainText('2');
+  await expect(badge(page).locator('.nd-statepill-n')).toHaveText('2');
+  // The state word stands alone, so a reader comparing it with the list is not handed the count.
+  await expect(badge(page).locator('.nd-statepill-label')).toHaveText('Warning');
 
   await badge(page).click();
   const list = page.getByRole('dialog', { name: 'Active alerts' });
