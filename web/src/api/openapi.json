@@ -10,7 +10,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.3.69"
+    "version": "0.3.70"
   },
   "paths": {
     "/api/v1/alert-grouping": {

@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.70 — Write notes in place and on folders, open a node's alerts from its state badge, and clear the unsaved-configuration warning right after a save
+
 ### New Features
 
 - **Notes on folders, and notes written where they are shown.** A folder now carries a free-text note, like a node. On a node's Overview tab and on a folder's pane, press the note (or **+ Add note**) and type — Save, or Ctrl+Enter; Esc cancels. The note has left the Edit node dialog. Neither note is sent with alerts. API: `PUT /api/v1/nodes/{id}/notes` and `PUT /api/v1/node-groups/{id}/notes` (`{"notes": "…"}`, `""` clears); `GET /api/v1/node-groups`, the MCP `list_node_groups` tool and the configuration bundle carry a folder's `notes`.
