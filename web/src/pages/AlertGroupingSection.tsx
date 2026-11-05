@@ -191,7 +191,7 @@ export function AlertGroupingSection({
                   fired: replay.fired,
                   count: replay.atOnce,
                   waiting: replay.waiting,
-                  delay: formatDuration(replay.maxDelaySecs ?? 0, { units: 1, smallest: 'm' }),
+                  delay: formatDuration(replay.maxDelaySecs ?? 0, { units: 1 }),
                 })}
             {replay.truncated && ` ${t('grouping.last7Partial')}`}
           </p>

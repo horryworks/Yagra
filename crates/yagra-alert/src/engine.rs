@@ -1492,10 +1492,7 @@ impl AlertManager {
             if let Some(alert) = stranded {
                 self.broadcast(&alert, true);
                 if alert.notify_held_until.is_some() {
-                    self.held
-                        .lock()
-                        .expect("held mutex poisoned")
-                        .remove(&check);
+                    self.unhold(check);
                 } else {
                     actions.push(NotifyAction::Resolve(alert));
                 }
@@ -1604,10 +1601,7 @@ impl AlertManager {
                     Some(alert) if alert.notify_held_until.is_some() => {
                         // ADR-236 decision 10: it was never sent or recorded, so there is nothing
                         // to close. The screen still drops it.
-                        self.held
-                            .lock()
-                            .expect("held mutex poisoned")
-                            .remove(&check);
+                        self.unhold(check);
                         self.broadcast(&alert, true);
                         Vec::new()
                     }
@@ -1796,14 +1790,27 @@ impl AlertManager {
                 let (state, count) = cs.candidate()?;
                 (state == NodeState::Unreachable).then(|| {
                     let remaining = i64::from(cs.dwell().saturating_sub(count).max(1));
-                    let interval_ms = self
-                        .intervals
-                        .for_node(n.as_uuid())
-                        .map_or(HELD_FALLBACK_INTERVAL_MS, |s| i64::from(s) * 1_000);
-                    (n, remaining * interval_ms)
+                    (n, remaining * self.interval_ms_or_fallback(n))
                 })
             })
             .collect()
+    }
+
+    /// `node`'s poll interval in milliseconds, five minutes when none is published - what both
+    /// the live hold and the replay measure a neighbour's remaining run in (ADR-236 decision 11).
+    fn interval_ms_or_fallback(&self, node: NodeId) -> i64 {
+        self.intervals
+            .for_node(node.as_uuid())
+            .map_or(HELD_FALLBACK_INTERVAL_MS, |s| i64::from(s) * 1_000)
+    }
+
+    /// Forget that `check`'s notification is held. Every exit a held alert can take goes through
+    /// this, so none can leave an entry behind for [`Self::release_held`] to page.
+    fn unhold(&self, check: CheckId) {
+        self.held
+            .lock()
+            .expect("held mutex poisoned")
+            .remove(&check);
     }
 
     /// When a border's notification should be held until, or `None` to send it now (ADR-236
@@ -1850,30 +1857,48 @@ impl AlertManager {
                 .get(&check)
                 .cloned()
             else {
-                self.held
-                    .lock()
-                    .expect("held mutex poisoned")
-                    .remove(&check);
+                self.unhold(check);
                 continue;
             };
             let Some(node) = alert.node() else {
                 continue;
             };
-            if now_unix_ms < until && !self.failing_neighbours(node).is_empty() {
+            let (paused, still_waiting) = {
+                let cfg = self.config.read().expect("config rwlock poisoned");
+                (
+                    cfg.is_paused(node, now_unix_ms),
+                    cfg.grouping_wait
+                        && cfg.grouping.level_of(node) != yagra_topology::grouping::Level::Off,
+                )
+            };
+            // An upgrade's pause observes nothing, so a failing neighbour cannot commit inside it:
+            // the wait is held over until the pause ends rather than run out against a frozen
+            // neighbour (ADR-236 Inc.2, user decision 2026-11-05).
+            if paused {
+                continue;
+            }
+            // Waiting switched off, or the node's level set to Off, sends what was held at once:
+            // the setting says send now, and nothing is left to wait for.
+            if still_waiting && now_unix_ms < until && !self.failing_neighbours(node).is_empty() {
                 continue;
             }
             let released = {
                 let mut active = self.active.lock().expect("alerts mutex poisoned");
-                let Some(cur) = active.get_mut(&check) else {
+                // Asked again under the lock: between the snapshot above and here the poll path
+                // may have rolled it up (and recorded that fire) or replaced it, and releasing it
+                // then would fire the same alert twice.
+                let Some(cur) = active
+                    .get_mut(&check)
+                    .filter(|cur| cur.notify_held_until.is_some())
+                else {
+                    drop(active);
+                    self.unhold(check);
                     continue;
                 };
                 cur.notify_held_until = None;
                 cur.clone()
             };
-            self.held
-                .lock()
-                .expect("held mutex poisoned")
-                .remove(&check);
+            self.unhold(check);
             self.broadcast(&released, false);
             actions.push(NotifyAction::Fire(released));
         }
@@ -1891,27 +1916,32 @@ impl AlertManager {
             .clone()
     }
 
-    /// Replay recorded outages against the links and levels in force now (ADR-236 decision 13).
-    /// A neighbour counts as failing for as long as a liveness run of the default dwell takes at
-    /// its poll interval, five minutes when none is published — the longest a hold here would wait.
+    /// Replay recorded outages against `graph` (ADR-236 decision 13) — the caller passes the one it
+    /// keeps the answer under, so the two cannot be different graphs. A neighbour counts as
+    /// failing for as long as a liveness run takes at its poll interval, five minutes when none is
+    /// published: its own dwell when its check is tracked, the default otherwise — the longest a
+    /// hold here would wait for it.
     #[must_use]
     pub fn replay_grouping(
         &self,
+        graph: &yagra_topology::grouping::LinkGraph,
         outages: &[yagra_topology::grouping::Outage],
         since_ms: i64,
     ) -> yagra_topology::grouping::ReplaySummary {
-        let graph = self
-            .config
-            .read()
-            .expect("config rwlock poisoned")
-            .grouping
-            .clone();
-        let runs = i64::from(DEFAULT_LIVENESS_DWELL.saturating_sub(1).max(1));
+        let dwells: HashMap<NodeId, u32> = {
+            let states = self.states.lock().expect("states mutex poisoned");
+            outages
+                .iter()
+                .filter_map(|o| {
+                    states
+                        .get(&check_id(o.node, LIVENESS))
+                        .map(|cs| (o.node, cs.dwell()))
+                })
+                .collect()
+        };
         graph.replay(outages, since_ms, |n| {
-            runs * self
-                .intervals
-                .for_node(n.as_uuid())
-                .map_or(HELD_FALLBACK_INTERVAL_MS, |s| i64::from(s) * 1_000)
+            let dwell = dwells.get(&n).copied().unwrap_or(DEFAULT_LIVENESS_DWELL);
+            i64::from(dwell.saturating_sub(1).max(1)) * self.interval_ms_or_fallback(n)
         })
     }
 
@@ -2031,10 +2061,7 @@ impl AlertManager {
                         cur.notify_held_until = None;
                         cur.clone()
                     };
-                    self.held
-                        .lock()
-                        .expect("held mutex poisoned")
-                        .remove(&alert.check);
+                    self.unhold(alert.check);
                     self.broadcast(&updated, false);
                     actions.push(NotifyAction::Fire(updated));
                 }
@@ -2240,10 +2267,7 @@ impl AlertManager {
             .remove(&check)?;
         self.broadcast(&prev, true);
         if prev.notify_held_until.is_some() {
-            self.held
-                .lock()
-                .expect("held mutex poisoned")
-                .remove(&check);
+            self.unhold(check);
             return Some(None);
         }
         Some(Some(NotifyAction::Resolve(prev)))
@@ -6507,6 +6531,145 @@ mod tests {
         ));
         assert_eq!(mgr.held_count(), 0);
         assert!(mgr.release_held(i64::MAX).is_empty());
+    }
+
+    /// The release tick snapshots the held set and reads the alert again later; if the poll path
+    /// rolled it up in between, the tick must not fire it a second time. The stale entry stands in
+    /// for that snapshot.
+    #[test]
+    fn a_held_alert_rolled_up_meanwhile_is_not_released_again() {
+        let (child, parent) = (NodeId::new(), NodeId::new());
+        let mgr = waiting(child, parent);
+        drive_n(&mgr, parent, CheckOutcome::Unreachable, 0, 1);
+        drive_n(
+            &mgr,
+            child,
+            CheckOutcome::Unreachable,
+            100,
+            DEFAULT_LIVENESS_DWELL,
+        );
+        drive_n(
+            &mgr,
+            parent,
+            CheckOutcome::Unreachable,
+            1,
+            DEFAULT_LIVENESS_DWELL - 1,
+        );
+        assert_eq!(held_alert(&mgr, child).root_cause, Some(parent));
+        mgr.held
+            .lock()
+            .unwrap()
+            .insert(check_id(child, LIVENESS), i64::MAX);
+
+        let released = mgr.release_held(i64::MAX - 1);
+        assert!(released.is_empty(), "fired twice: {released:?}");
+        assert_eq!(mgr.held_count(), 0, "the stale entry is dropped");
+    }
+
+    /// Switching waiting off, or the node's level to Off, sends what is held at the next tick even
+    /// though the neighbour is still failing and the wait has time left (user decision 2026-11-05).
+    #[test]
+    fn switching_waiting_off_releases_what_is_held() {
+        for (wait, level) in [(false, Level::Certain), (true, Level::Off)] {
+            let (child, parent) = (NodeId::new(), NodeId::new());
+            let mgr = waiting(child, parent);
+            drive_n(&mgr, parent, CheckOutcome::Unreachable, 0, 1);
+            drive_n(
+                &mgr,
+                child,
+                CheckOutcome::Unreachable,
+                100,
+                DEFAULT_LIVENESS_DWELL,
+            );
+            assert!(mgr.release_held(200).is_empty(), "still waiting");
+            let graph = Arc::new(linked(&[(child, parent)]).with_default_level(level));
+            mgr.set_config(
+                cfg(Vec::new(), HashMap::new())
+                    .with_grouping(graph)
+                    .with_grouping_wait(wait),
+            );
+            let released = mgr.release_held(201);
+            assert!(
+                matches!(released.as_slice(), [NotifyAction::Fire(a)] if a.subject.is_node(child)),
+                "wait={wait} level={level:?}: {released:?}"
+            );
+        }
+    }
+
+    /// An upgrade's pause observes nothing, so the neighbour cannot commit inside it: a wait that
+    /// runs out during the pause is held over, and released once the pause ends (user decision
+    /// 2026-11-05).
+    #[test]
+    fn a_wait_that_runs_out_during_an_upgrade_pause_waits_for_the_pause_to_end() {
+        let (child, parent) = (NodeId::new(), NodeId::new());
+        let mgr = waiting(child, parent);
+        drive_n(&mgr, parent, CheckOutcome::Unreachable, 0, 1);
+        drive_n(
+            &mgr,
+            child,
+            CheckOutcome::Unreachable,
+            100,
+            DEFAULT_LIVENESS_DWELL,
+        );
+        let until = held_alert(&mgr, child).notify_held_until.expect("held");
+        let with = |paused: Option<i64>| {
+            cfg(Vec::new(), HashMap::new())
+                .with_grouping(linked(&[(child, parent)]))
+                .with_grouping_wait(true)
+                .with_pause(paused, BTreeSet::new())
+        };
+        mgr.set_config(with(Some(until + 60_000)));
+        assert!(mgr.release_held(until).is_empty(), "held over the pause");
+        mgr.set_config(with(None));
+        assert!(matches!(
+            mgr.release_held(until).as_slice(),
+            [NotifyAction::Fire(a)] if a.subject.is_node(child)
+        ));
+    }
+
+    /// The replay gives a neighbour as long as the live hold would: its own dwell once its check is
+    /// tracked, not the default. A parent committing 20 minutes after its child is past the default
+    /// lookahead (2 x 5 min) and inside a dwell of 6 (5 x 5 min).
+    #[test]
+    fn the_replay_reads_a_neighbours_own_dwell() {
+        use yagra_topology::grouping::Outage;
+        let (child, parent) = (NodeId::new(), NodeId::new());
+        let mut rule = liveness_rule();
+        rule.rule.dwell_samples = 6;
+        let mgr = manager();
+        mgr.set_config(
+            AlertConfig::new(vec![rule], HashMap::new()).with_grouping(linked(&[(child, parent)])),
+        );
+        mgr.observe(&result(parent, CheckOutcome::Reachable, 0));
+        let outages = [
+            Outage {
+                node: child,
+                from_ms: 1_000,
+                to_ms: None,
+            },
+            Outage {
+                node: parent,
+                from_ms: 1_000 + 20 * 60 * 1_000,
+                to_ms: None,
+            },
+        ];
+        let graph = mgr.grouping_graph();
+        let certain = |s: yagra_topology::grouping::ReplaySummary| {
+            s.levels
+                .into_iter()
+                .find(|l| l.level == Level::Certain)
+                .unwrap()
+        };
+        let tuned = certain(mgr.replay_grouping(&graph, &outages, 0));
+        assert_eq!(
+            tuned.notified_waiting, 1,
+            "waiting rolls the child up: {tuned:?}"
+        );
+        let untracked = certain(manager().replay_grouping(&graph, &outages, 0));
+        assert_eq!(
+            untracked.notified_waiting, 2,
+            "the default dwell does not reach that far: {untracked:?}"
+        );
     }
 
     /// The neighbour came back instead: the wait is over and the node pages on its own.

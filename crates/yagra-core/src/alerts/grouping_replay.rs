@@ -120,7 +120,7 @@ pub(crate) async fn last_7_days(
         .collect();
     let outages = outages_from_rows(&rows, since, &alerts.down_set());
     let replayed = Arc::new(Replayed {
-        summary: alerts.replay_grouping(&outages, since),
+        summary: alerts.replay_grouping(&graph, &outages, since),
         truncated,
     });
     *KEPT

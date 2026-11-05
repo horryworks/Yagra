@@ -91,7 +91,9 @@
   text-decoration: none;
 }
 
-.alertrow-muted:hover {
+/* Only the delivery-hours mark is a link; the "waiting for a neighbour" mark shares the shape and
+   must not light up as if it were one. */
+a.alertrow-muted:hover {
   color: var(--text-primary);
   border-color: var(--accent-color);
 }
