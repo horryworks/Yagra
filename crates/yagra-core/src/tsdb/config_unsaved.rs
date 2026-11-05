@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -30,13 +30,28 @@ const REFRESH: Duration = Duration::from_secs(60);
 /// `None` while they agree. Absent: never checked.
 #[derive(Default)]
 pub struct UnsavedCache {
-    nodes: RwLock<HashMap<Uuid, Option<DateTime<Utc>>>>,
+    nodes: RwLock<Held>,
+}
+
+#[derive(Default)]
+struct Held {
+    nodes: HashMap<Uuid, Option<DateTime<Utc>>>,
+    /// When [`UnsavedCache::mark_saved`] last wrote each node. A refresh whose read began before
+    /// that may have read the row before the save report committed it, so it must not undo it.
+    marked: HashMap<Uuid, Instant>,
 }
 
 impl UnsavedCache {
-    fn replace(&self, nodes: HashMap<Uuid, Option<DateTime<Utc>>>) {
+    /// Take a refresh's answer, read from the database from `asked` on. A node marked saved at or
+    /// after `asked` keeps that mark: the read may predate the report's write, and putting the old
+    /// `Some(since)` back would carry it into the polls asked for right after the save.
+    fn replace(&self, mut nodes: HashMap<Uuid, Option<DateTime<Utc>>>, asked: Instant) {
         if let Ok(mut held) = self.nodes.write() {
-            *held = nodes;
+            held.marked.retain(|_, at| *at >= asked);
+            for node in held.marked.keys() {
+                nodes.insert(*node, None);
+            }
+            held.nodes = nodes;
         }
     }
 
@@ -46,7 +61,8 @@ impl UnsavedCache {
     /// would gain a `0` no device reported.
     pub(crate) fn mark_saved(&self, node: Uuid) {
         if let Ok(mut held) = self.nodes.write() {
-            held.insert(node, None);
+            held.nodes.insert(node, None);
+            held.marked.insert(node, Instant::now());
         }
     }
 
@@ -72,7 +88,7 @@ impl UnsavedCache {
         let Ok(held) = self.nodes.read() else {
             return;
         };
-        if let Some(since) = held.get(&result.node_id.as_uuid()) {
+        if let Some(since) = held.nodes.get(&result.node_id.as_uuid()) {
             result.samples.push(Sample::gauge(
                 config_unsaved::METRIC,
                 seconds_since(*since, now),
@@ -96,8 +112,9 @@ pub(crate) async fn run_refresh(
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         every.tick().await;
+        let asked = Instant::now();
         match saves.unsaved_all().await {
-            Ok(nodes) => cache.replace(nodes),
+            Ok(nodes) => cache.replace(nodes, asked),
             Err(e) => tracing::warn!(error = %e, "config save: unsaved states could not be read"),
         }
     }
@@ -164,10 +181,13 @@ mod tests {
         let saved = Uuid::new_v4();
         let cache = UnsavedCache::default();
         let now = Utc::now();
-        cache.replace(HashMap::from([
-            (checked, Some(now - chrono::Duration::seconds(90))),
-            (saved, None),
-        ]));
+        cache.replace(
+            HashMap::from([
+                (checked, Some(now - chrono::Duration::seconds(90))),
+                (saved, None),
+            ]),
+            Instant::now(),
+        );
         let scalar = || vec![Sample::gauge(UPTIME, 1.0)];
         let mut r = result_of(checked, scalar());
         cache.add_to(&mut r, now);
@@ -198,12 +218,36 @@ mod tests {
 
     /// The node's other results (ICMP, a walk) gain nothing: the rule's dwell counts one reading
     /// per interval, not one per result.
+    /// A refresh whose read began before a save was marked cannot put the old reading back: its
+    /// read may predate the report's write. A refresh begun after the mark is the newer answer.
+    #[test]
+    fn a_refresh_read_before_a_save_does_not_undo_it() {
+        let node = Uuid::new_v4();
+        let cache = UnsavedCache::default();
+        let now = Utc::now();
+        let stale = || HashMap::from([(node, Some(now - chrono::Duration::seconds(90)))]);
+        let scalar = || vec![Sample::gauge(UPTIME, 1.0)];
+        let reading = |cache: &UnsavedCache| {
+            let mut r = result_of(node, scalar());
+            cache.add_to(&mut r, now);
+            r.samples[1].value
+        };
+
+        let asked_before = Instant::now();
+        cache.mark_saved(node);
+        cache.replace(stale(), asked_before);
+        assert_eq!(reading(&cache), 0.0, "an older read undid the save");
+
+        cache.replace(stale(), Instant::now());
+        assert_eq!(reading(&cache), 90.0, "a newer read must win");
+    }
+
     #[test]
     fn the_cache_adds_a_reading_only_to_the_result_carrying_sys_uptime() {
         let checked = Uuid::new_v4();
         let cache = UnsavedCache::default();
         let now = Utc::now();
-        cache.replace(HashMap::from([(checked, Some(now))]));
+        cache.replace(HashMap::from([(checked, Some(now))]), Instant::now());
         let mut icmp = result_of(checked, vec![]);
         cache.add_to(&mut icmp, now);
         assert!(icmp.samples.is_empty());

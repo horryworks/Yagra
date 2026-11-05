@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The rules behind a free-text note written in place (ADR-239): on a node's Overview tab and on a
 // folder's pane. Kept apart from the component so Vitest (node environment) can hold them.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // A free-text note written where it is shown (ADR-239): a node's Overview tab and a folder's pane.
 // Pressing the text or the pencil turns the section into a text box with Save / Cancel; there is
 // no dialog to open. The rules (cap, when to show the count, what to draw) are in `notesRules.ts`.
@@ -32,18 +33,32 @@ interface Props {
   onSave: (notes: string) => Promise<void>;
   /** After a save landed: re-read whatever shows the note elsewhere. */
   onSaved?: () => void;
+  /** What a failed save says when the server gave no message of its own. */
+  errorFallback: string;
 }
 
-export function InlineNotes({ value, canEdit, placeholder, onSave, onSaved }: Props) {
+export function InlineNotes({
+  value,
+  canEdit,
+  placeholder,
+  onSave,
+  onSaved,
+  errorFallback,
+}: Props) {
   const { t } = useTranslation('nodes');
   // What this section shows until the parent's next read arrives, so a save does not flash back
   // to the old text in between.
   const [shown, setShown] = useState(value ?? '');
   const [editing, setEditing] = useState(false);
 
-  // A newer read from the parent wins, except while the person is typing.
+  // A newer read from the parent wins, except while the person is typing. Keyed on the value
+  // actually changing: re-running because `editing` went false after a save would copy the parent's
+  // still-stale value over the text just saved, and the old note would flash back until the re-read.
+  const seenValue = useRef(value);
   useEffect(() => {
-    if (!editing) setShown(value ?? '');
+    if (editing || value === seenValue.current) return;
+    seenValue.current = value;
+    setShown(value ?? '');
   }, [value, editing]);
 
   const view = noteView(shown, canEdit);
@@ -58,6 +73,7 @@ export function InlineNotes({ value, canEdit, placeholder, onSave, onSaved }: Pr
       <NoteEditor
         initial={shown}
         placeholder={placeholder}
+        errorFallback={errorFallback}
         onSave={onSave}
         onCancel={() => setEditing(false)}
         onDone={(next) => {
@@ -106,12 +122,14 @@ export function InlineNotes({ value, canEdit, placeholder, onSave, onSaved }: Pr
 function NoteEditor({
   initial,
   placeholder,
+  errorFallback,
   onSave,
   onCancel,
   onDone,
 }: {
   initial: string;
   placeholder: string;
+  errorFallback: string;
   onSave: (notes: string) => Promise<void>;
   onCancel: () => void;
   onDone: (next: string) => void;
@@ -119,7 +137,7 @@ function NoteEditor({
   const { t } = useTranslation(['nodes', 'common']);
   const [draft, setDraft] = useState(initial);
   const boxRef = useRef<HTMLTextAreaElement>(null);
-  const form = useSubmit<string>({ errorFallback: t('common:actions.save'), onDone });
+  const form = useSubmit<string>({ errorFallback, onDone });
   const tooLong = !isValidNotes(draft);
 
   useEffect(() => {

@@ -153,6 +153,7 @@ export function OverviewTab({
       <InlineNotes
         value={node.notes}
         canEdit={canEdit}
+        errorFallback={t('err.saveNode')}
         placeholder={t('field.notesPlaceholder')}
         onSave={(notes) => api.setNodeNotes(node.id, notes)}
         onSaved={onChanged}

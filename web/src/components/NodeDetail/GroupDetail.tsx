@@ -257,6 +257,7 @@ export function GroupDetail({
         <InlineNotes
           value={group.notes}
           canEdit={canEdit}
+          errorFallback={t('err.saveGroup')}
           placeholder={t('field.groupNotesPlaceholder')}
           onSave={(notes) => api.setNodeGroupNotes(group.id, notes)}
           onSaved={onNotesSaved}
