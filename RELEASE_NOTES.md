@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.71 — Back up and save the configuration of a Cisco device whose login lands in privileged mode
+
 ### Bug Fixes
 
 - **Config backup and Save to startup now work on a Cisco device whose login lands straight in privileged mode (`#`).** When the CLI login carried an enable password, oxidized sent `enable` and waited 30 seconds for a password question such a device never asks, so every fetch failed as "no connection" and the save that follows a fetch never ran. Yagra now reads the prompt first and sends `enable` only to a device sitting at `>`. The bundled oxidized is recreated by this upgrade.
