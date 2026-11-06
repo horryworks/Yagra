@@ -81,6 +81,7 @@ const schemaEnumPins: {
   OidcProviderKind: AssertEqual<OidcProviderKind, components['schemas']['OidcProviderKind']>;
   TokenSurface: AssertEqual<TokenSurface, components['schemas']['TokenSurface']>;
   BackupInput: AssertEqual<BackupInput, Exclude<components['schemas']['BackupInput'], 'unknown'>>;
+  Protocol: AssertEqual<Protocol, components['schemas']['Protocol']>;
   BackupReadiness: AssertEqual<BackupReadiness, components['schemas']['Readiness']>;
   AttemptOutcome: AssertEqual<AttemptOutcome, components['schemas']['AttemptOutcome']>;
   ScanMode: AssertEqual<ScanMode, Exclude<components['schemas']['ScanMode'], 'unknown'>>;
@@ -160,6 +161,7 @@ const schemaEnumPins: {
   OidcProviderKind: true,
   TokenSurface: true,
   BackupInput: true,
+  Protocol: true,
   BackupReadiness: true,
   AttemptOutcome: true,
   ScanMode: true,
@@ -399,6 +401,10 @@ export type ConfigDiff = components['schemas']['ConfigDiff'];
  *  minus `unknown`. */
 export const BACKUP_INPUTS = ['ssh', 'ssh_then_telnet', 'telnet'] as const;
 export type BackupInput = (typeof BACKUP_INPUTS)[number];
+
+/** The one protocol a login attempt goes over (ADR-242). Pinned to `schemas.Protocol`. */
+export const PROTOCOLS = ['ssh', 'telnet'] as const;
+export type Protocol = (typeof PROTOCOLS)[number];
 
 /** Whether a node's config is fetched, or the one thing to fix. Pinned to `schemas.Readiness`. */
 export const BACKUP_READINESS = [

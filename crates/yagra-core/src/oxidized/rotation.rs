@@ -42,7 +42,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
-use yagra_base::config_backup::{Attempt, AttemptOutcome, ConfigBackupRepo, Rotation, ScanMode};
+use yagra_base::config_backup::{
+    Attempt, AttemptOutcome, BackupInput, ConfigBackupRepo, Protocol, Rotation, ScanMode,
+};
 use yagra_base::secrets::{CredentialStore, KIND_CLI_LOGIN};
 
 use super::client::OxidizedClient;
@@ -146,11 +148,12 @@ pub(crate) fn candidates(order: Option<&[Uuid]>, cli_logins: &[Uuid]) -> Vec<Uui
 /// What a node should do now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Step {
-    /// Hand this login to oxidized and fetch.
-    Fetch(Uuid),
-    /// Try this login, but not before then.
+    /// Hand this login to oxidized, over this protocol, and fetch.
+    Fetch(Uuid, Protocol),
+    /// Try this login over this protocol, but not before then.
     Wait {
         credential: Uuid,
+        protocol: Protocol,
         until: DateTime<Utc>,
     },
     /// Every candidate failed in this pass. Nothing is tried until the pass is restarted.
@@ -210,46 +213,78 @@ fn allowed_at(
     .unwrap_or(now)
 }
 
-/// Which login a node tries next, and when.
+/// One node's side of [`next_step`]: what it may try, how, and what it has tried.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NodeSearch<'a> {
+    /// From [`candidates`].
+    pub candidates: &'a [Uuid],
+    pub input: BackupInput,
+    pub rotation: &'a Rotation,
+    /// The node's own attempts, newest first.
+    pub attempts: &'a [Attempt],
+}
+
+/// Which login a node tries next, over which protocol, and when.
 ///
-/// - `candidates`: from [`candidates`].
-/// - `rotation`: the node's row.
-/// - `node_attempts`: the node's own attempts, newest first, reaching back at least to the start of
-///   its pass.
+/// - `node`: its candidates (from [`candidates`]), its row, its own attempts, and its setting.
+///   `input` is the node's setting. A fixed one ([`BackupInput::Ssh`], [`BackupInput::Telnet`])
+///   is the protocol of every attempt; the automatic search ([`BackupInput::SshThenTelnet`]) picks
+///   one per attempt (ADR-242).
+///   Its attempts are newest first, reaching back at least to the start of its pass.
 /// - `fleet_recent`: every attempt in the fleet in the last [`WINDOW`], the node's included.
 /// - `limits`: the node's scan mode's; `caps`: each login's fleet-wide cap ([`login_caps`]), the
 ///   node's own `login_cap` for a login missing from it.
 ///
-/// A login remembered as working is tried again as long as it is still a candidate. Otherwise the
-/// first candidate that has not failed since the pass began is tried — after a device that did not
-/// answer, the same one again after `limits.unreachable_retry`, until it has not answered for
-/// `limits.give_up`, when the node stops as if every login had failed.
+/// A login remembered as working is tried again as long as it is still a candidate, over the
+/// protocol it worked over. Otherwise the first candidate that has not failed since the pass began
+/// is tried — after a device that did not answer, the same one again after
+/// `limits.unreachable_retry`, until it has not answered for `limits.give_up`, when the node stops
+/// as if every login had failed.
+///
+/// The automatic search starts a pass over SSH. When SSH does not connect, the same login is tried
+/// over telnet next, with no extra wait: nothing was refused, so nothing is spent. When telnet does
+/// not connect either, the device is treated as silent and the next try is SSH again. A login SSH
+/// refused moves on to the next login over SSH — never the same login over telnet, which would
+/// double the failures one device sees. Once telnet has reached the device in this pass, the rest
+/// of the pass stays on telnet.
 #[must_use]
 pub(crate) fn next_step(
-    candidates: &[Uuid],
-    rotation: &Rotation,
-    node_attempts: &[Attempt],
+    node: &NodeSearch<'_>,
     fleet_recent: &[Attempt],
     limits: &Limits,
     caps: &HashMap<Uuid, usize>,
     now: DateTime<Utc>,
 ) -> Step {
+    let NodeSearch {
+        candidates,
+        input,
+        rotation,
+        attempts: node_attempts,
+    } = *node;
     if candidates.is_empty() {
         return Step::NoCandidate;
     }
-    let decide = |credential: Uuid, not_before: Option<DateTime<Utc>>| {
+    // A token a newer core wrote is never sent to oxidized (`source.rs`); SSH is the harmless
+    // answer for a step nothing will act on.
+    let first = input.protocol(None).unwrap_or(Protocol::Ssh);
+    let decide = |credential: Uuid, protocol: Protocol, not_before: Option<DateTime<Utc>>| {
         let cap = caps.get(&credential).copied().unwrap_or(limits.login_cap);
         let until = allowed_at(credential, limits, cap, node_attempts, fleet_recent, now)
             .max(not_before.unwrap_or(now));
         if until <= now {
-            Step::Fetch(credential)
+            Step::Fetch(credential, protocol)
         } else {
-            Step::Wait { credential, until }
+            Step::Wait {
+                credential,
+                protocol,
+                until,
+            }
         }
     };
     if rotation.login_confirmed {
         if let Some(c) = rotation.credential_id.filter(|c| candidates.contains(c)) {
-            return decide(c, None);
+            let protocol = input.protocol(rotation.try_input).unwrap_or(first);
+            return decide(c, protocol, None);
         }
     }
     let round = rotation.round_started_at;
@@ -257,13 +292,16 @@ pub(crate) fn next_step(
         .iter()
         .filter(|a| round.is_none_or(|r| a.at >= r))
         .collect();
+    // The protocol an attempt went over; one recorded before ADR-242 went over the node's own.
+    let over = |a: &Attempt| a.input.unwrap_or(first);
     if let Some(last) = in_round.first() {
         // A person cancelled the last fetch (stage 5 decision 56): the same login again, after the
         // interval a silent device gets, so a cancel is not undone a minute later by the rotation.
         // It is no evidence about the device, so it neither counts towards giving up nor moves on.
         if last.outcome == AttemptOutcome::Cancelled {
             if let Some(c) = last.credential_id.filter(|c| candidates.contains(c)) {
-                return decide(c, Some(last.at + limits.unreachable_retry));
+                let protocol = input.protocol(Some(over(last))).unwrap_or(first);
+                return decide(c, protocol, Some(last.at + limits.unreachable_retry));
             }
         }
         if last.outcome == AttemptOutcome::Unreachable {
@@ -277,17 +315,34 @@ pub(crate) fn next_step(
                 return Step::Exhausted;
             }
             if let Some(c) = last.credential_id.filter(|c| candidates.contains(c)) {
-                return decide(c, Some(last.at + limits.unreachable_retry));
+                if input.searches_protocols() && over(last) == Protocol::Ssh {
+                    // SSH did not connect: telnet next, as soon as the limits allow.
+                    return decide(c, Protocol::Telnet, None);
+                }
+                return decide(c, first, Some(last.at + limits.unreachable_retry));
             }
         }
     }
+    // Telnet has reached the device in this pass: the rest of the pass stays on it.
+    let protocol = if input.searches_protocols()
+        && in_round.iter().any(|a| {
+            over(a) == Protocol::Telnet
+                && !matches!(
+                    a.outcome,
+                    AttemptOutcome::Unreachable | AttemptOutcome::Cancelled
+                )
+        }) {
+        Protocol::Telnet
+    } else {
+        first
+    };
     let tried: HashSet<Uuid> = in_round
         .iter()
         .filter(|a| a.outcome.is_login_failure())
         .filter_map(|a| a.credential_id)
         .collect();
     match candidates.iter().find(|c| !tried.contains(c)) {
-        Some(c) => decide(*c, None),
+        Some(c) => decide(*c, protocol, None),
         None => Step::Exhausted,
     }
 }
@@ -297,9 +352,14 @@ pub(crate) fn next_step(
 /// the leader's automatic rotation; the forced attempt is recorded like any other and counts
 /// against it. `None` when there is nothing to try.
 #[must_use]
-pub(crate) const fn login_to_force(step: Step) -> Option<Uuid> {
+pub(crate) const fn login_to_force(step: Step) -> Option<(Uuid, Protocol)> {
     match step {
-        Step::Fetch(credential) | Step::Wait { credential, .. } => Some(credential),
+        Step::Fetch(credential, protocol)
+        | Step::Wait {
+            credential,
+            protocol,
+            ..
+        } => Some((credential, protocol)),
         Step::Exhausted | Step::NoCandidate => None,
     }
 }
@@ -380,9 +440,12 @@ pub(crate) async fn step_of(
     let fleet = fleet_recent(repo, now).await?;
     let caps = login_caps(&candidate_sets(&repo.targets().await?, &logins));
     Ok(Some(next_step(
-        &cands,
-        &rotation,
-        &node_attempts,
+        &NodeSearch {
+            candidates: &cands,
+            input: cfg.input,
+            rotation: &rotation,
+            attempts: &node_attempts,
+        },
         &fleet,
         &limits_of(cfg.scan_mode),
         &caps,
@@ -502,16 +565,19 @@ async fn tick(
             continue;
         }
         let step = next_step(
-            &cands,
-            &rotation,
-            &node_attempts,
+            &NodeSearch {
+                candidates: &cands,
+                input: t.config.input,
+                rotation: &rotation,
+                attempts: &node_attempts,
+            },
             &fleet,
             &limits_of(t.config.scan_mode),
             &caps,
             now,
         );
         let result = match step {
-            Step::Fetch(credential) => {
+            Step::Fetch(credential, protocol) => {
                 // Counted as if it will fail, so two nodes due in the same tick cannot both spend
                 // the last failure a shared login has left.
                 fleet.push(Attempt {
@@ -520,9 +586,10 @@ async fn tick(
                     outcome: AttemptOutcome::Lost,
                     new_version: None,
                     at: now,
+                    input: Some(protocol),
                 });
                 match repo
-                    .dispatch(t.node_id, credential, now, now - REQUEST_TIMEOUT)
+                    .dispatch(t.node_id, credential, protocol, now, now - REQUEST_TIMEOUT)
                     .await
                 {
                     Ok(true) => {
@@ -632,6 +699,7 @@ mod tests {
             outcome,
             new_version: None,
             at,
+            input: None,
         }
     }
 
@@ -644,9 +712,12 @@ mod tests {
         now: DateTime<Utc>,
     ) -> Step {
         next_step(
-            cands,
-            rot,
-            node,
+            &NodeSearch {
+                candidates: cands,
+                input: BackupInput::Ssh,
+                rotation: rot,
+                attempts: node,
+            },
             fleet,
             &limits_of(ScanMode::Normal),
             &HashMap::new(),
@@ -683,18 +754,25 @@ mod tests {
         let cands = [A, B, C];
         let start = t0();
         let rot = fresh(start);
-        assert_eq!(step(&cands, &rot, &[], &[], start), Step::Fetch(A));
+        assert_eq!(
+            step(&cands, &rot, &[], &[], start),
+            Step::Fetch(A, Protocol::Ssh)
+        );
 
         let one = vec![attempt(NODE, A, AttemptOutcome::AuthFailed, start)];
         assert_eq!(
             step(&cands, &rot, &one, &one, start + minutes(1)),
             Step::Wait {
                 credential: B,
+                protocol: Protocol::Ssh,
                 until: start + minutes(10)
             }
         );
         let later = start + minutes(10);
-        assert_eq!(step(&cands, &rot, &one, &one, later), Step::Fetch(B));
+        assert_eq!(
+            step(&cands, &rot, &one, &one, later),
+            Step::Fetch(B, Protocol::Ssh)
+        );
 
         let two = newest_first(vec![
             one[0].clone(),
@@ -702,7 +780,7 @@ mod tests {
         ]);
         assert_eq!(
             step(&cands, &rot, &two, &two, later + minutes(10)),
-            Step::Fetch(C)
+            Step::Fetch(C, Protocol::Ssh)
         );
 
         let worked = Rotation {
@@ -712,7 +790,7 @@ mod tests {
         };
         assert_eq!(
             step(&cands, &worked, &two, &two, later + minutes(30)),
-            Step::Fetch(C)
+            Step::Fetch(C, Protocol::Ssh)
         );
     }
 
@@ -731,12 +809,13 @@ mod tests {
             step(&cands, &rot, &fails, &fails, start + minutes(30)),
             Step::Wait {
                 credential: d,
+                protocol: Protocol::Ssh,
                 until: start + minutes(60)
             }
         );
         assert_eq!(
             step(&cands, &rot, &fails, &fails, start + minutes(61)),
-            Step::Fetch(d)
+            Step::Fetch(d, Protocol::Ssh)
         );
     }
 
@@ -760,12 +839,13 @@ mod tests {
             step(&cands, &rot, &[], &fleet, start + minutes(5)),
             Step::Wait {
                 credential: A,
+                protocol: Protocol::Ssh,
                 until: start + minutes(60)
             }
         );
         assert_eq!(
             step(&cands, &rot, &[], &fleet, start + minutes(60)),
-            Step::Fetch(A)
+            Step::Fetch(A, Protocol::Ssh)
         );
     }
 
@@ -783,9 +863,12 @@ mod tests {
         let lim = limits_of(ScanMode::Normal);
         assert_eq!(
             next_step(
-                &[A, B],
-                &rot,
-                &cancelled,
+                &NodeSearch {
+                    candidates: &[A, B],
+                    input: BackupInput::Ssh,
+                    rotation: &rot,
+                    attempts: &cancelled,
+                },
                 &[],
                 &lim,
                 &HashMap::new(),
@@ -793,6 +876,7 @@ mod tests {
             ),
             Step::Wait {
                 credential: A,
+                protocol: Protocol::Ssh,
                 until: start + lim.unreachable_retry
             }
         );
@@ -802,6 +886,7 @@ mod tests {
             step(&cands, &rot, &silent, &silent, start + minutes(5)),
             Step::Wait {
                 credential: A,
+                protocol: Protocol::Ssh,
                 until: start + limits_of(ScanMode::Normal).unreachable_retry
             }
         );
@@ -813,7 +898,7 @@ mod tests {
                 &silent,
                 start + limits_of(ScanMode::Normal).unreachable_retry
             ),
-            Step::Fetch(A)
+            Step::Fetch(A, Protocol::Ssh)
         );
     }
 
@@ -834,7 +919,7 @@ mod tests {
         let restarted = fresh(start + minutes(91));
         assert_eq!(
             step(&cands, &restarted, &fails, &fails, start + minutes(91)),
-            Step::Fetch(A)
+            Step::Fetch(A, Protocol::Ssh)
         );
         assert_eq!(step(&[], &restarted, &[], &[], start), Step::NoCandidate);
     }
@@ -854,7 +939,144 @@ mod tests {
         };
         assert_eq!(
             step(&cands, &rot, &refused, &refused, start + minutes(10)),
-            Step::Fetch(B)
+            Step::Fetch(B, Protocol::Ssh)
+        );
+    }
+
+    /// An attempt over one protocol, for the automatic search's tests (ADR-242).
+    fn over(cred: Uuid, protocol: Protocol, outcome: AttemptOutcome, at: DateTime<Utc>) -> Attempt {
+        Attempt {
+            input: Some(protocol),
+            ..attempt(NODE, cred, outcome, at)
+        }
+    }
+
+    /// [`next_step`] for a node on the automatic search, in Normal mode.
+    fn auto(cands: &[Uuid], rot: &Rotation, node: &[Attempt], now: DateTime<Utc>) -> Step {
+        next_step(
+            &NodeSearch {
+                candidates: cands,
+                input: BackupInput::SshThenTelnet,
+                rotation: rot,
+                attempts: node,
+            },
+            node,
+            &limits_of(ScanMode::Normal),
+            &HashMap::new(),
+            now,
+        )
+    }
+
+    /// A pass starts over SSH; SSH that does not connect is followed by the same login over telnet
+    /// at once, since nothing was refused.
+    #[test]
+    fn the_search_starts_on_ssh_and_tries_telnet_when_ssh_does_not_connect() {
+        use Protocol::{Ssh, Telnet};
+        let start = t0();
+        let rot = fresh(start);
+        assert_eq!(auto(&[A, B], &rot, &[], start), Step::Fetch(A, Ssh));
+        let closed = vec![over(A, Ssh, AttemptOutcome::Unreachable, start)];
+        assert_eq!(
+            auto(&[A, B], &rot, &closed, start + minutes(1)),
+            Step::Fetch(A, Telnet)
+        );
+    }
+
+    /// Telnet not connecting either means the device is silent: SSH again, after the wait a silent
+    /// device gets, and the two runs of silence count towards giving up together.
+    #[test]
+    fn telnet_not_connecting_either_goes_back_to_ssh_after_the_silent_wait() {
+        use Protocol::{Ssh, Telnet};
+        let start = t0();
+        let rot = fresh(start);
+        let lim = limits_of(ScanMode::Normal);
+        let both = newest_first(vec![
+            over(A, Ssh, AttemptOutcome::Unreachable, start),
+            over(A, Telnet, AttemptOutcome::Unreachable, start + minutes(1)),
+        ]);
+        assert_eq!(
+            auto(&[A], &rot, &both, start + minutes(2)),
+            Step::Wait {
+                credential: A,
+                protocol: Ssh,
+                until: start + minutes(1) + lim.unreachable_retry
+            }
+        );
+        assert_eq!(
+            auto(&[A], &rot, &both, start + lim.give_up),
+            Step::Exhausted,
+            "silence over either protocol counts from the first"
+        );
+    }
+
+    /// A login SSH refused moves on to the next login over SSH, never the same login over telnet:
+    /// that would double the failures the device sees.
+    #[test]
+    fn a_login_ssh_refused_moves_on_over_ssh() {
+        use Protocol::Ssh;
+        let start = t0();
+        let rot = fresh(start);
+        let refused = vec![over(A, Ssh, AttemptOutcome::AuthFailed, start)];
+        assert_eq!(
+            auto(&[A, B], &rot, &refused, start + minutes(10)),
+            Step::Fetch(B, Ssh)
+        );
+    }
+
+    /// Once telnet has reached the device, the rest of the pass stays on telnet rather than asking
+    /// SSH again for every login.
+    #[test]
+    fn a_pass_that_reached_the_device_over_telnet_stays_on_telnet() {
+        use Protocol::{Ssh, Telnet};
+        let start = t0();
+        let rot = fresh(start);
+        let tried = newest_first(vec![
+            over(A, Ssh, AttemptOutcome::Unreachable, start),
+            over(A, Telnet, AttemptOutcome::Other, start + minutes(1)),
+        ]);
+        assert_eq!(
+            auto(&[A, B], &rot, &tried, start + minutes(11)),
+            Step::Fetch(B, Telnet)
+        );
+        assert_eq!(
+            auto(
+                &[A, B],
+                &fresh(start + minutes(5)),
+                &tried,
+                start + minutes(11)
+            ),
+            Step::Fetch(A, Ssh),
+            "a new pass starts on SSH again"
+        );
+    }
+
+    /// A login that works is fetched over the protocol it worked over.
+    #[test]
+    fn a_working_login_is_fetched_over_the_protocol_it_worked_over() {
+        use Protocol::Telnet;
+        let rot = Rotation {
+            credential_id: Some(B),
+            login_confirmed: true,
+            try_input: Some(Telnet),
+            ..fresh(t0())
+        };
+        assert_eq!(auto(&[A, B], &rot, &[], t0()), Step::Fetch(B, Telnet));
+    }
+
+    /// "SSH only" never moves to telnet: SSH that does not connect is a silent device.
+    #[test]
+    fn ssh_only_never_tries_telnet() {
+        use Protocol::Ssh;
+        let start = t0();
+        let rot = fresh(start);
+        let closed = vec![over(A, Ssh, AttemptOutcome::Unreachable, start)];
+        assert_eq!(
+            step(&[A], &rot, &closed, &closed, start + minutes(1)),
+            Step::Wait {
+                credential: A,
+                protocol: Ssh,
+                until: start + limits_of(ScanMode::Normal).unreachable_retry
+            }
         );
     }
 
@@ -863,13 +1085,17 @@ mod tests {
     #[test]
     fn fetch_now_forces_the_held_back_login() {
         let until = t0() + minutes(10);
-        assert_eq!(login_to_force(Step::Fetch(A)), Some(A));
+        assert_eq!(
+            login_to_force(Step::Fetch(A, Protocol::Ssh)),
+            Some((A, Protocol::Ssh))
+        );
         assert_eq!(
             login_to_force(Step::Wait {
                 credential: B,
+                protocol: Protocol::Ssh,
                 until
             }),
-            Some(B)
+            Some((B, Protocol::Ssh))
         );
         assert_eq!(login_to_force(Step::Exhausted), None);
         assert_eq!(login_to_force(Step::NoCandidate), None);
@@ -885,15 +1111,18 @@ mod tests {
         let rot = fresh(start);
         let none = HashMap::new();
         let wait = |mode| match next_step(
-            &cands,
-            &rot,
-            &one,
+            &NodeSearch {
+                candidates: &cands,
+                input: BackupInput::Ssh,
+                rotation: &rot,
+                attempts: &one,
+            },
             &one,
             &limits_of(mode),
             &none,
             start + minutes(1),
         ) {
-            Step::Fetch(_) => start + minutes(1),
+            Step::Fetch(..) => start + minutes(1),
             Step::Wait { until, .. } => until,
             other => panic!("{other:?}"),
         };
@@ -907,9 +1136,12 @@ mod tests {
             attempt(NODE, C, AttemptOutcome::AuthFailed, start + minutes(120)),
         ]);
         let slow = next_step(
-            &cands,
-            &rot,
-            &three,
+            &NodeSearch {
+                candidates: &cands,
+                input: BackupInput::Ssh,
+                rotation: &rot,
+                attempts: &three,
+            },
             &three,
             &limits_of(ScanMode::Slow),
             &none,
@@ -919,6 +1151,7 @@ mod tests {
             slow,
             Step::Wait {
                 credential: Uuid::from_u128(0xd),
+                protocol: Protocol::Ssh,
                 until: start + chrono::TimeDelta::hours(24)
             }
         );
@@ -952,7 +1185,7 @@ mod tests {
         let rot = fresh(start);
         assert!(matches!(
             step(&cands, &rot, &silent, &silent, start + minutes(120)),
-            Step::Fetch(A)
+            Step::Fetch(A, Protocol::Ssh)
         ));
         assert_eq!(
             step(
@@ -1014,8 +1247,14 @@ mod tests {
             "deleted: the column is cleared"
         );
         assert!(!settled(&Rotation::default(), &[A]));
-        assert_eq!(step(&[B], &worked, &[], &[], t0()), Step::Fetch(B));
-        assert_eq!(step(&[A, B], &deleted, &[], &[], t0()), Step::Fetch(A));
+        assert_eq!(
+            step(&[B], &worked, &[], &[], t0()),
+            Step::Fetch(B, Protocol::Ssh)
+        );
+        assert_eq!(
+            step(&[A, B], &deleted, &[], &[], t0()),
+            Step::Fetch(A, Protocol::Ssh)
+        );
     }
 
     #[test]

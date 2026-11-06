@@ -28768,6 +28768,17 @@
             "format": "uuid",
             "description": "The login tried; `null` when it has since been deleted."
           },
+          "input": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Protocol",
+                "description": "The protocol it went over; `null` for an attempt recorded before Yagra chose one per\nattempt (ADR-242)."
+              }
+            ]
+          },
           "new_version": {
             "type": [
               "boolean",
@@ -30837,7 +30848,8 @@
             "description": "Every candidate failed in this pass; nothing is tried until a fetch is asked for, the order\nchanges, or a CLI login is added or changed."
           },
           "input": {
-            "$ref": "#/components/schemas/BackupInput"
+            "$ref": "#/components/schemas/BackupInput",
+            "description": "How the device's command line is reached: `ssh_then_telnet` lets Yagra pick SSH or telnet\nfor each attempt (ADR-242); `ssh` or `telnet` fixes it."
           },
           "login_confirmed": {
             "type": "boolean",
@@ -30878,6 +30890,17 @@
               "null"
             ],
             "description": "The model the node's profile maps to, if any."
+          },
+          "protocol": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Protocol",
+                "description": "The protocol of the login being tried or next due, or the one the working login goes over;\n`null` for an input this core does not know."
+              }
+            ]
           },
           "readiness": {
             "$ref": "#/components/schemas/Readiness",
@@ -42868,6 +42891,14 @@
             "format": "uuid"
           }
         }
+      },
+      "Protocol": {
+        "type": "string",
+        "description": "The one protocol a single login attempt goes over (ADR-242). Stored in\n`node_config_backup.try_input` and `config_backup_attempts.input`; a token this core does not\nknow reads as `None`, which means SSH.",
+        "enum": [
+          "ssh",
+          "telnet"
+        ]
       },
       "ProviderChoice": {
         "type": "object",

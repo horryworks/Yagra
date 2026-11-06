@@ -6322,6 +6322,7 @@ export interface components {
              * @description The login tried; `null` when it has since been deleted.
              */
             credential_id?: string | null;
+            input?: null | components["schemas"]["Protocol"];
             /** @description For a success: whether a new version was stored. `null` otherwise. */
             new_version?: boolean | null;
             outcome: components["schemas"]["AttemptOutcome"];
@@ -7364,6 +7365,10 @@ export interface components {
              *     changes, or a CLI login is added or changed.
              */
             exhausted: boolean;
+            /**
+             * @description How the device's command line is reached: `ssh_then_telnet` lets Yagra pick SSH or telnet
+             *     for each attempt (ADR-242); `ssh` or `telnet` fixes it.
+             */
             input: components["schemas"]["BackupInput"];
             /** @description `credential_id` has fetched successfully. */
             login_confirmed: boolean;
@@ -7377,6 +7382,7 @@ export interface components {
             pending: boolean;
             /** @description The model the node's profile maps to, if any. */
             profile_model?: string | null;
+            protocol?: null | components["schemas"]["Protocol"];
             /** @description Whether it is fetched, or the one thing to fix. */
             readiness: components["schemas"]["Readiness"];
             /**
@@ -13266,6 +13272,13 @@ export interface components {
             /** Format: uuid */
             template_id: string;
         };
+        /**
+         * @description The one protocol a single login attempt goes over (ADR-242). Stored in
+         *     `node_config_backup.try_input` and `config_backup_attempts.input`; a token this core does not
+         *     know reads as `None`, which means SSH.
+         * @enum {string}
+         */
+        Protocol: "ssh" | "telnet";
         /**
          * @description What the Settings form needs to render one provider choice.
          *

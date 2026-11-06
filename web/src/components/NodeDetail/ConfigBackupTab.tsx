@@ -31,9 +31,7 @@ import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 import { formatExactTime, relativeTime } from '../../lib/format';
 import { isCliCredentialKind } from '../../lib/credentialKinds';
 import {
-  BACKUP_INPUTS,
   SCAN_MODES,
-  type BackupInput,
   type ConfigBackupView,
   type ConfigDiff,
   type ConfigVersion,
@@ -48,6 +46,8 @@ import {
   cardOf,
   formOf,
   historyRows,
+  sshOnly,
+  withSshOnly,
   isDirty,
   isQuietFetchRefusal,
   lastSuccessAt,
@@ -302,6 +302,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             <span className={`cfgb-h-mark cfgb-h-${line.tone === 'bad' ? 'fail' : 'quiet'}`} aria-hidden="true" />
             <span className={`cfgb-h-what cfgb-tone-${line.tone}`}>
               {t(line.key, { login: loginText(line.login) })}
+              {r.attempt.input && <span className="cfgb-h-proto">{t(`config.protocol.${r.attempt.input}`)}</span>}
             </span>
             <span className="cfgb-h-acts" />
           </li>
@@ -354,6 +355,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                       )
                     )}
                     {vers.length > 0 && <span>{t('config.card.versions', { count: vers.length })}</span>}
+                    {v.protocol && <span>{t(`config.protocol.${v.protocol}`)}</span>}
                   </p>
                 )}
               </div>
@@ -433,23 +435,6 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               <div className="cfgb-settings-body">
                 <div className="cfgb-settings-grid">
                   <div className="modal-field">
-                    <label className="modal-field-label" htmlFor="cfgb-input">
-                      {t('config.connection')}
-                    </label>
-                    <Select
-                      id="cfgb-input"
-                      value={form.input}
-                      disabled={!canStart}
-                      onChange={(e) => setForm({ ...form, input: e.target.value as BackupInput })}
-                    >
-                      {BACKUP_INPUTS.map((i) => (
-                        <option key={i} value={i}>
-                          {t(`config.input.${i}`)}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div className="modal-field">
                     <label className="modal-field-label" htmlFor="cfgb-model">
                       {t('config.model')}
                     </label>
@@ -489,6 +474,15 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                     </Select>
                   </div>
                 </div>
+                <label className="nd-check-toggle">
+                  <input
+                    type="checkbox"
+                    checked={sshOnly(form)}
+                    disabled={!canStart}
+                    onChange={(e) => setForm(withSshOnly(form, e.target.checked))}
+                  />
+                  <span>{t('config.input.ssh')}</span>
+                </label>
                 {canStart && (
                   <div className="cfgb-logins">
                     <div className="cfgb-logins-head">

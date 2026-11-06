@@ -16,6 +16,7 @@
 
 ### New Features
 
+- **Config backup finds whether a device takes SSH or telnet by itself.** Yagra tries SSH first; when SSH does not connect, it tries the same login over telnet on the next attempt, and remembers the protocol that worked along with the login. A login SSH refused moves on to the next login over SSH, so a device no longer sees one refused login twice in a single fetch. The connection choice in NodeDetail ▸ Config is now one box, **SSH only**, for a device whose password must not travel over telnet in clear text; the switch-on dialog on Config backups has the same box. **Every node already configured with "SSH" or "Telnet" moves to the automatic search** — tick SSH only on any device that must never be reached over telnet. A node whose login already works keeps the protocol it works over. The card and each failed attempt in the history name the protocol. API: `input` keeps its three values, and a node with no settings now reads as `ssh_then_telnet`, which the WebUI sends; `GET /api/v1/nodes/{node_id}/config-backup` adds `protocol`, and each attempt adds `input`.
 - **A node switched on for config backup and not fetched for 2 days now raises an alert.** "Config backup not fetched for 2 days" is a Warning on the node, delivered like any other alert. It closes once a fetch works, or when the backup is switched off. A node in a maintenance window gets no new one. A node that has never been fetched counts from when its backup settings were last saved.
 
 ### Improvements

@@ -28,7 +28,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use uuid::Uuid;
-use yagra_base::config_backup::{BackupSchedule, BackupTarget, ConfigBackupRepo, ScheduleNode};
+use yagra_base::config_backup::{
+    BackupSchedule, BackupTarget, ConfigBackupRepo, Protocol, ScheduleNode,
+};
 use yagra_base::secrets::CredentialStore;
 use yagra_base::wall_clock;
 
@@ -296,16 +298,21 @@ async fn tick(
             false
         }
         Step::Fetch(nodes) => {
-            let logins: HashMap<Uuid, Uuid> = targets
+            // Each node's working login, over the protocol it works over (ADR-242).
+            let logins: HashMap<Uuid, (Uuid, Protocol)> = targets
                 .iter()
-                .filter_map(|t| t.rotation.credential_id.map(|c| (t.node_id, c)))
+                .filter_map(|t| {
+                    let credential = t.rotation.credential_id?;
+                    let protocol = t.config.input.protocol(t.rotation.try_input)?;
+                    Some((t.node_id, (credential, protocol)))
+                })
                 .collect();
             for node in nodes {
-                let Some(&credential) = logins.get(&node) else {
+                let Some(&(credential, protocol)) = logins.get(&node) else {
                     continue;
                 };
                 match repo
-                    .dispatch(node, credential, now, now - REQUEST_TIMEOUT)
+                    .dispatch(node, credential, protocol, now, now - REQUEST_TIMEOUT)
                     .await
                 {
                     // The login is already in oxidized's list (a working one always is), so there

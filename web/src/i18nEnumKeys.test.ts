@@ -72,6 +72,7 @@ import {
   CHANNEL_KINDS,
   REVEALED_FIELD_KEYS,
   BACKUP_INPUTS,
+  PROTOCOLS,
   BACKUP_READINESS,
   ATTEMPT_OUTCOMES,
   SCAN_MODES,
@@ -373,6 +374,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // readiness is the one sentence saying why a device is not backed up; a raw key there hides it.
     const locales = { en: enNodes, ja: jaNodes };
     expectKeys('config backup input', locales, 'config.input.', BACKUP_INPUTS);
+    expectKeys('config backup protocol', locales, 'config.protocol.', PROTOCOLS);
     expectKeys('config backup readiness', locales, 'config.readiness.', BACKUP_READINESS);
     // Stage 3: how each login attempt ended, and the tree's mark for a backed-up node.
     expectKeys('config backup outcome', locales, 'config.outcome.', ATTEMPT_OUTCOMES);

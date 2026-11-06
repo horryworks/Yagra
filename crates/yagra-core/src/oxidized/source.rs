@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
-use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup};
+use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup, Protocol};
 use yagra_base::secrets::{CliLoginSecret, CredentialStore, KIND_CLI_LOGIN};
 
 use super::relay::Route;
@@ -171,12 +171,18 @@ pub(crate) async fn source_nodes(
     // plaintext lives only as long as this call, as it did when each node opened its own.
     let mut opened: HashMap<Uuid, Option<CliLoginSecret>> = HashMap::new();
     for t in targets {
+        // One protocol per attempt (ADR-242): the automatic search hands oxidized the one the
+        // rotation chose, never "ssh, telnet", so a refused SSH login is not retried over telnet
+        // inside the same fetch.
         let (Some(model), Some(input)) = (
             model_of(
                 t.config.model_override.as_deref(),
                 t.profile_name.as_deref(),
             ),
-            t.config.input.oxidized(),
+            t.config
+                .input
+                .protocol(t.rotation.try_input)
+                .map(Protocol::as_str),
         ) else {
             continue;
         };

@@ -25,11 +25,11 @@ export interface ConfigBackupForm {
 }
 
 /** The form a stored configuration opens as. A stored `unknown` input (a newer core wrote it) opens
- *  as the default, and saving replaces it — the select cannot show a value it does not offer. */
+ *  as the default — Yagra picks SSH or telnet per attempt (ADR-242) — and saving replaces it. */
 export function formOf(view: ConfigBackupView): ConfigBackupForm {
   const input = (BACKUP_INPUTS as readonly string[]).includes(view.input)
     ? (view.input as BackupInput)
-    : 'ssh';
+    : 'ssh_then_telnet';
   // A mode a newer core wrote opens as the most careful one, which is how this core enforces it —
   // saving then never makes the node faster than it was.
   const scanMode = (SCAN_MODES as readonly string[]).includes(view.scan_mode)
@@ -41,6 +41,19 @@ export function formOf(view: ConfigBackupView): ConfigBackupForm {
     model: view.model_override ?? '',
     scanMode,
   };
+}
+
+/** The "SSH only" box (ADR-242 decision 5): ticked keeps the node off telnet; unticked lets Yagra
+ *  move to telnet when SSH does not connect. A node an API client set to telnet only shows unticked
+ *  and stays telnet only until the box is ticked. */
+export function sshOnly(form: ConfigBackupForm): boolean {
+  return form.input === 'ssh';
+}
+
+/** The form with the "SSH only" box set. */
+export function withSshOnly(form: ConfigBackupForm, on: boolean): ConfigBackupForm {
+  if (on) return { ...form, input: 'ssh' };
+  return { ...form, input: form.input === 'ssh' ? 'ssh_then_telnet' : form.input };
 }
 
 /** The `PUT …/config-backup` body for a form. */

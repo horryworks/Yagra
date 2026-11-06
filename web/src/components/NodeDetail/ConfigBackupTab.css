@@ -407,3 +407,9 @@
     grid-column: 2;
   }
 }
+
+/* The protocol an attempt went over (ADR-242), after what happened. */
+.cfgb-h-proto {
+  margin-left: var(--space-2);
+  color: var(--text-tertiary);
+}

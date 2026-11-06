@@ -24,7 +24,8 @@ pub enum BackupInput {
     Ssh,
     /// Telnet only, for a device that has no SSH.
     Telnet,
-    /// SSH, and telnet when SSH cannot connect.
+    /// SSH first, and telnet on the next attempt when SSH does not connect; Yagra picks one per
+    /// attempt and remembers the one that works (ADR-242). The token is older than that behaviour.
     SshThenTelnet,
     /// A token a newer core wrote. Never sent to oxidized, and refused as input.
     Unknown,
@@ -38,17 +39,46 @@ crate::token_enum!(BackupInput, Unknown, "node_config_backup.input", [
 ]);
 
 impl BackupInput {
-    /// The `input` string oxidized reads: inputs tried in order, comma separated.
+    /// The protocol one attempt uses (ADR-242 decision 1): a fixed input's own, and for the
+    /// automatic search the one the rotation chose (`chosen`, `None` meaning SSH). `None` for a
+    /// token a newer core wrote, which is never sent to oxidized.
     #[must_use]
-    pub const fn oxidized(self) -> Option<&'static str> {
+    pub const fn protocol(self, chosen: Option<Protocol>) -> Option<Protocol> {
         match self {
-            Self::Ssh => Some("ssh"),
-            Self::Telnet => Some("telnet"),
-            Self::SshThenTelnet => Some("ssh, telnet"),
+            Self::Ssh => Some(Protocol::Ssh),
+            Self::Telnet => Some(Protocol::Telnet),
+            Self::SshThenTelnet => match chosen {
+                Some(p) => Some(p),
+                None => Some(Protocol::Ssh),
+            },
             Self::Unknown => None,
         }
     }
+
+    /// Whether the rotation may move from SSH to telnet when SSH does not connect.
+    #[must_use]
+    pub const fn searches_protocols(self) -> bool {
+        match self {
+            Self::SshThenTelnet => true,
+            Self::Ssh | Self::Telnet | Self::Unknown => false,
+        }
+    }
 }
+
+/// The one protocol a single login attempt goes over (ADR-242). Stored in
+/// `node_config_backup.try_input` and `config_backup_attempts.input`; a token this core does not
+/// know reads as `None`, which means SSH.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    Ssh,
+    Telnet,
+}
+
+crate::token_enum!(Protocol, [
+    Ssh => "ssh",
+    Telnet => "telnet",
+]);
 
 /// How fast a node tries its CLI logins: each mode is one set of lockout limits (ADR-210 stage 3
 /// decision 27). The numbers are core's (`oxidized::rotation::limits_of`).
@@ -148,6 +178,9 @@ pub struct Rotation {
     pub next_try_at: Option<DateTime<Utc>>,
     /// The newest version Yagra has seen.
     pub last_version_oid: Option<String>,
+    /// The protocol of the next attempt while the node looks for a login, and the one its login
+    /// works over once it has one (ADR-242). `None` means SSH.
+    pub try_input: Option<Protocol>,
 }
 
 /// One configured node with what is needed to hand it to oxidized and to choose its next login.
@@ -186,6 +219,8 @@ pub struct Attempt {
     /// could not be asked.
     pub new_version: Option<bool>,
     pub at: DateTime<Utc>,
+    /// The protocol it went over; `None` for an attempt recorded before ADR-242.
+    pub input: Option<Protocol>,
 }
 
 /// What one [`ConfigBackupRepo::switch`] did, each list sorted.
@@ -238,7 +273,7 @@ pub const RELAY_PORT_LAST: u16 = 59998;
 const RELAY_PORT_DRAWS: usize = 64;
 
 const ROTATION_COLUMNS: &str = "b.credential_id, b.login_confirmed, b.round_started_at, \
-                                b.requested_at, b.next_try_at, b.last_version_oid";
+                                b.requested_at, b.next_try_at, b.last_version_oid, b.try_input";
 
 fn rotation_of(r: &sqlx::postgres::PgRow) -> Result<Rotation, sqlx::Error> {
     Ok(Rotation {
@@ -248,7 +283,12 @@ fn rotation_of(r: &sqlx::postgres::PgRow) -> Result<Rotation, sqlx::Error> {
         requested_at: r.try_get("requested_at")?,
         next_try_at: r.try_get("next_try_at")?,
         last_version_oid: r.try_get("last_version_oid")?,
+        try_input: protocol_of(r.try_get("try_input")?),
     })
+}
+
+fn protocol_of(token: Option<String>) -> Option<Protocol> {
+    token.as_deref().and_then(Protocol::from_token)
 }
 
 fn config_of(r: &sqlx::postgres::PgRow) -> Result<NodeConfigBackup, sqlx::Error> {
@@ -268,6 +308,7 @@ fn attempt_of(r: &sqlx::postgres::PgRow) -> Result<Attempt, sqlx::Error> {
         outcome: AttemptOutcome::from_stored(&r.try_get::<String, _>("outcome")?),
         new_version: r.try_get("new_version")?,
         at: r.try_get("at")?,
+        input: protocol_of(r.try_get("input")?),
     })
 }
 
@@ -328,7 +369,8 @@ impl ConfigBackupRepo {
                round_started_at = CASE WHEN $6 THEN now() \
                                   ELSE node_config_backup.round_started_at END, \
                requested_at = CASE WHEN $6 THEN NULL ELSE node_config_backup.requested_at END, \
-               next_try_at = CASE WHEN $6 THEN NULL ELSE node_config_backup.next_try_at END",
+               next_try_at = CASE WHEN $6 THEN NULL ELSE node_config_backup.next_try_at END, \
+               try_input = CASE WHEN $6 THEN NULL ELSE node_config_backup.try_input END",
         )
         .bind(node)
         .bind(cfg.enabled)
@@ -461,12 +503,13 @@ impl ConfigBackupRepo {
         &self,
         node: Uuid,
         credential: Uuid,
+        protocol: Protocol,
         at: DateTime<Utc>,
         outstanding_after: DateTime<Utc>,
     ) -> anyhow::Result<bool> {
         let done = sqlx::query(
             "UPDATE node_config_backup SET credential_id = $2, requested_at = $3, \
-               next_try_at = NULL, \
+               next_try_at = NULL, try_input = $5, \
                login_confirmed = login_confirmed AND credential_id IS NOT DISTINCT FROM $2 \
              WHERE node_id = $1 AND (requested_at IS NULL OR requested_at <= $4)",
         )
@@ -474,6 +517,7 @@ impl ConfigBackupRepo {
         .bind(credential)
         .bind(at)
         .bind(outstanding_after)
+        .bind(protocol.as_str())
         .execute(&self.pool)
         .await?;
         Ok(done.rows_affected() > 0)
@@ -495,7 +539,7 @@ impl ConfigBackupRepo {
     /// sent to a device may be the one that locks it.
     pub async fn outstanding(&self, after: DateTime<Utc>) -> anyhow::Result<Vec<Attempt>> {
         let rows = sqlx::query(
-            "SELECT node_id, credential_id, requested_at FROM node_config_backup \
+            "SELECT node_id, credential_id, requested_at, try_input FROM node_config_backup \
              WHERE requested_at > $1 AND credential_id IS NOT NULL",
         )
         .bind(after)
@@ -509,6 +553,7 @@ impl ConfigBackupRepo {
                     outcome: AttemptOutcome::Lost,
                     new_version: None,
                     at: r.try_get("requested_at")?,
+                    input: protocol_of(r.try_get("try_input")?),
                 })
             })
             .collect()
@@ -541,7 +586,7 @@ impl ConfigBackupRepo {
         let done = sqlx::query(
             "UPDATE node_config_backup SET credential_id = NULL, login_confirmed = false, \
                round_started_at = now(), requested_at = NULL, next_try_at = NULL, \
-               updated_at = now() WHERE node_id = $1",
+               try_input = NULL, updated_at = now() WHERE node_id = $1",
         )
         .bind(node)
         .execute(&self.pool)
@@ -554,7 +599,8 @@ impl ConfigBackupRepo {
     pub async fn restart_round(&self, node: Uuid) -> anyhow::Result<()> {
         sqlx::query(
             "UPDATE node_config_backup SET round_started_at = now(), requested_at = NULL, \
-               next_try_at = NULL WHERE node_id = $1",
+               next_try_at = NULL, \
+               try_input = CASE WHEN login_confirmed THEN try_input END WHERE node_id = $1",
         )
         .bind(node)
         .execute(&self.pool)
@@ -566,8 +612,8 @@ impl ConfigBackupRepo {
     /// that failed may work now.
     pub async fn restart_unconfirmed_rounds(&self) -> anyhow::Result<u64> {
         let done = sqlx::query(
-            "UPDATE node_config_backup SET round_started_at = now(), next_try_at = NULL \
-             WHERE NOT login_confirmed",
+            "UPDATE node_config_backup SET round_started_at = now(), next_try_at = NULL, \
+               try_input = NULL WHERE NOT login_confirmed",
         )
         .execute(&self.pool)
         .await?;
@@ -589,7 +635,7 @@ impl ConfigBackupRepo {
     ) -> anyhow::Result<Option<Attempt>> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
-            "SELECT credential_id, login_confirmed, last_version_oid, requested_at \
+            "SELECT credential_id, login_confirmed, last_version_oid, requested_at, try_input \
              FROM node_config_backup WHERE node_id = $1 FOR UPDATE",
         )
         .bind(node)
@@ -611,18 +657,21 @@ impl ConfigBackupRepo {
             row.try_get("credential_id")?
         };
         let previous: Option<String> = row.try_get("last_version_oid")?;
+        let input = protocol_of(row.try_get("try_input")?);
         let new_version = match (outcome, oid) {
             (AttemptOutcome::Success, Some(oid)) => Some(previous.as_deref() != Some(oid)),
             _ => None,
         };
         let at: DateTime<Utc> = sqlx::query_scalar(
-            "INSERT INTO config_backup_attempts (node_id, credential_id, outcome, new_version) \
-             VALUES ($1, $2, $3, $4) RETURNING at",
+            "INSERT INTO config_backup_attempts \
+               (node_id, credential_id, outcome, new_version, input) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING at",
         )
         .bind(node)
         .bind(credential)
         .bind(outcome.as_str())
         .bind(new_version)
+        .bind(input.map(Protocol::as_str))
         .fetch_one(&mut *tx)
         .await?;
         if unrequested {
@@ -643,7 +692,7 @@ impl ConfigBackupRepo {
             // could not post — still counts against the limits, but says nothing about the login.
             sqlx::query(
                 "UPDATE node_config_backup SET login_confirmed = false, round_started_at = $2, \
-                   requested_at = NULL WHERE node_id = $1",
+                   requested_at = NULL, try_input = NULL WHERE node_id = $1",
             )
             .bind(node)
             .bind(at)
@@ -662,13 +711,15 @@ impl ConfigBackupRepo {
             outcome,
             new_version,
             at,
+            input,
         }))
     }
 
     /// Every attempt since `since`, across the fleet, oldest first — what the limits count.
     pub async fn attempts_since(&self, since: DateTime<Utc>) -> anyhow::Result<Vec<Attempt>> {
         let rows = sqlx::query(
-            "SELECT node_id, credential_id, outcome, new_version, at FROM config_backup_attempts \
+            "SELECT node_id, credential_id, outcome, new_version, at, input \
+             FROM config_backup_attempts \
              WHERE at >= $1 ORDER BY at, id",
         )
         .bind(since)
@@ -680,7 +731,8 @@ impl ConfigBackupRepo {
     /// A node's newest attempts, newest first.
     pub async fn attempts_of(&self, node: Uuid, limit: i64) -> anyhow::Result<Vec<Attempt>> {
         let rows = sqlx::query(
-            "SELECT node_id, credential_id, outcome, new_version, at FROM config_backup_attempts \
+            "SELECT node_id, credential_id, outcome, new_version, at, input \
+             FROM config_backup_attempts \
              WHERE node_id = $1 ORDER BY at DESC, id DESC LIMIT $2",
         )
         .bind(node)
@@ -707,16 +759,18 @@ impl ConfigBackupRepo {
         let rows = sqlx::query(&format!(
             "SELECT n.id AS node_id, p.name AS profile_name, (b.node_id IS NOT NULL) AS configured, \
                     COALESCE(b.enabled, false) AS enabled, b.login_order, \
-                    COALESCE(b.input, 'ssh') AS input, b.model_override, \
+                    COALESCE(b.input, 'ssh_then_telnet') AS input, b.model_override, \
                     COALESCE(b.scan_mode, 'normal') AS scan_mode, \
                     b.credential_id, COALESCE(b.login_confirmed, false) AS login_confirmed, \
                     b.round_started_at, b.requested_at, b.next_try_at, b.last_version_oid, \
+                    b.try_input, \
                     a.credential_id AS a_credential_id, a.outcome AS a_outcome, \
-                    a.new_version AS a_new_version, a.at AS a_at, s.at AS last_success_at \
+                    a.new_version AS a_new_version, a.at AS a_at, a.input AS a_input, \
+                    s.at AS last_success_at \
              FROM nodes n \
              LEFT JOIN node_config_backup b ON b.node_id = n.id \
              LEFT JOIN profiles p ON p.id = n.profile_id \
-             LEFT JOIN LATERAL (SELECT credential_id, outcome, new_version, at \
+             LEFT JOIN LATERAL (SELECT credential_id, outcome, new_version, at, input \
                                 FROM config_backup_attempts WHERE node_id = n.id \
                                 ORDER BY at DESC, id DESC LIMIT 1) a ON true \
              LEFT JOIN LATERAL (SELECT at FROM config_backup_attempts \
@@ -747,6 +801,7 @@ impl ConfigBackupRepo {
                         outcome: AttemptOutcome::from_stored(&r.try_get::<String, _>("a_outcome")?),
                         new_version: r.try_get("a_new_version")?,
                         at,
+                        input: protocol_of(r.try_get("a_input")?),
                     }),
                     None => None,
                 };
@@ -1199,11 +1254,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_input_has_a_token_and_an_oxidized_spelling() {
+    fn every_input_has_a_token_and_a_protocol() {
         for input in BackupInput::ALL {
             assert_eq!(BackupInput::from_token(input.as_str()), Some(*input));
             assert_eq!(
-                input.oxidized().is_some(),
+                input.protocol(None).is_some(),
                 *input != BackupInput::Unknown,
                 "{input:?}"
             );
@@ -1214,7 +1269,36 @@ mod tests {
             BackupInput::from_stored("ssh_over_carrier_pigeon"),
             BackupInput::Unknown
         );
-        assert_eq!(BackupInput::Unknown.oxidized(), None);
+        assert_eq!(BackupInput::Unknown.protocol(None), None);
+    }
+
+    /// The automatic search goes over the protocol the rotation chose, SSH until it chose one; a
+    /// fixed input ignores the choice (ADR-242).
+    #[test]
+    fn each_input_answers_one_protocol_per_attempt() {
+        use Protocol::{Ssh, Telnet};
+        let auto = BackupInput::SshThenTelnet;
+        assert_eq!(auto.protocol(None), Some(Ssh));
+        assert_eq!(auto.protocol(Some(Telnet)), Some(Telnet));
+        assert_eq!(
+            BackupInput::Ssh.protocol(Some(Telnet)),
+            Some(Ssh),
+            "SSH only"
+        );
+        assert_eq!(BackupInput::Telnet.protocol(None), Some(Telnet));
+        assert!(auto.searches_protocols());
+        assert!(!BackupInput::Ssh.searches_protocols());
+        assert!(!BackupInput::Telnet.searches_protocols());
+        for p in Protocol::ALL {
+            assert_eq!(Protocol::from_token(p.as_str()), Some(*p));
+            let serde = serde_json::to_value(p).expect("serialize");
+            assert_eq!(serde, p.as_str(), "token and serde tag disagree");
+        }
+        assert_eq!(
+            protocol_of(Some("carrier_pigeon".into())),
+            None,
+            "reads as SSH"
+        );
     }
 
     #[test]
@@ -1571,6 +1655,7 @@ mod tests {
             .dispatch(
                 node,
                 login,
+                Protocol::Ssh,
                 Utc::now(),
                 Utc::now() - chrono::TimeDelta::minutes(10)
             )
@@ -1666,14 +1751,14 @@ mod tests {
             .expect("put"));
         let cutoff = || Utc::now() - chrono::TimeDelta::minutes(10);
         assert!(repo
-            .dispatch(node, login, Utc::now(), cutoff())
+            .dispatch(node, login, Protocol::Ssh, Utc::now(), cutoff())
             .await
             .expect("dispatch"));
         repo.record_result(node, AttemptOutcome::Success, Some("aaa"))
             .await
             .expect("record");
         assert!(repo
-            .dispatch(node, login, Utc::now(), cutoff())
+            .dispatch(node, login, Protocol::Ssh, Utc::now(), cutoff())
             .await
             .expect("dispatch"));
         let lost = repo
@@ -1692,6 +1777,82 @@ mod tests {
         assert_eq!(rot.requested_at, None);
     }
 
+    /// Each attempt records the protocol it went over, a working login keeps its protocol, and a
+    /// node that forgets its login starts again from SSH (ADR-242).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_attempt_records_its_protocol_and_a_working_login_keeps_it(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let node = crate::pgtest::node(&pool, "sw-06", 6, None).await;
+        let login = crate::pgtest::credential(&pool, "ops", "cli_login").await;
+        assert!(repo
+            .put(node, &on(BackupInput::SshThenTelnet, Some("ios")), true)
+            .await
+            .expect("put"));
+        let cutoff = || Utc::now() - chrono::TimeDelta::minutes(10);
+        async fn rot_of(repo: &ConfigBackupRepo, node: Uuid) -> Rotation {
+            repo.get_with_rotation(node)
+                .await
+                .expect("get")
+                .expect("row")
+                .1
+        }
+        assert_eq!(
+            rot_of(&repo, node).await.try_input,
+            None,
+            "a new node starts from SSH"
+        );
+
+        assert!(repo
+            .dispatch(node, login, Protocol::Ssh, Utc::now(), cutoff())
+            .await
+            .expect("dispatch"));
+        let silent = repo
+            .record_result(node, AttemptOutcome::Unreachable, None)
+            .await
+            .expect("record")
+            .expect("configured");
+        assert_eq!(silent.input, Some(Protocol::Ssh));
+
+        assert!(repo
+            .dispatch(node, login, Protocol::Telnet, Utc::now(), cutoff())
+            .await
+            .expect("dispatch"));
+        assert_eq!(
+            repo.outstanding(cutoff()).await.expect("outstanding")[0].input,
+            Some(Protocol::Telnet),
+            "a fetch out counts with the protocol it was handed"
+        );
+        repo.record_result(node, AttemptOutcome::Success, Some("aaa"))
+            .await
+            .expect("record");
+        let after = rot_of(&repo, node).await;
+        assert!(after.login_confirmed);
+        assert_eq!(
+            after.try_input,
+            Some(Protocol::Telnet),
+            "it works over telnet"
+        );
+        let read = repo.attempts_of(node, 10).await.expect("attempts");
+        assert_eq!(
+            read.iter().map(|a| a.input).collect::<Vec<_>>(),
+            vec![Some(Protocol::Telnet), Some(Protocol::Ssh)]
+        );
+
+        repo.restart_round(node).await.expect("restart");
+        assert_eq!(
+            rot_of(&repo, node).await.try_input,
+            Some(Protocol::Telnet),
+            "a new pass keeps what works"
+        );
+        assert!(repo.forget_login(node).await.expect("forget"));
+        assert_eq!(
+            rot_of(&repo, node).await.try_input,
+            None,
+            "searching again starts from SSH"
+        );
+    }
+
     /// A second dispatch while one is out changes nothing, and the one out counts as an attempt
     /// and keeps oxidized's node list from being read again.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -1708,9 +1869,15 @@ mod tests {
         let now = Utc::now();
         let cutoff = now - chrono::TimeDelta::minutes(10);
         assert!(!repo.any_outstanding(cutoff).await.expect("idle"));
-        assert!(repo.dispatch(node, a, now, cutoff).await.expect("first"));
+        assert!(repo
+            .dispatch(node, a, Protocol::Ssh, now, cutoff)
+            .await
+            .expect("first"));
         assert!(repo.any_outstanding(cutoff).await.expect("busy"));
-        assert!(!repo.dispatch(node, b, now, cutoff).await.expect("second"));
+        assert!(!repo
+            .dispatch(node, b, Protocol::Ssh, now, cutoff)
+            .await
+            .expect("second"));
         let out = repo.outstanding(cutoff).await.expect("outstanding");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].credential_id, Some(a));

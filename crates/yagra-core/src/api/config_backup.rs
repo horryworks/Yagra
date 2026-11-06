@@ -49,7 +49,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_base::config_backup::{
-    Attempt, AttemptOutcome, BackupInput, NodeConfigBackup, OverviewState, ScanMode,
+    Attempt, AttemptOutcome, BackupInput, NodeConfigBackup, OverviewState, Protocol, ScanMode,
 };
 use yagra_base::config_save::SaveRecord;
 
@@ -287,6 +287,9 @@ pub(crate) struct AttemptView {
     outcome: AttemptOutcome,
     /// For a success: whether a new version was stored. `null` otherwise.
     new_version: Option<bool>,
+    /// The protocol it went over; `null` for an attempt recorded before Yagra chose one per
+    /// attempt (ADR-242).
+    input: Option<Protocol>,
 }
 
 impl From<Attempt> for AttemptView {
@@ -296,6 +299,7 @@ impl From<Attempt> for AttemptView {
             credential_id: a.credential_id,
             outcome: a.outcome,
             new_version: a.new_version,
+            input: a.input,
         }
     }
 }
@@ -325,7 +329,12 @@ pub(crate) struct ConfigBackupView {
     exhausted: bool,
     /// The newest attempts, newest first.
     attempts: Vec<AttemptView>,
+    /// How the device's command line is reached: `ssh_then_telnet` lets Yagra pick SSH or telnet
+    /// for each attempt (ADR-242); `ssh` or `telnet` fixes it.
     input: BackupInput,
+    /// The protocol of the login being tried or next due, or the one the working login goes over;
+    /// `null` for an input this core does not know.
+    protocol: Option<Protocol>,
     /// How fast it tries its logins: one set of lockout limits each (stage 3 decision 27).
     scan_mode: ScanMode,
     /// The model a person picked; `null` means "from the profile".
@@ -396,7 +405,7 @@ async fn get_config_backup(
         NodeConfigBackup {
             enabled: false,
             login_order: None,
-            input: BackupInput::Ssh,
+            input: BackupInput::SshThenTelnet,
             model_override: None,
             scan_mode: ScanMode::Normal,
         },
@@ -430,6 +439,10 @@ async fn get_config_backup(
         exhausted: step == Some(Step::Exhausted),
         attempts: attempts.into_iter().map(AttemptView::from).collect(),
         input: cfg.input,
+        protocol: cfg.input.protocol(match step {
+            Some(Step::Fetch(_, p) | Step::Wait { protocol: p, .. }) => Some(p),
+            _ => rot.try_input,
+        }),
         scan_mode: cfg.scan_mode,
         model_override: cfg.model_override,
         profile_model: oxidized::source::model_of(None, profile.as_deref()),
@@ -675,7 +688,7 @@ async fn list_versions(
         .await
         .ok()
         .flatten()
-        .filter(|c| c.enabled && c.input.oxidized().is_some());
+        .filter(|c| c.enabled && c.input.protocol(None).is_some());
     let Some(cfg) = listed else {
         return Ok(Json(Vec::new()));
     };
@@ -912,13 +925,15 @@ pub(super) async fn start_fetch(admin: &Admin, node_id: Uuid) -> ApiResult<()> {
             .ok_or_else(not_ready)?;
     }
     match rotation::login_to_force(step) {
-        Some(credential) => {
-            // A node fetched again with the login that already works is in oxidized's list as it
-            // is, so it needs no reload. Any other login has to reach the list first, and the list
+        Some((credential, protocol)) => {
+            // A node fetched again with the login that already works, over the protocol it works
+            // over, is in oxidized's list as it is, so it needs no reload. Any other login has to reach the list first, and the list
             // may not be read again while another fetch is out (`rotation::may_reload`).
-            let reload = !rot
-                .as_ref()
-                .is_some_and(|r| r.login_confirmed && r.credential_id == Some(credential));
+            let reload = !rot.as_ref().is_some_and(|r| {
+                r.login_confirmed
+                    && r.credential_id == Some(credential)
+                    && r.try_input.unwrap_or(Protocol::Ssh) == protocol
+            });
             if reload
                 && !rotation::may_reload(repo, now)
                     .await
@@ -930,7 +945,13 @@ pub(super) async fn start_fetch(admin: &Admin, node_id: Uuid) -> ApiResult<()> {
                 ));
             }
             let started = repo
-                .dispatch(node_id, credential, now, now - rotation::REQUEST_TIMEOUT)
+                .dispatch(
+                    node_id,
+                    credential,
+                    protocol,
+                    now,
+                    now - rotation::REQUEST_TIMEOUT,
+                )
                 .await
                 .map_err(|e| read_failed(&e))?;
             if !started {
@@ -1980,6 +2001,7 @@ mod tests {
         repo.dispatch(
             node,
             login,
+            Protocol::Ssh,
             Utc::now(),
             Utc::now() - rotation::REQUEST_TIMEOUT,
         )
@@ -2076,6 +2098,7 @@ mod tests {
         repo.dispatch(
             node,
             login,
+            Protocol::Ssh,
             Utc::now(),
             Utc::now() - rotation::REQUEST_TIMEOUT,
         )
@@ -2179,6 +2202,7 @@ mod tests {
         repo.dispatch(
             node,
             login,
+            Protocol::Ssh,
             Utc::now(),
             Utc::now() - rotation::REQUEST_TIMEOUT,
         )
@@ -2207,6 +2231,7 @@ mod tests {
         repo.dispatch(
             bare,
             bare_login,
+            Protocol::Ssh,
             Utc::now(),
             Utc::now() - rotation::REQUEST_TIMEOUT,
         )

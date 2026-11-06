@@ -32,7 +32,8 @@ const off = {
   try_after: null,
   exhausted: false,
   attempts: [],
-  input: 'ssh',
+  input: 'ssh_then_telnet',
+  protocol: 'ssh',
   scan_mode: 'normal',
   model_override: null,
   profile_model: 'ios',
@@ -50,7 +51,7 @@ const refused = {
   credential_id: LOGIN,
   try_after: '2026-10-22T10:10:00Z',
   attempts: [
-    { at: '2026-10-22T10:00:00Z', credential_id: LOGIN, outcome: 'auth_failed', new_version: null },
+    { at: '2026-10-22T10:00:00Z', credential_id: LOGIN, outcome: 'auth_failed', new_version: null, input: 'ssh' },
   ],
 } satisfies Schemas['ConfigBackupView'];
 
@@ -60,7 +61,11 @@ const working = {
   ...refused,
   login_confirmed: true,
   try_after: null,
-  attempts: [{ at: new Date().toISOString(), credential_id: LOGIN, outcome: 'success', new_version: true }],
+  // Found over telnet: SSH did not connect (ADR-242).
+  protocol: 'telnet',
+  attempts: [
+    { at: new Date().toISOString(), credential_id: LOGIN, outcome: 'success', new_version: true, input: 'telnet' },
+  ],
 } satisfies Schemas['ConfigBackupView'];
 const fetching = { ...working, pending: true } satisfies Schemas['ConfigBackupView'];
 const saved = {
@@ -134,7 +139,7 @@ test.describe('a node not backed up yet', () => {
     expect((await put).postDataJSON()).toEqual({
       enabled: true,
       login_order: null,
-      input: 'ssh',
+      input: 'ssh_then_telnet',
       model_override: null,
       scan_mode: 'normal',
     });
@@ -154,6 +159,7 @@ test.describe('a node still looking for its login', () => {
     await expect(card.locator('.cfgb-state')).toHaveText('Looking for a login that works');
     await expect(card.locator('.cfgb-facts')).toContainText('next try at');
     await expect(page.locator('.cfgb-h')).toContainText('ymock-ops-login was refused');
+    await expect(page.locator('.cfgb-h .cfgb-h-proto').first()).toHaveText('SSH');
     await expect(page.getByRole('switch', { name: 'Backup' })).toBeChecked();
     // Looking is not a problem: no dot on the tab.
     await expect(configTabDot(page)).toHaveCount(0);
@@ -186,6 +192,8 @@ test.describe('a node whose login works', () => {
   }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
     await expect(page.locator('.cfgb-card-ok .cfgb-state')).toHaveText('Backed up');
+    // The protocol the login works over is one of the card's facts (ADR-242).
+    await expect(page.locator('.cfgb-card-ok .cfgb-facts')).toContainText('Telnet');
     const summary = page.locator('.cfgb-settings summary');
     await expect(summary).toContainText('ymock-ops-login');
     await expect(page.locator('.cred-picker')).toBeHidden();
@@ -203,18 +211,18 @@ test.describe('a node whose login works', () => {
     await rescan;
   });
 
-  test('Save sends the order and the connection as edited', async ({ page }) => {
+  test('Save sends the order and "SSH only" as edited', async ({ page }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
     await page.locator('.cfgb-settings summary').click();
     await page.locator('.cred-picker').getByRole('checkbox', { name: /ymock-second-login/ }).uncheck();
-    await page.locator('#cfgb-input').selectOption('telnet');
+    await page.locator('.cfgb-settings').getByRole('checkbox', { name: 'SSH only' }).check();
     await page.locator('#cfgb-speed').selectOption('rapid');
     const put = page.waitForRequest(isPut('/config-backup'));
     await page.locator('.cfgb-settings').getByRole('button', { name: 'Save', exact: true }).click();
     expect((await put).postDataJSON()).toEqual({
       enabled: true,
       login_order: [LOGIN],
-      input: 'telnet',
+      input: 'ssh',
       model_override: null,
       scan_mode: 'rapid',
     });

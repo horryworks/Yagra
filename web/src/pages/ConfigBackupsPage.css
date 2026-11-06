@@ -66,3 +66,11 @@
   gap: 6px;
   cursor: pointer;
 }
+
+/* The "SSH only" box in the switch-on dialog (ADR-242). */
+.cfgbl-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}

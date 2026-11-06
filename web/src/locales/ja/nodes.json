@@ -1221,7 +1221,6 @@
     }
   },
   "config": {
-    "connection": "接続",
     "scanMode": "試す速さ",
     "scanModes": {
       "rapid": "速い（1 分おき）",
@@ -1230,6 +1229,10 @@
     },
     "input": {
       "ssh_then_telnet": "SSH、だめなら telnet",
+      "ssh": "SSH だけ使う",
+      "telnet": "telnet だけ"
+    },
+    "protocol": {
       "ssh": "SSH",
       "telnet": "telnet"
     },

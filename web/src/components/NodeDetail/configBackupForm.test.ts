@@ -11,6 +11,8 @@ import {
   needsAttention,
   STALE_AFTER_MS,
   formOf,
+  sshOnly,
+  withSshOnly,
   isDirty,
   isQuietFetchRefusal,
   loginLabel,
@@ -116,7 +118,21 @@ describe('config backup form (ADR-210)', () => {
 
   it('opens a stored unknown input as the default, which is then a change', () => {
     const v = view({ input: 'unknown' });
-    expect(formOf(v).input).toBe('ssh');
+    expect(formOf(v).input).toBe('ssh_then_telnet');
+  });
+
+  it('the SSH-only box keeps a node off telnet, and unticking it lets Yagra search (ADR-242)', () => {
+    const auto = formOf(view({ input: 'ssh_then_telnet' }));
+    expect(sshOnly(auto)).toBe(false);
+    const on = withSshOnly(auto, true);
+    expect(on.input).toBe('ssh');
+    expect(sshOnly(on)).toBe(true);
+    expect(withSshOnly(on, false).input).toBe('ssh_then_telnet');
+    // telnet only (an API client set it) shows unticked and stays telnet only.
+    const telnet = formOf(view({ input: 'telnet' }));
+    expect(sshOnly(telnet)).toBe(false);
+    expect(withSshOnly(telnet, false).input).toBe('telnet');
+    expect(bodyOf(on, true).input).toBe('ssh');
   });
 
   it('opens a mode it does not know as the most careful one', () => {
