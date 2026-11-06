@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-05
-# counts: MA-L=40335 MA-L-repeats-dropped=3 MA-M=6591 MA-S=7233 withheld=3
+# fetched: 2026-11-06
+# counts: MA-L=40345 MA-L-repeats-dropped=3 MA-M=6593 MA-S=7234 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13536,7 +13536,10 @@
 0479FD	Ciena Corporation
 047A0B	Beijing Xiaomi Electronics Co., Ltd.
 047AAE	Huawei Device Co., Ltd.
+047B43	IEEE Registration Authority
 047B435	Shenzhen XJ-Micro Technology Co., Ltd.
+047B43B	ACADEMY FOR FUTURE HEALTH LTD
+047B43C	RR Technologies GmbH
 047BCB	Universal Global Scientific Industrial., Ltd
 047C16	Micro-Star INTL CO., LTD.
 047D50	Shenzhen Kang Ying Technology Co.Ltd.
@@ -14873,7 +14876,7 @@
 0CA06C	Industrial Cyber Sensing Inc.
 0CA138	BLiNQ Networks Inc.
 0CA280	FN-LINK TECHNOLOGY Ltd.
-0CA2F4	Chameleon Technology (UK) Limited
+0CA2F4	Verve Energy Technology
 0CA3B2	Apple, Inc.
 0CA402	Alcatel-Lucent IPD
 0CA42A	OB Telecom Electronic Technology Co., Ltd
@@ -24260,6 +24263,7 @@
 50EE87	HPRO
 50EE9B	AltoBeam Inc.
 50EEB5	Texas Instruments
+50EEF8	Xiaomi Communications Co Ltd
 50F003	Open Stack, Inc.
 50F0D3	Samsung Electronics Co.,Ltd
 50F14A	Texas Instruments
@@ -27272,6 +27276,7 @@
 68D482	SHENZHEN GONGJIN ELECTRONICS CO.,LT
 68D48B	Hailo Technologies Ltd.
 68D6ED	GooWi Wireless Technology Co., Limited
+68D770	IoTronix Technologies Sdn. Bhd.
 68D79A	Ubiquiti Inc
 68D925	ProSys Development Services
 68D927	HUAWEI TECHNOLOGIES CO.,LTD
@@ -35500,6 +35505,7 @@
 88541F	Google, Inc.
 88546B	Texas Instruments
 88548E	vivo Mobile Communication Co., Ltd.
+8854E0	Xiaomi Communications Co Ltd
 8856A6	Espressif Inc.
 88571D	Seongji Industry Company
 885721	Espressif Inc.
@@ -35732,6 +35738,7 @@
 88B863	HISENSE VISUAL TECHNOLOGY CO.,LTD
 88B86F	Infinix mobility limited
 88B8D0	Dongguan Koppo Electronic Co.,Ltd
+88B8F7	NVIDIA Corporation
 88B945	Apple, Inc.
 88B951	Xiaomi Communications Co Ltd
 88B9B8	NXP Semiconductors Taiwan Ltd.
@@ -38739,6 +38746,7 @@
 8C1F64F09	Texi AS
 8C1F64F0A	HORIZON.INC
 8C1F64F0B	Nagy Márton Jozsef e.v.
+8C1F64F0C	Profcon AB
 8C1F64F10	Televic Rail GmbH
 8C1F64F11	Ottronic GmbH
 8C1F64F12	CAITRON GmbH
@@ -40303,6 +40311,7 @@
 94B216	Silicon Laboratories
 94B271	HUAWEI TECHNOLOGIES CO.,LTD
 94B2CC	PIONEER CORPORATION
+94B2EC	NVIDIA Corporation
 94B34F	Ruckus Wireless
 94B3F7	Hui Zhou Gaoshengda Technology Co.,LTD
 94B40F	Hewlett Packard Enterprise
@@ -41479,6 +41488,7 @@
 9CDFB3	NXP Semiconductor (Tianjin) LTD.
 9CE041	Nokia
 9CE063	Samsung Electronics Co.,Ltd
+9CE087	Espressif Systems (Singapore) Pte. Ltd
 9CE10E	NCTech Ltd
 9CE176	Cisco Systems, Inc
 9CE1D6	Junger Audio-Studiotechnik GmbH
@@ -43863,6 +43873,7 @@ B07D62	Dipl.-Ing. H. Horstmann GmbH
 B07D64	Intel Corporate
 B07E11	Texas Instruments
 B07E70	Zadara Storage Ltd.
+B07EF4	Hangzhou HikAuto Technology Co., Ltd.
 B07FB9	NETGEAR
 B0808C	Laser Light Engines
 B08101	Honor Device Co., Ltd.
@@ -49001,6 +49012,7 @@ D4D853	Intel Corporate
 D4D892	HUAWEI TECHNOLOGIES CO.,LTD
 D4D898	Korea CNO Tech Co., Ltd
 D4D919	GoPro
+D4D96A	Xiaomi Communications Co Ltd
 D4DA21	Beijing Xiaomi Mobile Software Co., Ltd
 D4DACD	SKY UK LIMITED
 D4DC09	Mist Systems, Inc.
@@ -49125,6 +49137,7 @@ D8209F	Cubro Acronet GesmbH
 D820A2	HUAWEI TECHNOLOGIES CO.,LTD
 D821DA	SERNET (SUZHOU) TECHNOLOGIES CORPORATION
 D822F4	Avnet Silica
+D82332	Espressif Systems (Singapore) Pte. Ltd
 D823E0	SPEEDTECH CORP.
 D82477	Universal Electric Corporation
 D824BD	Cisco Systems, Inc
