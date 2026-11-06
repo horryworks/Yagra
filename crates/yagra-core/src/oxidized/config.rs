@@ -259,17 +259,21 @@ hooks:
 /// and the setgid bit from the kernel - so it is made and never chmod-ed. 🚨 A chmod by this
 /// process, which is not in oxidized's group, CLEARS the setgid bit: the files written afterwards
 /// then belong to this process's own group, oxidized gets "permission denied" on every model file,
-/// and the enable replacement silently does not load (measured on both lab boxes, 2026-11-06). A
-/// directory left in that state by the first build of this change is removed and made again: its
-/// group differs from the home's.
+/// and the enable replacement silently does not load (measured on both lab boxes, 2026-11-06). The
+/// `oxidized-init` container's `chgrp -R` hides that on the next start, but it runs before this
+/// writer, so a model file rewritten later would be unreadable again until the start after. A
+/// directory in another group, or without the setgid bit under a home that has it - what the first
+/// build of this change left behind - is therefore removed and made again.
 fn ensure_model_dir(home: &Path) -> std::io::Result<()> {
     let models = home.join(MODEL_DIR);
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-        let home_gid = std::fs::metadata(home)?.gid();
+        const SETGID: u32 = 0o2000;
+        let home = std::fs::metadata(home)?;
         if let Ok(m) = std::fs::metadata(&models) {
-            if m.gid() == home_gid {
+            let inherits = m.mode() & SETGID != 0 || home.mode() & SETGID == 0;
+            if m.gid() == home.gid() && inherits {
                 return Ok(());
             }
             std::fs::remove_dir_all(&models)?;
