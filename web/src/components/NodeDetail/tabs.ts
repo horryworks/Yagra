@@ -168,6 +168,9 @@ export interface NodeDetailTabStats {
    *  costs no extra fetch, the way the Interfaces pill reads rows the pane already has. Null on
    *  every node that is not a controller. */
   wlanController: WirelessControllerSummary | null;
+  /** The config backup asks for a fix or the device is unsaved (ADR-240 decision 5,
+   *  `configBackupForm.ts::needsAttention`). False until read, and on a node with no Config tab. */
+  configAttention: boolean;
 }
 
 /** Per-tab presentation rules. `labelKey` resolves in the `nodes` i18n namespace. */
@@ -295,6 +298,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     kinds: DEVICE_ONLY,
     needsSnmp: false,
     needsWlanController: false,
+    warn: (s) => s.configAttention,
   },
   events: {
     labelKey: 'tabs.events',

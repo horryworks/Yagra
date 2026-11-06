@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* NodeDetail ▸ Config (ADR-210 stages 2 and 3). Colours and fonts come from theme variables. */
+/* NodeDetail ▸ Config (ADR-210 stages 2 and 3, ADR-240). Colours and fonts come from theme variables. */
 
 .cfgb {
   display: flex;
@@ -7,14 +7,6 @@
   gap: 12px;
   /* The side gutter every other node-detail tab keeps (`NeighborsTab.css`). */
   padding: var(--space-3) var(--space-4);
-}
-
-.cfgb-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
 }
 
 /* The one line that says where the backup stands. Its tone is the colour; the words say it too. */
@@ -39,21 +31,22 @@
   color: var(--text-secondary);
 }
 
-/* Running and startup differ (ADR-222 Inc.9): the line, and the button that shows how. */
+/* Running and startup differ (ADR-222 Inc.9): the line, the button that shows how, and the save. */
 .cfgb-unsaved {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: var(--border-width) solid color-mix(in srgb, var(--status-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
 }
 
-/* Two short choices side by side at a width that fits their values, not stretched across the pane;
-   the tops line up so the two labels sit on one line. */
-.cfgb-settings {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
-  gap: 0 16px;
-  align-items: start;
+.cfgb-unsaved-t {
+  flex: 1 1 220px;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 
 .cfgb-logins {
@@ -74,23 +67,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.cfgb-actions {
-  display: inline-flex;
-  gap: 6px;
-}
-
-/* One named record (stored versions, saves, the fetch log): its heading sits on the table. */
-.cfgb-record .nd-section-t {
-  margin-bottom: 6px;
-}
-
-/* The count beside a record's name: the number, not a second label. */
-.cfgb-record-n {
-  margin-left: 4px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
 }
 
 /* Running beside the saved file, opened under the line that says the node is unsaved (ADR-222
@@ -179,21 +155,255 @@
   color: var(--status-critical);
 }
 
-.cfgb-switch {
-  display: inline-flex;
+.cfgb-add-login {
+  align-self: flex-start;
+  color: var(--accent-color);
+}
+
+/* The status card (ADR-240 decision 1): a mark, what is true, the facts behind it, the switch; a
+   problem adds its one fix on a row of its own. */
+.cfgb-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 14px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: var(--border-width) solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.cfgb-card-ok {
+  border-color: color-mix(in srgb, var(--status-ok) 40%, var(--border-color));
+}
+
+.cfgb-card-busy {
+  border-color: color-mix(in srgb, var(--accent-color) 40%, var(--border-color));
+}
+
+.cfgb-card-fix {
+  border-color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 8%, var(--bg-primary));
+}
+
+.cfgb-card-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: var(--font-lg);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.cfgb-card-ok .cfgb-card-mark {
+  color: var(--status-ok);
+  background: color-mix(in srgb, var(--status-ok) 14%, transparent);
+}
+
+.cfgb-card-busy .cfgb-card-mark {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+}
+
+.cfgb-card-fix .cfgb-card-mark {
+  color: var(--status-warning);
+  background: var(--bg-primary);
+}
+
+.cfgb-card-text {
+  min-width: 0;
+}
+
+.cfgb-card .cfgb-state {
+  font-size: var(--font-md);
+  font-weight: 600;
+}
+
+.cfgb-facts {
+  margin: 2px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.cfgb-card-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* The fix sits under the sentence that names the problem, not under the mark. */
+.cfgb-card-fixes {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-.cfgb-login {
+.cfgb-fix-model {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 560px) {
+  .cfgb-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .cfgb-card-right,
+  .cfgb-card-fixes {
+    grid-column: 1 / -1;
+  }
+}
+
+/* The settings, folded into the line that summarises them (decision 3). */
+.cfgb-settings {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 8px;
+}
+
+.cfgb-settings > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.cfgb-settings-t {
   font-weight: 500;
 }
 
-.cfgb-spacer {
-  flex: 1;
+.cfgb-settings-sum {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  min-width: 0;
 }
 
-.cfgb-add-login {
-  align-self: flex-start;
-  color: var(--accent-color);
+.cfgb-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 14px 14px;
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+/* Short choices side by side at a width that fits their values; the tops line up so the labels
+   sit on one line. */
+.cfgb-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 260px));
+  gap: 0 16px;
+  align-items: start;
+}
+
+.cfgb-settings-body .cfgb-buttons {
+  justify-content: flex-end;
+}
+
+/* The history (decision 4): one list, newest first. */
+.cfgb-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cfgb-h {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cfgb-h > li + li {
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.cfgb-h-row {
+  display: grid;
+  grid-template-columns: 170px 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  min-height: 40px;
+}
+
+.cfgb-h-at {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.cfgb-h-mark {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--border-color);
+}
+
+.cfgb-h-version {
+  background: var(--accent-color);
+}
+
+.cfgb-h-save {
+  background: var(--status-ok);
+}
+
+.cfgb-h-fail {
+  background: var(--status-warning);
+}
+
+.cfgb-h-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cfgb-h-oid {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.cfgb-h-acts {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.cfgb-h-same {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.cfgb-h-viewer {
+  padding: 8px 12px 12px;
+  background: var(--bg-secondary);
+}
+
+@media (max-width: 560px) {
+  .cfgb-h-row {
+    grid-template-columns: 10px minmax(0, 1fr);
+  }
+
+  .cfgb-h-at {
+    grid-column: 2;
+    order: -1;
+  }
+
+  .cfgb-h-acts {
+    grid-column: 2;
+  }
 }

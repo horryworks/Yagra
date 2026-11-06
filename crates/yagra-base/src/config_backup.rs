@@ -1108,6 +1108,41 @@ impl ConfigBackupRepo {
     }
 }
 
+impl ConfigBackupRepo {
+    /// Every node switched on, with its newest successful fetch and when its settings were last
+    /// saved - what the stale watch reads (ADR-240 decision 6). A node never fetched counts from
+    /// the second, which is also when it was switched on unless the settings were edited since.
+    pub async fn stale_watch_nodes(&self) -> anyhow::Result<Vec<StaleWatchNode>> {
+        let rows = sqlx::query(
+            "SELECT b.node_id, b.updated_at, s.at AS last_success_at \
+             FROM node_config_backup b \
+             LEFT JOIN LATERAL (SELECT at FROM config_backup_attempts \
+                                WHERE node_id = b.node_id AND outcome = 'success' \
+                                ORDER BY at DESC, id DESC LIMIT 1) s ON true \
+             WHERE b.enabled",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(StaleWatchNode {
+                    node_id: r.try_get("node_id")?,
+                    settings_saved_at: r.try_get("updated_at")?,
+                    last_success_at: r.try_get("last_success_at")?,
+                })
+            })
+            .collect()
+    }
+}
+
+/// One node switched on for config backup, as the stale watch reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StaleWatchNode {
+    pub node_id: Uuid,
+    pub settings_saved_at: DateTime<Utc>,
+    pub last_success_at: Option<DateTime<Utc>>,
+}
+
 /// A `SMALLINT` column the table's CHECK bounds to a `u8`.
 fn small(r: &sqlx::postgres::PgRow, col: &str) -> anyhow::Result<u8> {
     let v: i16 = r.try_get(col)?;
@@ -1415,6 +1450,57 @@ mod tests {
             after[&c], first[&a],
             "a freed port waits for the whole range to come round"
         );
+    }
+
+    /// The stale watch (ADR-240) sees each node switched on once, with its newest success - not its
+    /// newest attempt - and never a node switched off.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_stale_watch_reads_the_newest_success_of_each_node_switched_on(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let fetched = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let never = crate::pgtest::node(&pool, "sw-02", 2, None).await;
+        let off = crate::pgtest::node(&pool, "sw-03", 3, None).await;
+        let cfg = on(BackupInput::Ssh, Some("ios"));
+        for n in [fetched, never, off] {
+            assert!(repo.put(n, &cfg, true).await.expect("put"));
+        }
+        assert!(repo
+            .put(
+                off,
+                &NodeConfigBackup {
+                    enabled: false,
+                    ..cfg.clone()
+                },
+                false
+            )
+            .await
+            .expect("put"));
+        for (outcome, hours) in [("success", 50), ("success", 30), ("auth_failed", 1)] {
+            sqlx::query(
+                "INSERT INTO config_backup_attempts (node_id, outcome, at) \
+                 VALUES ($1, $2, now() - make_interval(hours => $3))",
+            )
+            .bind(fetched)
+            .bind(outcome)
+            .bind(hours)
+            .execute(&pool)
+            .await
+            .expect("attempt");
+        }
+
+        let mut got = repo.stale_watch_nodes().await.expect("read");
+        got.sort_by_key(|n| n.node_id == never);
+        assert_eq!(got.len(), 2, "the node switched off is not watched");
+        assert_eq!(got[0].node_id, fetched);
+        let age = Utc::now() - got[0].last_success_at.expect("a success");
+        assert!(
+            (age.num_hours() - 30).abs() <= 1,
+            "the newest success, not the newest attempt: {age}"
+        );
+        assert_eq!(got[1].node_id, never);
+        assert_eq!(got[1].last_success_at, None);
+        assert!(Utc::now() - got[1].settings_saved_at < chrono::Duration::minutes(5));
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

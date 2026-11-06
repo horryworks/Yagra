@@ -25,6 +25,8 @@
 //!
 //! - [`push`] is the leader loop that opens and closes the alert saying config backups are not
 //!   reaching their Git destination (stage 4). The pushes are the push script's, inside oxidized.
+//! - [`stale`] is the leader loop that opens and closes a node's alert saying it has not been
+//!   fetched for two days (ADR-240).
 //!
 //! ⚠️ oxidized's REST API has no authentication. It is reachable only on the compose network,
 //! which holds nothing but this deployment's own containers; that is the whole protection.
@@ -37,6 +39,7 @@ pub(crate) mod rotation;
 pub(crate) mod save;
 pub(crate) mod schedule;
 pub(crate) mod source;
+pub(crate) mod stale;
 pub(crate) mod status;
 
 use std::path::PathBuf;

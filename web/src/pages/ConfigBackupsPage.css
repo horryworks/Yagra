@@ -53,61 +53,6 @@
   font-size: var(--font-sm);
 }
 
-/* A row's switch: a real checkbox (`role="switch"`) carries the semantics and the keyboard; the
-   track is drawn from it, as Inventory's filter switch does. */
-.cfgbl-sw {
-  display: inline-flex;
-  cursor: pointer;
-}
-
-.cfgbl-sw input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.cfgbl-sw-track {
-  position: relative;
-  width: 28px;
-  height: 16px;
-  border-radius: 8px;
-  background: var(--bg-primary);
-  border: var(--border-width) solid var(--border-color);
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-
-.cfgbl-sw-track::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--text-secondary);
-  transition: transform 0.12s ease, background 0.12s ease;
-}
-
-.cfgbl-sw input:checked + .cfgbl-sw-track {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
-}
-
-.cfgbl-sw input:checked + .cfgbl-sw-track::after {
-  transform: translateX(12px);
-  background: var(--on-brand);
-}
-
-.cfgbl-sw input:focus-visible + .cfgbl-sw-track {
-  outline: 2px solid var(--accent-color);
-  outline-offset: 1px;
-}
-
-.cfgbl-sw input:disabled + .cfgbl-sw-track {
-  opacity: 0.5;
-}
-
 /* The filter's labels carry a count, so they keep to one line and size to their text. */
 .cfgbl-tools .ts-seg button {
   flex: none;

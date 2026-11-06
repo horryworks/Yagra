@@ -1283,13 +1283,6 @@
       "unknown": "{{login}} failed",
       "cancelled": "Fetch cancelled"
     },
-    "attempts": {
-      "cols": {
-        "at": "Time",
-        "login": "Login",
-        "result": "Result"
-      }
-    },
     "list": {
       "cols": {
         "pick": "Select",
@@ -1340,11 +1333,6 @@
     },
     "unavailable": "This deployment has no config backup service.",
     "noVersions": "No versions yet.",
-    "cols": {
-      "stored": "Stored",
-      "version": "Version",
-      "actions": "Actions"
-    },
     "view": "View",
     "compare": "Compare",
     "err": {
@@ -1362,9 +1350,7 @@
       "on": "On",
       "off": "Off"
     },
-    "login": "Login",
     "rescan": "Search logins again",
-    "changeOrder": "Change the try order",
     "addLogin": "Add a CLI login",
     "cancelFetch": "Cancel fetch",
     "schedule": {
@@ -1389,12 +1375,6 @@
       "confirmTitle": "Save the running configuration?",
       "confirm": "Restarting {{node}} will no longer bring back its current startup configuration. Yagra keeps a copy.",
       "confirmLabel": "Save",
-      "cols": {
-        "at": "Time",
-        "origin": "Asked by",
-        "result": "Result",
-        "actions": "Actions"
-      },
       "origin": {
         "person": "A person",
         "auto": "Yagra"
@@ -1423,11 +1403,6 @@
       "running": "Running · from line {{n}}",
       "saved": "Saved file · from line {{n}}"
     },
-    "records": {
-      "versions": "Stored versions",
-      "saves": "Saves to startup",
-      "attempts": "Fetch log"
-    },
     "autoSave": {
       "title": "Automatic save",
       "on": "On",
@@ -1439,6 +1414,35 @@
       "err": {
         "save": "Could not save the automatic-save setting"
       }
+    },
+    "card": {
+      "off": "Not backed up",
+      "searching": "Looking for a login that works",
+      "stale": "Not fetched for over 2 days",
+      "ok": "Backed up",
+      "last": "Last fetched {{ago}}",
+      "next": "Next {{time}}",
+      "versions_one": "{{count}} version",
+      "versions_other": "{{count}} versions",
+      "saveAndFetch": "Save and fetch",
+      "tryAgain": "Try again",
+      "saveAgain": "Save again"
+    },
+    "settings": {
+      "title": "Connection settings",
+      "noModel": "No model"
+    },
+    "history": {
+      "title": "History",
+      "filter": {
+        "changes": "Changes",
+        "all": "All"
+      },
+      "version": "New version",
+      "first": "First version",
+      "save": "Save to startup ({{who}}):",
+      "sameN_one": "No change, {{count}} fetch",
+      "sameN_other": "No change, {{count}} fetches"
     }
   },
   "rules": {

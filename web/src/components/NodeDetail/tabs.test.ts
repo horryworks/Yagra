@@ -315,6 +315,7 @@ const stats = (over: Partial<NodeDetailTabStats> = {}): NodeDetailTabStats => ({
   hasSnmp: false,
   state: 'ok',
   wlanController: null,
+  configAttention: false,
   ...over,
 });
 
@@ -352,6 +353,13 @@ describe('node-detail tab badges and warnings', () => {
     expect(meta.warn?.(stats({ hasSnmp: true, state: 'ok' }))).toBe(false);
     // No SNMP ⇒ nothing is expected to collect, so it is not "needs attention".
     expect(meta.warn?.(stats({ hasSnmp: false, state: 'unreachable' }))).toBe(false);
+  });
+
+  it('warns on config when the backup asks for a fix or the device is unsaved (ADR-240)', () => {
+    const meta = NODE_DETAIL_TAB_META.config;
+    expect(meta.warn?.(stats({ configAttention: true }))).toBe(true);
+    expect(meta.warn?.(stats())).toBe(false);
+    expect(meta.badge).toBeUndefined();
   });
 
   it('leaves the plain tabs undecorated', () => {

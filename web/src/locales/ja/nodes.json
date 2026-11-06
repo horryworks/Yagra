@@ -1273,13 +1273,6 @@
       "unknown": "{{login}} で失敗しました",
       "cancelled": "取得をやめました"
     },
-    "attempts": {
-      "cols": {
-        "at": "日時",
-        "login": "ログイン",
-        "result": "結果"
-      }
-    },
     "list": {
       "cols": {
         "pick": "選択",
@@ -1330,11 +1323,6 @@
     },
     "unavailable": "この環境には config バックアップがありません。",
     "noVersions": "版はまだありません。",
-    "cols": {
-      "stored": "保存日時",
-      "version": "版",
-      "actions": "操作"
-    },
     "view": "表示",
     "compare": "比較",
     "err": {
@@ -1352,9 +1340,7 @@
       "on": "オン",
       "off": "オフ"
     },
-    "login": "ログイン",
     "rescan": "ログインを探し直す",
-    "changeOrder": "試す順を変える",
     "addLogin": "CLI ログインを追加",
     "cancelFetch": "取得をやめる",
     "schedule": {
@@ -1379,12 +1365,6 @@
       "confirmTitle": "running-config を保存しますか？",
       "confirm": "{{node}} を再起動しても、今の startup-config には戻らなくなります。控えは Yagra に残ります。",
       "confirmLabel": "保存",
-      "cols": {
-        "at": "日時",
-        "origin": "依頼",
-        "result": "結果",
-        "actions": "操作"
-      },
       "origin": {
         "person": "人",
         "auto": "Yagra"
@@ -1413,11 +1393,6 @@
       "running": "running-config · {{n}} 行目から",
       "saved": "保存ファイル · {{n}} 行目から"
     },
-    "records": {
-      "versions": "保存した版",
-      "saves": "startup への保存",
-      "attempts": "取得の記録"
-    },
     "autoSave": {
       "title": "自動保存",
       "on": "オン",
@@ -1429,6 +1404,35 @@
       "err": {
         "save": "自動保存の設定を保存できませんでした"
       }
+    },
+    "card": {
+      "off": "バックアップしていません",
+      "searching": "使えるログインを探しています",
+      "stale": "2 日以上取れていません",
+      "ok": "バックアップできています",
+      "last": "最後の取得 {{ago}}",
+      "next": "次 {{time}}",
+      "versions_one": "版 {{count}} 個",
+      "versions_other": "版 {{count}} 個",
+      "saveAndFetch": "保存して取得",
+      "tryAgain": "もう一度試す",
+      "saveAgain": "保存し直す"
+    },
+    "settings": {
+      "title": "接続の設定",
+      "noModel": "機種なし"
+    },
+    "history": {
+      "title": "履歴",
+      "filter": {
+        "changes": "変更だけ",
+        "all": "すべて"
+      },
+      "version": "新しい版",
+      "first": "最初の版",
+      "save": "startup への保存（{{who}}）:",
+      "sameN_one": "変更なし（{{count}} 回）",
+      "sameN_other": "変更なし（{{count}} 回）"
     }
   },
   "rules": {

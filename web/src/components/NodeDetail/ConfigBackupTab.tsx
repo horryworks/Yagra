@@ -1,21 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// NodeDetail ▸ Config (ADR-210 stages 2 and 3): the node's configuration as the bundled oxidized
-// fetches it. One line says where the backup stands; Start (save and fetch once) or Stop and Fetch
-// now act on it; the settings are the connection, the model and the order the CLI logins are tried
-// in; below them the latest login attempts, the stored versions, a version's text and two versions
-// side by side.
+// NodeDetail ▸ Config (ADR-210 stages 2 and 3, ADR-240): the node's configuration as the bundled
+// oxidized fetches it. A status card at the top says whether the backup works, and when it does not,
+// offers the one thing that fixes it; the settings are folded into one line; the stored versions,
+// the saves to startup and the failed fetches are one history, newest first.
 //
 // The text and the comparison need `manage_config` (the server's `remove_secret` is model by model
-// and can miss one), so a Viewer sees the state, the attempts and the versions and nothing of the
-// text. Switching the backup on hands the logins to the device, so Start and Save also need
-// `manage_credentials` (ADR-210 stage 8); logins are named only for a caller who may list credentials. The judgement
-// — the form, the state line, how often to read again — is `configBackupForm.ts`.
+// and can miss one), so a Viewer sees the card, the settings line and the history and nothing of
+// the text. Switching the backup on hands the logins to the device, so the switch and the settings'
+// Save also need `manage_credentials` (ADR-210 stage 8); logins are named only for a caller who may
+// list credentials. The judgement - the card, the history, the form - is `configBackupForm.ts`.
 //
 // "Save to startup" (ADR-222) is the one control here that writes to the device: it takes
-// `save_device_config` (Admin), confirms, and the save runs right after a fetch. The saves list
-// below the attempts shows how each ended, and the startup configuration it replaced.
+// `save_device_config` (Admin), confirms, and sits on the line that says the device is unsaved.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError, errMsg } from '../../services/api';
@@ -24,53 +22,56 @@ import { useLoad } from '../../lib/useLoad';
 import { LoadGate } from '../ui/LoadGate';
 import { Button } from '../ui/Button';
 import { Segmented } from '../ui/Segmented';
+import { Switch } from '../ui/Switch';
 import { Select } from '../ui/Field';
-import { DataTable, type Column } from '../ui/DataTable';
 import { EmptyState } from '../ui/EmptyState';
 import { ScreenLink } from '../ui/ScreenLink';
 import { CredentialPicker } from '../ui/CredentialPicker';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
-import { TimeCell } from '../ui/tableCells';
-import { formatExactTime } from '../../lib/format';
+import { formatExactTime, relativeTime } from '../../lib/format';
 import { isCliCredentialKind } from '../../lib/credentialKinds';
 import {
   BACKUP_INPUTS,
   SCAN_MODES,
-  type AttemptView,
   type BackupInput,
   type ConfigBackupView,
   type ConfigDiff,
   type ConfigVersion,
   type NodeDetail,
-  type SaveRecord,
   type ScanMode,
 } from '../../types/api';
 import {
+  HISTORY_FILTERS,
   attemptLine,
   bodyOf,
   canOfferSave,
+  cardOf,
   formOf,
+  historyRows,
   isDirty,
   isQuietFetchRefusal,
+  lastSuccessAt,
   loginLabel,
-  orderShown,
   pickedLogins,
-  previousOf,
   refreshMs,
   saveLine,
   shortOid,
-  stateLine,
+  type CardFix,
   type ConfigBackupForm,
+  type HistoryFilter,
+  type HistoryRow,
 } from './configBackupForm';
 import { compareColumns, compareRows } from './compareOutput';
 import './ConfigBackupTab.css';
 
-/** What the viewer pane shows: one version's text, a version beside the one before it, or the
- *  startup configuration a save replaced. */
+/** What the viewer under a history row shows: one version's text, a version beside the one before
+ *  it, or the startup configuration a save replaced. */
 type Shown =
   | { kind: 'text'; oid: string }
   | { kind: 'diff'; from: string; to: string }
   | { kind: 'startup'; save: string };
+
+const CARD_MARK = { off: '–', busy: '…', ok: '✓', fix: '!' } as const;
 
 export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
@@ -86,6 +87,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   });
   useEffect(() => setPoll(refreshMs(view.data)), [view.data]);
   const available = view.data?.available ?? false;
+  const enabled = view.data?.enabled ?? false;
   const confirmed = view.data?.login_confirmed ?? false;
   const versions = useLoad(
     () => api.listConfigVersions(node.id),
@@ -96,6 +98,11 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
       errorFallback: t('config.err.versions'),
     },
   );
+  // When the next daily run starts. Its failure is not worth a line: the card simply leaves it out.
+  const schedule = useLoad(() => api.getConfigBackupSchedule(), [enabled], {
+    initial: null,
+    enabled: available && enabled,
+  });
   const creds = useLoad(() => api.listCredentials(), [], {
     initial: [],
     enabled: canCreds,
@@ -110,7 +117,9 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
-  const [orderOpen, setOrderOpen] = useState(false);
+  const [filter, setFilter] = useState<HistoryFilter>('changes');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pickedModel, setPickedModel] = useState('');
   // Which unsaved spell the comparison was opened for: a node saved and then changed again starts
   // a new one, so the panel does not reopen on its own.
   const [diffOpenFor, setDiffOpenFor] = useState<string | null>(null);
@@ -137,147 +146,181 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
         view.reload();
       });
   };
-  /** Fetch now. A fetch the limits hold back, or one already out, is not an error: the state line
-   *  says until when. */
+  /** Fetch now. A fetch the limits hold back, or one already out, is not an error: the card says
+   *  until when. */
   const fetchQuietly = () =>
     api.fetchConfigNow(node.id).catch((e: unknown) => {
       if (!(e instanceof ApiError && isQuietFetchRefusal(e.status, e.code))) throw e;
     });
-  const start = () => {
-    if (!form) return;
+  /** Switch on with `f` and ask for the first fetch. */
+  const start = (f: ConfigBackupForm) =>
     act(async () => {
-      await api.putConfigBackup(node.id, bodyOf(form, true));
+      await api.putConfigBackup(node.id, bodyOf(f, true));
       await fetchQuietly();
     }, t('config.err.save'));
-  };
   const stop = () => {
-    if (!form) return;
-    act(() => api.putConfigBackup(node.id, bodyOf(form, false)), t('config.err.save'));
+    if (form) act(() => api.putConfigBackup(node.id, bodyOf(form, false)), t('config.err.save'));
   };
   const save = () => {
-    if (!form || !view.data) return;
-    act(() => api.putConfigBackup(node.id, bodyOf(form, view.data?.enabled ?? false)), t('config.err.save'));
+    if (form) act(() => api.putConfigBackup(node.id, bodyOf(form, enabled)), t('config.err.save'));
   };
   const fetchNow = () => act(fetchQuietly, t('config.err.fetch'));
   const cancelFetch = () => act(() => api.cancelConfigFetch(node.id), t('config.err.cancel'));
   const rescan = () => act(() => api.rescanConfigLogins(node.id), t('config.err.rescan'));
 
-  const attemptColumns = useMemo<Column<AttemptView>[]>(
-    () => [
-      {
-        key: 'at',
-        header: t('config.attempts.cols.at'),
-        width: '200px',
-        render: (a) => <TimeCell iso={a.at} />,
-      },
-      {
-        key: 'login',
-        header: t('config.attempts.cols.login'),
-        width: '180px',
-        render: (a) => loginText(a.credential_id),
-      },
-      {
-        key: 'result',
-        header: t('config.attempts.cols.result'),
-        width: '1fr',
-        render: (a) => {
-          const line = attemptLine(a);
-          return (
-            <span className={`cfgb-tone-${line.tone}`}>
-              {t(line.key, { login: loginText(line.login) })}
-            </span>
-          );
-        },
-      },
-    ],
-    [t, loginText],
-  );
+  const v = view.data;
+  const vers = versions.data;
+  const lastOk = useMemo(() => (v ? lastSuccessAt(v, vers) : null), [v, vers]);
+  const card = useMemo(() => (v ? cardOf(v, lastOk, Date.now()) : null), [v, lastOk]);
+  const rows = useMemo(() => (v ? historyRows(vers, v.saves, v.attempts, filter) : []), [v, vers, filter]);
+  const canStart = canConfig && canCreds;
 
-  const saveColumns = useMemo<Column<SaveRecord>[]>(
-    () => [
-      {
-        key: 'at',
-        header: t('config.saves.cols.at'),
-        width: '200px',
-        render: (r) => <TimeCell iso={r.requested_at} />,
-      },
-      {
-        key: 'origin',
-        header: t('config.saves.cols.origin'),
-        width: '120px',
-        render: (r) => t(`config.saves.origin.${r.origin}`),
-      },
-      {
-        key: 'result',
-        header: t('config.saves.cols.result'),
-        width: '1fr',
-        render: (r) => {
-          const line = saveLine(r);
-          return <span className={`cfgb-tone-${line.tone}`}>{t(line.key)}</span>;
-        },
-      },
-      {
-        key: 'actions',
-        header: t('config.saves.cols.actions'),
-        width: '200px',
-        align: 'right',
-        render: (r) =>
-          canConfig && r.kept_startup ? (
-            <Button variant="outline" onClick={() => setShown({ kind: 'startup', save: r.id })}>
-              {t('config.saves.viewStartup')}
+  /** The control behind one of the card's fixes, or nothing for a caller who may not use it. */
+  const fixControl = (fix: CardFix): ReactNode => {
+    if (!v || !form) return null;
+    switch (fix) {
+      case 'pickModel':
+        return canStart ? (
+          <span key={fix} className="cfgb-fix-model">
+            <Select
+              id="cfgb-fix-model"
+              aria-label={t('config.model')}
+              value={pickedModel}
+              onChange={(e) => setPickedModel(e.target.value)}
+            >
+              <option value="">{t('config.modelPick')}</option>
+              {v.models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </Select>
+            <Button
+              variant="primary"
+              disabled={busy || pickedModel === ''}
+              onClick={() => start({ ...form, model: pickedModel })}
+            >
+              {t('config.card.saveAndFetch')}
             </Button>
-          ) : null,
-      },
-    ],
-    [t, canConfig],
-  );
+          </span>
+        ) : null;
+      case 'addLogin':
+        return canCreds ? (
+          <Link key={fix} className="btn btn-primary" to="/nodes/credentials?tab=cli">
+            {t('config.addLogin')}
+          </Link>
+        ) : null;
+      case 'rescan':
+        return canConfig ? (
+          <Button key={fix} onClick={rescan} disabled={busy}>
+            {t('config.card.tryAgain')}
+          </Button>
+        ) : null;
+      case 'fetch':
+        return canConfig ? (
+          <Button key={fix} variant="primary" onClick={fetchNow} disabled={busy}>
+            {t('config.fetchNow')}
+          </Button>
+        ) : null;
+      case 'settings':
+        return (
+          <Button key={fix} onClick={() => setSettingsOpen(true)}>
+            {t('config.settings.title')}
+          </Button>
+        );
+      case 'resave':
+        return canStart ? (
+          <Button key={fix} variant="primary" onClick={save} disabled={busy}>
+            {t('config.card.saveAgain')}
+          </Button>
+        ) : null;
+      case 'pollers':
+        return <ScreenLink key={fix} to="/settings/pollers" />;
+    }
+  };
 
-  const columns = useMemo<Column<ConfigVersion>[]>(
-    () => [
-      {
-        key: 'stored',
-        header: t('config.cols.stored'),
-        width: '220px',
-        render: (v) => (v.stored_at ? formatExactTime(v.stored_at) : '—'),
-      },
-      {
-        key: 'oid',
-        header: t('config.cols.version'),
-        width: '1fr',
-        render: (v) => <code className="mono">{shortOid(v.oid)}</code>,
-      },
-      {
-        key: 'actions',
-        header: t('config.cols.actions'),
-        width: '200px',
-        align: 'right',
-        render: (v) => {
-          if (!canConfig) return null;
-          const prev = previousOf(versions.data, v.oid);
-          return (
-            <span className="cfgb-actions">
-              <Button variant="outline" onClick={() => setShown({ kind: 'text', oid: v.oid })}>
-                {t('config.view')}
-              </Button>
-              {prev && (
-                <Button
-                  variant="outline"
-                  onClick={() => setShown({ kind: 'diff', from: prev, to: v.oid })}
-                >
-                  {t('config.compare')}
+  /** Whether the viewer is open under this row. */
+  const opensUnder = (r: HistoryRow): boolean => {
+    if (!shown || !canConfig) return false;
+    if (r.kind === 'version') {
+      return (shown.kind === 'text' && shown.oid === r.oid) || (shown.kind === 'diff' && shown.to === r.oid);
+    }
+    return r.kind === 'save' && shown.kind === 'startup' && shown.save === r.save.id;
+  };
+
+  const historyRow = (r: HistoryRow, i: number): ReactNode => {
+    const at = <span className="cfgb-h-at">{r.at ? formatExactTime(r.at) : ''}</span>;
+    switch (r.kind) {
+      case 'version':
+        return (
+          <li key={`v:${r.oid}`} className="cfgb-h-row">
+            {at}
+            <span className="cfgb-h-mark cfgb-h-version" aria-hidden="true" />
+            <span className="cfgb-h-what">
+              {t(r.prev ? 'config.history.version' : 'config.history.first')}{' '}
+              <code className="mono cfgb-h-oid">{shortOid(r.oid)}</code>
+            </span>
+            <span className="cfgb-h-acts">
+              {canConfig && (
+                <>
+                  <Button onClick={() => setShown({ kind: 'text', oid: r.oid })}>{t('config.view')}</Button>
+                  {r.prev && (
+                    <Button onClick={() => setShown({ kind: 'diff', from: r.prev ?? '', to: r.oid })}>
+                      {t('config.compare')}
+                    </Button>
+                  )}
+                </>
+              )}
+            </span>
+          </li>
+        );
+      case 'save': {
+        const line = saveLine(r.save);
+        return (
+          <li key={`s:${r.save.id}`} className="cfgb-h-row">
+            {at}
+            <span className="cfgb-h-mark cfgb-h-save" aria-hidden="true" />
+            <span className="cfgb-h-what">
+              {t('config.history.save', { who: t(`config.saves.origin.${r.save.origin}`) })}{' '}
+              <span className={`cfgb-tone-${line.tone}`}>{t(line.key)}</span>
+            </span>
+            <span className="cfgb-h-acts">
+              {canConfig && r.save.kept_startup && (
+                <Button onClick={() => setShown({ kind: 'startup', save: r.save.id })}>
+                  {t('config.saves.viewStartup')}
                 </Button>
               )}
             </span>
-          );
-        },
-      },
-    ],
-    [t, canConfig, versions.data],
-  );
+          </li>
+        );
+      }
+      case 'attempt': {
+        const line = attemptLine(r.attempt);
+        return (
+          <li key={`a:${r.at}:${i}`} className="cfgb-h-row">
+            {at}
+            <span className={`cfgb-h-mark cfgb-h-${line.tone === 'bad' ? 'fail' : 'quiet'}`} aria-hidden="true" />
+            <span className={`cfgb-h-what cfgb-tone-${line.tone}`}>
+              {t(line.key, { login: loginText(line.login) })}
+            </span>
+            <span className="cfgb-h-acts" />
+          </li>
+        );
+      }
+      case 'same':
+        return (
+          <li key={`n:${r.at}:${i}`} className="cfgb-h-row cfgb-h-same">
+            {at}
+            <span className="cfgb-h-mark cfgb-h-quiet" aria-hidden="true" />
+            <span className="cfgb-h-what">
+              {r.count > 1 ? t('config.history.sameN', { count: r.count }) : t('config.result.noChange')}
+            </span>
+            <span className="cfgb-h-acts" />
+          </li>
+        );
+    }
+  };
 
-  const v = view.data;
-  const line = v ? stateLine(v) : null;
-  const canStart = canConfig && canCreds;
   return (
     <LoadGate load={view}>
       {view.error && (
@@ -285,78 +328,82 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
           {view.error}
         </p>
       )}
-      {v && form && line && (
+      {v && form && card && (
         <div className="cfgb">
           {!v.available && <p className="form-status">{t('config.unavailable')}</p>}
-          <div className="cfgb-head">
-            {canStart && v.available && (
-              <span className="cfgb-switch">
-                <span className="modal-field-label">{t('config.switch.label')}</span>
-                {/* On saves and fetches once; Off stops the backup and keeps every version. One
-                    control, so stopping cannot be read as stopping the fetch beside it (ADR-210
-                    stage 5 decision 53). */}
-                <Segmented
-                  ariaLabel={t('config.switch.label')}
-                  options={[
-                    { value: 'on', label: t('config.switch.on') },
-                    { value: 'off', label: t('config.switch.off') },
-                  ]}
-                  value={v.enabled ? 'on' : 'off'}
-                  onChange={(next) => {
-                    if (busy || (next === 'on') === v.enabled) return;
-                    if (next === 'on') start();
-                    else stop();
-                  }}
-                />
+          {v.available && (
+            <section className={`cfgb-card cfgb-card-${card.kind}`} aria-label={t('config.switch.label')}>
+              <span className="cfgb-card-mark" aria-hidden="true">
+                {CARD_MARK[card.kind]}
               </span>
-            )}
-            <p className={`cfgb-state cfgb-tone-${line.tone}`} role="status">
-              {t(line.key, { ...line.params, login: loginText(line.login) })}
-              {v.try_after && <> · {t('config.state.nextTry', { time: formatExactTime(v.try_after) })}</>}
-              {v.readiness === 'no_credential' && canCreds && (
-                <>
-                  {' '}
-                  <ScreenLink to="/nodes/credentials" />
-                </>
-              )}
-            </p>
-            {canConfig && v.available && v.enabled && v.pending && (
-              <div className="cfgb-buttons">
-                <Button variant="outline" onClick={cancelFetch} disabled={busy}>
-                  {t('config.cancelFetch')}
-                </Button>
-              </div>
-            )}
-            {canConfig && v.available && v.enabled && v.readiness === 'ready' && !v.pending && (
-              <div className="cfgb-buttons">
-                <Button onClick={fetchNow} disabled={busy}>
-                  {t('config.fetchNow')}
-                </Button>
-                {canSave && canOfferSave(v) && (
-                  <Button variant="outline" onClick={() => setConfirmSave(true)} disabled={busy}>
-                    {t('config.saves.button')}
-                  </Button>
+              <div className="cfgb-card-text">
+                <p className="cfgb-state" role="status">
+                  {t(card.line.key, { ...card.line.params, login: loginText(card.line.login) })}
+                </p>
+                {v.enabled && (
+                  <p className="cfgb-facts">
+                    {lastOk && <span>{t('config.card.last', { ago: relativeTime(lastOk) })}</span>}
+                    {v.try_after ? (
+                      <span>{t('config.state.nextTry', { time: formatExactTime(v.try_after) })}</span>
+                    ) : (
+                      // A problem the run cannot fix (no model, every login refused) is not
+                      // waiting for the next run, so the card does not promise one.
+                      (card.kind !== 'fix' || card.fixes.includes('fetch')) &&
+                      schedule.data?.upcoming_start_at && (
+                        <span>{t('config.card.next', { time: formatExactTime(schedule.data.upcoming_start_at) })}</span>
+                      )
+                    )}
+                    {vers.length > 0 && <span>{t('config.card.versions', { count: vers.length })}</span>}
+                  </p>
                 )}
               </div>
-            )}
-          </div>
-          {v.unsaved && (
+              <div className="cfgb-card-right">
+                {canConfig && v.enabled && v.pending && (
+                  <Button onClick={cancelFetch} disabled={busy}>
+                    {t('config.cancelFetch')}
+                  </Button>
+                )}
+                {canConfig && card.kind === 'ok' && (
+                  <Button variant="ghost" onClick={fetchNow} disabled={busy}>
+                    {t('config.fetchNow')}
+                  </Button>
+                )}
+                {canStart && (
+                  <Switch
+                    label={t('config.switch.label')}
+                    ariaLabel={t('config.switch.label')}
+                    checked={v.enabled}
+                    disabled={busy}
+                    onChange={(on) => (on ? start(form) : stop())}
+                  />
+                )}
+              </div>
+              {card.kind === 'fix' && card.fixes.length > 0 && (
+                <div className="cfgb-card-fixes">{card.fixes.map(fixControl)}</div>
+              )}
+            </section>
+          )}
+          {v.enabled && v.unsaved && (
             <div className="cfgb-unsaved">
-              <p className="cfgb-state cfgb-tone-bad">
+              <span className="cfgb-unsaved-t">
                 {t('config.unsaved.since', { time: formatExactTime(v.unsaved.since) })}
-              </p>
+              </span>
               {canConfig && v.unsaved.has_output && (
                 <Button
-                  variant="outline"
                   aria-expanded={diffOpenFor === v.unsaved.since}
                   onClick={() => setDiffOpenFor((o) => (o === v.unsaved?.since ? null : (v.unsaved?.since ?? null)))}
                 >
                   {diffOpenFor === v.unsaved.since ? t('config.unsaved.hide') : t('config.unsaved.view')}
                 </Button>
               )}
+              {canSave && canOfferSave(v) && (
+                <Button variant="primary" onClick={() => setConfirmSave(true)} disabled={busy}>
+                  {t('config.saves.button')}
+                </Button>
+              )}
             </div>
           )}
-          {v.unsaved && canConfig && v.unsaved.has_output && diffOpenFor === v.unsaved.since && (
+          {v.enabled && v.unsaved && canConfig && v.unsaved.has_output && diffOpenFor === v.unsaved.since && (
             <UnsavedDiff nodeId={node.id} checkedAt={v.unsaved.checked_at} />
           )}
           {error && (
@@ -365,170 +412,147 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             </p>
           )}
 
-          <div className="cfgb-settings">
-            <div className="modal-field">
-              <label className="modal-field-label" htmlFor="cfgb-input">
-                {t('config.connection')}
-              </label>
-              <Select
-                id="cfgb-input"
-                value={form.input}
-                disabled={!canStart}
-                onChange={(e) => setForm({ ...form, input: e.target.value as BackupInput })}
-              >
-                {BACKUP_INPUTS.map((i) => (
-                  <option key={i} value={i}>
-                    {t(`config.input.${i}`)}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="modal-field">
-              <label className="modal-field-label" htmlFor="cfgb-speed">
-                {t('config.scanMode')}
-              </label>
-              <Select
-                id="cfgb-speed"
-                value={form.scanMode}
-                disabled={!canStart}
-                onChange={(e) => setForm({ ...form, scanMode: e.target.value as ScanMode })}
-              >
-                {SCAN_MODES.map((m) => (
-                  <option key={m} value={m}>
-                    {t(`config.scanModes.${m}`)}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="modal-field">
-              <label className="modal-field-label" htmlFor="cfgb-model">
-                {t('config.model')}
-              </label>
-              <Select
-                id="cfgb-model"
-                value={form.model}
-                disabled={!canStart}
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-              >
-                <option value="">
-                  {v.profile_model
-                    ? t('config.modelFromProfile', { model: v.profile_model })
-                    : t('config.modelPick')}
-                </option>
-                {v.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          </div>
-          {canStart && (
-            <div className="cfgb-logins">
-              {v.login_confirmed && v.credential_id && (
-                <div className="cfgb-logins-head">
-                  <span className="modal-field-label">{t('config.login')}</span>
-                  <span className="cfgb-login">{loginText(v.credential_id)}</span>
-                  <span className="cfgb-spacer" />
-                  {v.enabled && (
-                    <Button variant="outline" onClick={rescan} disabled={busy}>
+          {v.available && v.enabled && (
+            <details
+              className="cfgb-settings"
+              open={settingsOpen}
+              onToggle={(e) => setSettingsOpen(e.currentTarget.open)}
+            >
+              <summary>
+                <span className="cfgb-settings-t">{t('config.settings.title')}</span>
+                <span className="cfgb-settings-sum">
+                  {[
+                    t(`config.input.${form.input}`),
+                    v.model_override ?? v.profile_model ?? t('config.settings.noModel'),
+                    v.login_confirmed && v.credential_id ? loginText(v.credential_id) : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+              </summary>
+              <div className="cfgb-settings-body">
+                <div className="cfgb-settings-grid">
+                  <div className="modal-field">
+                    <label className="modal-field-label" htmlFor="cfgb-input">
+                      {t('config.connection')}
+                    </label>
+                    <Select
+                      id="cfgb-input"
+                      value={form.input}
+                      disabled={!canStart}
+                      onChange={(e) => setForm({ ...form, input: e.target.value as BackupInput })}
+                    >
+                      {BACKUP_INPUTS.map((i) => (
+                        <option key={i} value={i}>
+                          {t(`config.input.${i}`)}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="modal-field">
+                    <label className="modal-field-label" htmlFor="cfgb-model">
+                      {t('config.model')}
+                    </label>
+                    <Select
+                      id="cfgb-model"
+                      value={form.model}
+                      disabled={!canStart}
+                      onChange={(e) => setForm({ ...form, model: e.target.value })}
+                    >
+                      <option value="">
+                        {v.profile_model
+                          ? t('config.modelFromProfile', { model: v.profile_model })
+                          : t('config.modelPick')}
+                      </option>
+                      {v.models.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="modal-field">
+                    <label className="modal-field-label" htmlFor="cfgb-speed">
+                      {t('config.scanMode')}
+                    </label>
+                    <Select
+                      id="cfgb-speed"
+                      value={form.scanMode}
+                      disabled={!canStart}
+                      onChange={(e) => setForm({ ...form, scanMode: e.target.value as ScanMode })}
+                    >
+                      {SCAN_MODES.map((m) => (
+                        <option key={m} value={m}>
+                          {t(`config.scanModes.${m}`)}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+                {canStart && (
+                  <div className="cfgb-logins">
+                    <div className="cfgb-logins-head">
+                      <span className="modal-field-label">{t('config.logins')}</span>
+                      {form.order !== null && (
+                        <Button onClick={() => setForm({ ...form, order: null })}>{t('config.defaultOrder')}</Button>
+                      )}
+                    </div>
+                    <CredentialPicker
+                      options={logins}
+                      selected={pickedLogins(form, v)}
+                      onChange={(ids) => setForm({ ...form, order: ids })}
+                      disabled={busy}
+                    />
+                    <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
+                      {t('config.addLogin')}
+                    </Link>
+                  </div>
+                )}
+                {canStart && (
+                  <div className="cfgb-buttons">
+                    <Button onClick={rescan} disabled={busy}>
                       {t('config.rescan')}
                     </Button>
-                  )}
-                  <Button
-                    variant="outline"
-                    aria-expanded={orderOpen}
-                    onClick={() => setOrderOpen(!orderOpen)}
-                  >
-                    {t('config.changeOrder')}
-                  </Button>
-                </div>
-              )}
-              {orderShown(v, orderOpen) && (
-                <>
-                  <div className="cfgb-logins-head">
-                    <span className="modal-field-label">{t('config.logins')}</span>
-                    {form.order !== null && (
-                      <Button variant="outline" onClick={() => setForm({ ...form, order: null })}>
-                        {t('config.defaultOrder')}
-                      </Button>
-                    )}
+                    <Button variant="primary" onClick={save} disabled={busy || !isDirty(form, v)}>
+                      {t('common:actions.save')}
+                    </Button>
                   </div>
-                  <CredentialPicker
-                    options={logins}
-                    selected={pickedLogins(form, v)}
-                    onChange={(ids) => setForm({ ...form, order: ids })}
-                    disabled={busy}
-                  />
-                  <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
-                    {t('config.addLogin')}
-                  </Link>
-                </>
-              )}
-            </div>
-          )}
-          {canStart && v.enabled && (
-            <div className="cfgb-buttons">
-              <Button variant="primary" onClick={save} disabled={busy || !isDirty(form, v)}>
-                {t('common:actions.save')}
-              </Button>
-            </div>
+                )}
+              </div>
+            </details>
           )}
 
-          {/* The three records, each named, in the order they are looked for: what was stored, what
-              was written to the device, then how each fetch went (ADR-222 Inc.9 decision 6). */}
-          {v.available && (
-            <section className="cfgb-record">
-              <div className="nd-section-head">
-                <div className="nd-section-t">
-                  {t('config.records.versions')}{' '}
-                  {!versions.loading && !versions.error && (
-                    <span className="cfgb-record-n">{versions.data.length}</span>
-                  )}
-                </div>
+          {v.available && (v.enabled || vers.length > 0) && (
+            <section className="cfgb-history">
+              <div className="cfgb-history-head">
+                <div className="nd-section-t">{t('config.history.title')}</div>
+                <Segmented
+                  ariaLabel={t('config.history.title')}
+                  options={HISTORY_FILTERS.map((f) => ({ value: f, label: t(`config.history.filter.${f}`) }))}
+                  value={filter}
+                  onChange={(f) => setFilter(f as HistoryFilter)}
+                />
               </div>
-              <DataTable
-                tableId="node.configVersions"
-                rows={versions.data}
-                columns={columns}
-                rowKey={(r) => r.oid}
-                loading={versions.loading}
-                empty={versions.error ?? <EmptyState text={t('config.noVersions')} />}
-              />
+              {versions.error && (
+                <p className="form-error" role="alert">
+                  {versions.error}
+                </p>
+              )}
+              {rows.length === 0 ? (
+                <EmptyState text={t('config.noVersions')} />
+              ) : (
+                <ol className="cfgb-h">
+                  {rows.map((r, i) => [
+                    historyRow(r, i),
+                    shown && opensUnder(r) ? (
+                      <li key={`viewer:${i}`} className="cfgb-h-viewer">
+                        <ConfigViewer nodeId={node.id} shown={shown} onClose={() => setShown(null)} />
+                      </li>
+                    ) : null,
+                  ])}
+                </ol>
+              )}
             </section>
-          )}
-          {v.saves.length > 0 && (
-            <section className="cfgb-record">
-              <div className="nd-section-head">
-                <div className="nd-section-t">
-                  {t('config.records.saves')} <span className="cfgb-record-n">{v.saves.length}</span>
-                </div>
-              </div>
-              <DataTable
-                tableId="node.configSaves"
-                rows={v.saves}
-                columns={saveColumns}
-                rowKey={(r) => r.id}
-              />
-            </section>
-          )}
-          {v.attempts.length > 0 && (
-            <section className="cfgb-record">
-              <div className="nd-section-head">
-                <div className="nd-section-t">
-                  {t('config.records.attempts')} <span className="cfgb-record-n">{v.attempts.length}</span>
-                </div>
-              </div>
-              <DataTable
-                tableId="node.configAttempts"
-                rows={v.attempts}
-                columns={attemptColumns}
-                rowKey={(a) => `${a.at}:${a.outcome}`}
-              />
-            </section>
-          )}
-          {shown && canConfig && (
-            <ConfigViewer nodeId={node.id} shown={shown} onClose={() => setShown(null)} />
           )}
           {confirmSave && (
             <ConfirmDeleteModal

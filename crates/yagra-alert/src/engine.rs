@@ -67,6 +67,14 @@ pub const CONFIG_PUSH_METRIC: &str = "config_backup_push";
 /// what a Nodes ▸ Rediscover Apply leads to, since Apply writes the new `sysObjectID`.
 pub const DEVICE_REPLACED_METRIC: &str = "device_replaced";
 
+/// The metric a "config backup not fetched" alert carries (ADR-240 decision 6): a node switched on
+/// for config backup has had no fetch that worked for longer than core's limit. Not a collected
+/// series - a label for the alert row, like [`POOL_COVERAGE_METRIC`].
+///
+/// Core's leader raises and closes it (`oxidized::stale`): it closes on evidence only - a fetch
+/// that worked - or because a person switched the backup off. Never on silence.
+pub const CONFIG_STALE_METRIC: &str = "config_backup_stale";
+
 /// The prefix every passive-event alert carries in its `metric`, and the marker that says
 /// **this alert has no time series behind it**.
 ///
@@ -2892,6 +2900,10 @@ impl AlertManager {
         if a.metric == DEVICE_REPLACED_METRIC {
             return false;
         }
+        // Nor has a stale config backup; core's config-backup watch closes it (ADR-240).
+        if a.metric == CONFIG_STALE_METRIC {
+            return false;
+        }
         true
     }
 
@@ -3264,6 +3276,47 @@ impl AlertManager {
             &Subject::Node(node),
             DEVICE_REPLACED_METRIC,
         ))
+    }
+
+    /// Raise a node's "config backup not fetched" alert (ADR-240 decision 6). `hours` is how long
+    /// it has gone without a fetch that worked, which is what the breach carries. `None` when it is
+    /// already open, so the watch can ask on every tick.
+    ///
+    /// `Warning`: monitoring has not stopped and the last version is still kept; what is missing is
+    /// a copy of the configuration as it is now. The watch does not raise one for a node in a
+    /// maintenance window, and leaves an open one alone there.
+    pub fn raise_config_stale_alert(
+        &self,
+        node: NodeId,
+        hours: f64,
+        at_unix_ms: i64,
+    ) -> Option<NotifyAction> {
+        let subject = Subject::Node(node);
+        let check = subject_check_id(&subject, CONFIG_STALE_METRIC);
+        self.raise_event_alert(Alert {
+            subject,
+            check,
+            severity: Severity::Warning,
+            state: NodeState::Warning,
+            at_unix_ms,
+            root_cause: None,
+            flapping: false,
+            metric: CONFIG_STALE_METRIC.to_owned(),
+            breach: Some(Breach {
+                value: hours,
+                threshold: None,
+                direction: Direction::Above,
+            }),
+            ifindex: None,
+            row: None,
+            row_name: None,
+            notify_held_until: None,
+        })
+    }
+
+    /// Resolve a node's "config backup not fetched" alert. `None` if it was not open.
+    pub fn resolve_config_stale_alert(&self, node: NodeId) -> Option<NotifyAction> {
+        self.resolve_event_alert(subject_check_id(&Subject::Node(node), CONFIG_STALE_METRIC))
     }
 
     /// Resolve a pool's coverage alert. `None` if it was not active.
@@ -8057,6 +8110,37 @@ mod tests {
         assert!(mgr.resolve_device_replaced_alert(node).is_some());
         assert!(mgr.active_alerts().is_empty());
         assert!(mgr.resolve_device_replaced_alert(node).is_none());
+    }
+
+    /// A "config backup not fetched" alert is on a node with no rule and no series (ADR-240), the
+    /// same shape as a replaced device: neither sweep may take it, and it survives a restart. It
+    /// carries how long the node has gone unfetched.
+    #[test]
+    fn neither_sweep_closes_a_config_stale_alert() {
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        assert!(mgr.raise_config_stale_alert(node, 49.0, 1_000).is_some());
+        assert!(
+            mgr.raise_config_stale_alert(node, 50.0, 2_000).is_none(),
+            "an open alert is not raised twice"
+        );
+        let open = mgr.active_alerts();
+        assert_eq!(open[0].metric, CONFIG_STALE_METRIC);
+        assert_eq!(open[0].breach.as_ref().map(|b| b.value), Some(49.0));
+
+        assert!(mgr.resolve_orphaned_collected_alerts().is_empty());
+        assert!(mgr.freshness_candidates().iter().all(|c| c.node != node));
+
+        let restored = AlertManager::new(untitled);
+        restored.set_config(cfg(Vec::new(), meta_for(node)));
+        restored.restore(mgr.active_alerts());
+        assert!(restored.resolve_orphaned_collected_alerts().is_empty());
+        assert_eq!(restored.active_alerts().len(), 1);
+
+        assert!(mgr.resolve_config_stale_alert(node).is_some());
+        assert!(mgr.active_alerts().is_empty());
+        assert!(mgr.resolve_config_stale_alert(node).is_none());
     }
 
     /// A pool-coverage alert is `pool_coverage`'s, and it has no node to resolve a rule against.

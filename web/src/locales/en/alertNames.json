@@ -26,6 +26,7 @@
   "cisco_ra_users": "Remote-access VPN users",
   "cisco_temp_c": "Chassis temperature",
   "config_backup_push": "Config backup not reaching its Git destination",
+  "config_backup_stale": "Config backup not fetched for 2 days",
   "config_unsaved_seconds": "Unsaved configuration",
   "device_replaced": "Device possibly replaced",
   "dns_answer_count": "DNS answers",

@@ -63,7 +63,7 @@ import { readSources, SRC } from './testSupport/sources';
 /** `[en, ja]` characters of prose per namespace. Measured 2026-10-06 (Inc.24); lower as prose goes. */
 const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
-  alertNames: [212, 122], // the config backup push alert's name (ADR-210 stage 4, 2026-10-23)
+  alertNames: [248, 140], // + the "config backup not fetched for 2 days" alert's name (ADR-240, 2026-11-06)
   alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
   alertsConfig: [9250, 4920], // + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03); + the wait switch, the last-7-days line in three states and one refusal (ADR-236 Inc.2, 2026-11-05)
   auth: [79, 43],
@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
   nav: [2634, 1206], // - the mute list menu item and its description (ADR-234, 2026-11-03)
-  nodes: [15706, 8972], // + the in-place note: "Add note" / "Edit note" and the folder note's placeholder (ADR-239, 2026-11-05)
+  nodes: [15789, 9020], // + the Config tab's status card and history labels; the three table headings went (ADR-240, 2026-11-06)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

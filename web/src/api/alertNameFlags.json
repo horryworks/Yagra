@@ -1,6 +1,7 @@
 [
   "__liveness__",
   "config_backup_push",
+  "config_backup_stale",
   "device_replaced",
   "dns_up",
   "http_body_match",

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The judgement behind NodeDetail ▸ Config (ADR-210 stages 2 and 3), out of the `.tsx` so a test
-// reaches it: the form's state and the body it sends, the one line that says where the backup
-// stands, which version a version is compared with, and how often the tab reads itself again.
+// The judgement behind NodeDetail ▸ Config (ADR-210 stages 2 and 3, ADR-240), out of the `.tsx` so
+// a test reaches it: the form's state and the body it sends, the status card at the top and what
+// it offers to fix, the one history the three records are merged into, which version a version is
+// compared with, whether the tab wears its dot, and how often the tab reads itself again.
 
 import type {
   AttemptView,
@@ -185,13 +186,6 @@ export function stateLine(view: ConfigBackupView): Line {
   return { key: 'config.state.waiting', tone: 'none' };
 }
 
-/** Whether the try order is drawn open: always while a login is still being looked for, and only
- *  when the operator opens it once one works — the working login is then named on its own line
- *  (ADR-210 stage 5 decision 55). */
-export function orderShown(view: ConfigBackupView, opened: boolean): boolean {
-  return !view.login_confirmed || !view.credential_id || opened;
-}
-
 /** How often the tab reads itself again: fast while a fetch is out, slowly while a login is still
  *  being looked for (the leader moves the rotation on every minute), not at all once settled. */
 export function refreshMs(view: ConfigBackupView | null): number | undefined {
@@ -217,4 +211,120 @@ export function previousOf(versions: readonly ConfigVersion[], oid: string): str
  *  never refuse it: a press tries at once (ADR-210 stage 3 decision 25). */
 export function isQuietFetchRefusal(status: number, code: string): boolean {
   return status === 409 && (code === 'config_backup_pending' || code === 'config_backup_not_ready');
+}
+
+/** How long a node switched on may go without a fetch that worked before the card says so and the
+ *  core raises `config_backup_stale` (ADR-240 decision 6). Fetches run daily, so one failed day is
+ *  not enough on its own. ⚠️ The core holds the same number (`config_stale::STALE_AFTER`). */
+export const STALE_AFTER_MS = 48 * 3600 * 1000;
+
+/** What the status card at the top of the tab is (ADR-240 decision 1). */
+export type CardKind = 'off' | 'busy' | 'ok' | 'fix';
+
+/** The one way out the card offers for a problem (decision 2). `fetch` asks for a fetch now;
+ *  `rescan` starts the login search again; `resave` saves the settings as they are. */
+export const CARD_FIXES = ['pickModel', 'addLogin', 'rescan', 'fetch', 'settings', 'resave', 'pollers'] as const;
+export type CardFix = (typeof CARD_FIXES)[number];
+
+export interface Card {
+  kind: CardKind;
+  line: Line;
+  fixes: CardFix[];
+}
+
+/** The fix each reason the node is not fetched points at. Keyed by every readiness so a new one
+ *  cannot compile without an answer; `ready` and `off` never reach it. */
+const READINESS_FIX: Record<ConfigBackupView['readiness'], CardFix[]> = {
+  ready: [],
+  off: [],
+  no_model: ['pickModel'],
+  no_credential: ['addLogin'],
+  unknown_input: ['settings'],
+  address_changed: ['resave'],
+  no_poller: ['pollers'],
+  poller_too_old: ['pollers'],
+  relay_refused: ['pollers'],
+};
+
+/** When the node was last fetched: its newest successful attempt, or — the attempts list being only
+ *  the newest few — the newest stored version. `null` when neither says. */
+export function lastSuccessAt(view: ConfigBackupView, versions: readonly ConfigVersion[]): string | null {
+  const ok = view.attempts.find((a) => a.outcome === 'success');
+  return ok?.at ?? versions[0]?.stored_at ?? null;
+}
+
+/** The status card for a node. `lastSuccess` comes from [`lastSuccessAt`]; a node whose last
+ *  success is unknown is not called stale — absence is not evidence. */
+export function cardOf(view: ConfigBackupView, lastSuccess: string | null, nowMs: number): Card {
+  if (!view.enabled) return { kind: 'off', line: { key: 'config.card.off', tone: 'none' }, fixes: [] };
+  if (view.readiness !== 'ready') {
+    return { kind: 'fix', line: stateLine(view), fixes: READINESS_FIX[view.readiness] };
+  }
+  if (view.pending) return { kind: 'busy', line: stateLine(view), fixes: [] };
+  if (view.exhausted) {
+    const line = stateLine(view);
+    const fixes: CardFix[] = line.key === 'config.state.gaveUp' ? ['rescan'] : ['addLogin', 'rescan'];
+    return { kind: 'fix', line, fixes };
+  }
+  if (!view.login_confirmed) {
+    return { kind: 'busy', line: { key: 'config.card.searching', tone: 'busy' }, fixes: [] };
+  }
+  if (lastSuccess !== null && nowMs - Date.parse(lastSuccess) >= STALE_AFTER_MS) {
+    return { kind: 'fix', line: { key: 'config.card.stale', tone: 'bad' }, fixes: ['fetch'] };
+  }
+  return { kind: 'ok', line: { key: 'config.card.ok', tone: 'ok' }, fixes: [] };
+}
+
+/** Whether the Config tab wears the attention dot (decision 5): the card asks for a fix, or the
+ *  running configuration is unsaved. */
+export function needsAttention(view: ConfigBackupView | null, nowMs: number): boolean {
+  if (!view?.available || !view.enabled) return false;
+  return cardOf(view, lastSuccessAt(view, []), nowMs).kind === 'fix' || !!view.unsaved;
+}
+
+/** Which rows the history shows: what changed (failures included), or everything. */
+export const HISTORY_FILTERS = ['changes', 'all'] as const;
+export type HistoryFilter = (typeof HISTORY_FILTERS)[number];
+
+/** One row of the history (decision 4). A fetch that stored a new version is its version's row;
+ *  one that found no change is `same`, folded into a run under `changes`. */
+export type HistoryRow =
+  | { kind: 'version'; at: string | null; oid: string; prev: string | null }
+  | { kind: 'save'; at: string; save: SaveRecord }
+  | { kind: 'attempt'; at: string; attempt: AttemptView }
+  | { kind: 'same'; at: string | null; count: number };
+
+const timeOf = (at: string | null): number => (at === null ? Number.NEGATIVE_INFINITY : Date.parse(at));
+
+/** The stored versions, the saves and the attempts as one list, newest first. A version whose time
+ *  could not be read sorts after everything timed and keeps its place among the others. */
+export function historyRows(
+  versions: readonly ConfigVersion[],
+  saves: readonly SaveRecord[],
+  attempts: readonly AttemptView[],
+  filter: HistoryFilter,
+): HistoryRow[] {
+  const rows: HistoryRow[] = [
+    ...versions.map(
+      (v): HistoryRow => ({ kind: 'version', at: v.stored_at ?? null, oid: v.oid, prev: previousOf(versions, v.oid) }),
+    ),
+    ...saves.map((s): HistoryRow => ({ kind: 'save', at: s.requested_at, save: s })),
+    ...attempts.flatMap((a): HistoryRow[] => {
+      if (a.outcome !== 'success') return [{ kind: 'attempt', at: a.at, attempt: a }];
+      // A new version is already its version's row.
+      return a.new_version === true ? [] : [{ kind: 'same', at: a.at, count: 1 }];
+    }),
+  ];
+  const sorted = rows
+    .map((r, i) => ({ r, i }))
+    .sort((x, y) => timeOf(y.r.at) - timeOf(x.r.at) || x.i - y.i)
+    .map((x) => x.r);
+  if (filter === 'all') return sorted;
+  const folded: HistoryRow[] = [];
+  for (const r of sorted) {
+    const last = folded.at(-1);
+    if (r.kind === 'same' && last?.kind === 'same') last.count += 1;
+    else folded.push(r.kind === 'same' ? { ...r } : r);
+  }
+  return folded;
 }

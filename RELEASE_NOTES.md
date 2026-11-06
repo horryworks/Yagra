@@ -14,6 +14,14 @@
 
 - **Only an Admin can reveal a stored device credential now.** The Reveal credentials permission has moved from Operator to Admin, so an Operator no longer sees "Show secret" in Nodes ▸ Credentials & secrets, and `POST /api/v1/credentials/{id}/reveal` answers 403 for an Operator. An Operator can still create, edit and rotate credentials, and can still switch config backup on. For API clients: switching config backup on (`PUT /api/v1/nodes/{node_id}/config-backup` with `enabled: true`, `POST /api/v1/config-backups/switch`) and `POST /api/v1/nodes/{node_id}/config-backup/rescan` now take Manage credentials and a signed-in person instead of Reveal credentials. An API token is still refused, and the rescan now answers `login_not_permitted` for one instead of `token_not_permitted`.
 
+### New Features
+
+- **A node switched on for config backup and not fetched for 2 days now raises an alert.** "Config backup not fetched for 2 days" is a Warning on the node, delivered like any other alert. It closes once a fetch works, or when the backup is switched off. A node in a maintenance window gets no new one. A node that has never been fetched counts from when its backup settings were last saved.
+
+### Improvements
+
+- **NodeDetail ▸ Config is laid out around one status card.** The card says whether the backup works, with the last fetch, the next run and the number of versions. When something is wrong it names the problem and offers the one fix: pick the model, add a CLI login, try again, or fetch now. Backup is one switch. The connection, model, speed and login order are folded into one summary line that opens on a press. Stored versions, saves to startup and failed fetches are one history, newest first; "Changes" folds unchanged fetches into one row, "All" shows each one. A version opens, or is compared with the one before it, right under its row. "Save to startup" now sits on the line that says the device is unsaved. The Config tab shows the attention dot when the backup needs a fix or the device is unsaved.
+
 ## v0.3.71 — Back up and save the configuration of a Cisco device whose login lands in privileged mode
 
 ### Bug Fixes

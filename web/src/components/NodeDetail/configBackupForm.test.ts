@@ -5,11 +5,15 @@ import {
   attemptLine,
   bodyOf,
   canOfferSave,
+  cardOf,
+  historyRows,
+  lastSuccessAt,
+  needsAttention,
+  STALE_AFTER_MS,
   formOf,
   isDirty,
   isQuietFetchRefusal,
   loginLabel,
-  orderShown,
   pickedLogins,
   previousOf,
   refreshMs,
@@ -240,12 +244,107 @@ describe('versions', () => {
   });
 });
 
-describe('the try order', () => {
-  it('is open while a login is looked for, and folded under the working one once found', () => {
-    const base = { login_confirmed: false, credential_id: null } as unknown as ConfigBackupView;
-    expect(orderShown(base, false)).toBe(true);
-    const found = { ...base, login_confirmed: true, credential_id: 'c1' } as ConfigBackupView;
-    expect(orderShown(found, false)).toBe(false);
-    expect(orderShown(found, true)).toBe(true);
+describe('the status card (ADR-240)', () => {
+  const now = Date.parse('2026-11-06T12:00:00Z');
+  const hoursAgo = (h: number) => new Date(now - h * 3600_000).toISOString();
+  const working = view({ enabled: true, readiness: 'ready', login_confirmed: true, credential_id: 'b' });
+
+  it('is off, then a problem with its one fix, before anything about fetching', () => {
+    expect(cardOf(view(), null, now).kind).toBe('off');
+    const noModel = cardOf(view({ enabled: true, readiness: 'no_model' }), null, now);
+    expect(noModel).toMatchObject({ kind: 'fix', fixes: ['pickModel'], line: { key: 'config.readiness.no_model' } });
+    expect(cardOf(view({ enabled: true, readiness: 'no_credential' }), null, now).fixes).toEqual(['addLogin']);
+    expect(cardOf(view({ enabled: true, readiness: 'address_changed' }), null, now).fixes).toEqual(['resave']);
+    expect(cardOf(view({ enabled: true, readiness: 'relay_refused' }), null, now).fixes).toEqual(['pollers']);
+  });
+
+  it('is busy while a fetch is out or a login is still being looked for', () => {
+    expect(cardOf({ ...working, pending: true }, null, now)).toMatchObject({
+      kind: 'busy',
+      line: { key: 'config.state.fetching' },
+    });
+    expect(cardOf({ ...working, login_confirmed: false }, null, now).line.key).toBe('config.card.searching');
+  });
+
+  it('offers a new login only when every login was refused, not when the device went quiet', () => {
+    const refused = { ...working, login_confirmed: false, exhausted: true, attempts: [attempt({ outcome: 'auth_failed' })] };
+    expect(cardOf(refused, null, now).fixes).toEqual(['addLogin', 'rescan']);
+    const quiet = { ...refused, attempts: [attempt({ outcome: 'unreachable' })] };
+    expect(cardOf(quiet, null, now)).toMatchObject({ kind: 'fix', fixes: ['rescan'], line: { key: 'config.state.gaveUp' } });
+  });
+
+  it('turns from ok to stale exactly at 48 hours, and never on an unknown last success', () => {
+    expect(cardOf(working, hoursAgo(47.9), now).kind).toBe('ok');
+    expect(cardOf(working, hoursAgo(48), now)).toMatchObject({ kind: 'fix', fixes: ['fetch'] });
+    expect(cardOf(working, null, now).kind).toBe('ok');
+    expect(STALE_AFTER_MS).toBe(48 * 3600_000);
+  });
+
+  it('reads the last success from the attempts first, then from the newest version', () => {
+    const v = [{ oid: 'x', stored_at: hoursAgo(5) }];
+    expect(lastSuccessAt(view({ attempts: [attempt({ outcome: 'auth_failed' }), { ...attempt({ outcome: 'success' }), at: hoursAgo(1) }] }), v)).toBe(
+      hoursAgo(1),
+    );
+    expect(lastSuccessAt(view({ attempts: [attempt({ outcome: 'auth_failed' })] }), v)).toBe(hoursAgo(5));
+    expect(lastSuccessAt(view(), [])).toBeNull();
+  });
+
+  it('puts the dot on the tab for a problem or an unsaved device, never on a switched-off one', () => {
+    expect(needsAttention(null, now)).toBe(false);
+    expect(needsAttention(working, now)).toBe(false);
+    expect(needsAttention({ ...working, readiness: 'no_poller' }, now)).toBe(true);
+    const unsaved = { since: hoursAgo(3), checked_at: hoursAgo(1), has_output: true };
+    expect(needsAttention({ ...working, unsaved }, now)).toBe(true);
+    expect(needsAttention({ ...working, unsaved, enabled: false }, now)).toBe(false);
+    expect(needsAttention({ ...working, readiness: 'no_poller', available: false }, now)).toBe(false);
+  });
+});
+
+describe('the history (ADR-240)', () => {
+  const versions = [
+    { oid: 'v2', stored_at: '2026-11-05T03:00:00Z' },
+    { oid: 'v1', stored_at: '2026-11-01T03:00:00Z' },
+  ];
+  const attempts = [
+    { ...attempt({ outcome: 'success' }), at: '2026-11-06T03:00:00Z', new_version: false },
+    { ...attempt({ outcome: 'success' }), at: '2026-11-05T03:00:00Z', new_version: true },
+    { ...attempt({ outcome: 'success' }), at: '2026-11-04T03:00:00Z', new_version: false },
+    { ...attempt({ outcome: 'success' }), at: '2026-11-03T03:00:00Z', new_version: false },
+    { ...attempt({ outcome: 'unreachable' }), at: '2026-11-02T14:00:00Z' },
+  ];
+  const saves = [save({ requested_at: '2026-11-05T03:01:00Z' })];
+
+  it('merges the three records newest first, a new version standing for its own fetch', () => {
+    const rows = historyRows(versions, saves, attempts, 'all');
+    expect(rows.map((r) => r.kind)).toEqual(['same', 'save', 'version', 'same', 'same', 'attempt', 'version']);
+    expect(rows[2]).toMatchObject({ oid: 'v2', prev: 'v1' });
+    expect(rows[6]).toMatchObject({ oid: 'v1', prev: null });
+  });
+
+  it('folds each run of unchanged fetches into one row under "changes"', () => {
+    const rows = historyRows(versions, saves, attempts, 'changes');
+    expect(rows.map((r) => (r.kind === 'same' ? `same×${r.count}` : r.kind))).toEqual([
+      'same×1',
+      'save',
+      'version',
+      'same×2',
+      'attempt',
+      'version',
+    ]);
+    // Folding builds new rows: the "all" list is not changed by asking for the folded one.
+    expect(historyRows(versions, saves, attempts, 'all').filter((r) => r.kind === 'same')).toHaveLength(3);
+  });
+
+  it('puts a version whose time could not be read last, in its own order', () => {
+    const rows = historyRows(
+      [
+        { oid: 'b', stored_at: null },
+        { oid: 'a', stored_at: null },
+      ],
+      saves,
+      [],
+      'all',
+    );
+    expect(rows.map((r) => (r.kind === 'version' ? r.oid : r.kind))).toEqual(['save', 'b', 'a']);
   });
 });

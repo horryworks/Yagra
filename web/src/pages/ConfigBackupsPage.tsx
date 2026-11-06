@@ -28,6 +28,7 @@ import { attemptLine, loginLabel } from '../components/NodeDetail/configBackupFo
 import { GIT_REMOTE_PATH, pushLine } from './integrations/gitRemote';
 import { formatTimestamp } from '../lib/format';
 import { Button } from '../components/ui/Button';
+import { Switch } from '../components/ui/Switch';
 import { Segmented } from '../components/ui/Segmented';
 import {
   LIST_FILTERS,
@@ -188,17 +189,12 @@ export function ConfigBackupsPage() {
           const movable = r.enabled ? canOff : canOn && canSwitchOn(r);
           if (!movable) return t(r.enabled ? 'config.switch.on' : 'config.switch.off');
           return (
-            <label className="cfgbl-sw">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={r.enabled}
-                disabled={switching}
-                aria-label={t('config.list.switchOne', { name: nodeName(r.node_id) })}
-                onChange={() => onSwitch([r], !r.enabled)}
-              />
-              <span className="cfgbl-sw-track" aria-hidden="true" />
-            </label>
+            <Switch
+              checked={r.enabled}
+              disabled={switching}
+              ariaLabel={t('config.list.switchOne', { name: nodeName(r.node_id) })}
+              onChange={(next) => onSwitch([r], next)}
+            />
           );
         },
       },

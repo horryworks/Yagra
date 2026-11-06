@@ -27,9 +27,6 @@
  */
 export const TABLE_IDS = [
   // Node detail
-  'node.configAttempts',
-  'node.configSaves',
-  'node.configVersions',
   'node.dnsHealth',
   'node.events',
   'node.flows',

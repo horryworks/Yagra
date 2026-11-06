@@ -37,6 +37,7 @@ import { ApTab } from './ApTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
 import { ConfigBackupTab } from './ConfigBackupTab';
+import { needsAttention } from './configBackupForm';
 import { FlowTab } from './FlowTab';
 import {
   NODE_DETAIL_TAB_META,
@@ -319,6 +320,26 @@ export function NodeDetail({
     };
   }, [node?.profile_id]);
 
+  // Whether the Config tab wears its dot (ADR-240 decision 5). Read once per node and again on each
+  // tab change, so a fix made on the Config tab clears the dot as the operator moves on; not on the
+  // refresh tick, which would add a config-backup read to every open detail every few seconds.
+  const hasConfig = subject != null && visibleNodeDetailTabs(subject).includes('config');
+  const [configAttention, setConfigAttention] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasConfig) {
+      setConfigAttention(false);
+      return;
+    }
+    api
+      .getConfigBackup(nodeId)
+      .then((v) => !cancelled && setConfigAttention(needsAttention(v, Date.now())))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, hasConfig, tab, reloadKey]);
+
   // Poll now: dispatch an immediate poll, then re-fetch the readings a few seconds later and again
   // once the identity and row names the same press reads have had time to arrive (ADR-149).
   const pollNow = () => {
@@ -419,6 +440,7 @@ export function NodeDetail({
     hasSnmp: node.snmp_configured,
     state,
     wlanController: node.wireless?.controller ?? null,
+    configAttention,
   };
   // Keyed by NodeDetailTab, so adding a tab to NODE_DETAIL_TABS without a body fails to compile.
   const tabBodies: Record<NodeDetailTab, ReactNode> = {

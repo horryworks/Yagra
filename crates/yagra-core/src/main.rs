@@ -1322,6 +1322,16 @@ impl LeaderTasks {
                     self.config_relay.clone(),
                 ),
             );
+            // A node switched on and not fetched for two days (ADR-240). Only where oxidized runs:
+            // without it nothing fetches, and every node switched on would page.
+            spawn_cancellable(
+                &self.shutdown,
+                oxidized::stale::run_stale_alert_watch(
+                    self.config_backup.clone(),
+                    self.alerts.clone(),
+                    self.alert_sink(&delivery, "a config-backup stale transition"),
+                ),
+            );
             self.spawn_config_relay().await?;
         }
         self.reconcile_orphaned_jobs().await;

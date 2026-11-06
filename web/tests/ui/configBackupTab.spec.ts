@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// NodeDetail ▸ Config (ADR-210 stages 2 and 3).
+// NodeDetail ▸ Config (ADR-210 stages 2 and 3, ADR-240).
 //
-// WHY A BROWSER. What Start sends and that it then asks for a fetch, which logins the order offers,
-// the state line naming a refused login, and which version "Compare" pairs with which, are wired in
-// `ConfigBackupTab.tsx`, which Vitest never runs; the route walk opens the Overview tab and presses
-// nothing.
+// WHY A BROWSER. What the switch sends and that it then asks for a fetch, which fix the status card
+// offers and what it sends, which logins the folded settings offer, which version "Compare" pairs
+// with which, and the dot on the tab, are wired in `ConfigBackupTab.tsx` and `NodeDetail.tsx`, which
+// Vitest never runs; the route walk opens the Overview tab and presses nothing. Which card a view
+// becomes is `configBackupForm.test.ts`'s.
 
 import type { components } from '../../src/api/schema';
+import type { Page } from '@playwright/test';
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
@@ -53,19 +55,16 @@ const refused = {
 } satisfies Schemas['ConfigBackupView'];
 
 // A login that works, and then the same node with a fetch out (ADR-210 stage 5 decisions 54-55).
+// The success is "now" so the card does not read it as two days old.
 const working = {
   ...refused,
   login_confirmed: true,
   try_after: null,
-  attempts: [
-    { at: '2026-10-22T10:00:00Z', credential_id: LOGIN, outcome: 'success', new_version: true },
-  ],
+  attempts: [{ at: new Date().toISOString(), credential_id: LOGIN, outcome: 'success', new_version: true }],
 } satisfies Schemas['ConfigBackupView'];
 const fetching = { ...working, pending: true } satisfies Schemas['ConfigBackupView'];
 const saved = {
   ...working,
-  readiness: 'ready',
-  enabled: true,
   saves: [
     {
       id: '00000000-0000-4000-8000-0000000000d1',
@@ -111,30 +110,107 @@ const overrides = (view: Schemas['ConfigBackupView']) => ({
   '/api/v1/credentials': credentials,
 });
 
+const isPut = (path: string) => (r: { method(): string; url(): string }) =>
+  r.method() === 'PUT' && new URL(r.url()).pathname.endsWith(path);
+const isPost = (path: string) => (r: { method(): string; url(): string }) =>
+  r.method() === 'POST' && new URL(r.url()).pathname.endsWith(path);
+
+/** The attention dot on the Config tab alone; the mock node's other tabs may wear their own. */
+const configTabDot = (page: Page) => page.getByRole('tab', { name: /^Config/ }).locator('.nd-tab-warn');
+
 test.describe('a node not backed up yet', () => {
   test.use({ mockConfig: { overrides: overrides(off) } });
 
-  test('Start sends the logins in their order and asks for the first fetch', async ({
+  test('the switch turns it on as it is and asks for the first fetch', async ({ page, errors }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await expect(page.locator('.cfgb-card-off .cfgb-state')).toHaveText('Not backed up');
+    // Nothing to set before switching on: the settings wait for it.
+    await expect(page.locator('.cfgb-settings')).toHaveCount(0);
+    const put = page.waitForRequest(isPut('/config-backup'));
+    const fetched = page.waitForRequest(isPost('/config-backup/fetch'));
+    // `click`, not `check`: the switch shows what the server stored, and this mock keeps answering
+    // "off", so the box is not left ticked; what matters is what the press sent.
+    await page.getByRole('switch', { name: 'Backup' }).click();
+    expect((await put).postDataJSON()).toEqual({
+      enabled: true,
+      login_order: null,
+      input: 'ssh',
+      model_override: null,
+      scan_mode: 'normal',
+    });
+    await fetched;
+    expect(errors.uncaught).toEqual([]);
+  });
+});
+
+test.describe('a node still looking for its login', () => {
+  test.use({ mockConfig: { overrides: overrides(refused) } });
+
+  test('the card says it is looking and when, and the history names the refused login', async ({
     page,
-    errors,
   }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    // Only CLI logins are offered, every one ticked in the try order.
-    const picker = page.locator('.cred-picker');
-    await expect(picker).toContainText('ymock-ops-login');
-    await expect(picker).toContainText('ymock-second-login');
-    await expect(picker).not.toContainText('ymock-community');
+    const card = page.locator('.cfgb-card-busy');
+    await expect(card.locator('.cfgb-state')).toHaveText('Looking for a login that works');
+    await expect(card.locator('.cfgb-facts')).toContainText('next try at');
+    await expect(page.locator('.cfgb-h')).toContainText('ymock-ops-login was refused');
+    await expect(page.getByRole('switch', { name: 'Backup' })).toBeChecked();
+    // Looking is not a problem: no dot on the tab.
+    await expect(configTabDot(page)).toHaveCount(0);
+  });
 
-    await picker.getByRole('checkbox', { name: /ymock-second-login/ }).uncheck();
+  test('a version opens as text under its row, and Compare pairs it with the one before', async ({
+    page,
+  }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const compares = page.getByRole('button', { name: 'Compare' });
+    // The oldest version has nothing before it.
+    await expect(compares).toHaveCount(1);
+
+    await page.getByRole('button', { name: 'View' }).first().click();
+    await expect(page.locator('.cfgb-h-viewer .cfgb-text')).toContainText('ntp server 192.0.2.1');
+
+    const diff = page.waitForRequest((r) => new URL(r.url()).pathname.endsWith('/config-backup/diff'));
+    await compares.click();
+    const url = new URL((await diff).url());
+    expect([url.searchParams.get('from'), url.searchParams.get('to')]).toEqual([OLD, NEW]);
+    await expect(page.locator('.cfgb-h-viewer .cfgb-line-removed')).toContainText('192.0.2.9');
+  });
+});
+
+test.describe('a node whose login works', () => {
+  test.use({ mockConfig: { overrides: overrides(working) } });
+
+  test('the settings fold into one line naming the login, and open to the order', async ({
+    page,
+  }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await expect(page.locator('.cfgb-card-ok .cfgb-state')).toHaveText('Backed up');
+    const summary = page.locator('.cfgb-settings summary');
+    await expect(summary).toContainText('ymock-ops-login');
+    await expect(page.locator('.cred-picker')).toBeHidden();
+
+    await summary.click();
+    await expect(page.locator('.cred-picker')).toContainText('ymock-second-login');
+    await expect(page.locator('.cred-picker')).not.toContainText('ymock-community');
+    await expect(page.getByRole('link', { name: 'Add a CLI login' })).toHaveAttribute(
+      'href',
+      '/nodes/credentials?tab=cli',
+    );
+
+    const rescan = page.waitForRequest(isPost('/config-backup/rescan'));
+    await page.getByRole('button', { name: 'Search logins again' }).click();
+    await rescan;
+  });
+
+  test('Save sends the order and the connection as edited', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await page.locator('.cfgb-settings summary').click();
+    await page.locator('.cred-picker').getByRole('checkbox', { name: /ymock-second-login/ }).uncheck();
     await page.locator('#cfgb-input').selectOption('telnet');
     await page.locator('#cfgb-speed').selectOption('rapid');
-    const put = page.waitForRequest(
-      (r) => r.method() === 'PUT' && new URL(r.url()).pathname.endsWith('/config-backup'),
-    );
-    const fetched = page.waitForRequest(
-      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/fetch'),
-    );
-    await page.getByRole('group', { name: 'Backup' }).getByRole('button', { name: 'On' }).click();
+    const put = page.waitForRequest(isPut('/config-backup'));
+    await page.locator('.cfgb-settings').getByRole('button', { name: 'Save', exact: true }).click();
     expect((await put).postDataJSON()).toEqual({
       enabled: true,
       login_order: [LOGIN],
@@ -142,71 +218,6 @@ test.describe('a node not backed up yet', () => {
       model_override: null,
       scan_mode: 'rapid',
     });
-    await fetched;
-    expect(errors.uncaught).toEqual([]);
-  });
-});
-
-test.describe('a node whose login was refused', () => {
-  test.use({ mockConfig: { overrides: overrides(refused) } });
-
-  test('the state line names the refused login and when the next one is tried', async ({
-    page,
-  }) => {
-    await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    const state = page.locator('.cfgb-state');
-    await expect(state).toContainText('ymock-ops-login was refused');
-    await expect(state).toContainText('next try at');
-    // The attempt is in the list too, with the same words.
-    await expect(page.locator('.cfgb-tone-bad', { hasText: 'was refused' })).toHaveCount(2);
-    // A backup that is on says so on its switch; there is no Stop beside Fetch now to misread.
-    const backup = page.getByRole('group', { name: 'Backup' });
-    await expect(backup.getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByRole('button', { name: 'Stop' })).toHaveCount(0);
-  });
-
-  test('a version opens as text, and Compare pairs it with the one before', async ({ page }) => {
-    await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    const compares = page.getByRole('button', { name: 'Compare' });
-    // The oldest version has nothing before it.
-    await expect(compares).toHaveCount(1);
-
-    await page.getByRole('button', { name: 'View' }).first().click();
-    await expect(page.locator('.cfgb-text')).toContainText('ntp server 192.0.2.1');
-
-    const diff = page.waitForRequest((r) =>
-      new URL(r.url()).pathname.endsWith('/config-backup/diff'),
-    );
-    await compares.click();
-    const url = new URL((await diff).url());
-    expect([url.searchParams.get('from'), url.searchParams.get('to')]).toEqual([OLD, NEW]);
-    await expect(page.locator('.cfgb-line-removed')).toContainText('192.0.2.9');
-  });
-});
-
-test.describe('a node whose login works', () => {
-  test.use({ mockConfig: { overrides: overrides(working) } });
-
-  test('names the working login, folds the try order, and searches again on request', async ({
-    page,
-  }) => {
-    await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    const head = page.locator('.cfgb-logins-head').first();
-    await expect(head).toContainText('ymock-ops-login');
-    await expect(page.locator('.cred-picker')).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Change the try order' }).click();
-    await expect(page.locator('.cred-picker')).toContainText('ymock-second-login');
-    await expect(page.getByRole('link', { name: 'Add a CLI login' })).toHaveAttribute(
-      'href',
-      '/nodes/credentials?tab=cli',
-    );
-
-    const rescan = page.waitForRequest(
-      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/rescan'),
-    );
-    await page.getByRole('button', { name: 'Search logins again' }).click();
-    await rescan;
   });
 });
 
@@ -216,38 +227,73 @@ test.describe('a node with a fetch out', () => {
   test('offers Cancel fetch instead of Fetch now, and cancelling posts it', async ({ page }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
     await expect(page.getByRole('button', { name: 'Fetch now' })).toHaveCount(0);
-    const cancel = page.waitForRequest(
-      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/cancel'),
-    );
+    const cancel = page.waitForRequest(isPost('/config-backup/cancel'));
     await page.getByRole('button', { name: 'Cancel fetch' }).click();
     await cancel;
   });
 });
 
-test.describe('a node Yagra can save (ADR-222)', () => {
+// The problems the card offers a fix for (ADR-240 decision 2).
+const noModel = {
+  ...off,
+  enabled: true,
+  readiness: 'no_model',
+  profile_model: null,
+} satisfies Schemas['ConfigBackupView'];
+const everyLoginRefused = {
+  ...refused,
+  exhausted: true,
+  try_after: null,
+} satisfies Schemas['ConfigBackupView'];
+
+test.describe('a node whose profile names no model', () => {
+  test.use({ mockConfig: { overrides: overrides(noModel) } });
+
+  test('the card asks for the model and saves it with the first fetch', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const card = page.locator('.cfgb-card-fix');
+    await expect(card.locator('.cfgb-state')).toContainText('No model');
+    await expect(configTabDot(page)).toHaveCount(1);
+    const go = card.getByRole('button', { name: 'Save and fetch' });
+    await expect(go).toBeDisabled();
+    await card.locator('#cfgb-fix-model').selectOption('nxos');
+    const put = page.waitForRequest(isPut('/config-backup'));
+    const fetched = page.waitForRequest(isPost('/config-backup/fetch'));
+    await go.click();
+    expect((await put).postDataJSON()).toMatchObject({ enabled: true, model_override: 'nxos' });
+    await fetched;
+  });
+});
+
+test.describe('a node no login gets into', () => {
+  test.use({ mockConfig: { overrides: overrides(everyLoginRefused) } });
+
+  test('the card offers a new login and another try', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const card = page.locator('.cfgb-card-fix');
+    await expect(card.locator('.cfgb-state')).toHaveText('No login worked.');
+    await expect(card.getByRole('link', { name: 'Add a CLI login' })).toHaveAttribute(
+      'href',
+      '/nodes/credentials?tab=cli',
+    );
+    const rescan = page.waitForRequest(isPost('/config-backup/rescan'));
+    await card.getByRole('button', { name: 'Try again' }).click();
+    await rescan;
+    await page.screenshot({ path: 'test-results/config-card-fix.png', fullPage: true });
+  });
+});
+
+test.describe('a node Yagra has saved (ADR-222)', () => {
   test.use({ mockConfig: { overrides: overrides(saved) } });
 
-  test('lists the save and asks for another only after the confirmation', async ({ page }) => {
+  test('the save is a row of the history, with the startup it replaced', async ({ page }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    await expect(page.locator('.cfgb')).toContainText('Saved');
-    await expect(page.getByRole('button', { name: 'Replaced startup' })).toHaveCount(1);
-    const posted = page.waitForRequest(
-      (r) => r.method() === 'POST' && new URL(r.url()).pathname.endsWith('/config-backup/save'),
-    );
-    await page.getByRole('button', { name: 'Save to startup' }).click();
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toContainText('Yagra keeps a copy');
-    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
-    await posted;
-  });
-
-  // Each of the three records says what it is and how many rows it holds, in the order they are
-  // looked for (ADR-222 Inc.9 decision 6).
-  test('names the three records, versions first and the fetch log last', async ({ page }) => {
-    await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    const titles = page.locator('.cfgb-record .nd-section-t');
-    await expect(titles).toHaveText(['Stored versions 2', 'Saves to startup 1', 'Fetch log 1']);
-    await page.screenshot({ path: 'test-results/config-records.png', fullPage: true });
+    const history = page.locator('.cfgb-h');
+    await expect(history).toContainText('Save to startup (A person): Saved');
+    await expect(history.getByRole('button', { name: 'Replaced startup' })).toHaveCount(1);
+    // Nothing unsaved, so nothing offers to save.
+    await expect(page.getByRole('button', { name: 'Save to startup' })).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/config-history.png', fullPage: true });
   });
 });
 
@@ -277,6 +323,7 @@ test.describe('a node read as unsaved (ADR-222 Inc.9)', () => {
 
   test('opens the two sides under the line, the changed row marked', async ({ page, errors }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    await expect(configTabDot(page)).toHaveCount(1);
     const line = page.locator('.cfgb-unsaved');
     await expect(line).toContainText('Unsaved since');
     await page.getByRole('button', { name: 'View differences' }).click();
@@ -301,5 +348,15 @@ test.describe('a node read as unsaved (ADR-222 Inc.9)', () => {
     await page.getByRole('button', { name: 'Hide differences' }).click();
     await expect(panel).toHaveCount(0);
     expect(errors.uncaught).toEqual([]);
+  });
+
+  test('saves to startup from the line, only after the confirmation', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const posted = page.waitForRequest(isPost('/config-backup/save'));
+    await page.locator('.cfgb-unsaved').getByRole('button', { name: 'Save to startup' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('Yagra keeps a copy');
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await posted;
   });
 });
