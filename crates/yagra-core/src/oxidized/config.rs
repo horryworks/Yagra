@@ -39,6 +39,42 @@ const PUSH_SCRIPT: &str = include_str!("yagra-push.rb");
 /// what core hands it from `yagra_common::config_save::SAVE_COMMANDS`.
 pub(crate) const SAVE_SCRIPT_FILE: &str = "yagra-save.rb";
 pub(crate) const SAVE_SCRIPT: &str = include_str!("yagra-save.rb");
+/// Yagra's replacement for oxidized's `enable` macro (ADR-210 stage 7), written beside the
+/// configuration and loaded by the model files below before oxidized's own model of that name.
+pub(crate) const ENABLE_SCRIPT_FILE: &str = "yagra-enable.rb";
+const ENABLE_SCRIPT: &str = include_str!("yagra-enable.rb");
+/// The directory under oxidized's home it reads a model from before its own (`manager.rb`).
+const MODEL_DIR: &str = "model";
+/// The models whose `enable` macro the replacement covers: the two oxidized 0.37 models that use
+/// `macro :enable` (measured in the pinned image). A model that handles enable its own way gets
+/// no file here and is untouched (decision 71).
+const ENABLE_MODELS: &[&str] = &["ios", "tplink"];
+
+/// The file Yagra writes as `model/<name>.rb`: the replacement first, then oxidized's own model,
+/// so the model is defined exactly as oxidized ships it except for the macro (decision 70).
+fn model_file(name: &str) -> String {
+    format!(
+        "# Written by Yagra (ADR-210 stage 7): oxidized's own {name} model, with Yagra's enable step.\n\
+         require File.join(Oxidized::Config::ROOT, '{ENABLE_SCRIPT_FILE}')\n\
+         require File.join(Oxidized::Config::MODEL_DIR, '{name}.rb')\n"
+    )
+}
+
+/// Every file `write` places besides the configuration and the token, as (path under the home,
+/// text). The model files and the replacement they load are read only when oxidized starts, so
+/// they are part of what [`CONFIG_REVISION`] pins.
+fn shared_files() -> Vec<(String, String)> {
+    let mut files = vec![
+        (PUSH_SCRIPT_FILE.to_owned(), PUSH_SCRIPT.to_owned()),
+        (SAVE_SCRIPT_FILE.to_owned(), SAVE_SCRIPT.to_owned()),
+        (ENABLE_SCRIPT_FILE.to_owned(), ENABLE_SCRIPT.to_owned()),
+    ];
+    for name in ENABLE_MODELS {
+        files.push((format!("{MODEL_DIR}/{name}.rb"), model_file(name)));
+    }
+    files
+}
+
 /// Where oxidized sees the shared directory (`docker-compose.deploy.yml` mounts it there).
 const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 
@@ -50,7 +86,7 @@ const SHARED_DIR_IN_OXIDIZED: &str = "/var/lib/yagra/oxidized";
 /// keeps running. A changed environment variable is what makes compose recreate the container, so
 /// the revision moves whenever the rendered text does. `the_revision_moves_with_the_configuration`
 /// fails until both are bumped.
-pub(crate) const CONFIG_REVISION: u32 = 9;
+pub(crate) const CONFIG_REVISION: u32 = 10;
 
 const TOKEN_LEN: usize = 40;
 
@@ -226,12 +262,17 @@ pub(crate) fn write(
     save_url: &str,
 ) -> anyhow::Result<()> {
     let token = ensure_token(home)?;
-    for (file, text) in [
-        (PUSH_SCRIPT_FILE, PUSH_SCRIPT),
-        (SAVE_SCRIPT_FILE, SAVE_SCRIPT),
-    ] {
+    let models = home.join(MODEL_DIR);
+    std::fs::create_dir_all(&models)?;
+    // 0750, like the home: the directory is setgid to oxidized's group, which inherits here.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o2750))?;
+    }
+    for (file, text) in shared_files() {
         let script = home.join(file);
-        if std::fs::read_to_string(&script).ok().as_deref() != Some(text) {
+        if std::fs::read_to_string(&script).ok().as_deref() != Some(text.as_str()) {
             yagra_base::atomic_file::write_atomically(&script, text.as_bytes(), 0o640)?;
         }
     }
@@ -326,13 +367,20 @@ mod tests {
         // are: they are what oxidized dials, and moving them to the internal listener (ADR-217) was
         // a change to the running configuration this digest could not see while it rendered
         // placeholders in their place.
-        let digest = sha2::Sha256::digest(
-            render("T", SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL).as_bytes(),
-        );
+        // The model files and the enable replacement are: oxidized loads a model once, when it
+        // first meets a node of that model, so a changed one needs the restart too (ADR-210 stage 7).
+        let mut pinned_text = render("T", SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL);
+        for (file, text) in shared_files() {
+            if file != PUSH_SCRIPT_FILE && file != SAVE_SCRIPT_FILE {
+                pinned_text.push_str(&file);
+                pinned_text.push_str(&text);
+            }
+        }
+        let digest = sha2::Sha256::digest(pinned_text.as_bytes());
         let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
         let pinned: &[(u32, &str)] = &[(
             CONFIG_REVISION,
-            "fcbb7783d72add6210d0b5c6bbbffcfffa7178728828f2c1b40bd7c4df4a83f4",
+            "3e565a7dc8dc46746d45e1e35ed487144a54464506ca092a0d002b524b06aa45",
         )];
         assert_eq!(
             pinned,
@@ -371,6 +419,20 @@ mod tests {
         assert_eq!(script, PUSH_SCRIPT);
         let save = std::fs::read_to_string(dir.join(SAVE_SCRIPT_FILE)).expect("save script");
         assert_eq!(save, SAVE_SCRIPT);
+        // Every model the enable replacement covers loads it first, then oxidized's own model.
+        for name in ENABLE_MODELS {
+            let model = std::fs::read_to_string(dir.join(MODEL_DIR).join(format!("{name}.rb")))
+                .expect("model file");
+            let ours = model
+                .find(ENABLE_SCRIPT_FILE)
+                .expect("loads the replacement");
+            let theirs = model
+                .find(&format!("MODEL_DIR, '{name}.rb'"))
+                .expect("loads oxidized's model");
+            assert!(ours < theirs, "{model}");
+        }
+        let enable = std::fs::read_to_string(dir.join(ENABLE_SCRIPT_FILE)).expect("enable");
+        assert_eq!(enable, ENABLE_SCRIPT);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -8,21 +8,29 @@
 # and a `save` that asks `[Y/N]:`. The fake core answers the script's question with the commands
 # in `commands.json`, which a Rust test generates from `config_save::SAVE_COMMANDS`.
 #
-# Usage: ruby run.rb <path to yagra-save.rb>
+# A second fake device speaks like Cisco IOS, to check Yagra's replacement of oxidized's `enable`
+# step (ADR-210 stage 7): one that lands a login in privileged mode (`sw-01#`) must never be sent
+# `enable`, and one that lands in user mode (`sw-01>`) must be, with its enable password.
+#
+# Usage: ruby run.rb <path to yagra-save.rb> <path to yagra-enable.rb>
 
 require 'json'
 require 'socket'
 require 'tmpdir'
+require 'fileutils'
 require 'uri'
 
 SCRIPT = ARGV.fetch(0)
+ENABLE_SCRIPT = ARGV.fetch(1)
 COMMANDS = JSON.parse(File.read(File.join(__dir__, 'commands.json')))
 VRP = COMMANDS.find { |c| c['model'] == 'vrp' } or abort 'no vrp row in commands.json'
+IOS = COMMANDS.find { |c| c['model'] == 'ios' } or abort 'no ios row in commands.json'
 NODE = '00000000-0000-4000-8000-000000000222'
 TOKEN = 'T0ken'
 DEVICE_PORT = 2323
 CORE_PORT = 8099
 PROMPT = '<sw-01>'
+ENABLE_SECRET = 'en-secret'
 
 # A device that speaks like VRP. `mode` decides how it answers a save, and `:already_saved` starts
 # it with nothing to save.
@@ -80,6 +88,60 @@ class FakeDevice
         break
       else
         client.write("\r\nError: Unrecognized command found at '^' position.\r\n#{PROMPT}")
+      end
+    end
+  ensure
+    client.close rescue nil
+  end
+end
+
+# A device that speaks like Cisco IOS. `:privileged` lands the login in `#`, as an AAA setup that
+# authorizes privilege 15 at login does; `:user` lands it in `>` and asks for the enable password.
+# In `>` it refuses the commands that need privilege, as IOS does.
+class FakeIos
+  attr_reader :heard
+
+  def initialize(mode)
+    @privileged = mode == :privileged
+    @heard = []
+  end
+
+  def prompt
+    @privileged ? 'sw-01#' : 'sw-01>'
+  end
+
+  def serve(client)
+    client.write("\r\nUser Access Verification\r\n\r\nUsername: ")
+    client.gets
+    client.write("\r\nPassword: ")
+    client.gets
+    client.write("\r\n\r\n#{prompt}")
+    while (line = client.gets)
+      cmd = line.strip
+      @heard << cmd
+      case cmd
+      when '', 'terminal length 0', 'terminal width 0'
+        client.write("\r\n#{prompt}")
+      when 'enable'
+        if @privileged
+          client.write("\r\n#{prompt}")
+        else
+          client.write("\r\nPassword: ")
+          answer = client.gets.to_s.strip
+          @heard << answer
+          @privileged = answer == ENABLE_SECRET
+          client.write("\r\n#{@privileged ? '' : "% Access denied\r\n"}#{prompt}")
+        end
+      when 'show startup-config'
+        text = @privileged ? "!\r\nhostname sw-01\r\n!\r\nend" : "% Invalid input detected at '^' marker."
+        client.write("\r\n#{text}\r\n#{prompt}")
+      when 'write memory'
+        text = @privileged ? "Building configuration...\r\n[OK]" : "% Invalid input detected at '^' marker."
+        client.write("\r\n#{text}\r\n#{prompt}")
+      when 'exit'
+        break
+      else
+        client.write("\r\n% Invalid input detected at '^' marker.\r\n#{prompt}")
       end
     end
   ensure
@@ -160,19 +222,27 @@ File.write(File.join(home, 'config'), <<~YAML)
         name: 0
 YAML
 File.write(File.join(home, 'router.db'), '')
+# What core writes beside the configuration (`oxidized/config.rs::model_file`): the enable
+# replacement, and a model file that loads it before oxidized's own model.
+FileUtils.mkdir_p(File.join(home, 'model'))
+FileUtils.cp(ENABLE_SCRIPT, File.join(home, 'yagra-enable.rb'))
+File.write(File.join(home, 'model', 'ios.rb'), <<~RUBY)
+  require File.join(Oxidized::Config::ROOT, 'yagra-enable.rb')
+  require File.join(Oxidized::Config::MODEL_DIR, 'ios.rb')
+RUBY
 
-def job(action, password)
+def job(action, password, model: VRP, enable: nil)
   {
     'action' => action, 'save' => (action == 'save' ? '11111111-1111-4111-8111-111111111111' : nil),
-    'ip' => '127.0.0.1', 'model' => 'vrp', 'input' => 'telnet', 'group' => 'yagra',
+    'ip' => '127.0.0.1', 'model' => model['model'], 'input' => 'telnet', 'group' => 'yagra',
     'username' => 'admin', 'password' => password, 'telnet_port' => DEVICE_PORT,
-    'commands' => VRP
+    'enable' => enable, 'commands' => model
   }.compact
 end
 
-def run(home, name, mode, action: 'save', password: 'right')
-  device = FakeDevice.new(mode)
-  core = FakeCore.new(job(action, password))
+def run(home, name, mode, action: 'save', password: 'right', device: nil, model: VRP, enable: nil)
+  device ||= FakeDevice.new(mode)
+  core = FakeCore.new(job(action, password, model: model, enable: enable))
   servers = [listen(DEVICE_PORT, device), listen(CORE_PORT, core)]
   env = {
     'OXIDIZED_HOME' => home, 'OX_NODE_NAME' => NODE, 'YAGRA_TOKEN' => TOKEN,
@@ -180,12 +250,13 @@ def run(home, name, mode, action: 'save', password: 'right')
   }
   # The environment the hook gives, and nothing else: oxidized spawns hooks with
   # `unsetenv_others`, and a script that leaned on an inherited variable passed here before.
+  started = Time.now
   pid = Process.spawn(env, 'ruby', SCRIPT, out: File::NULL, err: File::NULL, unsetenv_others: true)
   waited = 0
   waited += 1 while Process.waitpid(pid, Process::WNOHANG).nil? && sleep(1) && waited < 60
   Process.kill('KILL', pid) if waited >= 60
   servers.each(&:close)
-  [core.reports.last || {}, device.heard]
+  [core.reports.last || {}, device.heard, Time.now - started]
 end
 
 failures = []
@@ -239,6 +310,27 @@ check.call('automatic save never writes to a saved device', !heard.include?('sav
 
 r, = run(home, 'auto, silent', :silent, action: 'auto')
 check.call('an automatic save the device never confirms is not reported as saved', r['failure'] == 'no_answer', r)
+
+# ADR-210 stage 7: the enable step. oxidized waited for a password question a privileged login
+# never asks, so the login timed out and nothing was saved.
+r, heard, took = run(home, 'ios, lands in #', nil, device: FakeIos.new(:privileged), model: IOS,
+                                                   enable: ENABLE_SECRET)
+check.call('a login that lands in # is never sent enable', !heard.include?('enable'), heard)
+check.call('a login that lands in # saves', r['failure'] == '' && heard.include?('write memory'), r)
+check.call('a login that lands in # does not wait out the timeout', took < 5, "#{took.round(1)}s")
+check.call('the enable password is never sent to a device that did not ask for it',
+           !heard.include?(ENABLE_SECRET), heard)
+
+r, heard = run(home, 'ios, lands in >', nil, device: FakeIos.new(:user), model: IOS,
+                                            enable: ENABLE_SECRET)
+check.call('a login that lands in > is sent enable and then its password',
+           heard.index('enable') && heard.index(ENABLE_SECRET) &&
+             heard.index('enable') < heard.index(ENABLE_SECRET), heard)
+check.call('a login that lands in > saves after enable', r['failure'] == '', r)
+
+r, heard = run(home, 'ios, no enable password', nil, device: FakeIos.new(:privileged), model: IOS)
+check.call('a login with no enable password sends no enable', !heard.include?('enable'), heard)
+check.call('a login with no enable password saves', r['failure'] == '', r)
 
 puts failures.empty? ? 'ALL PASS' : "#{failures.size} FAILED"
 exit(failures.empty? ? 0 : 1)

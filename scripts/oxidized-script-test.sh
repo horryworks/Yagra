@@ -14,5 +14,6 @@ fi
 echo "oxidized image: $IMAGE"
 docker run --rm --entrypoint ruby \
   -v "$PWD/crates/yagra-core/src/oxidized/yagra-save.rb:/t/yagra-save.rb:ro" \
+  -v "$PWD/crates/yagra-core/src/oxidized/yagra-enable.rb:/t/yagra-enable.rb:ro" \
   -v "$PWD/scripts/oxidized-script-test:/t/harness:ro" \
-  "$IMAGE" /t/harness/run.rb /t/yagra-save.rb
+  "$IMAGE" /t/harness/run.rb /t/yagra-save.rb /t/yagra-enable.rb
