@@ -1,0 +1,10 @@
+/* Alerts ▸ Active (ADR-243). The table measures its rows (`autoRowHeight`, for the stacked Notes
+   column), so a row is as tall as its tallest cell plus the row's padding. A standard 30px button
+   there makes every row 45px instead of the 44px the table standard asks for (design-system §4.1);
+   28px keeps a row with no notes at 44.
+
+   Three classes deep on purpose: page CSS is bundled BEFORE the shared stylesheet, so a bare
+   `.active-alerts-explain` would lose to `.btn { height: 30px }` on load order. */
+.dt-row .btn.active-alerts-explain {
+  height: 28px;
+}

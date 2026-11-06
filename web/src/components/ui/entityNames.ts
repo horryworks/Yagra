@@ -39,6 +39,10 @@ export function useEntityNames() {
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [nodeNames, setNodeNames] = useState<Record<string, string>>({});
+  // The folder each resolved node is filed in, from the same batch (ADR-243 decision 4). Kept beside
+  // the names rather than fetched separately: the answer already carries it, and a second request
+  // per node would undo the batching.
+  const [nodeGroups, setNodeGroups] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     api.listNodeGroups().then(setGroups).catch(() => undefined);
@@ -63,6 +67,11 @@ export function useEntityNames() {
           for (const e of entries) next[e.id] = e.name;
           return next;
         });
+        setNodeGroups((prev) => {
+          const next = { ...prev };
+          for (const e of entries) next[e.id] = e.group_id ?? null;
+          return next;
+        });
       },
     });
   }
@@ -76,6 +85,16 @@ export function useEntityNames() {
       return id;
     },
     [nodeNames],
+  );
+  /** The folder a node is filed in: its id, `null` when ungrouped, `undefined` while the node has
+   *  not resolved yet (asking enqueues it, like `nodeName`). */
+  const nodeGroup = useCallback(
+    (id: string): string | null | undefined => {
+      if (id in nodeGroups) return nodeGroups[id];
+      batcher.current?.request(id);
+      return undefined;
+    },
+    [nodeGroups],
   );
   const groupName = useCallback((id: string) => resolveName(groups, id), [groups]);
   const profileName = useCallback((id: string) => resolveName(profiles, id), [profiles]);
@@ -111,5 +130,5 @@ export function useEntityNames() {
     [nodeName, profileName, groupName],
   );
 
-  return { groups, profiles, nodeName, groupName, profileName, scopeName };
+  return { groups, profiles, nodeName, nodeGroup, groupName, profileName, scopeName };
 }

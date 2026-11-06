@@ -34,6 +34,7 @@ export const TABLE_IDS = [
   'node.neighbors',
   'node.wirelessAps',
   // Alerts
+  'alerts.active',
   'alerts.eventRules',
   'alerts.history',
   'alerts.maintenance',

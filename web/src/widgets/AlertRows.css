@@ -3,30 +3,6 @@
   flex-direction: column;
 }
 
-/* Virtualized full triage list (ActiveAlertsPage): a bounded, scrollable region whose rows are
-   absolutely positioned and windowed by @tanstack/react-virtual (see AlertRows.tsx) so a
-   thousands-strong outage renders only the visible slice. The capped dashboard-widget path
-   (.alertrows) is untouched and renders in normal flow. */
-.alertrows-scroll {
-  position: relative;
-  overflow-y: auto;
-  /* Bound the region so windowing engages; dvh handles the iOS URL bar (vh fallback above it). */
-  max-height: 70vh;
-  max-height: 70dvh;
-}
-
-.alertrows-body {
-  position: relative;
-  width: 100%;
-}
-
-.alertrows-scroll .alertrow {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-}
-
 .alertrow {
   display: flex;
   align-items: center;
@@ -67,46 +43,10 @@
   text-overflow: ellipsis;
 }
 
-.alertrow-cause {
-  font-size: var(--font-sm);
-}
-
-.alertrow-flap {
-  font-size: var(--font-xs);
-  color: var(--status-warning);
-  border: var(--border-width) solid var(--status-warning);
-  border-radius: var(--radius-sm);
-  padding: 0 5px;
-}
-
-/* "Held until …" (ADR-226 decision 11): a small outlined mark, as a link to the delivery hours.
-   Neutral (not a status color) — a held page is not a node state. */
-.alertrow-muted {
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 0 5px;
-  white-space: nowrap;
-  text-decoration: none;
-}
-
-/* Only the delivery-hours mark is a link; the "waiting for a neighbour" mark shares the shape and
-   must not light up as if it were one. */
-a.alertrow-muted:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-color);
-}
-
 .alertrow-time {
   margin-left: auto;
   font-size: var(--font-xs);
   white-space: nowrap;
-}
-
-.alertrow-actions {
-  display: flex;
-  gap: 6px;
 }
 
 .alertrows-empty {
@@ -117,8 +57,7 @@ a.alertrow-muted:hover {
 }
 
 /* Mobile (ADR-027): the single fixed-height row would overflow ~390px, so wrap it into a stacked
-   card — line 1: severity dot + node + age (right); line 2: the check; line 3: cause/flap/held;
-   line 4: actions. `order` reshuffles the DOM (which puts time before the descriptive bits) into
+   card — line 1: severity dot + node + age (right); line 2: the check; line 3: the notes. `order` reshuffles the DOM (which puts time before the descriptive bits) into
    reading order. CSS-only; desktop is untouched. */
 html[data-viewport='mobile'] .alertrow {
   height: auto;
@@ -156,11 +95,4 @@ html[data-viewport='mobile'] .alertrow-cause,
 html[data-viewport='mobile'] .alertrow-flap,
 html[data-viewport='mobile'] .alertrow-muted {
   order: 3;
-}
-
-html[data-viewport='mobile'] .alertrow-actions {
-  order: 4;
-  flex-basis: 100%;
-  justify-content: flex-start;
-  gap: 8px;
 }

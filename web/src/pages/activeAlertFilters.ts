@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Alerts ▸ Active — which alerts the triage list shows, as pure functions.
+// Alerts ▸ Active — which alerts the triage table shows, as pure functions.
 //
 // Here rather than in the page for the usual reason: Vitest runs `environment: 'node'` with
 // `include: ['src/**/*.test.ts']`, so a test written beside a `.tsx` is a file nothing runs
@@ -14,34 +14,21 @@
 // server-side would mean giving the stream a subscription filter — an SSE design change, ADR
 // territory — not adding a query parameter.
 //
-// **ADR-053 Inc.6 moved the controls into a `FilterBar` and the logic onto the shared predicate.**
-// `AlertRows` draws a run of spans with no header row, so there is nowhere to hang a filter row
-// (decision E). What changed for the operator is not the layout: every dimension became a *set*, so
-// "critical and warning" and "down or unreachable" are sayable for the first time, and
-// the free text gained the NOT and regex modes every other list has.
+// **ADR-243 put the screen on the shared table with History's columns.** The filters are the
+// columns History filters — severity, node, what, state — under History's URL keys, so a link moves
+// between the two screens by changing the path. The scope (all / a folder / a node) is History's
+// too, read from the same `node_id` / `group_id` keys, but decided here in the browser.
 
-import { alertSubject, subjectText, type HasSubject } from '../lib/alertSubject';
-import {
-  normalizeSets,
-  readFilterParams,
-  specColumns,
-  writeFilterParams,
-  TEXT_MODES,
-  type ColumnFilterSpec,
-  type FilterState,
-  type FilterableColumn,
-} from '../lib/columnFilter';
-import { buildPredicate } from '../lib/filterPredicate';
+import { alertSubject, subjectNodeId, subjectText, type HasSubject } from '../lib/alertSubject';
+import { TEXT_MODES, type ColumnFilterSpec } from '../lib/columnFilter';
 import { severityLabel, stateLabel } from '../lib/format';
 import type { TFunction } from 'i18next';
 import type { NodeState, Severity } from '../types/api';
 
 /**
- * The fields the predicate reads.
+ * The fields the filters read.
  *
- * Structural rather than `Alert` so a test can build a row without the whole `ActiveAlertView`,
- * and so the predicate stays usable against the history row shape if this filter is ever wanted
- * there.
+ * Structural rather than `Alert` so a test can build a row without the whole stream frame.
  */
 export interface FilterableAlert extends HasSubject {
   severity: Severity;
@@ -53,20 +40,18 @@ export interface FilterableAlert extends HasSubject {
 export type NameOf = (id: string) => string;
 
 /**
- * The screen's filter columns.
+ * The screen's filters, keyed by column — and the keys are the URL keys, the same ones Alerts ▸
+ * History uses (`severity` / `node_q` / `metric` / `state`).
  *
- * ⚠️ **`nameOf` is a parameter, and the free-text column's `readText` is the only thing that calls
- * it.** That resolver is `useEntityNames`' lazy one: asking it about an id *enqueues* that id for
- * the next batch request, so resolving every alert's node name in order to draw thirty rows is
- * precisely what the batching exists to avoid. `buildPredicate` compiles a column that is not
- * narrowing to `null` and therefore never reads its row — so with the search box empty, nothing is
- * asked and the default view costs nothing. That used to be an explicit `if (q === '') return true`
- * guard in the hand-written predicate; it is now a property of the shared one, which is the whole
- * reason this screen could move onto it.
+ * ⚠️ **`nameOf` is read only by the node column's `readText`.** That resolver is `useEntityNames`'
+ * lazy one: asking it about an id *enqueues* that id for the next batch request. `buildPredicate`
+ * compiles a column that is not narrowing to `null` and never reads its row, so with the node
+ * filter empty nothing is asked. (Sorting by node does ask, for every row — that is the price of
+ * putting the list in name order, paid only when someone asks for it.)
  *
- * The text matches the subject (a node's name **or** its raw UUID, or a pool's name) and the metric
- * that fired. The raw id is included because it is the handle that appears in a deep link and in an
- * API error, so pasting one has to find its row — the same rule as the Credentials list.
+ * The node text matches a node's name **or** its raw UUID, or a non-node subject's own name. The
+ * raw id is included because it is the handle in a deep link and in an API error, so pasting one
+ * has to find its row.
  */
 export function activeAlertFilters(
   t: TFunction,
@@ -82,6 +67,28 @@ export function activeAlertFilters(
       allLabel: t('history.filter.allSeverities'),
       counts: 'client',
     },
+    node_q: {
+      kind: 'text',
+      // Both modes and NOT: the whole set is in the browser, so a regex costs a pass over a few
+      // thousand rows rather than a query, and "everything except the lab switches" is the triage
+      // question this screen exists for.
+      modes: TEXT_MODES,
+      not: true,
+      readText: (a) => {
+        const subject = alertSubject(a);
+        return subject.kind === 'node' ? [nameOf(subject.nodeId), subject.nodeId] : [subjectText(subject)];
+      },
+      containsSemantics: 'substring',
+    },
+    metric: {
+      kind: 'text',
+      modes: TEXT_MODES,
+      not: true,
+      // The metric name, as History filters it. A liveness alert stores none and so never matches a
+      // term — the same rule as History, so one term means the same thing on both screens.
+      readText: (a) => [a.metric],
+      containsSemantics: 'substring',
+    },
     state: {
       kind: 'enum',
       options: states.map((s) => ({ value: s, label: stateLabel(s) })),
@@ -89,94 +96,42 @@ export function activeAlertFilters(
       allLabel: t('history.filter.allStates'),
       counts: 'client',
     },
-    q: {
-      kind: 'text',
-      // Both modes and NOT: the whole set is in the browser, so a regex costs a pass over a few
-      // thousand rows rather than a query, and "everything except the link-flap noise" is the
-      // triage question this screen exists for.
-      modes: TEXT_MODES,
-      not: true,
-      readText: (a) => {
-        const subject = alertSubject(a);
-        return subject.kind === 'node'
-          ? [nameOf(subject.nodeId), subject.nodeId, a.metric]
-          : [subjectText(subject), a.metric];
-      },
-      containsSemantics: 'substring',
-      placeholder: t('active.searchPlaceholder'),
-    },
   };
 }
 
-/** Column keys paired with their specs — what the bar, the sheet and the predicate all walk. */
-export function activeAlertColumns(
-  t: TFunction,
-  nameOf: NameOf,
-  severities: readonly Severity[],
-  states: readonly NodeState[],
-): FilterableColumn<FilterableAlert>[] {
-  return specColumns(activeAlertFilters(t, nameOf, severities, states));
+/** The scope the URL names: a node id, a folder id, or neither (both empty strings). */
+export interface AlertScope {
+  nodeId: string;
+  groupId: string;
 }
 
-/** Plain-text names for the bar and the mobile sheet, keyed the same way. */
-export function activeAlertLabels(t: TFunction): Record<string, string> {
-  return {
-    severity: t('history.cols.severity'),
-    state: t('history.cols.state'),
-    q: t('active.searchLabel'),
-  };
-}
+/** A node's folder: the id, `null` when ungrouped, `undefined` while it has not resolved. */
+export type GroupOf = (nodeId: string) => string | null | undefined;
 
 /**
- * The row predicate, built once per `(state, nameOf)` pair.
+ * The scope predicate, or `null` when nothing is scoped (so the caller skips the pass).
  *
- * A **factory** rather than a `(row, nameOf) => boolean`, because `AlertRows` applies it per row: a
- * regex compiled per row would be compiled once per alert in an outage. `nowMs` is unused — no
- * column here is a range — but it is passed for the shared signature rather than special-cased.
+ * - **A node** keeps that node's alerts. A pool's or an organization's alert belongs to no node and
+ *   is left out, as History leaves it out.
+ * - **A folder** keeps the alerts of nodes filed in it or in any folder beneath it (`subtree`, the
+ *   folder's own id included). ⚠️ A node whose folder has not resolved yet is left out *for now*:
+ *   asking `groupOf` enqueues it, and the row appears when the answer lands. Showing it meanwhile
+ *   would put another site's alerts on screen for a moment, which is the worse of the two errors on
+ *   a screen two people may be reading during an incident.
  */
-export function alertPredicate(
-  columns: readonly FilterableColumn<FilterableAlert>[],
-  state: FilterState,
-): (a: FilterableAlert) => boolean {
-  return buildPredicate(columns, state, 0);
-}
-
-/**
- * Read the filters out of the URL.
- *
- * The URL is their only source of truth here: nothing else holds them, so a narrowed triage view
- * survives a reload and can be pasted into a chat during an incident — which is the whole point on
- * a screen two people are looking at at once.
- *
- * ⚠️ The keys stayed `severity` / `state` / `q`, so links taken before the multi-value
- * change still open the same view — a single token is a one-element set. Nothing had to be renamed
- * because these were already the column keys.
- */
-export function readFilters(
-  columns: readonly FilterableColumn<FilterableAlert>[],
-  params: URLSearchParams,
-): FilterState {
-  // The set re-encoding this used to spell out inline is `normalizeSets` now (Inc.10, decision AA) —
-  // it was the shape the four server-side screens needed, and they needed it for a sharper reason:
-  // an unknown token here just fails to match a row, but there it reaches the API and 400s.
-  return normalizeSets(columns, readFilterParams(columns, params));
-}
-
-/** Write the filters back, deleting every key whose value is the default so the unfiltered view
- *  has no query string at all. */
-export function writeFilters(
-  columns: readonly FilterableColumn<FilterableAlert>[],
-  params: URLSearchParams,
-  next: FilterState,
-): void {
-  writeFilterParams(columns, params, next);
-}
-
-/** A resolver for the column set that only the URL codec and the labels look at.
- *
- *  It throws rather than returning the id, because returning something plausible would let a future
- *  edit read a row through these columns and get a raw UUID where a name belongs, silently. Only the
- *  free-text column's `readText` calls a resolver, and nothing in the codec path reads a row. */
-export const urlOnlyResolver: NameOf = () => {
-  throw new Error('activeAlertFilters: the URL-codec column set must not read a row');
+export function scopePredicate(
+  scope: AlertScope,
+  subtree: ReadonlySet<string>,
+  groupOf: GroupOf,
+): ((a: HasSubject) => boolean) | null {
+  if (scope.nodeId) return (a) => subjectNodeId(a) === scope.nodeId;
+  if (scope.groupId) {
+    return (a) => {
+      const node = subjectNodeId(a);
+      if (node === null) return false;
+      const group = groupOf(node);
+      return group != null && subtree.has(group);
+    };
+  }
+  return null;
 }

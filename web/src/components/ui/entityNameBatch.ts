@@ -48,6 +48,9 @@ export const NAME_MAX_ATTEMPTS = 3;
 export interface NameEntry {
   id: string;
   name: string;
+  /** The folder the node is filed in, `null` for an ungrouped node (ADR-243 decision 4). Optional
+   *  only so a fake in a test may leave it out; the endpoint always sends it. */
+  group_id?: string | null;
 }
 
 export interface NameBatchDeps {

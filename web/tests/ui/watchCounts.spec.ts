@@ -47,7 +47,7 @@ test.describe('a fleet whose only pool has no live poller', () => {
 test.describe('a fleet that is fully watched', () => {
   test('draws neither the line nor the chip', async ({ page }) => {
     await page.goto('/alerts');
-    await expect(page.locator('.alertrows-empty, .alertrow').first()).toBeVisible();
+    await expect(page.locator('.dt-row, .dt-empty').first()).toBeVisible();
     await expect(page.locator('.nothing-polled')).toHaveCount(0);
     await expect(page.locator('.watch-chip', { hasText: 'Not watched' })).toHaveCount(0);
   });

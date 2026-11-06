@@ -114,7 +114,7 @@ export const MUST_FILTER: Record<string, string> = {
   '/nodes/discovery': 'the two hand-built discovery tables (where the 28px defect landed)',
   '/nodes/collection/mib': 'a server-side filter: typing has to reach the request',
   '/nodes/collection': 'a grouped `.ytable`, header funnels plus the toolbar funnel for category',
-  '/alerts': 'a header-less list over SSE: its funnel is in the toolbar',
+  '/alerts': 'a browser-held list over SSE, header funnels since ADR-243',
   '/events': 'URL-backed header funnels',
   '/alerts/history': 'server-side, and the one that shipped never reaching the request',
   '/settings/users': 'the identity list — no header, a toolbar funnel',

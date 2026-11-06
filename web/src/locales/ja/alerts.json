@@ -3,8 +3,10 @@
     "empty": "アクティブなアラートはありません。",
     "emptyFiltered": "この絞り込みに一致するアクティブなアラートがありません。",
     "noNodes": "監視しているノードがありません。",
-    "searchPlaceholder": "ノードまたはメトリクスを検索…",
-    "searchLabel": "ノード / メトリクス"
+    "cols": {
+      "notes": "補足",
+      "actions": "操作"
+    }
   },
   "row": {
     "flapping": "フラッピング",

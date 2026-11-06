@@ -3,8 +3,10 @@
     "empty": "No active alerts.",
     "emptyFiltered": "No active alerts match these filters.",
     "noNodes": "No nodes are being monitored.",
-    "searchPlaceholder": "Search node or metric…",
-    "searchLabel": "Node or metric"
+    "cols": {
+      "notes": "Notes",
+      "actions": "Actions"
+    }
   },
   "row": {
     "flapping": "flapping",

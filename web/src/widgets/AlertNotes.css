@@ -1,0 +1,58 @@
+/* The notes beside an active alert (ADR-243). Shared by the Active alerts table, which stacks them
+   in its Notes column, and the dashboard widget's compact row, which lays them side by side. */
+
+/* Stacked: one note per line, each as wide as its own text. The table row grows with it
+   (`autoRowHeight`), so a row with no notes keeps the standard height.
+
+   Block lines, not a flex column: a note can be longer than the column (an upstream node still
+   showing its raw id before its name resolves), and `text-overflow` draws nothing on a flex box —
+   the walk's geometry check found exactly that. Each line ellipses on its own and carries its whole
+   text in a `title` (AlertNotes.tsx). */
+.alert-notes {
+  display: block;
+  min-width: 0;
+}
+
+.alert-notes > * {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alert-notes > * + * {
+  margin-top: 2px;
+}
+
+.alertrow-cause {
+  font-size: var(--font-sm);
+}
+
+.alertrow-flap {
+  font-size: var(--font-xs);
+  color: var(--status-warning);
+  border: var(--border-width) solid var(--status-warning);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+}
+
+/* "Held until …" (ADR-226 decision 11): a small outlined mark, as a link to the delivery hours.
+   Neutral (not a status color) — a held page is not a node state. */
+.alertrow-muted {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 0 5px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+/* Only the delivery-hours mark is a link; the "waiting for a neighbour" mark shares the shape and
+   must not light up as if it were one. */
+a.alertrow-muted:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}

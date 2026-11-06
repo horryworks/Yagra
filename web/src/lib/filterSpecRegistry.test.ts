@@ -401,7 +401,11 @@ const ROUTES: readonly Route[] = [
   { path: '/events', own: ['node_id'], tables: [{ entries: ['eventFilters'], prefix: '' }] },
   { path: '/events/webhooks', own: [], tables: [{ entries: ['eventSourceFilters'], prefix: '' }] },
   { path: '/events/forwarding', own: [], tables: [{ entries: ['forwardingFilters'], prefix: '' }] },
-  { path: '/alerts', own: [], tables: [{ entries: ['activeAlertFilters'], prefix: '' }] },
+  {
+    path: '/alerts',
+    own: ['node_id', 'group_id', 'silenced', 'sort', 'dir'],
+    tables: [{ entries: ['activeAlertFilters'], prefix: '' }],
+  },
   {
     path: '/alerts/history',
     own: ['node_id', 'group_id'],
