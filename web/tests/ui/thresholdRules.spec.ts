@@ -219,9 +219,16 @@ test('the scope level and the scope id are two columns, each carrying its own va
   // 🚨 The row actually grew. Without `autoRowHeight` the cell would render all three names into
   // a box the virtualizer has already decided is 44px tall, and the extra two would be clipped —
   // which `isVisible()` and `toHaveCount()` both report as fine. Height is the only witness.
+  // The witness is that the last name ends inside the row: a 44px row would cut it off. (It used to
+  // compare against twice the single row, which held only while each line was as tall as the copy
+  // button ADR-241 removed: three lines of plain text are 87px, under 2 × 44.)
   const multiBox = await multiRow.boundingBox();
   const singleBox = await profileRow.boundingBox();
-  expect(multiBox!.height).toBeGreaterThan(singleBox!.height * 2);
+  expect(multiBox!.height).toBeGreaterThan(singleBox!.height);
+  const lastNameBottom = await multi
+    .locator('.yt-entity-name')
+    .evaluateAll((els) => Math.max(...els.map((e) => e.getBoundingClientRect().bottom)));
+  expect(lastNameBottom).toBeLessThanOrEqual(multiBox!.y + multiBox!.height);
   // …and a row whose cells are all one line is still exactly the standard height, so opting in
   // costs nothing to the 22 rules that name one target. (design-system §4.1: body rows are 44px.)
   expect(Math.round(singleBox!.height)).toBe(44);

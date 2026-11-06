@@ -20,6 +20,7 @@
 
 ### Improvements
 
+- **The copy-id button beside a name in a table is gone.** Lists that show a node, folder or profile by name (Active alerts, History, Events, Maintenance, Thresholds, Discovery, node detail, Troubleshoot reports and others) no longer draw a copy button next to it. Hovering the name still shows the id. The Credential ID column in Credentials keeps its copy button.
 - **NodeDetail ▸ Config is laid out around one status card.** The card says whether the backup works, with the last fetch, the next run and the number of versions. When something is wrong it names the problem and offers the one fix: pick the model, add a CLI login, try again, or fetch now. Backup is one switch. The connection, model, speed and login order are folded into one summary line that opens on a press. Stored versions, saves to startup and failed fetches are one history, newest first; "Changes" folds unchanged fetches into one row, "All" shows each one. A version opens, or is compared with the one before it, right under its row. "Save to startup" now sits on the line that says the device is unsaved. The Config tab shows the attention dot when the backup needs a fix or the device is unsaved.
 
 ## v0.3.71 — Back up and save the configuration of a Cisco device whose login lands in privileged mode
