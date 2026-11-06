@@ -9,8 +9,8 @@
 //!   resolves names only for a caller who may list them.
 //! - `PUT …/config-backup` — switch it on or off, the node's own order of CLI logins (or the try
 //!   order of Credentials & secrets), SSH or telnet, the model. `ManageConfig`, and switching it on
-//!   also takes `RevealCredentials` and a fleet-wide caller, because it hands logins to the node's
-//!   address. oxidized is asked to re-read its node list straight after.
+//!   also takes `ManageCredentials`, a signed-in person (never an API token) and a fleet-wide
+//!   caller, because it hands logins to the node's address (ADR-210 stage 8, decision 73). oxidized is asked to re-read its node list straight after.
 //! - `GET …/config-backup/versions` — the stored versions. `View`.
 //! - `GET …/config-backup/versions/{oid}` and `GET …/config-backup/diff` — the text, and two
 //!   versions side by side. **`ManageConfig`** (decision 10): oxidized's `remove_secret` is model by
@@ -55,7 +55,8 @@ use yagra_base::config_save::SaveRecord;
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{
-    Actor, Admin, RequireManageConfig, RequireRevealCredentials, RequireView, Scoped, VisibleNode,
+    Actor, Admin, Caller, RequireManageConfig, RequireManageCredentials, RequireView, Scoped,
+    VisibleNode,
 };
 use super::ApiState;
 use crate::oxidized::{
@@ -484,15 +485,15 @@ const MAX_ORDER: usize = 200;
         (status = 204, description = "Saved; the bundled oxidized is asked to re-read its node list. Changing the order starts the logins afresh, and so does switching it on unless a login had been found that works, which is kept"),
         (status = 400, description = "An unknown input or model, a login that is not a CLI login, a repeated one, or both `login_order` and `credential_id` (`invalid_config_backup`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`)", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn put_config_backup(
     _perm: RequireManageConfig,
-    // Optional: needed only to switch the backup on (below). An API token never holds it.
-    reveal: Option<RequireRevealCredentials>,
+    // Optional: needed only to switch the backup on (below).
+    hand_out: MayHandOutLogins,
     _visible: VisibleNode,
     Scoped(scope): Scoped,
     admin: Admin,
@@ -538,16 +539,7 @@ async fn put_config_backup(
     }
     if body.enabled {
         refuse_scoped_login(&scope)?;
-        // Switching it on hands every login in the order to the node's address, so it takes what
-        // reading one back takes: a caller that may not see a password must not be able to send
-        // it somewhere it chose.
-        if reveal.is_none() {
-            return Err(ApiError::forbidden_code(
-                "login_not_permitted",
-                "switching config backup on hands CLI logins to the device and needs the Reveal \
-                 credentials permission, which an API token never holds",
-            ));
-        }
+        hand_out.check()?;
     }
     let before = admin
         .config_backup
@@ -604,6 +596,46 @@ fn refuse_scoped_login(scope: &super::scope::NodeScope) -> Result<(), ApiError> 
         "a CLI login is shared by every folder, so an account restricted to folders cannot \
          switch config backup on",
     )
+}
+
+/// Whether this caller may hand a node's CLI logins to its address: switching the backup on, or
+/// rescanning. It takes a role that manages credentials and a person signed in (ADR-210 stage 8,
+/// decision 73). The API token refusal is the part that matters: a token is unattended and
+/// copyable, and one that could switch backups on could hand every login out in a loop. Before
+/// stage 8 this was `RevealCredentials`, which tokens never hold; that permission is the Admin's
+/// alone now, and the Operator keeps this act.
+///
+/// Never rejects on its own: switching OFF needs neither, so the handler asks [`Self::check`] only
+/// on the branch that hands logins out.
+pub(super) struct MayHandOutLogins(bool);
+
+#[axum::async_trait]
+impl axum::extract::FromRequestParts<ApiState> for MayHandOutLogins {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        st: &ApiState,
+    ) -> Result<Self, Self::Rejection> {
+        let creds = RequireManageCredentials::from_request_parts(parts, st)
+            .await
+            .is_ok();
+        let person = Caller::from_request_parts(parts, st).await.is_ok();
+        Ok(Self(creds && person))
+    }
+}
+
+impl MayHandOutLogins {
+    fn check(&self) -> Result<(), ApiError> {
+        if self.0 {
+            return Ok(());
+        }
+        Err(ApiError::forbidden_code(
+            "login_not_permitted",
+            "switching config backup on hands CLI logins to the device; it needs the Manage \
+             credentials permission and a signed-in person, never an API token",
+        ))
+    }
 }
 
 /// One stored version.
@@ -969,20 +1001,21 @@ async fn cancel_fetch(
     responses(
         (status = 204, description = "The login that worked is forgotten and the node's logins are tried again from the top of its order, by the rotation and within the lockout limits; nothing is sent to the device by this call"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig or RevealCredentials, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig; or the caller lacks ManageCredentials or is an API token (`login_not_permitted`), or is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see, or it has no config backup", body = super::error::ErrorBody),
     ),
 )]
 async fn rescan_logins(
     _perm: RequireManageConfig,
     // It hands the node's logins out again, so it takes what switching the backup on takes.
-    _reveal: RequireRevealCredentials,
+    hand_out: MayHandOutLogins,
     _visible: VisibleNode,
     Scoped(scope): Scoped,
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     refuse_scoped_login(&scope)?;
+    hand_out.check()?;
     let found = admin
         .config_backup
         .forget_login(node_id)
@@ -1172,14 +1205,14 @@ pub(crate) struct SwitchResult {
         (status = 200, description = "Switched in one transaction. A node with settings keeps them; one with none gets `input`, every CLI login and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list", body = SwitchResult),
         (status = 400, description = "No node, more than 5,000, an unknown input, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn switch_config_backups(
     _perm: RequireManageConfig,
     // Optional: needed only to switch on, as for the PUT.
-    reveal: Option<RequireRevealCredentials>,
+    hand_out: MayHandOutLogins,
     Scoped(scope): Scoped,
     Actor(actor): Actor,
     admin: Admin,
@@ -1197,13 +1230,7 @@ async fn switch_config_backups(
     }
     if body.enabled {
         refuse_scoped_login(&scope)?;
-        if reveal.is_none() {
-            return Err(ApiError::forbidden_code(
-                "login_not_permitted",
-                "switching config backup on hands CLI logins to the device and needs the Reveal \
-                 credentials permission, which an API token never holds",
-            ));
-        }
+        hand_out.check()?;
     }
     let mut ids = body.node_ids;
     ids.sort_unstable();
@@ -1836,6 +1863,49 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// An Operator signed in switches the backup on, but an Admin-role API token cannot, on either
+    /// route, and cannot rescan (ADR-210 stage 8, decision 73): handing logins out takes a person.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_api_token_cannot_hand_logins_out(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{account_token, live_state, send};
+        let st = live_state(pool.clone()).await;
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        let (admin, _) = account_token(&st, "fixture-admin", yagra_common::Role::Admin).await;
+        let mint = serde_json::json!({ "name": "ci", "role": "admin", "surfaces": ["rest"] });
+        let (status, body) = send(&st, "POST", "/api/v1/api-tokens", &admin, Some(mint)).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let api_token = body["token"].as_str().expect("the raw token").to_owned();
+
+        let path = format!("/api/v1/nodes/{node}/config-backup");
+        let on = serde_json::json!({"enabled": true, "input": "ssh", "model_override": "ios"});
+        let (status, body) = send(&st, "PUT", &path, &api_token, Some(on.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "login_not_permitted", "{body}");
+
+        let switch = serde_json::json!({"node_ids": [node], "enabled": true, "input": "ssh"});
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/config-backups/switch",
+            &api_token,
+            Some(switch),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "login_not_permitted", "{body}");
+
+        // The same switch from an Operator signed in is accepted, then the token cannot rescan.
+        let (operator, _) =
+            account_token(&st, "fixture-operator", yagra_common::Role::Operator).await;
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(on)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let rescan = format!("/api/v1/nodes/{node}/config-backup/rescan");
+        let (status, body) = send(&st, "POST", &rescan, &api_token, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "login_not_permitted", "{body}");
     }
 
     /// A CLI login is never handed to an SNMP sweep as a community (ADR-210).

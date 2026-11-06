@@ -263,12 +263,13 @@ impl Role {
             // matrix renders it verbatim, so a stale sentence here is a wrong answer on screen.
             Role::Operator => {
                 "Runs the monitoring: everything a Viewer sees, plus the inventory, profiles, \
-                 thresholds, collection, discovery, event rules, monitoring credentials (and \
-                 reading them back), alert response and maintenance windows."
+                 thresholds, collection, discovery, event rules, monitoring credentials, alert \
+                 response and maintenance windows."
             }
             Role::Admin => {
                 "Owns the deployment: everything an Operator does, plus notification delivery, \
-                 forwarding, TLS, upgrades, retention, users, and the audit log."
+                 forwarding, TLS, upgrades, retention, users, the audit log, and reading stored \
+                 device credentials back."
             }
         }
     }
@@ -288,11 +289,11 @@ impl Role {
             Permission::AckAlerts
             | Permission::ManageMaintenance
             | Permission::ManageConfig
-            | Permission::ManageCredentials
-            | Permission::RevealCredentials => self >= Role::Operator,
+            | Permission::ManageCredentials => self >= Role::Operator,
             Permission::ManageSystem
             | Permission::ManageUsers
             | Permission::ViewAudit
+            | Permission::RevealCredentials
             | Permission::SaveDeviceConfig => self == Role::Admin,
         }
     }
@@ -367,9 +368,9 @@ impl Permission {
                  collection, discovery, event rules, and reports."
             }
             Permission::ManageCredentials => "Create, edit, and rotate monitoring credentials.",
-            // A permission of its own rather than part of ManageCredentials (ADR-210): both go to
-            // Operator today, but "may replace a secret" and "may read one back" are different
-            // trusts, and keeping them apart is what lets a later role split separate them.
+            // A permission of its own rather than part of ManageCredentials (ADR-210): "may replace
+            // a secret" and "may read one back" are different trusts. Stage 8 used that split: an
+            // Operator replaces secrets, only an Admin reads one back.
             Permission::RevealCredentials => {
                 "Show a stored device credential's secret, for signing in to the device. \
                  Every view is recorded in the audit log."
@@ -499,9 +500,10 @@ mod tests {
         // operator could not add a node.
         assert!(Role::Operator.grants(Permission::ManageConfig));
         assert!(Role::Operator.grants(Permission::ManageCredentials));
-        // ADR-210: reading a device credential back is the operator's too — they are the ones
-        // who sign in to the device — and never a viewer's.
-        assert!(Role::Operator.grants(Permission::RevealCredentials));
+        // ADR-210 stage 8: reading a device credential back is the admin's alone. An operator
+        // still replaces secrets (above) but never sees one.
+        assert!(Role::Admin.grants(Permission::RevealCredentials));
+        assert!(!Role::Operator.grants(Permission::RevealCredentials));
         assert!(!Role::Viewer.grants(Permission::RevealCredentials));
         assert!(Role::Admin.grants(Permission::SaveDeviceConfig));
         assert!(!Role::Operator.grants(Permission::SaveDeviceConfig));

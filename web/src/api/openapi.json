@@ -3688,7 +3688,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)",
+            "description": "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4321,7 +4321,7 @@
         "tags": [
           "credentials"
         ],
-        "summary": "Show a stored credential's secret, for a person signing in to the device (ADR-210).",
+        "summary": "Show a stored credential's secret, for a person signing in to the device (ADR-210). Admin\nonly since stage 8: an Operator replaces secrets but never reads one back.",
         "description": "**A POST although it changes nothing**, so `audit_mw` writes a row naming who read which\ncredential — the same reason the relocation download is one. The answer is never cached\n(`Cache-Control: no-store`). Refused to an API token (`token_not_permitted`) and to an account\nrestricted to folders (`scope_unsupported`): the shelf belongs to no folder, so a scoped caller\ncould otherwise read the login of a site it cannot see. An integration key and a kind this\nserver does not know are refused (`not_revealable`).",
         "operationId": "reveal_credential",
         "parameters": [
@@ -14188,7 +14188,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`)",
+            "description": "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -14523,7 +14523,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig or RevealCredentials, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)",
+            "description": "Role lacks ManageConfig; or the caller lacks ManageCredentials or is an API token (`login_not_permitted`), or is restricted to folders (`scope_unsupported`)",
             "content": {
               "application/json": {
                 "schema": {

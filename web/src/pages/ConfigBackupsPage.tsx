@@ -78,10 +78,10 @@ export function ConfigBackupsPage() {
     [creds.data],
   );
 
-  // Switching (ADR-224): off takes ManageConfig, on also RevealCredentials, as the Config tab.
-  const canReveal = useCan('reveal_credentials');
+  // Switching (ADR-224): off takes ManageConfig, on also ManageCredentials (ADR-210 stage 8), as
+  // the Config tab.
   const canOff = canConfig;
-  const canOn = canConfig && canReveal;
+  const canOn = canConfig && canCreds;
   // `null` until a person picks one: then the list opens on what is backed up, or on everything
   // while nothing is yet — an empty first view would hide the nodes there are to switch on.
   const [picking, setFilter] = useState<ListFilter | null>(null);

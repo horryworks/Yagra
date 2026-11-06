@@ -265,7 +265,8 @@ impl RequiredPermission for ManageCredentialsPerm {
 /// Read a stored device credential's secret back in plaintext (ADR-210).
 ///
 /// Its own permission rather than [`ManageCredentialsPerm`]: replacing a secret and reading one
-/// back are different trusts, even while the same role holds both. API tokens never hold it
+/// back are different trusts — an Operator holds the first, only an Admin the second (ADR-210
+/// stage 8). API tokens never hold it
 /// ([`TOKEN_DENIED_PERMISSIONS`]).
 pub struct RevealCredentialsPerm;
 impl RequiredPermission for RevealCredentialsPerm {

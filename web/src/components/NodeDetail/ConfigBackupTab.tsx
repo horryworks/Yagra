@@ -8,7 +8,7 @@
 // The text and the comparison need `manage_config` (the server's `remove_secret` is model by model
 // and can miss one), so a Viewer sees the state, the attempts and the versions and nothing of the
 // text. Switching the backup on hands the logins to the device, so Start and Save also need
-// `reveal_credentials`; logins are named only for a caller who may list credentials. The judgement
+// `manage_credentials` (ADR-210 stage 8); logins are named only for a caller who may list credentials. The judgement
 // — the form, the state line, how often to read again — is `configBackupForm.ts`.
 //
 // "Save to startup" (ADR-222) is the one control here that writes to the device: it takes
@@ -76,7 +76,6 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const canConfig = useCan('manage_config');
   const canCreds = useCan('manage_credentials');
-  const canReveal = useCan('reveal_credentials');
   const canSave = useCan('save_device_config');
   const [confirmSave, setConfirmSave] = useState(false);
   const [poll, setPoll] = useState<number | undefined>(undefined);
@@ -278,7 +277,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
 
   const v = view.data;
   const line = v ? stateLine(v) : null;
-  const canStart = canConfig && canReveal;
+  const canStart = canConfig && canCreds;
   return (
     <LoadGate load={view}>
       {view.error && (
@@ -424,7 +423,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               </Select>
             </div>
           </div>
-          {canStart && canCreds && (
+          {canStart && (
             <div className="cfgb-logins">
               {v.login_confirmed && v.credential_id && (
                 <div className="cfgb-logins-head">

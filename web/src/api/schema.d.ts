@@ -915,7 +915,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Show a stored credential's secret, for a person signing in to the device (ADR-210).
+         * Show a stored credential's secret, for a person signing in to the device (ADR-210). Admin
+         *     only since stage 8: an Operator replaces secrets but never reads one back.
          * @description **A POST although it changes nothing**, so `audit_mw` writes a row naming who read which
          *     credential — the same reason the relocation download is one. The answer is never cached
          *     (`Cache-Control: no-store`). Refused to an API token (`token_not_permitted`) and to an account
@@ -19207,7 +19208,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`) */
+            /** @description Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -27542,7 +27543,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`) or by a caller without RevealCredentials, such as an API token (`login_not_permitted`) */
+            /** @description Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -27822,7 +27823,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig or RevealCredentials, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`) */
+            /** @description Role lacks ManageConfig; or the caller lacks ManageCredentials or is an API token (`login_not_permitted`), or is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;

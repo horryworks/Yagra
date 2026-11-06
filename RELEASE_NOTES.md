@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **Only an Admin can reveal a stored device credential now.** The Reveal credentials permission has moved from Operator to Admin, so an Operator no longer sees "Show secret" in Nodes ▸ Credentials & secrets, and `POST /api/v1/credentials/{id}/reveal` answers 403 for an Operator. An Operator can still create, edit and rotate credentials, and can still switch config backup on. For API clients: switching config backup on (`PUT /api/v1/nodes/{node_id}/config-backup` with `enabled: true`, `POST /api/v1/config-backups/switch`) and `POST /api/v1/nodes/{node_id}/config-backup/rescan` now take Manage credentials and a signed-in person instead of Reveal credentials. An API token is still refused, and the rescan now answers `login_not_permitted` for one instead of `token_not_permitted`.
+
 ## v0.3.71 — Back up and save the configuration of a Cisco device whose login lands in privileged mode
 
 ### Bug Fixes

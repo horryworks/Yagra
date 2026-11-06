@@ -618,7 +618,8 @@ fn revealed_fields(kind: &str, secret: &[u8]) -> Option<Result<Vec<RevealedField
     Some(fields)
 }
 
-/// Show a stored credential's secret, for a person signing in to the device (ADR-210).
+/// Show a stored credential's secret, for a person signing in to the device (ADR-210). Admin
+/// only since stage 8: an Operator replaces secrets but never reads one back.
 ///
 /// **A POST although it changes nothing**, so `audit_mw` writes a row naming who read which
 /// credential — the same reason the relocation download is one. The answer is never cached
@@ -736,6 +737,12 @@ mod tests {
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in all_routes() {
+                // ...except reading a secret back, which is the Admin's alone (ADR-210 stage 8).
+                let want = if path.ends_with("/reveal") {
+                    StatusCode::FORBIDDEN
+                } else {
+                    want
+                };
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
                     want,
@@ -1355,13 +1362,13 @@ mod tests {
         }
     }
 
-    /// An Operator reads a credential back, and the read leaves an audit row naming it (ADR-210).
+    /// An Admin reads a credential back, and the read leaves an audit row naming it (ADR-210).
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn an_operator_reveals_a_credential_and_the_audit_log_records_it(pool: sqlx::PgPool) {
+    async fn an_admin_reveals_a_credential_and_the_audit_log_records_it(pool: sqlx::PgPool) {
         use crate::api::tests_support::{live_state, send, token};
         let st = live_state(pool.clone()).await;
-        let tok = token(&st, yagra_common::Role::Operator);
+        let tok = token(&st, yagra_common::Role::Admin);
         let (status, body) = send(
             &st,
             "POST",
@@ -1398,11 +1405,12 @@ mod tests {
         assert_eq!(action, format!("POST {path}"));
     }
 
-    /// Who may not read a credential back: a Viewer, an account restricted to folders, and anyone
-    /// asking for an integration key or a credential that does not exist.
+    /// Who may not read a credential back: a Viewer, an Operator (ADR-210 stage 8), an account
+    /// restricted to folders, and anyone asking for an integration key or a credential that does
+    /// not exist.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn a_reveal_is_refused_to_a_viewer_a_scoped_caller_and_an_integration_key(
+    async fn a_reveal_is_refused_to_a_viewer_an_operator_a_scoped_caller_and_an_integration_key(
         pool: sqlx::PgPool,
     ) {
         use crate::api::tests_support::{live_state, scoped_token, send, token};
@@ -1425,7 +1433,15 @@ mod tests {
         assert_eq!(answer["error"]["code"].as_str(), Some(refusal.as_str()));
 
         let operator = token(&st, yagra_common::Role::Operator);
-        let (status, answer) = send(&st, "POST", &reveal(key), &operator, None).await;
+        let (status, answer) = send(&st, "POST", &reveal(community), &operator, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+        assert!(
+            !answer.to_string().contains("a-test-secret"),
+            "a refusal carried the secret"
+        );
+
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (status, answer) = send(&st, "POST", &reveal(key), &admin, None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
         assert_eq!(answer["error"]["code"], "not_revealable");
         assert!(
@@ -1433,7 +1449,7 @@ mod tests {
             "a refusal carried the secret"
         );
 
-        let (status, answer) = send(&st, "POST", &reveal(Uuid::new_v4()), &operator, None).await;
+        let (status, answer) = send(&st, "POST", &reveal(Uuid::new_v4()), &admin, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
         assert_eq!(answer["error"]["code"], "credential_not_found");
     }
