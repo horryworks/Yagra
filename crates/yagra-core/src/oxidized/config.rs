@@ -253,6 +253,35 @@ hooks:
     )
 }
 
+/// The `model/` directory under `home`, in oxidized's group so oxidized can read what is in it.
+///
+/// The home is setgid to oxidized's group, and a directory made inside it inherits both the group
+/// and the setgid bit from the kernel - so it is made and never chmod-ed. 🚨 A chmod by this
+/// process, which is not in oxidized's group, CLEARS the setgid bit: the files written afterwards
+/// then belong to this process's own group, oxidized gets "permission denied" on every model file,
+/// and the enable replacement silently does not load (measured on both lab boxes, 2026-11-06). A
+/// directory left in that state by the first build of this change is removed and made again: its
+/// group differs from the home's.
+fn ensure_model_dir(home: &Path) -> std::io::Result<()> {
+    let models = home.join(MODEL_DIR);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        let home_gid = std::fs::metadata(home)?.gid();
+        if let Ok(m) = std::fs::metadata(&models) {
+            if m.gid() == home_gid {
+                return Ok(());
+            }
+            std::fs::remove_dir_all(&models)?;
+        }
+        std::fs::DirBuilder::new().mode(0o750).create(&models)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(&models)
+    }
+}
+
 /// Write the token (if new) and the configuration file into `home`. Leaves an identical file alone.
 pub(crate) fn write(
     home: &Path,
@@ -262,14 +291,7 @@ pub(crate) fn write(
     save_url: &str,
 ) -> anyhow::Result<()> {
     let token = ensure_token(home)?;
-    let models = home.join(MODEL_DIR);
-    std::fs::create_dir_all(&models)?;
-    // 0750, like the home: the directory is setgid to oxidized's group, which inherits here.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&models, std::fs::Permissions::from_mode(0o2750))?;
-    }
+    ensure_model_dir(home)?;
     for (file, text) in shared_files() {
         let script = home.join(file);
         if std::fs::read_to_string(&script).ok().as_deref() != Some(text.as_str()) {
@@ -394,6 +416,32 @@ mod tests {
             compose.contains(&line),
             "docker-compose.deploy.yml must carry {line} on the oxidized service"
         );
+    }
+
+    /// The model directory takes the home's group, and a directory in another group - what the
+    /// first build of ADR-210 stage 7 left behind - is made again rather than kept. Only the group
+    /// is checked here: a test process cannot hand a directory to a group it is not in.
+    #[cfg(unix)]
+    #[test]
+    fn the_model_directory_is_in_the_homes_group() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = std::env::temp_dir().join(format!("yagra-ox-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        write(&dir, SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL).expect("write");
+        let home_gid = std::fs::metadata(&dir).expect("home").gid();
+        let models = dir.join(MODEL_DIR);
+        assert_eq!(
+            std::fs::metadata(&models).expect("model dir").gid(),
+            home_gid
+        );
+        // A second start leaves a correct directory and its files alone.
+        let before = std::fs::metadata(models.join("ios.rb")).expect("ios").ino();
+        write(&dir, SOURCE_URL, EVENTS_URL, PUSH_URL, SAVE_URL).expect("rewrite");
+        assert_eq!(
+            std::fs::metadata(models.join("ios.rb")).expect("ios").ino(),
+            before
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
