@@ -7401,9 +7401,10 @@ export interface components {
             /** @description How fast it tries its logins: one set of lockout limits each (stage 3 decision 27). */
             scan_mode: components["schemas"]["ScanMode"];
             /**
-             * @description The node has gone without a fetch that worked for longer than core allows, the same
-             *     judgement that opens its "config backup not fetched" alert (ADR-240 decision 6), whether or
-             *     not a maintenance window holds that alert back. `false` while switched off.
+             * @description The node has gone without a fetch that worked for longer than core allows, or its "config
+             *     backup not fetched" alert is open and no fetch has worked since - the judgement that opens
+             *     and closes that alert (ADR-240 decision 6), whether or not a maintenance window holds it
+             *     back. `false` while switched off.
              */
             stale: boolean;
             status?: null | components["schemas"]["BackupStatusView"];
@@ -13285,9 +13286,7 @@ export interface components {
             template_id: string;
         };
         /**
-         * @description The one protocol a single login attempt goes over (ADR-242). Stored in
-         *     `node_config_backup.try_input` and `config_backup_attempts.input`; a token this core does not
-         *     know reads as `None`, which means SSH.
+         * @description The one protocol a single login attempt goes over: `ssh` or `telnet` (ADR-242).
          * @enum {string}
          */
         Protocol: "ssh" | "telnet";

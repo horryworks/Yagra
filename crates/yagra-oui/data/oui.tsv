@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-06
-# counts: MA-L=40345 MA-L-repeats-dropped=3 MA-M=6593 MA-S=7234 withheld=3
+# fetched: 2026-11-07
+# counts: MA-L=40347 MA-L-repeats-dropped=3 MA-M=6595 MA-S=7235 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13538,8 +13538,10 @@
 047AAE	Huawei Device Co., Ltd.
 047B43	IEEE Registration Authority
 047B435	Shenzhen XJ-Micro Technology Co., Ltd.
+047B43A	RUBISEC CORPORATION
 047B43B	ACADEMY FOR FUTURE HEALTH LTD
 047B43C	RR Technologies GmbH
+047B43D	ZEBO PTE LTD
 047BCB	Universal Global Scientific Industrial., Ltd
 047C16	Micro-Star INTL CO., LTD.
 047D50	Shenzhen Kang Ying Technology Co.Ltd.
@@ -16663,6 +16665,7 @@
 1C0460	NXP Semiconductors Taiwan Ltd.
 1C05B7	Chongqing Trantor Technology Co., Ltd.
 1C0656	IDY Corporation
+1C07DD	FRITZ! Technology GmbH
 1C08C1	LG Innotek
 1C0B52	EPICOM S.A
 1C0B8B	Ubiquiti Inc
@@ -20338,7 +20341,7 @@
 34C8D62	Guangzhou Linkpi Technology Co. Ltd
 34C8D63	kratos network pte.ltd.
 34C8D64	Chengdu Decentest technology Co., Ltd.
-34C8D65	PRIZMA GROUP DISTRIBUTION & CONSULTING D.O.O - RUBISEC
+34C8D65	RUBISEC CORPORATION
 34C8D66	Signalwing Corporation
 34C8D67	ZXCLAA Technology(Suzhou) Co.,Ltd
 34C8D68	Illumina
@@ -36069,6 +36072,7 @@
 8C1F64085	SORB ENGINEERING LLC
 8C1F64086	WEPTECH elektronik GmbH
 8C1F64087	Benchmark Electronics BV
+8C1F64088	JTL Systems Ltd.
 8C1F64089	ANSER-NET CO ., LTD
 8C1F6408B	Shanghai Shenxu Technology Co., Ltd
 8C1F6408C	eviateg GmbH
@@ -52093,6 +52097,7 @@ F026F8	Worldcns Co.,Ltd.
 F0272D	Amazon Technologies Inc.
 F02745	F-Secure Corporation
 F02765	Murata Manufacturing Co., Ltd.
+F0276E	AltoBeam Inc.
 F027A0	Apple, Inc.
 F02929	Cisco Systems, Inc
 F02A23	Creative Next Design

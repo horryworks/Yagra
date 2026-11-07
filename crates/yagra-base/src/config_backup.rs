@@ -65,9 +65,10 @@ impl BackupInput {
     }
 }
 
-/// The one protocol a single login attempt goes over (ADR-242). Stored in
-/// `node_config_backup.try_input` and `config_backup_attempts.input`; a token this core does not
-/// know reads as `None`, which means SSH.
+/// The one protocol a single login attempt goes over: `ssh` or `telnet` (ADR-242).
+//
+// Stored in `node_config_backup.try_input` and `config_backup_attempts.input`; a token this core
+// does not know reads back as `None`, which the rotation treats as SSH.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Protocol {

@@ -144,6 +144,17 @@ pub(crate) fn hands_login(t: &BackupTarget, now: DateTime<Utc>) -> bool {
         && (t.rotation.login_confirmed || super::rotation::in_flight(t.rotation.requested_at, now))
 }
 
+/// The `input` oxidized is handed for a node: one protocol per attempt (ADR-242). The automatic
+/// search hands the one the rotation chose - never "ssh, telnet", so a refused SSH login is not
+/// retried over telnet inside the same fetch - and "SSH only" is SSH whatever was remembered.
+/// `None` for an input a newer core wrote, which is never sent.
+pub(crate) fn input_of(t: &BackupTarget) -> Option<&'static str> {
+    t.config
+        .input
+        .protocol(t.rotation.try_input)
+        .map(Protocol::as_str)
+}
+
 /// Every configured node with a model and a connection, as oxidized's source.
 ///
 /// A node whose login may be handed over ([`hands_login`]) and that has a relay port gets the
@@ -171,18 +182,12 @@ pub(crate) async fn source_nodes(
     // plaintext lives only as long as this call, as it did when each node opened its own.
     let mut opened: HashMap<Uuid, Option<CliLoginSecret>> = HashMap::new();
     for t in targets {
-        // One protocol per attempt (ADR-242): the automatic search hands oxidized the one the
-        // rotation chose, never "ssh, telnet", so a refused SSH login is not retried over telnet
-        // inside the same fetch.
         let (Some(model), Some(input)) = (
             model_of(
                 t.config.model_override.as_deref(),
                 t.profile_name.as_deref(),
             ),
-            t.config
-                .input
-                .protocol(t.rotation.try_input)
-                .map(Protocol::as_str),
+            input_of(&t),
         ) else {
             continue;
         };
@@ -398,6 +403,27 @@ mod tests {
         assert_eq!(p.ip, PARKED_IP);
         assert_eq!(p.group, super::super::GROUP);
         assert_eq!(p.enable, None);
+    }
+
+    /// oxidized gets the protocol the node's search remembered, one at a time; "SSH only" never
+    /// gets telnet, whatever was remembered (ADR-242).
+    #[test]
+    fn oxidized_is_handed_one_protocol_the_one_remembered() {
+        use yagra_base::config_backup::Protocol;
+        let with = |input: BackupInput, remembered: Option<Protocol>| {
+            let mut t = target(true, None, false);
+            t.config.input = input;
+            t.rotation.try_input = remembered;
+            input_of(&t)
+        };
+        assert_eq!(with(BackupInput::SshThenTelnet, None), Some("ssh"));
+        assert_eq!(
+            with(BackupInput::SshThenTelnet, Some(Protocol::Telnet)),
+            Some("telnet")
+        );
+        assert_eq!(with(BackupInput::Ssh, Some(Protocol::Telnet)), Some("ssh"));
+        assert_eq!(with(BackupInput::Telnet, None), Some("telnet"));
+        assert_eq!(with(BackupInput::Unknown, Some(Protocol::Ssh)), None);
     }
 
     #[test]

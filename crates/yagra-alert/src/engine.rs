@@ -3314,6 +3314,15 @@ impl AlertManager {
         })
     }
 
+    /// Whether a node's "config backup not fetched" alert is open now.
+    #[must_use]
+    pub fn config_stale_alert_open(&self, node: NodeId) -> bool {
+        self.active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .contains_key(&subject_check_id(&Subject::Node(node), CONFIG_STALE_METRIC))
+    }
+
     /// Resolve a node's "config backup not fetched" alert. `None` if it was not open.
     pub fn resolve_config_stale_alert(&self, node: NodeId) -> Option<NotifyAction> {
         self.resolve_event_alert(subject_check_id(&Subject::Node(node), CONFIG_STALE_METRIC))
@@ -8120,7 +8129,9 @@ mod tests {
         let node = NodeId::new();
         let mgr = manager();
         mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        assert!(!mgr.config_stale_alert_open(node));
         assert!(mgr.raise_config_stale_alert(node, 49.0, 1_000).is_some());
+        assert!(mgr.config_stale_alert_open(node));
         assert!(
             mgr.raise_config_stale_alert(node, 50.0, 2_000).is_none(),
             "an open alert is not raised twice"
@@ -8139,6 +8150,7 @@ mod tests {
         assert_eq!(restored.active_alerts().len(), 1);
 
         assert!(mgr.resolve_config_stale_alert(node).is_some());
+        assert!(!mgr.config_stale_alert_open(node));
         assert!(mgr.active_alerts().is_empty());
         assert!(mgr.resolve_config_stale_alert(node).is_none());
     }

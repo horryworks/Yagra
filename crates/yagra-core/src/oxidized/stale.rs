@@ -4,7 +4,8 @@
 //! worked for [`STALE_AFTER`], or closes it once one has.
 //!
 //! A node never fetched counts from when its settings were last saved, which is when it was
-//! switched on unless someone edited the settings or searched its logins again since. A fetch that
+//! switched on unless someone edited the settings or searched its logins again since. Saving or
+//! searching again therefore delays a NEW alert; it never closes one already open. A fetch that
 //! worked closes the alert; so does switching the backup off. Nothing else does - a read that
 //! fails changes nothing, because an absent answer is not evidence that the node was fetched.
 //!
@@ -14,6 +15,7 @@
 //! Leader-only: two cores raising the same alert would both page. Run only where the bundled
 //! oxidized is configured - without it nothing fetches, and every node switched on would page.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,6 +55,15 @@ pub(crate) fn hours_unfetched(node: &StaleWatchNode, now: DateTime<Utc>) -> Opti
     (age >= STALE_AFTER).then(|| age.as_secs() as f64 / 3600.0)
 }
 
+/// Whether a node is stale: it has gone [`STALE_AFTER`] without a fetch that worked, or its alert
+/// is open and no fetch has worked since. The second half is what keeps a re-save or a fresh login
+/// search from closing an open alert on a node never fetched (ADR-240 decision 6: only a fetch
+/// that worked, or switching off, closes it). The node view and the watch both ask this.
+#[must_use]
+pub(crate) fn is_stale(node: &StaleWatchNode, now: DateTime<Utc>, alert_open: bool) -> bool {
+    hours_unfetched(node, now).is_some() || (alert_open && node.last_success_at.is_none())
+}
+
 /// What to do for every node switched on (`nodes`) and every node whose alert is open (`open`).
 /// A node whose alert is open and that is no longer switched on - or no longer exists - is closed.
 #[must_use]
@@ -62,20 +73,21 @@ pub(crate) fn steps(
     now: DateTime<Utc>,
     in_maintenance: impl Fn(Uuid) -> bool,
 ) -> Vec<Step> {
+    let open: HashSet<Uuid> = open.iter().copied().collect();
+    let watched: HashSet<Uuid> = nodes.iter().map(|n| n.node_id).collect();
     let mut out = Vec::new();
     for n in nodes {
+        let is_open = open.contains(&n.node_id);
         match hours_unfetched(n, now) {
             Some(hours) if !in_maintenance(n.node_id) => out.push(Step::Raise(n.node_id, hours)),
             Some(_) => {}
-            None if open.contains(&n.node_id) => out.push(Step::Resolve(n.node_id)),
+            None if is_open && !is_stale(n, now, is_open) => out.push(Step::Resolve(n.node_id)),
             None => {}
         }
     }
-    for id in open {
-        if !nodes.iter().any(|n| n.node_id == *id) {
-            out.push(Step::Resolve(*id));
-        }
-    }
+    let mut gone: Vec<Uuid> = open.difference(&watched).copied().collect();
+    gone.sort_unstable();
+    out.extend(gone.into_iter().map(Step::Resolve));
     out
 }
 
@@ -188,6 +200,26 @@ mod tests {
                 Step::Resolve(Uuid::from_u128(2))
             ]
         );
+    }
+
+    /// Saving the settings again, or searching for a login again, moves a never-fetched node's
+    /// clock - but an alert already open stays open until a fetch works (ADR-240 decision 6).
+    #[test]
+    fn a_re_save_does_not_close_an_open_alert_on_a_node_never_fetched() {
+        let resaved = node(1, 1, None);
+        let open = [Uuid::from_u128(1)];
+        assert!(steps(&[resaved], &open, now(), |_| false).is_empty());
+        assert!(is_stale(&resaved, now(), true));
+        assert!(
+            !is_stale(&resaved, now(), false),
+            "and no new alert is raised"
+        );
+        let fetched = node(1, 1, Some(1));
+        assert_eq!(
+            steps(&[fetched], &open, now(), |_| false),
+            vec![Step::Resolve(Uuid::from_u128(1))]
+        );
+        assert!(!is_stale(&fetched, now(), true));
     }
 
     #[test]

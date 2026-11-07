@@ -287,8 +287,8 @@ pub(crate) struct AttemptView {
     outcome: AttemptOutcome,
     /// For a success: whether a new version was stored. `null` otherwise.
     new_version: Option<bool>,
-    /// The protocol it went over; `null` for an attempt recorded before Yagra chose one per
-    /// attempt (ADR-242).
+    /// The protocol it went over; `null` when that is not known (an attempt from before Yagra
+    /// chose one per attempt, or a result Yagra was no longer waiting for).
     input: Option<Protocol>,
 }
 
@@ -332,9 +332,10 @@ pub(crate) struct ConfigBackupView {
     /// When a fetch last worked, from every attempt rather than the newest few; `null` when none
     /// has or the backup is switched off.
     last_success_at: Option<DateTime<Utc>>,
-    /// The node has gone without a fetch that worked for longer than core allows, the same
-    /// judgement that opens its "config backup not fetched" alert (ADR-240 decision 6), whether or
-    /// not a maintenance window holds that alert back. `false` while switched off.
+    /// The node has gone without a fetch that worked for longer than core allows, or its "config
+    /// backup not fetched" alert is open and no fetch has worked since - the judgement that opens
+    /// and closes that alert (ADR-240 decision 6), whether or not a maintenance window holds it
+    /// back. `false` while switched off.
     stale: bool,
     /// How the device's command line is reached: `ssh_then_telnet` lets Yagra pick SSH or telnet
     /// for each attempt (ADR-242); `ssh` or `telnet` fixes it.
@@ -379,6 +380,7 @@ async fn get_config_backup(
     _perm: RequireView,
     _visible: VisibleNode,
     admin: Admin,
+    axum::extract::State(st): axum::extract::State<ApiState>,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<ConfigBackupView>> {
     let repo = &admin.config_backup;
@@ -450,11 +452,16 @@ async fn get_config_backup(
         exhausted: step == Some(Step::Exhausted),
         attempts: attempts.into_iter().map(AttemptView::from).collect(),
         last_success_at: watched.and_then(|w| w.last_success_at),
-        stale: watched.is_some_and(|w| oxidized::stale::hours_unfetched(&w, now).is_some()),
+        stale: watched.is_some_and(|w| {
+            let open = st
+                .alerts
+                .config_stale_alert_open(yagra_common::NodeId::from(node_id));
+            oxidized::stale::is_stale(&w, now, open)
+        }),
         input: cfg.input,
         protocol: cfg.input.protocol(match step {
             Some(Step::Fetch(_, p) | Step::Wait { protocol: p, .. }) => Some(p),
-            _ => rot.try_input,
+            Some(Step::Exhausted | Step::NoCandidate) | None => rot.try_input,
         }),
         scan_mode: cfg.scan_mode,
         model_override: cfg.model_override,
@@ -1870,6 +1877,21 @@ mod tests {
             get(&st, &path, &operator).await["stale"],
             true,
             "never fetched for 49 hours"
+        );
+
+        // Its alert is open; saving the settings again restarts the clock but does not make the
+        // node fetched, so it stays stale until a fetch works (ADR-240 decision 6).
+        assert!(st
+            .alerts
+            .raise_config_stale_alert(yagra_common::NodeId::from(node), 49.0, 0)
+            .is_some());
+        let again = serde_json::json!({"enabled": true, "input": "ssh", "model_override": "ios"});
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(again)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            get(&st, &path, &operator).await["stale"],
+            true,
+            "a re-save does not count as a fetch"
         );
 
         let attempt = |outcome: &'static str, hours: i32| {

@@ -28775,7 +28775,7 @@
               },
               {
                 "$ref": "#/components/schemas/Protocol",
-                "description": "The protocol it went over; `null` for an attempt recorded before Yagra chose one per\nattempt (ADR-242)."
+                "description": "The protocol it went over; `null` when that is not known (an attempt from before Yagra\nchose one per attempt, or a result Yagra was no longer waiting for)."
               }
             ]
           },
@@ -30932,7 +30932,7 @@
           },
           "stale": {
             "type": "boolean",
-            "description": "The node has gone without a fetch that worked for longer than core allows, the same\njudgement that opens its \"config backup not fetched\" alert (ADR-240 decision 6), whether or\nnot a maintenance window holds that alert back. `false` while switched off."
+            "description": "The node has gone without a fetch that worked for longer than core allows, or its \"config\nbackup not fetched\" alert is open and no fetch has worked since - the judgement that opens\nand closes that alert (ADR-240 decision 6), whether or not a maintenance window holds it\nback. `false` while switched off."
           },
           "status": {
             "oneOf": [
@@ -42907,7 +42907,7 @@
       },
       "Protocol": {
         "type": "string",
-        "description": "The one protocol a single login attempt goes over (ADR-242). Stored in\n`node_config_backup.try_input` and `config_backup_attempts.input`; a token this core does not\nknow reads as `None`, which means SSH.",
+        "description": "The one protocol a single login attempt goes over: `ssh` or `telnet` (ADR-242).",
         "enum": [
           "ssh",
           "telnet"
