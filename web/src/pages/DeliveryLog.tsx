@@ -20,6 +20,7 @@ import { EntityName } from '../components/ui/EntityName';
 import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { TimeCell } from '../components/ui/tableCells';
+import { Stack } from '../components/ui/Page';
 import { serverToolbarFilters } from '../lib/listToolbar';
 import { isAnyFiltered, specColumns, type FilterState } from '../lib/columnFilter';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
@@ -237,41 +238,45 @@ export function DeliveryLog({
 
   const reload = () => setReloadNonce((n) => n + 1);
 
+  // The `section` carries the ref a channel row scrolls to (`Stack` takes none), so the parts sit
+  // in a `Stack` inside it.
   return (
-    <section className="routing-log-section" ref={sectionRef}>
-      <ListToolbar
-        list={serverToolbarFilters(filterCols, { filters, setFilters })}
-        labels={{
-          range: t('routing.log.cols.time'),
-          channel: t('routing.log.cols.channel'),
-          event: t('routing.log.cols.event'),
-          result: t('routing.log.cols.result'),
-          side: t('routing.log.cols.side'),
-        }}
-        count={{ shown: rows.length, noun: (n) => t('routing.log.noun', { count: n }) }}
-        leading={<h2 className="table-section-title">{t('routing.log.title')}</h2>}
-      >
-        <Button variant="outline" onClick={reload}>
-          {t('routing.log.refresh')}
-        </Button>
-      </ListToolbar>
-      {error && <p className="form-error">{error}</p>}
-      <div className="routing-log-table">
-        <DataTable
-          tableId="settings.notificationDeliveries"
-          rows={rows}
-          columns={columns}
-          filters={filters}
-          onFiltersChange={setFilters}
-          rowKey={(r) => String(r.id)}
-          onRowClick={(r) => setOpen((cur) => (cur === String(r.id) ? null : String(r.id)))}
-          expanded={(r) => (open === String(r.id) ? <DeliveryDetail row={r} /> : null)}
-          expandedKey={open}
-          onReachEnd={cursor === null ? undefined : loadMore}
-          loading={loading}
-          empty={filtered ? t('common:filter.noMatch') : t('routing.log.empty')}
-        />
-      </div>
+    <section ref={sectionRef}>
+      <Stack gap={12}>
+        <ListToolbar
+          title={t('routing.log.title')}
+          list={serverToolbarFilters(filterCols, { filters, setFilters })}
+          labels={{
+            range: t('routing.log.cols.time'),
+            channel: t('routing.log.cols.channel'),
+            event: t('routing.log.cols.event'),
+            result: t('routing.log.cols.result'),
+            side: t('routing.log.cols.side'),
+          }}
+          count={{ shown: rows.length, noun: (n) => t('routing.log.noun', { count: n }) }}
+        >
+          <Button variant="outline" onClick={reload}>
+            {t('routing.log.refresh')}
+          </Button>
+        </ListToolbar>
+        {error && <p className="form-error">{error}</p>}
+        <Stack className="routing-log-table">
+          <DataTable
+            tableId="settings.notificationDeliveries"
+            rows={rows}
+            columns={columns}
+            filters={filters}
+            onFiltersChange={setFilters}
+            rowKey={(r) => String(r.id)}
+            onRowClick={(r) => setOpen((cur) => (cur === String(r.id) ? null : String(r.id)))}
+            expanded={(r) => (open === String(r.id) ? <DeliveryDetail row={r} /> : null)}
+            expandedKey={open}
+            onReachEnd={cursor === null ? undefined : loadMore}
+            loading={loading}
+            empty={filtered ? t('common:filter.noMatch') : t('routing.log.empty')}
+          />
+        </Stack>
+      </Stack>
     </section>
   );
 }

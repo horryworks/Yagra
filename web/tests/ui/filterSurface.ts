@@ -121,7 +121,7 @@ export const MUST_FILTER: Record<string, string> = {
   '/alerts': 'a browser-held list over SSE, header funnels since ADR-243',
   '/events': 'URL-backed header funnels',
   '/alerts/history': 'server-side, and the one that shipped never reaching the request',
-  '/settings/users': 'the identity list — no header, a toolbar funnel',
+  '/settings/users': 'a browser-held table, header funnels (a header-less list until ADR-246 Inc.5)',
   '/settings/audit': 'server-side header funnels',
   '/troubleshoot/runs': 'a header-less list, a toolbar funnel',
   '/troubleshoot/findings': 'the number kind lives here (Score)',

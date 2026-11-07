@@ -282,9 +282,9 @@ export function MibRepositoryPage() {
     anyFiltered: !!query,
   };
 
+  // A fragment: the toolbar and the table are Collection setup's own children (ADR-246).
   return (
-    <div>
-
+    <>
       <LoadGate load={catalog}>
         <ListToolbar
           list={list}
@@ -323,6 +323,6 @@ export function MibRepositoryPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }

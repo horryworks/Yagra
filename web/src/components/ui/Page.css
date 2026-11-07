@@ -7,11 +7,19 @@
   min-height: 0;
 }
 
-/* The page owns the space under its header; the header's own margin would double it. A compound
-   selector, so it wins over `.pageheader` whatever order the two stylesheets load in. */
+/* A header, a toolbar and `Tabs` carry their own margins for the screens that stack them by hand;
+   inside a `Page` or a `Stack` the gap is the only space between blocks. Compound selectors, so
+   they win whatever order the stylesheets load in. */
 .ui-page > .pageheader,
-.ui-page > .table-toolbar {
+.ui-page > .table-toolbar,
+.ui-stack > .table-toolbar {
   margin-bottom: 0;
+}
+
+.ui-page > .ui-tabs,
+.ui-inline > .ui-tabs,
+.ui-page > p {
+  margin: 0;
 }
 
 /* A list or a canvas fills the height: the table or the surface below the header scrolls inside
@@ -30,6 +38,11 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+.ui-stack.is-fill {
+  flex: 1;
+  min-height: 0;
 }
 
 .ui-inline {

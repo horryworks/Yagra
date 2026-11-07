@@ -19,10 +19,10 @@ import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { LoadGate } from '../components/ui/LoadGate';
 import type { AuditRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
+import { Page } from '../components/ui/Page';
 import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -202,69 +202,64 @@ export function AuditPage() {
   };
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:settings.audit')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.audit') }]}
       />
 
-      {!authed ? (
-        <Card>
-          <p className="muted">{t('common:loadBlock.signIn')}</p>
-        </Card>
-      ) : block ? (
-        <LoadBlockNotice
-          block={block}
-          unavailable={t('audit.err.load')}
-          permission="view_audit"
-        />
-      ) : (
-        <>
-          <ListToolbar
-            list={serverToolbarFilters(filterCols, { filters: rowFilters, setFilters: setRowFilters })}
-            labels={{
-              q: t('audit.cols.user'),
-              action: t('audit.cols.action'),
-              status: t('audit.cols.status'),
-              range: t('audit.cols.time'),
-            }}
-            count={{ shown: rows.length, noun: (n) => t('audit.entry', { count: n }) }}
+      {/* The block is this screen's own (keyset paging keeps it off useLoad), handed to the gate in
+          the shape useLoad would give it. */}
+      <LoadGate
+        signedIn={authed}
+        load={{ block }}
+        unavailable={t('audit.err.load')}
+        permission="view_audit"
+      >
+        <ListToolbar
+          list={serverToolbarFilters(filterCols, { filters: rowFilters, setFilters: setRowFilters })}
+          labels={{
+            q: t('audit.cols.user'),
+            action: t('audit.cols.action'),
+            status: t('audit.cols.status'),
+            range: t('audit.cols.time'),
+          }}
+          count={{ shown: rows.length, noun: (n) => t('audit.entry', { count: n }) }}
+        >
+          <Button
+            variant="outline"
+            onClick={exportCsv}
+            disabled={rows.length === 0}
+            title={t('audit.exportHint')}
           >
-            <Button
-              variant="outline"
-              onClick={exportCsv}
-              disabled={rows.length === 0}
-              title={t('audit.exportHint')}
-            >
-              <DownloadIcon width={15} height={15} /> {t('audit.export')}
-            </Button>
-          </ListToolbar>
+            <DownloadIcon width={15} height={15} /> {t('audit.export')}
+          </Button>
+        </ListToolbar>
 
-          {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
 
-          {/* Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered
-              query that legitimately returns zero is indistinguishable from an empty log, and the
-              screen would claim there is nothing here while a filter is hiding it. */}
-          <DataTable
-            tableId="settings.audit"
-            rows={rows}
-            columns={columns}
-            filters={rowFilters}
-            onFiltersChange={setRowFilters}
-            rowKey={(r) => r.id}
-            onReachEnd={cursor === null ? undefined : loadMore}
-            loading={loading}
-            empty={filtered ? t('audit.empty.filtered') : t('audit.empty.none')}
-          />
-          {retention && !loading && cursor === null && rows.length > 0 && (
-            <p className="muted">
-              {retention.kind === 'days'
-                ? t('audit.retention.days', { count: retention.days })
-                : t('audit.retention.indefinite')}
-            </p>
-          )}
-        </>
-      )}
-    </div>
+        {/* Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered
+            query that legitimately returns zero is indistinguishable from an empty log, and the
+            screen would claim there is nothing here while a filter is hiding it. */}
+        <DataTable
+          tableId="settings.audit"
+          rows={rows}
+          columns={columns}
+          filters={rowFilters}
+          onFiltersChange={setRowFilters}
+          rowKey={(r) => r.id}
+          onReachEnd={cursor === null ? undefined : loadMore}
+          loading={loading}
+          empty={filtered ? t('audit.empty.filtered') : t('audit.empty.none')}
+        />
+        {retention && !loading && cursor === null && rows.length > 0 && (
+          <p className="muted">
+            {retention.kind === 'days'
+              ? t('audit.retention.days', { count: retention.days })
+              : t('audit.retention.indefinite')}
+          </p>
+        )}
+      </LoadGate>
+    </Page>
   );
 }

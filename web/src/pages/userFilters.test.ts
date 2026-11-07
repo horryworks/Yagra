@@ -7,7 +7,7 @@ import { ROLES, USER_KINDS, type UserSummary } from '../types/api';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
 import { facetCounts } from '../lib/filterCounts';
-import { userColumns, userFilterLabels, USER_STATUSES } from './userFilters';
+import { userColumns, USER_STATUSES } from './userFilters';
 
 const t = ((k: string) => k) as unknown as TFunction;
 const COLS = userColumns(t);
@@ -47,10 +47,6 @@ describe('the option lists come from the shared enums', () => {
     expect(kind.options.map((o) => o.value)).toEqual([...USER_KINDS]);
   });
 
-  it('labels every column, so the bar never shows a raw key', () => {
-    const labels = userFilterLabels(t);
-    for (const c of COLS) expect(labels[c.key]).toBeTruthy();
-  });
 });
 
 describe('the predicate', () => {

@@ -36,6 +36,6 @@
   white-space: nowrap;
 }
 
-.dup-ignored {
-  margin-top: var(--space-2);
+.dup-note {
+  margin: 0;
 }

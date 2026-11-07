@@ -125,9 +125,9 @@ export function CollectionTemplatesPage() {
     return cols;
   }, [t, canConfig, openItems]);
 
+  // A fragment: the toolbar and the table are Collection setup's own children (ADR-246).
   return (
-    <div>
-
+    <>
       <LoadGate load={sets} permission="manage_config">
         <ListToolbar
           list={serverToolbarFilters(filterCols, { filters, setFilters })}
@@ -148,46 +148,44 @@ export function CollectionTemplatesPage() {
         {/* Virtualized since ADR-053 Inc.6 — the last of the twelve hand-rolled `ytable` screens
             to move, held back only because its rows expand. `expandedKey` is what drops the
             measured height of a row that has just closed. */}
-        <div className="templates-table">
-          <DataTable
-            tableId="nodes.collectionTemplates"
-            rows={filtered}
-            columns={columns}
-            rowKey={(r) => r.id}
-            loading={loading}
-            expanded={(r) =>
-              openItems === r.id ? (
-                <div className="crud-collection">
-                  {/* How far an edit here reaches: every profile that attaches the set. */}
-                  <p className="form-status">{t('sets.usedBy', { count: r.profile_count })}</p>
-                  <CollectionEditor scope="template" scopeId={r.id} canEdit={canConfig} />
-                </div>
-              ) : null
-            }
-            expandedKey={openItems}
-            filters={filters}
-            onFiltersChange={setFilters}
-            empty={
-              rows.length === 0 ? (
-                <EmptyState
-                  text={t('sets.empty.none')}
-                  action={
-                    canConfig ? (
-                      <Button type="button" variant="primary" onClick={() => setAdding(true)}>
-                        + {t('sets.addSet')}
-                      </Button>
-                    ) : undefined
-                  }
-                />
-              ) : (
-                <>
-                  <p className="yt-empty-title">{t('sets.empty.noMatch')}</p>
-                  <p className="yt-empty-sub">{t('shared.trySearch')}</p>
-                </>
-              )
-            }
-          />
-        </div>
+        <DataTable
+          tableId="nodes.collectionTemplates"
+          rows={filtered}
+          columns={columns}
+          rowKey={(r) => r.id}
+          loading={loading}
+          expanded={(r) =>
+            openItems === r.id ? (
+              <div className="tmpl-collection">
+                {/* How far an edit here reaches: every profile that attaches the set. */}
+                <p className="form-status">{t('sets.usedBy', { count: r.profile_count })}</p>
+                <CollectionEditor scope="template" scopeId={r.id} canEdit={canConfig} />
+              </div>
+            ) : null
+          }
+          expandedKey={openItems}
+          filters={filters}
+          onFiltersChange={setFilters}
+          empty={
+            rows.length === 0 ? (
+              <EmptyState
+                text={t('sets.empty.none')}
+                action={
+                  canConfig ? (
+                    <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                      + {t('sets.addSet')}
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <>
+                <p className="yt-empty-title">{t('sets.empty.noMatch')}</p>
+                <p className="yt-empty-sub">{t('shared.trySearch')}</p>
+              </>
+            )
+          }
+        />
       </LoadGate>
 
       {adding && (
@@ -209,7 +207,7 @@ export function CollectionTemplatesPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

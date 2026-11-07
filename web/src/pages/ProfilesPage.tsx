@@ -165,9 +165,9 @@ export function ProfilesPage() {
     return out;
   }, [filtered, t]);
 
+  // A fragment: the toolbar and the table are Collection setup's own children (ADR-246).
   return (
-    <div>
-
+    <>
       <LoadGate load={profiles} permission="manage_config">
         <ListToolbar
           list={serverToolbarFilters(allFilterCols, { filters, setFilters }, undefined, filterCounts)}
@@ -333,7 +333,7 @@ export function ProfilesPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

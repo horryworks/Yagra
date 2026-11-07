@@ -26,6 +26,7 @@ import { filterChips, resultCount, type ToolbarFilters } from '../../lib/listToo
 import { clearFilter, type FilterableColumn } from '../../lib/columnFilter';
 import { filterSummaryText } from '../../lib/filterWords';
 import './FilterChips.css';
+import './Section.css';
 
 interface ControlsProps<T> {
   list: ToolbarFilters<T>;
@@ -121,7 +122,11 @@ interface Props<T> extends ControlsProps<T> {
     noun: (n: number) => string;
     showTotal?: 'whenFiltered' | 'always';
   };
-  /** Before the filter controls: a scope picker, a section title. */
+  /** The heading of a list that is one section of a page (Routing's channels, its rules), drawn at
+   *  the start of this row so the count and the buttons share its line. The same look as a
+   *  page-level `SectionHead` (`level={2}`). */
+  title?: ReactNode;
+  /** Before the filter controls: a scope picker. */
   leading?: ReactNode;
   /** After the filter controls, before the spacer: a sort control, a view switch. */
   tools?: ReactNode;
@@ -137,6 +142,7 @@ export function ListToolbar<T>({
   onSheetOpen,
   menu,
   count,
+  title,
   leading,
   tools,
   note,
@@ -145,6 +151,7 @@ export function ListToolbar<T>({
   const n = count && resultCount({ ...count, anyFiltered: list.anyFiltered });
   return (
     <TableToolbar>
+      {title !== undefined && <h2 className="ui-section-title is-page">{title}</h2>}
       {leading}
       <FilterControls list={list} labels={labels} onSheetOpen={onSheetOpen} menu={menu} />
       {tools}

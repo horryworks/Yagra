@@ -1,6 +1,5 @@
 {
   "unavailable": "Managing API tokens requires the admin role.",
-  "signInPrompt": "Sign in as an admin to manage API tokens.",
   "empty": "No API tokens yet.",
   "add": {
     "button": "New token",

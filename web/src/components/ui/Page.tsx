@@ -38,10 +38,18 @@ interface BoxProps {
   children: ReactNode;
 }
 
-/** Children one above the other. */
-export function Stack({ gap = 12, as: Tag = 'div', className, children }: BoxProps) {
+/** Children one above the other. `fill` takes the height left in a list or canvas `Page`, for the
+ *  box a `DataTable` sits in when it is not the page's own child (a tab's body), so the table
+ *  still scrolls inside itself rather than the page. */
+export function Stack({
+  gap = 12,
+  as: Tag = 'div',
+  fill,
+  className,
+  children,
+}: BoxProps & { fill?: boolean }) {
   return (
-    <Tag className={cx('ui-stack', className)} style={{ gap: spaceVar(gap) }}>
+    <Tag className={cx('ui-stack', fill && 'is-fill', className)} style={{ gap: spaceVar(gap) }}>
       {children}
     </Tag>
   );

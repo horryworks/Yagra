@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Which accounts Settings ▸ Users shows (ADR-053 Inc.6).
 //
-// The Users screen is the "identity list" (data-table standard v2, variant B) — a roomy card per
-// account, with no header row — so there is nowhere to put a column filter row. It gets a
-// `FilterBar` instead: the same controls, carrying their own names (decision E).
+// The Users screen was the "identity list" — a roomy card per account with no header row — and
+// filtered through a bar of its own. Since ADR-246 Inc.5 it is a `DataTable` like every other list,
+// so these filters sit in its column filter row and take their names from its column headers.
 //
 // **What the operator gains is not the layout.** The role control was a segmented radio group, so it
 // could ask for exactly one role; "operators and admins" — the set that can actually change
@@ -77,12 +77,3 @@ export function userColumns(t: TFunction): FilterableColumn<UserSummary>[] {
   return specColumns(userFilters(t));
 }
 
-/** Plain-text names for the bar and the mobile sheet. */
-export function userFilterLabels(t: TFunction): Record<string, string> {
-  return {
-    role: t('users.cols.role'),
-    status: t('users.cols.status'),
-    kind: t('users.cols.kind'),
-    q: t('users.cols.username'),
-  };
-}

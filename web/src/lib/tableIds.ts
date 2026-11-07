@@ -79,6 +79,7 @@ export const TABLE_IDS = [
   'settings.notificationDeliveries',
   'settings.pollers',
   'settings.routingRules',
+  'settings.users',
 ] as const;
 
 /** The name of one table. An unregistered spelling is a compile error at the call site. */

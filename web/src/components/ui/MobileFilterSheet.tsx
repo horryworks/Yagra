@@ -134,6 +134,7 @@ export function FilterSections<T>({
  *  - On a desktop it exists only for a list with no header row (`menu`), and opens the same
  *    sections in a popover. A list with a header filters from each column's funnel, so it draws
  *    no button at all - the press that added a row to the table is gone.
+ *  - A list with nothing to filter draws none either: on a phone the button opened an empty sheet.
  */
 export function FilterButton<T>({
   columns,
@@ -163,6 +164,7 @@ export function FilterButton<T>({
   const n = activeFilterCount(columns, filters, baseline);
   const label = n > 0 ? t('filter.buttonCount', { count: n }) : t('filter.button');
 
+  if (columns.length === 0) return null;
   if (mode === 'mobile') {
     return (
       <button type="button" className={n > 0 ? 'mfilt-btn on' : 'mfilt-btn'} onClick={onOpen}>

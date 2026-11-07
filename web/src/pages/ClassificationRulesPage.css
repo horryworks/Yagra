@@ -7,7 +7,7 @@
   /* Stacked cell: left-align under the header — do NOT inherit `.ytable-cell`'s center. */
   align-items: flex-start;
   justify-content: center;
-  gap: 3px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
@@ -26,13 +26,11 @@
 /* Small "OID" / "descr" kind chip in the gutter. */
 .classrules-sig-kind {
   justify-self: start;
-  padding: 1px var(--space-1-5);
+  padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: var(--font-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 /* The matched value (OID prefix / sysDescr regex) — monospace, truncates with ellipsis. */

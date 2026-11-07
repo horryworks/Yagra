@@ -16,6 +16,7 @@ import {
 } from '../lib/format';
 import { api } from '../services/api';
 import { type AlertHistoryRow } from '../types/api';
+import { Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { LoadGate } from '../components/ui/LoadGate';
 import { useLoad } from '../lib/useLoad';
@@ -196,7 +197,7 @@ export function HistoryPage() {
   }, [cursor, filterCols, filters, scopeIds, nowMs, firstPage.data]);
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:alerts.history')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.history') }]}
@@ -251,6 +252,6 @@ export function HistoryPage() {
           // reaches millions of rows, per popover open. ADR-023 puts UI load third.
         />
       </LoadGate>
-    </div>
+    </Page>
   );
 }

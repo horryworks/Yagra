@@ -10,14 +10,10 @@
   line-height: 1.6;
 }
 
-/* The row under the level tabs that names the target, and the head of "Check a node" (ADR-230). */
+/* The row under the level tabs that names the target, and the head of "Check a node" (ADR-230).
+   Both are an `Inline`; the page spaces them. */
 .thresholds-target,
 .thresholds-check-head {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: var(--space-2) 0;
   font-size: var(--font-sm);
 }
 
@@ -81,7 +77,6 @@ html[data-viewport='mobile'] .thresholds-bound-side {
 /* The "no reachability rule" warning, in the warning colour: it is not an error (the operator may
    have meant it) but it must not read as prose. */
 .thresholds-warn-card {
-  margin-bottom: var(--space-4);
   border-left: 2px solid var(--status-warning);
 }
 
@@ -117,7 +112,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
    as text at input height so the form does not visibly lose a row. */
 .thresholds-fixed {
   margin: 0;
-  padding: 7px 0;
+  padding: var(--space-1-5) 0;
   color: var(--text-primary);
   font-size: var(--font-sm);
 }
@@ -166,7 +161,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
 .thresholds-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(var(--space-1) / 2);
+  gap: var(--space-0-5);
   margin: 0 0 var(--space-1);
   padding: 0;
   list-style: none;
@@ -179,7 +174,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
   border-radius: var(--radius-sm);
   display: inline-flex;
   font-size: var(--font-sm);
-  gap: calc(var(--space-1) / 2);
+  gap: var(--space-0-5);
   padding: var(--space-0-5) var(--space-1);
 }
 

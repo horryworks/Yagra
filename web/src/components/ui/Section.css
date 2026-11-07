@@ -11,6 +11,16 @@
   font-weight: var(--weight-medium);
 }
 
+/* The heading of a section that sits on the page itself, with no Card around it (ADR-246 Inc.5,
+   decided by the user): the one place a heading is drawn larger than a Card's. */
+.ui-section-title.is-page {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--font-lg);
+  color: var(--text-primary);
+}
+
 .ui-section-head {
   display: flex;
   align-items: center;

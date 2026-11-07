@@ -142,9 +142,9 @@
 }
 
 /* The admission that the search was broadened. Sits between the action row and the table, in the
-   secondary tone: it explains the rows below rather than warning about them. */
+   secondary tone: it explains the rows below rather than warning about them. No margin of its own:
+   both screens that show it stack their blocks with a gap (ADR-246). */
 .ev-widened {
-  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -153,7 +153,6 @@
    the table rather than inside the page note, so the note stays one clean line — the thing G1
    asserts on every screen — while this one may wrap over several endpoints. */
 .ev-listening {
-  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -168,7 +167,6 @@
    matched no rule are kept for a shorter period, so the older part of the list can be missing the
    very events a rule is being written for. Same tone as `.ev-widened` — it explains the rows. */
 .ev-retention {
-  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }

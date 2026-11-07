@@ -13,7 +13,9 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { ConfigBackupRow } from '../types/api';
+import { Page, Stack } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
+import { TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { EmptyState } from '../components/ui/EmptyState';
 import { EntityName } from '../components/ui/EntityName';
@@ -253,43 +255,118 @@ export function ConfigBackupsPage() {
   const offPlan = planSwitch(picked, false);
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:nodes.configBackups')}
         writePermission="manage_config"
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.configBackups') }]}
       />
-      {sched && schedule.data && (
-        <p className="cfgbl-sched">
-          <span>{t('config.schedule.rule', { time: sched.time, zone: sched.zone, count: sched.count })}</span>
-          <span>
-            {sched.state.key === 'config.schedule.next' &&
-              t(sched.state.key, { at: formatTimestamp(Date.parse(sched.state.at)) })}
-            {sched.state.key === 'config.schedule.running' &&
-              t(sched.state.key, { done: sched.state.done, total: sched.state.total })}
-            {sched.state.key === 'config.schedule.runningBare' && t(sched.state.key)}
-          </span>
-          {canConfig && (
-            <Button onClick={() => setEditing(true)} aria-label={t('config.schedule.title')}>
-              {t('config.schedule.change')}
-            </Button>
+      {/* Drawn only with a line in it: an empty box would still take the page's gap. */}
+      {(schedule.data || line) && (
+        <Stack gap={8}>
+          {sched && schedule.data && (
+            <p className="cfgbl-sched">
+              <span>{t('config.schedule.rule', { time: sched.time, zone: sched.zone, count: sched.count })}</span>
+              <span>
+                {sched.state.key === 'config.schedule.next' &&
+                  t(sched.state.key, { at: formatTimestamp(Date.parse(sched.state.at)) })}
+                {sched.state.key === 'config.schedule.running' &&
+                  t(sched.state.key, { done: sched.state.done, total: sched.state.total })}
+                {sched.state.key === 'config.schedule.runningBare' && t(sched.state.key)}
+              </span>
+              {canConfig && (
+                <Button onClick={() => setEditing(true)} aria-label={t('config.schedule.title')}>
+                  {t('config.schedule.change')}
+                </Button>
+              )}
+            </p>
           )}
-        </p>
-      )}
-      {schedule.data && (
-        <p className="cfgbl-sched">
-          <span>
-            {schedule.data.auto_save.enabled
-              ? t('config.autoSave.lineOn')
-              : t('config.autoSave.lineOff')}
-          </span>
-          {canSave && (
-            <Button onClick={() => setAutoSaveOpen(true)} aria-label={t('config.autoSave.title')}>
-              {t('config.autoSave.change')}
-            </Button>
+          {schedule.data && (
+            <p className="cfgbl-sched">
+              <span>
+                {schedule.data.auto_save.enabled
+                  ? t('config.autoSave.lineOn')
+                  : t('config.autoSave.lineOff')}
+              </span>
+              {canSave && (
+                <Button onClick={() => setAutoSaveOpen(true)} aria-label={t('config.autoSave.title')}>
+                  {t('config.autoSave.change')}
+                </Button>
+              )}
+            </p>
           )}
-        </p>
+          {line && (
+            <p className={`cfgbl-push ${line.key === 'git.push.failed' ? 'bad' : ''}`}>
+              <Link to={GIT_REMOTE_PATH}>{t('system:git.name')}</Link>
+              {': '}
+              {line.key === 'git.push.ok' &&
+                t(`system:${line.key}`, { at: formatTimestamp(Date.parse(line.at)), head: line.head })}
+              {line.key === 'git.push.failed' &&
+                t(`system:${line.key}`, {
+                  at: formatTimestamp(Date.parse(line.at)),
+                  why: t(`system:git.failure.${line.failure}`),
+                })}
+              {(line.key === 'git.push.waiting' || line.key === 'git.push.none') &&
+                t(`system:${line.key}`)}
+            </p>
+          )}
+        </Stack>
       )}
+      {/* The filter and the switches act on the list, so a refused read shows the notice instead
+          of them (LoadGate), not above them. */}
+      <LoadGate load={list}>
+        <TableToolbar>
+          {canOff && shown.length > 0 && (
+            <label className="cfgbl-pickall">
+              <input
+                type="checkbox"
+                checked={allPicked}
+                onChange={() =>
+                  setSelected(allPicked ? new Set() : new Set(shown.map((r) => r.node_id)))
+                }
+              />
+              <span>{t('config.list.pickAll')}</span>
+            </label>
+          )}
+          <div className="cfgbl-filter">
+            <Segmented
+              ariaLabel={t('config.list.filter')}
+              options={LIST_FILTERS.map((f) => ({
+                value: f,
+                label: f === 'all' ? t('config.list.state.all') : `${t(`config.list.state.${f}`)} ${counts[f]}`,
+              }))}
+              value={filter}
+              onChange={(next) => pickFilter(next as ListFilter)}
+            />
+          </div>
+          <TableSpacer />
+          {picked.length > 0 && (
+            <div className="cfgbl-bulk">
+              <span>{t('config.list.picked', { count: picked.length })}</span>
+              {canOn && onPlan.ids.length > 0 && (
+                <Button disabled={switching} onClick={() => onSwitch(picked, true)}>
+                  {t('config.list.switchOnN', { count: onPlan.ids.length })}
+                </Button>
+              )}
+              {offPlan.ids.length > 0 && (
+                <Button disabled={switching} onClick={() => onSwitch(picked, false)}>
+                  {t('config.list.switchOffN', { count: offPlan.ids.length })}
+                </Button>
+              )}
+              <Button onClick={() => setSelected(new Set())}>{t('config.list.unpick')}</Button>
+            </div>
+          )}
+        </TableToolbar>
+        {switchError && <p className="form-error">{switchError}</p>}
+        <DataTable
+          tableId="nodes.configBackups"
+          rows={shown}
+          columns={columns}
+          rowKey={(r) => r.node_id}
+          loading={list.loading}
+          empty={list.error ?? <EmptyState text={t(`config.list.emptyOf.${filter}`)} />}
+        />
+      </LoadGate>
       {autoSaveOpen && schedule.data && (
         <ConfigAutoSaveModal
           schedule={schedule.data}
@@ -310,61 +387,6 @@ export function ConfigBackupsPage() {
           }}
         />
       )}
-      {line && (
-        <p className={`cfgbl-push ${line.key === 'git.push.failed' ? 'bad' : ''}`}>
-          <Link to={GIT_REMOTE_PATH}>{t('system:git.name')}</Link>
-          {': '}
-          {line.key === 'git.push.ok' &&
-            t(`system:${line.key}`, { at: formatTimestamp(Date.parse(line.at)), head: line.head })}
-          {line.key === 'git.push.failed' &&
-            t(`system:${line.key}`, {
-              at: formatTimestamp(Date.parse(line.at)),
-              why: t(`system:git.failure.${line.failure}`),
-            })}
-          {(line.key === 'git.push.waiting' || line.key === 'git.push.none') &&
-            t(`system:${line.key}`)}
-        </p>
-      )}
-      <div className="cfgbl-tools">
-        {canOff && shown.length > 0 && (
-          <label className="cfgbl-pickall">
-            <input
-              type="checkbox"
-              checked={allPicked}
-              onChange={() =>
-                setSelected(allPicked ? new Set() : new Set(shown.map((r) => r.node_id)))
-              }
-            />
-            <span>{t('config.list.pickAll')}</span>
-          </label>
-        )}
-        <Segmented
-          ariaLabel={t('config.list.filter')}
-          options={LIST_FILTERS.map((f) => ({
-            value: f,
-            label: f === 'all' ? t('config.list.state.all') : `${t(`config.list.state.${f}`)} ${counts[f]}`,
-          }))}
-          value={filter}
-          onChange={(next) => pickFilter(next as ListFilter)}
-        />
-        {picked.length > 0 && (
-          <div className="cfgbl-bulk">
-            <span>{t('config.list.picked', { count: picked.length })}</span>
-            {canOn && onPlan.ids.length > 0 && (
-              <Button disabled={switching} onClick={() => onSwitch(picked, true)}>
-                {t('config.list.switchOnN', { count: onPlan.ids.length })}
-              </Button>
-            )}
-            {offPlan.ids.length > 0 && (
-              <Button disabled={switching} onClick={() => onSwitch(picked, false)}>
-                {t('config.list.switchOffN', { count: offPlan.ids.length })}
-              </Button>
-            )}
-            <Button onClick={() => setSelected(new Set())}>{t('config.list.unpick')}</Button>
-          </div>
-        )}
-      </div>
-      {switchError && <p className="form-error">{switchError}</p>}
       {asking && (
         <ConfigBackupSwitchOnModal
           ids={asking.ids}
@@ -377,16 +399,6 @@ export function ConfigBackupsPage() {
           }}
         />
       )}
-      <LoadGate load={list}>
-        <DataTable
-          tableId="nodes.configBackups"
-          rows={shown}
-          columns={columns}
-          rowKey={(r) => r.node_id}
-          loading={list.loading}
-          empty={list.error ?? <EmptyState text={t(`config.list.emptyOf.${filter}`)} />}
-        />
-      </LoadGate>
-    </div>
+    </Page>
   );
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Responsive row/card action group. Desktop keeps the familiar hover-revealed IconButton row
-// (rendered as a bare fragment so it drops straight into the page's existing `.ytable-actions` /
-// `.il-actions` wrapper — the hover-reveal + `(hover:none)` CSS still applies). Mobile collapses
+// (rendered as a bare fragment so it drops straight into the page's existing `.ytable-actions`
+// wrapper — the hover-reveal + `(hover:none)` CSS still applies). Mobile collapses
 // the same actions behind a single ⋮ "more" button + popover menu, so a card doesn't stack N
 // icon buttons at ~390px. The responsive branch lives here so adopting pages just swap their
 // inner IconButtons for `<OverflowMenu actions={…} />` — no per-page viewport logic.

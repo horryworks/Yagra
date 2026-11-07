@@ -34,7 +34,7 @@ const MIN_FILES = 12;
 test('the row-action classes the walk hovers are still the ones the app renders', () => {
   const hits = filesUnder(SRC).filter((f) => {
     const s = readFileSync(f, 'utf8');
-    return s.includes('ytable-actions') || s.includes('il-actions');
+    return s.includes('ytable-actions');
   });
   expect(
     hits.length,
@@ -60,11 +60,9 @@ test('every row class that can hold row actions is named in the reveal rules', (
     // hover: the pointer path, and the half that shipped broken.
     '.ytable-row:hover .ytable-actions',
     '.dt-row:hover .ytable-actions',
-    '.il-row:hover .il-actions',
     // focus-within: the keyboard path, which the same omission also broke.
     '.ytable-row:focus-within .ytable-actions',
     '.dt-row:focus-within .ytable-actions',
-    '.il-row:focus-within .il-actions',
   ];
   for (const rule of rules) {
     expect(

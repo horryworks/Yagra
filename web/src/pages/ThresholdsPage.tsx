@@ -59,6 +59,7 @@ import {
   type RuleView,
 } from './thresholdQuery';
 import { Tabs } from '../components/ui/Tabs';
+import { Inline, Stack } from '../components/ui/Page';
 import { Select } from '../components/ui/Field';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { NodePicker } from '../components/NodePicker/NodePicker';
@@ -413,8 +414,10 @@ export function ThresholdsPage() {
     livenessReload();
   }, [rulesetReload, livenessReload]);
 
+  // A tab of Alert rules: a fragment, so the toolbar and the table below are the page's own
+  // children and the table fills the height (ADR-246).
   return (
-    <div>
+    <>
       {/* Deleting the reachability rule is allowed — it is an ordinary row — and it switches off
           node-down paging for the whole fleet. Saying so where it happened is the alternative to
           making that one row undeletable, which would make it a different kind of row. The way
@@ -430,9 +433,11 @@ export function ThresholdsPage() {
         </Card>
       )}
 
+      {/* Its own box: the two tables below have fixed heights, and as the page's own children the
+          list layout would shrink them to fit. */}
       {view.check || checking ? (
-        <>
-          <div className="thresholds-check-head">
+        <Stack gap={8}>
+          <Inline gap={8} className="thresholds-check-head">
             <NodePicker
               value={view.check}
               valueLabel={view.check ? nodeName(view.check) : undefined}
@@ -452,10 +457,10 @@ export function ThresholdsPage() {
             >
               {t('thresholds.check.back')}
             </button>
-          </div>
+          </Inline>
           {view.check && <NodeRulesView nodeId={view.check} />}
           {view.check && <NodeEventRulesView nodeId={view.check} />}
-        </>
+        </Stack>
       ) : (
       <>
       <Tabs
@@ -467,7 +472,7 @@ export function ThresholdsPage() {
         onChange={(tab) => setView({ tab, target: null, check: null })}
       />
       {targetKind(view.tab) && (
-        <div className="thresholds-target">
+        <Inline gap={8} className="thresholds-target">
           <span className="muted">{t(`thresholds.tabs.${view.tab}`)}</span>
           {targetKind(view.tab) === 'profile' ? (
             <Select
@@ -497,7 +502,7 @@ export function ThresholdsPage() {
               onChange={(n) => setView({ ...view, target: n?.id ?? null })}
             />
           )}
-        </div>
+        </Inline>
       )}
       <LoadGate load={ruleset} permission="manage_config">
         <ListToolbar
@@ -606,6 +611,6 @@ export function ThresholdsPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }

@@ -13,6 +13,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
+import { Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
@@ -243,7 +244,7 @@ export function MaintenancePage() {
   const sorting = useClientSort(columns, filtering.shown);
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:alerts.maintenance')}
         writePermission="manage_maintenance"
@@ -338,6 +339,6 @@ export function MaintenancePage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }

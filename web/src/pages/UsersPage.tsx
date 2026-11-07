@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Users (Settings ▸ Users). Admin-only CRUD over local auth accounts, rendered
-// as the "identity list" (data-table standard v2, variant B): a roomy row per account with a
-// role-colored monogram, inline instant role change, account status, and hover row-actions
-// (change password / enable-disable / delete). The server enforces ManageUsers (admin) and guards
-// against removing/demoting/disabling the last admin (409 last_admin); the UI surfaces those typed
-// errors and reverts. Passwords are write-only — the API never returns a hash.
+// Users (Settings ▸ Users). Admin-only CRUD over local auth accounts, drawn as a `DataTable` like
+// every other list (ADR-246 Inc.5): one row per account with a role-colored monogram, how it signs
+// in, its status, an inline instant role change, and row actions (scope / enable-disable /
+// password / delete). It used to be the "identity list" (variant B), a two-line card per account
+// with no header row. The server enforces ManageUsers (admin) and guards against
+// removing/demoting/disabling the last admin (409 last_admin); the UI surfaces those typed errors
+// and reverts. Passwords are write-only — the API never returns a hash.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -30,12 +31,16 @@ import { FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Callout } from '../components/ui/Section';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
-import { serverToolbarFilters } from '../lib/listToolbar';
+import { columnLabels, serverToolbarFilters } from '../lib/listToolbar';
+import { Page } from '../components/ui/Page';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClippedText } from '../components/ui/ClippedText';
+import { rowActionsWidth } from '../lib/rowActions';
 
 import { useFilterParams } from '../lib/useFilterParams';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
-import { userColumns, userFilterLabels } from './userFilters';
+import { userColumns } from './userFilters';
 import { Monogram } from '../components/ui/tableCells';
 import { InfoPress } from '../components/ui/InfoTip';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
@@ -59,7 +64,6 @@ export function UsersPage() {
   const canUsers = useCan('manage_users');
   const [me, setMe] = useState<string | null>(null);
   const filterCols = useMemo(() => userColumns(t), [t]);
-  const filterLabels = useMemo(() => userFilterLabels(t), [t]);
   // In the URL (ADR-153), so a narrowed list survives a reload.
   const { filters, setFilters } = useFilterParams(filterCols);
   const [error, setError] = useState<string | null>(null);
@@ -76,24 +80,30 @@ export function UsersPage() {
     api.me().then((m) => setMe(m.username)).catch(() => setMe(null));
   }, []);
 
-  const changeRole = (id: string, next: Role) => {
-    setError(null);
-    api
-      .setUserRole(id, next)
-      .then(load)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('users.err.changeRole')));
-        load(); // revert the optimistic-looking select to the server's truth
-      });
-  };
+  const changeRole = useCallback(
+    (id: string, next: Role) => {
+      setError(null);
+      api
+        .setUserRole(id, next)
+        .then(load)
+        .catch((e: unknown) => {
+          setError(errMsg(e, t('users.err.changeRole')));
+          load(); // revert the optimistic-looking select to the server's truth
+        });
+    },
+    [load, t],
+  );
 
-  const toggleEnabled = (u: UserSummary) => {
-    setError(null);
-    api
-      .setUserEnabled(u.id, !u.enabled)
-      .then(load)
-      .catch((e: unknown) => setError(errMsg(e, t('users.err.changeStatus'))));
-  };
+  const toggleEnabled = useCallback(
+    (u: UserSummary) => {
+      setError(null);
+      api
+        .setUserEnabled(u.id, !u.enabled)
+        .then(load)
+        .catch((e: unknown) => setError(errMsg(e, t('users.err.changeStatus'))));
+    },
+    [load, t],
+  );
 
   const list = useMemo(
     () => rows.filter(buildPredicate(filterCols, filters, Date.now())),
@@ -109,8 +119,134 @@ export function UsersPage() {
     [rows, filterCols, filters],
   );
 
+  // Each filter sits on the column it narrows, so the column key IS the URL key (`q`, `kind`,
+  // `status`, `role`), unchanged from the toolbar funnel these filters used to open from.
+  const columns = useMemo(() => {
+    const cols: Column<UserSummary>[] = [
+      {
+        key: 'q',
+        header: t('users.cols.user'),
+        width: '1fr',
+        render: (u) => (
+          <span className="yt-user">
+            <Monogram name={u.username} role={u.role} />
+            <ClippedText text={u.username} />
+            {me === u.username && <span className="you-pill">{t('users.you')}</span>}
+          </span>
+        ),
+      },
+      {
+        key: 'kind',
+        header: t('users.cols.kind'),
+        // Sized for the widest kind badge, "Service account" with its ▾.
+        width: '160px',
+        render: (u) => <KindBadge kind={u.auth_source} />,
+      },
+      {
+        key: 'status',
+        header: t('users.cols.status'),
+        width: '110px',
+        render: (u) => (
+          <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
+            <span className="yt-status-dot" />
+            {u.enabled ? t('users.status.active') : t('users.status.disabled')}
+          </span>
+        ),
+      },
+      {
+        key: 'role',
+        header: t('users.cols.role'),
+        width: '140px',
+        render: (u) =>
+          canUsers ? (
+            <select
+              className={`role-select role-${u.role}`}
+              value={u.role}
+              onChange={(e) => changeRole(u.id, e.target.value as Role)}
+              aria-label={t('users.roleFor', { name: u.username })}
+            >
+              {ROLES.map((r) => (
+                <option key={r} value={r}>
+                  {t(`role.${r}`)}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="muted">{t(`role.${u.role}`)}</span>
+          ),
+      },
+      {
+        key: 'last_login',
+        header: t('users.cols.lastLogin'),
+        width: '100px',
+        render: (u) => (
+          <span title={u.last_login_at ?? undefined}>{relativeTime(u.last_login_at ?? null)}</span>
+        ),
+      },
+      {
+        key: 'created',
+        header: t('users.cols.created'),
+        width: '100px',
+        render: (u) => dateOnly(u.created_at),
+      },
+      {
+        key: 'scope',
+        header: t('users.cols.scope'),
+        width: '120px',
+        render: (u) => <ScopeSummary scope={u.scope} />,
+      },
+    ];
+    if (canUsers) {
+      cols.push({
+        key: 'actions',
+        header: t('users.cols.actions'),
+        // Scope, enable/disable, password and delete; an admin's row draws three.
+        width: rowActionsWidth(4),
+        align: 'right',
+        render: (u) => (
+          <span className="ytable-actions">
+            <OverflowMenu
+              actions={[
+                // Offered only where it can succeed: the API refuses to scope an admin (409
+                // `admin_is_unscoped`) because admin permissions are fleet-wide, so showing the
+                // action there is showing a button that must fail.
+                ...(canHoldScope(u.role)
+                  ? [
+                      {
+                        label: t('users.action.changeScope'),
+                        icon: <BoxIcon />,
+                        onClick: () => setScopeUser(u),
+                      },
+                    ]
+                  : []),
+                {
+                  label: u.enabled ? t('users.action.disable') : t('users.action.enable'),
+                  icon: <PowerIcon />,
+                  onClick: () => toggleEnabled(u),
+                },
+                {
+                  label: t('users.action.changePassword'),
+                  icon: <KeyIcon />,
+                  onClick: () => setPwUser(u),
+                },
+                {
+                  label: t('users.action.delete'),
+                  icon: <TrashIcon />,
+                  danger: true,
+                  onClick: () => setDelUser(u),
+                },
+              ]}
+            />
+          </span>
+        ),
+      });
+    }
+    for (const c of cols) c.filter = filterCols.find((f) => f.key === c.key)?.filter;
+    return cols;
+  }, [t, me, canUsers, filterCols, changeRole, toggleEnabled]);
+
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:settings.users')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.users') }]}
@@ -124,8 +260,7 @@ export function UsersPage() {
       >
         <ListToolbar
           list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, facets)}
-          labels={filterLabels}
-          menu
+          labels={columnLabels(columns)}
           count={{
             shown: list.length,
             total: rows.length,
@@ -139,121 +274,35 @@ export function UsersPage() {
           )}
         </ListToolbar>
 
-        {error && <p className="form-error users-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
 
-        <div className="identity-list">
-          {list.length === 0 ? (
-            <div className="il-empty">
-              {loading ? (
-                t('common:loading')
-              ) : rows.length === 0 ? (
-                <EmptyState
-                  text={t('users.empty.none')}
-                  action={
-                    canUsers && (
-                      <Button variant="primary" onClick={() => setAdding(true)}>
-                        + {t('users.actions.addUser')}
-                      </Button>
-                    )
-                  }
-                />
-              ) : (
-                t('users.empty.filtered')
-              )}
-            </div>
-          ) : (
-            list.map((u) => {
-              const last = relativeTime(u.last_login_at ?? null);
-              return (
-                <div className={u.enabled ? 'il-row' : 'il-row is-muted'} key={u.id}>
-                  <Monogram name={u.username} role={u.role} lg />
-                  <div className="il-id">
-                    <div className="il-line1">
-                      <span className="il-name">{u.username}</span>
-                      {me === u.username && <span className="you-pill">{t('users.you')}</span>}
-                      {/* One badge driven by the kind, not a branch per kind: LDAP was the third
-                          member and would have been the third `===` comparison. The label is a
-                          runtime key, so `i18nEnumKeys.test.ts` demands EN and JA for any kind added
-                          later. Pressing the badge says who holds the password and who decides
-                          the role (`USER_KIND_INFO`) — a hover could not be read on touch. */}
-                      <KindBadge kind={u.auth_source} />
-                      <span className={u.enabled ? 'status-pill active' : 'status-pill disabled'}>
-                        <span className="yt-status-dot" />
-                        {u.enabled ? t('users.status.active') : t('users.status.disabled')}
-                      </span>
-                    </div>
-                    <div className="il-line2">
-                      <span>{t('users.created', { date: dateOnly(u.created_at) })}</span>
-                      <span className="il-meta-sep">·</span>
-                      <span title={u.last_login_at ?? undefined}>
-                        {t('users.lastLogin', { time: last })}
-                      </span>
-                      <span className="il-meta-sep">·</span>
-                      <ScopeSummary scope={u.scope} />
-                    </div>
-                  </div>
-                  <div className="il-right">
-                    {canUsers ? (
-                      <select
-                        className={`role-select role-${u.role}`}
-                        value={u.role}
-                        onChange={(e) => changeRole(u.id, e.target.value as Role)}
-                        aria-label={t('users.roleFor', { name: u.username })}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {t(`role.${r}`)}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="muted">{t(`role.${u.role}`)}</span>
-                    )}
-                    {canUsers && (
-                      <div className="il-actions">
-                        <OverflowMenu
-                          actions={[
-                            // Offered only where it can succeed: the API refuses to scope an
-                            // admin (409 `admin_is_unscoped`) because admin permissions are
-                            // fleet-wide, so showing the action there is showing a button that
-                            // must fail.
-                            ...(canHoldScope(u.role)
-                              ? [
-                                  {
-                                    label: t('users.action.changeScope'),
-                                    icon: <BoxIcon />,
-                                    onClick: () => setScopeUser(u),
-                                  },
-                                ]
-                              : []),
-                            {
-                              label: u.enabled
-                                ? t('users.action.disable')
-                                : t('users.action.enable'),
-                              icon: <PowerIcon />,
-                              onClick: () => toggleEnabled(u),
-                            },
-                            {
-                              label: t('users.action.changePassword'),
-                              icon: <KeyIcon />,
-                              onClick: () => setPwUser(u),
-                            },
-                            {
-                              label: t('users.action.delete'),
-                              icon: <TrashIcon />,
-                              danger: true,
-                              onClick: () => setDelUser(u),
-                            },
-                          ]}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+        <DataTable
+          tableId="settings.users"
+          rows={list}
+          columns={columns}
+          rowKey={(u) => u.id}
+          rowClass={(u) => (u.enabled ? undefined : 'is-muted')}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={facets}
+          loading={loading}
+          empty={
+            rows.length === 0 ? (
+              <EmptyState
+                text={t('users.empty.none')}
+                action={
+                  canUsers && (
+                    <Button variant="primary" onClick={() => setAdding(true)}>
+                      + {t('users.actions.addUser')}
+                    </Button>
+                  )
+                }
+              />
+            ) : (
+              t('users.empty.filtered')
+            )
+          }
+        />
       </LoadGate>
 
       {adding && (
@@ -288,23 +337,32 @@ export function UsersPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }
 
-/** An account's kind, when it is not a plain local account: a badge that explains itself when
- *  pressed. */
+/** How an account signs in. A plain local account is the default and reads as a word; every other
+ *  kind is a badge that explains itself when pressed — who holds the password and who decides the
+ *  role (`USER_KIND_INFO`), since a hover could not be read on touch.
+ *
+ *  One badge driven by the kind, not a branch per kind: LDAP was the third member and would have
+ *  been the third `===` comparison. The label is a runtime key, so `i18nEnumKeys.test.ts` demands
+ *  EN and JA for any kind added later. */
 function KindBadge({ kind }: { kind: string }) {
   const { t } = useTranslation('access');
-  if (kind === 'local') return null;
-  const info = kindInfoKey(kind);
   const label = t(`users.kind.${kind}`);
+  if (kind === 'local') return <span>{label}</span>;
+  const info = kindInfoKey(kind);
   return info ? (
-    <InfoPress infoKey={info} className="you-pill">
+    <InfoPress infoKey={info} className="you-pill users-kind">
       {label}
     </InfoPress>
   ) : (
-    <span className="you-pill">{label}</span>
+    // A kind this build has no word for shows its raw label, which can outrun the column: the pill
+    // is a flex box, which never draws an ellipsis, so the words go in a block that does.
+    <span className="you-pill">
+      <ClippedText text={label} />
+    </span>
   );
 }
 

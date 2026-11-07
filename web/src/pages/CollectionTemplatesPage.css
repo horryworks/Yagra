@@ -1,7 +1,7 @@
 /* Metric sets — data-table standard v2 (styles/table.css). Only the per-row expander
    (the metric editor) and the Metrics-cell toggle are page-local. */
 
-.templates-table .crud-collection {
+.tmpl-collection {
   padding: var(--space-3) var(--space-4) var(--space-4);
   background: var(--bg-tertiary);
   border-bottom: var(--border-width) solid var(--border-color);

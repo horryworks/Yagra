@@ -7,8 +7,13 @@
 // every table; this names the screen and the number, so a selector that stopped finding buttons
 // cannot pass here with zero.
 
+import type { Page } from '@playwright/test';
 import { expect, test } from '../support/app';
 import { inspectRowActions } from './rowActions';
+
+/** One section of the screen, found by its heading. */
+const section = (page: Page, title: string) =>
+  page.locator('section').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
 
 test('every row action on Notification delivery can be pressed', async ({ page }) => {
   await page.goto('/alerts/routing');
@@ -28,16 +33,16 @@ test('Refresh on the delivery log asks the server again', async ({ page }) => {
   const first = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
   await page.goto('/alerts/routing');
   await first;
-  const section = page.locator('.routing-log-section');
-  await expect(section).toBeVisible();
+  const log = section(page, 'Delivery log');
+  await expect(log).toBeVisible();
   const again = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
-  await section.getByRole('button', { name: 'Refresh' }).click();
+  await log.getByRole('button', { name: 'Refresh' }).click();
   await again;
 });
 
 test('a routing rule opens for editing with its own values', async ({ page }) => {
   await page.goto('/alerts/routing');
-  const ruleRow = page.locator('.routing-rules-section .dt-row').first();
+  const ruleRow = section(page, 'Routing rules').locator('.dt-row').first();
   await ruleRow.hover();
   await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
   const dialog = page.getByRole('dialog');

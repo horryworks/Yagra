@@ -146,18 +146,20 @@
       "allKinds": "All account types"
     },
     "cols": {
-      "username": "Username",
       "role": "Role",
       "status": "Status",
-      "kind": "Account type"
+      "kind": "Account type",
+      "user": "User",
+      "lastLogin": "Last login",
+      "created": "Created",
+      "scope": "Can see",
+      "actions": "Actions"
     },
     "you": "You",
     "status": {
       "active": "Active",
       "disabled": "Disabled"
     },
-    "created": "Created {{date}}",
-    "lastLogin": "Last login {{time}}",
     "roleFor": "Role for {{name}}",
     "empty": {
       "none": "No users yet.",

@@ -24,6 +24,7 @@ import { alertNotes } from '../lib/alertNotes';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { alertWhatOf, formatTimestamp, severityColorVar, severityLabel, stateLabel } from '../lib/format';
 import { SEVERITIES, type Alert } from '../types/api';
+import { Page, Stack } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -252,7 +253,7 @@ export function ActiveAlertsPage() {
   const filtered = isAnyFiltered(filterCols, filters) || scopeActive || onlySilenced;
 
   return (
-    <div className="page-fill active-alerts-page">
+    <Page layout="list" className="active-alerts-page">
       <PageHeader
         title={t('nav:alerts.active')}
         writePermission="ack_alerts"
@@ -288,43 +289,46 @@ export function ActiveAlertsPage() {
           />
         }
       />
-      <WatchChips
-        chips={watchChips({ silenced, maintenance: summary?.states.maintenance ?? 0, watch })}
-        onlySilenced={onlySilenced}
-        onToggleSilenced={toggleSilenced}
-      />
-      <DataTable
-        tableId="alerts.active"
-        rows={sorting.rows}
-        columns={sorting.columns}
-        sort={sorting.sort}
-        onSortChange={sorting.setSort}
-        filters={filters}
-        onFiltersChange={setFilters}
-        filterCounts={counts}
-        rowKey={alertRowKey}
-        // The Notes column stacks one note per line (ADR-243 decision 5), so a row is as tall as
-        // its notes; a row with none keeps the standard height.
-        autoRowHeight
-        empty={
-          all.length === 0 && noNodes ? (
-            <EmptyState
-              text={t('active.noNodes')}
-              action={
-                canConfig && (
-                  <Button variant="primary" onClick={() => navigate(addNodeHref())}>
-                    {t('nodes:add.node')}
-                  </Button>
-                )
-              }
-            />
-          ) : all.length > 0 && filtered ? (
-            t('active.emptyFiltered')
-          ) : (
-            t('active.empty')
-          )
-        }
-      />
+      {/* The chips narrow the table under them, so they sit with it rather than a page step away. */}
+      <Stack fill gap={8}>
+        <WatchChips
+          chips={watchChips({ silenced, maintenance: summary?.states.maintenance ?? 0, watch })}
+          onlySilenced={onlySilenced}
+          onToggleSilenced={toggleSilenced}
+        />
+        <DataTable
+          tableId="alerts.active"
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          rowKey={alertRowKey}
+          // The Notes column stacks one note per line (ADR-243 decision 5), so a row is as tall as
+          // its notes; a row with none keeps the standard height.
+          autoRowHeight
+          empty={
+            all.length === 0 && noNodes ? (
+              <EmptyState
+                text={t('active.noNodes')}
+                action={
+                  canConfig && (
+                    <Button variant="primary" onClick={() => navigate(addNodeHref())}>
+                      {t('nodes:add.node')}
+                    </Button>
+                  )
+                }
+              />
+            ) : all.length > 0 && filtered ? (
+              t('active.emptyFiltered')
+            ) : (
+              t('active.empty')
+            )
+          }
+        />
+      </Stack>
       {explaining && (
         <RcaModal
           node={explaining.node}
@@ -332,7 +336,7 @@ export function ActiveAlertsPage() {
           onClose={() => setExplaining(null)}
         />
       )}
-    </div>
+    </Page>
   );
 }
 

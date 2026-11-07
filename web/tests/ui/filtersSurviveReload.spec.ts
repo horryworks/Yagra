@@ -34,21 +34,6 @@ async function typeFilter(page: Page, scope: Locator | Page, column: string, ter
   await expect(page.getByRole('dialog')).toHaveCount(0);
 }
 
-/** The same, for a list with no header: its filters open from one funnel in the toolbar, one
- *  section per column (ADR-228). */
-async function typeMenuFilter(page: Page, column: string, term: string) {
-  await page.locator('.mfilt-menu > .mfilt-btn').click();
-  const section = page
-    .getByRole('dialog')
-    .locator('.mfilt-sec')
-    .filter({ has: page.getByRole('heading', { name: column }) });
-  const box = section.getByRole('searchbox').first();
-  await box.fill(term);
-  await box.press('Enter');
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-}
-
 const reload = async (page: Page) => {
   await page.goto(page.url());
 };
@@ -149,7 +134,8 @@ test.describe('a node-detail tab', () => {
 test.describe('a one-table screen that kept its filter in component state', () => {
   test('Settings ▸ Users keeps a narrowed list after a reload', async ({ page }) => {
     await page.goto('/settings/users');
-    await typeMenuFilter(page, 'Username', NEEDLE);
+    // A table since ADR-246 Inc.5: the username search sits on the User column's funnel.
+    await typeFilter(page, page, 'User', NEEDLE);
     await expect(page).toHaveURL(new RegExp(`[?&]q=[^&]*${NEEDLE}`));
     await reload(page);
     await expect(page.getByRole('button', { name: /Clear all filters/ }), 'the reload lost the filter').toHaveCount(1);

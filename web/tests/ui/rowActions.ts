@@ -19,16 +19,17 @@
 
 import type { Page } from '@playwright/test';
 
-/** Rows that carry a hover-revealed action group, in all three row flavours the app renders.
+/** Rows that carry a hover-revealed action group, in both row flavours the app renders.
  *
- *  ⚠️ **All three, every time.** `.ytable-row` is the hand-rolled tables, `.dt-row` is `DataTable`,
- *  `.il-row` is the interface list — and naming two of the three is precisely the bug above.
+ *  ⚠️ **Both, every time.** `.ytable-row` is the hand-rolled tables, `.dt-row` is `DataTable` —
+ *  and naming one of them is precisely the bug above. (A third, `.il-row`, was the Users list until
+ *  ADR-246 Inc.5 made it a `DataTable`.)
  *  `ui-conventions.md` repeats this at the CSS rule; it is repeated here because a selector in a
  *  test drifts from a selector in a stylesheet exactly as easily. */
 const ROWS_WITH_ACTIONS =
-  '.dt-row:has(.ytable-actions), .ytable-row:has(.ytable-actions), .il-row:has(.il-actions)';
+  '.dt-row:has(.ytable-actions), .ytable-row:has(.ytable-actions)';
 
-const ACTION_GROUP = '.ytable-actions, .il-actions';
+const ACTION_GROUP = '.ytable-actions';
 
 /** Anything below this is not "revealed": the transition is 0.15s and settles well inside the
  *  poll, so a value between the two states means the reveal did not happen rather than that it is
@@ -60,7 +61,7 @@ async function firstRowOfEachTable(page: Page): Promise<number[]> {
     const seen = new Set<Element>();
     const out: number[] = [];
     document.querySelectorAll(sel).forEach((row, i) => {
-      const table = row.closest('.dt, .ytable, .il-list') ?? row.parentElement ?? document.body;
+      const table = row.closest('.dt, .ytable') ?? row.parentElement ?? document.body;
       if (seen.has(table)) return;
       seen.add(table);
       out.push(i);

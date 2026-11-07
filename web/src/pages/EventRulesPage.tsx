@@ -11,6 +11,7 @@ import {
   type Severity,
 } from '../types/api';
 import { Tabs } from '../components/ui/Tabs';
+import { Inline } from '../components/ui/Page';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { useEntityNames } from '../components/ui/entityNames';
@@ -216,15 +217,17 @@ export function EventRulesPage() {
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
   const sorting = useClientSort(columns, filtering.shown);
 
+  // A tab of Alert rules: a fragment, so the toolbar and the table below are the page's own
+  // children and the table fills the height (ADR-246).
   return (
-    <div>
+    <>
       <Tabs
         tabs={EVENT_TARGET_TABS.map((key) => ({ key, label: t(`eventRules.tabs.${key}`) }))}
         active={view.tab}
         onChange={(tab) => setView({ tab, target: null })}
       />
       {(view.tab === 'folder' || view.tab === 'node') && (
-        <div className="eventrules-target">
+        <Inline gap={8} className="eventrules-target">
           <span className="muted">{t(`eventRules.tabs.${view.tab}`)}</span>
           {view.tab === 'folder' ? (
             <GroupPicker
@@ -241,7 +244,7 @@ export function EventRulesPage() {
               onChange={(n) => setView({ ...view, target: n?.id ?? null })}
             />
           )}
-        </div>
+        </Inline>
       )}
       <LoadGate load={rules} permission="manage_config">
         <ListToolbar
@@ -308,7 +311,7 @@ export function EventRulesPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

@@ -17,8 +17,8 @@ import { useAuthStore, useCan } from '../store';
 import type { AnalysisSchedule, AnalysisScheduleStatus } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
-import { Card } from '../components/ui/Card';
-import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { Page } from '../components/ui/Page';
+import { LoadGate } from '../components/ui/LoadGate';
 import { Button } from '../components/ui/Button';
 import { Badge, type Tone } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -146,17 +146,12 @@ export function ScheduledPage() {
   // action is offered only to a caller who holds it, rather than failing on save.
   const canWrite = useCan('ack_alerts');
 
-  const {
-    data: answer,
-    block,
-    error,
-    loading,
-    reload: load,
-  } = useLoad(() => api.listAnalysisSchedules(), [], {
+  const schedules = useLoad(() => api.listAnalysisSchedules(), [], {
     initial: [] as AnalysisSchedule[],
     enabled: authed,
     errorFallback: t('schedule.err.load'),
   });
+  const { data: answer, error, loading, reload: load } = schedules;
   // The server lists the next run first, and saving a schedule moves its next run, so the re-read
   // after a save keeps the order on screen (ADR-216). Opening the page orders it afresh.
   const rows = useStableOrder(answer, (s) => s.id, '');
@@ -190,7 +185,7 @@ export function ScheduledPage() {
   };
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:troubleshoot.scheduled')}
         writePermission="ack_alerts"
@@ -200,47 +195,39 @@ export function ScheduledPage() {
         ]}
       />
 
-      {!authed ? (
-        <Card>
-          <p className="muted">{t('schedule.signInPrompt')}</p>
-        </Card>
-      ) : block ? (
-        <LoadBlockNotice block={block} />
-      ) : (
-        <>
-          <ListToolbar
-            list={filtering}
-            labels={columnLabels(columns)}
-            count={{
-              shown: shown.length,
-              total: rows.length,
-              noun: (n) => t('schedule.schedule', { count: n }),
-            }}
-          >
-            {canWrite && (
-              <Button variant="primary" onClick={() => setCreating(true)}>
-                {t('schedule.add')}
-              </Button>
-            )}
-          </ListToolbar>
+      <LoadGate signedIn={authed} load={schedules}>
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('schedule.schedule', { count: n }),
+          }}
+        >
+          {canWrite && (
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              {t('schedule.add')}
+            </Button>
+          )}
+        </ListToolbar>
 
-          {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
 
-          <DataTable
-            tableId="troubleshoot.scheduled"
-            rows={sorting.rows}
-            columns={sorting.columns}
-            sort={sorting.sort}
-            onSortChange={sorting.setSort}
-            filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            rowKey={(s) => s.id}
-            loading={loading}
-            empty={anyFiltered ? t('common:filter.noMatch') : t('schedule.empty')}
-          />
-        </>
-      )}
+        <DataTable
+          tableId="troubleshoot.scheduled"
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          rowKey={(s) => s.id}
+          loading={loading}
+          empty={anyFiltered ? t('common:filter.noMatch') : t('schedule.empty')}
+        />
+      </LoadGate>
 
       {(creating || editing) && (
         <ScheduleModal
@@ -270,6 +257,6 @@ export function ScheduledPage() {
           })}
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

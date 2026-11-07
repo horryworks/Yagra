@@ -1,13 +1,13 @@
-/* Pollers (Settings ▸ Pollers). Table chrome comes from styles/table.css; only the pool-summary
-   strip, the online/offline status cue, and the register-poller snippet rows live here. Built on
-   the tokens in tokens.css — no hardcoded color/font here. */
+/* Pollers (Settings ▸ Pollers). The frame - sections, their headings, the space between them - is
+   the shared parts (ADR-246); table chrome comes from styles/table.css. What lives here is this
+   screen's own look: the pool board, the online/offline status cue, the snippet rows and the pool
+   dialogs' choices and refusals. */
 
 /* ============================================================ pool summary strip */
 .pool-strip {
   display: flex;
   flex-wrap: wrap;
   gap: var(--gap);
-  margin-bottom: var(--space-4);
 }
 
 .pool-card {
@@ -17,7 +17,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3) 14px;
+  padding: var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
@@ -72,7 +72,7 @@
 .poller-status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
   white-space: nowrap;
 }
@@ -113,7 +113,7 @@
   margin: 0;
   overflow-x: auto;
   white-space: pre;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-primary);
@@ -126,32 +126,14 @@
   font-size: var(--font-sm);
 }
 
-/* ============================================================ monitoring gaps (store-and-forward) */
-.poller-gaps {
-  margin-top: var(--space-5);
-}
-
-.poller-gaps-title {
-  font-size: var(--font-md);
-  font-weight: var(--weight-medium);
-  color: var(--text-primary);
-  margin: 0 0 var(--space-1);
-}
-
+/* ============================================================ monitoring gaps and one poller's nodes */
+/* A state line under the section's heading; the section's `Stack` spaces it. */
 .poller-gaps-note {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: var(--font-sm);
 }
 
-/* Node drill-down: title row with its Close action, and the poller-id trigger in the fleet table. */
-.poller-nodes-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-1);
-}
-
+/* The poller-id trigger in the fleet table that opens the node drill-down. */
 .poller-drill {
   padding: 0;
   border: none;
@@ -178,20 +160,6 @@
 }
 
 /* ============================================================ pool management (ADR-107) */
-
-/* The strip's own heading. Paired with the toolbar's poller count below, so the screen reads as
-   two named lists rather than four unlabelled boxes above a table (ADR-055 R1). */
-.section-label {
-  margin: 0 0 10px;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
-.section-label strong {
-  color: var(--text-primary);
-  font-weight: var(--weight-medium);
-}
 
 /* The slot is the drop target; the card inside it is a plain surface holding three buttons (the
    funnel, the ⋮ and, when warned, the badge) — a button cannot hold another (ADR-200 Inc.4). */
@@ -238,18 +206,17 @@
   color: var(--accent-color);
 }
 
-/* The funnels' selection, above the table: one removable chip per pool. */
+/* The funnels' selection, under the cards and above the table: one removable chip per pool. */
 .pool-filter-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin: calc(-1 * var(--space-1-5)) 0 10px;
 }
 
 .pool-filter-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   max-width: 100%;
   padding: 0 var(--space-0-5) 0 var(--space-2);
   border: var(--border-width) solid var(--accent-color);
@@ -329,7 +296,7 @@
   align-items: center;
   justify-content: center;
   min-height: 96px;
-  padding: var(--space-3) 14px;
+  padding: var(--space-3);
   border: var(--border-width) dashed var(--border-color);
   border-radius: var(--radius);
   background: none;
@@ -351,7 +318,7 @@
 .pool-cell-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -385,7 +352,7 @@
    went quietly wrong. Subdued instead of hidden. */
 .pool-move-link {
   flex: none;
-  padding: 1px 5px;
+  padding: 0 var(--space-1);
   border: var(--border-width) solid transparent;
   border-radius: var(--radius-sm);
   background: none;
@@ -402,10 +369,6 @@
   color: var(--accent-color);
 }
 
-.pool-move-error {
-  margin: 0 0 var(--space-2);
-}
-
 /* The card a poller is being dragged over. Accent, never a status colour — "this is where it will
    land" is not a network state (design-system §1.1/§1.3). */
 .pool-slot.is-over .pool-card {
@@ -419,7 +382,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -432,7 +395,7 @@
 .form-choice > span {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
@@ -451,7 +414,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   margin: 0;
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-left: 2px solid var(--status-warning);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--status-warning) 12%, transparent);
@@ -470,21 +433,14 @@
 
 .pool-reflist {
   margin: 0;
-  padding-left: 20px;
+  padding-left: var(--space-4);
   font-size: var(--font-sm);
   color: var(--text-secondary);
   line-height: 1.9;
 }
 
-.pool-divider {
-  height: var(--border-width);
-  background: var(--border-color);
-}
-
 .pool-subhead {
   margin: 0;
   font-size: var(--font-xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--text-tertiary);
 }

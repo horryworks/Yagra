@@ -144,7 +144,9 @@ const CONTROL_FROM_SESSION: { re: RegExp; why: string }[] = [
     why: 'draws a control when signed in. Ask for the permission the action needs.',
   },
   {
-    re: new RegExp(`=\\{${A}\\}`),
+    // `LoadGate signedIn={authed}` is the sign-in pane above (ADR-246 Inc.5): it replaces the whole
+    // list with "sign in to continue", so it is authentication, not a control.
+    re: new RegExp(`(?<!signedIn)=\\{${A}\\}`),
     why: 'passes "signed in" as a capability prop (canEdit={authed}).',
   },
   {
@@ -181,6 +183,13 @@ describe('write controls are drawn from a permission, not from a role or a sessi
       return PRINCIPAL_ROLE.test(src) && ROLE_COMPARISON.test(src);
     });
     expect(offenders.map((f) => f.slice(SRC.length + 1).replace(/\\/g, '/'))).toEqual([]);
+  });
+
+  it('names a capability prop and lets the sign-in pane through', () => {
+    // The lookbehind that admits `signedIn={…}` must not also admit the shape the rule exists for.
+    const hits = (src: string) => CONTROL_FROM_SESSION.filter(({ re }) => re.test(src)).length;
+    expect(hits(`<Panel canEdit={${A}} />`)).toBe(1);
+    expect(hits(`<LoadGate signedIn={${A}} load={x}>`)).toBe(0);
   });
 
   it('no component draws a control from being signed in', () => {

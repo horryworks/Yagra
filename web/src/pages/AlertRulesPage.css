@@ -1,16 +1,12 @@
-/* Alerts ▸ Alert rules (ADR-232): the tab bar with, at its right end, how the tab's rules combine. */
-.alert-rules-tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
+/* Alerts ▸ Alert rules (ADR-232): the tab bar with, at its right end, how the tab's rules combine.
+   The row itself is an `Inline`; the bar takes what the chip leaves. */
 .alert-rules-tabs > .ui-tabs {
   flex: 1;
   min-width: 0;
 }
 .alert-rules-how {
   flex: none;
-  padding: var(--space-0-5) 10px;
+  padding: var(--space-0-5) var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);

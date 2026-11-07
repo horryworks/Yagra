@@ -14,6 +14,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../services/api';
 import { useCan } from '../store';
 import type { DuplicateNodesView } from '../types/api';
+import { Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
@@ -193,7 +194,7 @@ export function DuplicateNodesPage() {
   }, [t, canConfig, selected, groupName]);
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:nodes.duplicates')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.duplicates') }]}
@@ -241,12 +242,12 @@ export function DuplicateNodesPage() {
           </p>
         )}
         {view && view.total > view.groups.length && (
-          <p className="muted">
+          <p className="muted dup-note">
             {t('duplicates.truncated', { shown: view.groups.length, total: view.total })}
           </p>
         )}
         {ignored.shown.length > 0 && (
-          <p className="muted dup-ignored">
+          <p className="muted dup-note">
             {t('duplicates.ignored', {
               count: view?.ignored_total ?? 0,
               values:
@@ -284,6 +285,6 @@ export function DuplicateNodesPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }

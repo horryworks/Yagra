@@ -5,6 +5,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Inline, Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Tabs } from '../components/ui/Tabs';
 import {
@@ -22,8 +23,10 @@ export function AlertRulesPage() {
   const navigate = useNavigate();
   const active = alertRuleTabOf(pathname);
   const title = t('alerts.alertRules');
+  // A list screen (ADR-246): each tab renders its blocks as a fragment, so its toolbar and table
+  // are this page's own children and the table fills the height left under the tab bar.
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={title}
         trail={[
@@ -32,15 +35,15 @@ export function AlertRulesPage() {
           { label: t(ALERT_RULE_TAB_LABEL_KEYS[active]) },
         ]}
       />
-      <div className="alert-rules-tabs">
+      <Inline gap={12} className="alert-rules-tabs">
         <Tabs
           tabs={ALERT_RULE_TABS.map((key) => ({ key, label: t(ALERT_RULE_TAB_LABEL_KEYS[key]) }))}
           active={active}
           onChange={(key) => navigate(alertRuleTabPath(key))}
         />
         <span className="alert-rules-how">{t(ALERT_RULE_HOW_KEYS[active])}</span>
-      </div>
+      </Inline>
       <Outlet />
-    </div>
+    </Page>
   );
 }

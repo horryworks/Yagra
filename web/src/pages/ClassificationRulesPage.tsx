@@ -162,9 +162,9 @@ export function ClassificationRulesPage() {
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
   const sorting = useClientSort(columns, filtering.shown);
 
+  // A fragment: the toolbar and the table are Collection setup's own children (ADR-246).
   return (
-    <div>
-
+    <>
       <LoadGate load={rules} permission="manage_config">
         <ListToolbar
           list={filtering}
@@ -248,7 +248,7 @@ export function ClassificationRulesPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

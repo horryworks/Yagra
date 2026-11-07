@@ -25,7 +25,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, Field } from '../components/ui/Field';
 import { Fields, FieldRow, FieldValue } from '../components/ui/FormLayout';
-import { Inline } from '../components/ui/Page';
+import { Inline, Page } from '../components/ui/Page';
 import { SecretInput } from '../components/ui/SecretInput';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -729,7 +729,7 @@ export function CredentialsPage() {
   const allIds = useMemo(() => rows.map((c) => c.id), [rows]);
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:nodes.credentials')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.credentials') }]}
@@ -755,7 +755,7 @@ export function CredentialsPage() {
           onChanged={load}
         />
       </LoadGate>
-    </div>
+    </Page>
   );
 }
 

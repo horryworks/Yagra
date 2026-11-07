@@ -9,9 +9,10 @@
 // Between the rules and the log sit the alert grouping (ADR-236, `AlertGroupingSection.tsx`) and
 // the delivery hours (ADR-226, `DeliveryHoursSection.tsx`).
 //
-// Data-table standard v2: each list is a section header + toolbar (count + "+ Add …") over the
-// shared `.ytable`. Add via modal; enable/disable is an inline icon toggle; delete confirms in a
-// modal. Channel kind and rule severity are neutral/status chips (categorical vs status).
+// A `sections` page (ADR-246): each list is its toolbar, which carries the section's title, the
+// count and "+ Add …" on one row, then its table, grouped in one `Stack`. Add via modal; enable/disable and delete sit in the row's
+// menu; delete confirms in a modal. Channel kind and rule severity are neutral/status chips
+// (categorical vs status).
 
 import { useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -35,7 +36,7 @@ import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Field, TextInput, Select } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
-import { Inline, Stack } from '../components/ui/Page';
+import { Inline, Page, Stack } from '../components/ui/Page';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -120,13 +121,13 @@ export function RoutingPage() {
   };
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:alerts.routing')}
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
       />
       <LoadGate load={routing} permission="manage_system">
-        {error && <p className="form-error routing-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
         <ChannelsSection
           channels={channels}
           canSystem={canSystem}
@@ -148,7 +149,7 @@ export function RoutingPage() {
         <DeliveryHoursSection canSystem={canSystem} onError={setError} />
         <DeliveryLog channels={channels} filterState={logFilters} sectionRef={logRef} />
       </LoadGate>
-    </div>
+    </Page>
   );
 }
 
@@ -274,8 +275,9 @@ function ChannelsSection({
   const sorting = useClientSort(columns, filtering.shown, { prefix: CHANNEL_FILTER_PREFIX });
 
   return (
-    <section>
+    <Stack as="section" gap={12}>
       <ListToolbar
+        title={t('routing.channels.title')}
         list={filtering}
         labels={columnLabels(columns)}
         count={{
@@ -283,9 +285,6 @@ function ChannelsSection({
           total: channels.length,
           noun: (n) => t('noun.channel', { count: n }),
         }}
-        leading={
-          <h2 className="table-section-title">{t('routing.channels.title')}</h2>
-        }
       >
         {canSystem && (
           <Button variant="primary" onClick={() => setAdding(true)}>
@@ -363,7 +362,7 @@ function ChannelsSection({
           />
         </ConfirmDeleteModal>
       )}
-    </section>
+    </Stack>
   );
 }
 
@@ -702,8 +701,9 @@ function RulesSection({
   const sorting = useClientSort(columns, filtering.shown, { prefix: ROUTING_RULE_FILTER_PREFIX });
 
   return (
-    <section className="routing-rules-section">
+    <Stack as="section" gap={12}>
       <ListToolbar
+        title={t('routing.rules.title')}
         list={filtering}
         labels={columnLabels(columns)}
         count={{
@@ -711,9 +711,6 @@ function RulesSection({
           total: rules.length,
           noun: (n) => t('common:noun.rule', { count: n }),
         }}
-        leading={
-          <h2 className="table-section-title">{t('routing.rules.title')}</h2>
-        }
       >
         {/* Not drawn rather than disabled while there is no channel (ADR-056): a rule names the
             channels it sends to, and the empty list below says what comes first (ADR-209). */}
@@ -728,13 +725,13 @@ function RulesSection({
           rather than a pinned row, because the rules table is filtered and counted in the browser
           and a row that is not a rule would be filtered and counted with them. */}
       {defaultRoute && (
-        <p className="routing-default-route">
+        <Inline as="p" gap={8} className="routing-default-route">
           <span className="yt-name-txt">{t('routing.log.defaultRoute')}</span>
           <Badge tone="neutral">{t('routing.rules.defaultRoute.allAlerts')}</Badge>
           <span className="muted">
             {defaultRouteChannels(defaultRoute) ?? t('routing.rules.defaultRoute.notSet')}
           </span>
-        </p>
+        </Inline>
       )}
 
       <DataTable
@@ -809,7 +806,7 @@ function RulesSection({
           />
         </ConfirmDeleteModal>
       )}
-    </section>
+    </Stack>
   );
 }
 

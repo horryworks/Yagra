@@ -31,7 +31,8 @@ import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { SavedFinding } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
+import { Page } from '../components/ui/Page';
+import { LoadGate } from '../components/ui/LoadGate';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
@@ -245,7 +246,7 @@ export function SavedFindingsPage() {
   };
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:troubleshoot.findings')}
         trail={[
@@ -254,55 +255,51 @@ export function SavedFindingsPage() {
         ]}
       />
 
-      {!authed ? (
-        <Card>
-          <p className="muted">{t('findings.signInPrompt')}</p>
-        </Card>
-      ) : (
-        <>
-          {/* The scope narrows this list too, so it is counted and cleared with the columns — a
-              "clear all" that leaves a node selected is a lie. */}
-          <ListToolbar
-            list={serverToolbarFilters(
-              filterCols,
-              { filters: rowFilters, setFilters: setRowFilters },
-              {
-                active: scopeIsSet(scopeIds),
-                clear: writeScope({ nodeId: '', groupId: '' }),
-                onClear: () => setScope(allScope(t)),
-              },
-            )}
-            labels={sheetLabels}
-            count={{ shown: rows.length, noun: (n) => t('findings.finding', { count: n }) }}
-            leading={
-              // The scope's ids are the URL's; the picker writes them and shows a label for them.
-              <ScopePicker value={scope} onChange={onScope} className="ts-sf-scope" />
-            }
-          />
+      {/* Keyset-paged by hand rather than through useLoad, so there is no refusal to gate on: a
+          failed read is the error line above the table. */}
+      <LoadGate signedIn={authed} load={{ block: null }}>
+        {/* The scope narrows this list too, so it is counted and cleared with the columns — a
+            "clear all" that leaves a node selected is a lie. */}
+        <ListToolbar
+          list={serverToolbarFilters(
+            filterCols,
+            { filters: rowFilters, setFilters: setRowFilters },
+            {
+              active: scopeIsSet(scopeIds),
+              clear: writeScope({ nodeId: '', groupId: '' }),
+              onClear: () => setScope(allScope(t)),
+            },
+          )}
+          labels={sheetLabels}
+          count={{ shown: rows.length, noun: (n) => t('findings.finding', { count: n }) }}
+          leading={
+            // The scope's ids are the URL's; the picker writes them and shows a label for them.
+            <ScopePicker value={scope} onChange={onScope} className="ts-sf-scope" />
+          }
+        />
 
-          {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
 
-          <DataTable
-            tableId="troubleshoot.findings"
-            rows={rows}
-            columns={columns}
-            filters={rowFilters}
-            onFiltersChange={setRowFilters}
-            rowKey={(f) => f.id}
-            onRowClick={open}
-            onReachEnd={exhausted ? undefined : loadMore}
-            loading={loading}
-            // Keyed off the filters, never off `rows.length`: this list is keyset-paged and
-            // filtered in SQL, so a query that legitimately returns zero is indistinguishable from
-            // a store with nothing in it.
-            empty={
-              isAnyFiltered(filterCols, rowFilters) || scopeIsSet(scopeIds)
-                ? t('findings.empty.filtered')
-                : t('findings.empty.none')
-            }
-          />
-        </>
-      )}
-    </div>
+        <DataTable
+          tableId="troubleshoot.findings"
+          rows={rows}
+          columns={columns}
+          filters={rowFilters}
+          onFiltersChange={setRowFilters}
+          rowKey={(f) => f.id}
+          onRowClick={open}
+          onReachEnd={exhausted ? undefined : loadMore}
+          loading={loading}
+          // Keyed off the filters, never off `rows.length`: this list is keyset-paged and
+          // filtered in SQL, so a query that legitimately returns zero is indistinguishable from
+          // a store with nothing in it.
+          empty={
+            isAnyFiltered(filterCols, rowFilters) || scopeIsSet(scopeIds)
+              ? t('findings.empty.filtered')
+              : t('findings.empty.none')
+          }
+        />
+      </LoadGate>
+    </Page>
   );
 }

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Tabs } from '../components/ui/Tabs';
 import { Button } from '../components/ui/Button';
@@ -325,7 +326,7 @@ export function ReportsPage() {
   ];
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:dashboard.reports')}
         writePermission="manage_config"
@@ -523,6 +524,6 @@ export function ReportsPage() {
           {confirm.text}
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

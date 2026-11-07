@@ -36,6 +36,7 @@ import {
   usesTls,
 } from './forwardingOptions';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -629,69 +630,61 @@ export function ForwardingPage() {
   const wantsFlow = rows.some((r) => r.enabled && r.source_kind === 'flow');
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:events.forwarding')}
         trail={[{ label: t('nav:sections.events') }, { label: t('nav:events.forwarding') }]}
       />
 
-      {!authed ? (
-        <Card>
-          <p className="muted">{t('common:loadBlock.signIn')}</p>
-        </Card>
-      ) : (
-        <LoadGate load={destinations} permission="manage_system">
-          {wantsVerbatim && staleP.length > 0 && (
-            <Card>
-              <p className="fwd-warn">{t('warn.noRawCapture', { pollers: staleP.join(', ') })}</p>
-            </Card>
-          )}
-          {wantsFlow && noFlowRelay.length > 0 && (
-            <Card>
-              <p className="fwd-warn">
-                {t('warn.noFlowRelay', { pollers: noFlowRelay.join(', ') })}
-              </p>
-            </Card>
-          )}
-          {status && !status.sending && (
-            <Card>
-              <p className="muted">{t('warn.standby')}</p>
-            </Card>
-          )}
+      <LoadGate signedIn={authed} load={destinations} permission="manage_system">
+        {wantsVerbatim && staleP.length > 0 && (
+          <Card>
+            <p className="fwd-warn">{t('warn.noRawCapture', { pollers: staleP.join(', ') })}</p>
+          </Card>
+        )}
+        {wantsFlow && noFlowRelay.length > 0 && (
+          <Card>
+            <p className="fwd-warn">{t('warn.noFlowRelay', { pollers: noFlowRelay.join(', ') })}</p>
+          </Card>
+        )}
+        {status && !status.sending && (
+          <Card>
+            <p className="muted">{t('warn.standby')}</p>
+          </Card>
+        )}
 
-          <ListToolbar
-            list={filtering}
-            labels={columnLabels(columns)}
-            count={{
-              shown: shown.length,
-              total: rows.length,
-              noun: (n) => t('count', { count: n }),
-            }}
-          >
-            {canSystem && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('add.button')}
-              </Button>
-            )}
-          </ListToolbar>
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('count', { count: n }),
+          }}
+        >
+          {canSystem && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('add.button')}
+            </Button>
+          )}
+        </ListToolbar>
 
-          {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
 
-          <DataTable
-            tableId="settings.forwarding"
-            rows={sorting.rows}
-            columns={sorting.columns}
-            sort={sorting.sort}
-            onSortChange={sorting.setSort}
-            filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            rowKey={(r) => r.id}
-            loading={loading}
-            empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
-          />
-        </LoadGate>
-      )}
+        <DataTable
+          tableId="settings.forwarding"
+          rows={sorting.rows}
+          columns={sorting.columns}
+          sort={sorting.sort}
+          onSortChange={sorting.setSort}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          rowKey={(r) => r.id}
+          loading={loading}
+          empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
+        />
+      </LoadGate>
 
       {(adding || editing) && (
         <DestinationModal
@@ -730,6 +723,6 @@ export function ForwardingPage() {
           <p className="modal-confirm-text">{testResult.text}</p>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 }

@@ -5,9 +5,9 @@
 // the register-poller helper follow the shared Modal patterns. The list auto-refreshes every 10s
 // (no SSE — poller liveness is coarse-grained), on top of a manual reload.
 //
-// Modeled on EventSourcesPage (the data-table-standard exemplar): PageHeader with the
-// Settings ▸ Pollers trail, a TableToolbar (count + primary action) over the shared `.ytable`, and
-// destructive-consent via the shared Modal.
+// A `Page` of sections (ADR-246): the bus card, the pools under their `SectionHead`, the poller
+// list (`ListToolbar` + `DataTable`), and, when there is something to show, one poller's nodes and
+// the recent monitoring gaps. The page spaces them; this file's CSS is the pool board's own look.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCopy } from '../lib/useCopy';
@@ -31,8 +31,8 @@ import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { Field, TextInput } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
-import { Inline, Stack } from '../components/ui/Page';
-import { Callout } from '../components/ui/Section';
+import { Inline, Page, Stack } from '../components/ui/Page';
+import { Callout, SectionHead } from '../components/ui/Section';
 import { InfoPress, InfoTip } from '../components/ui/InfoTip';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { StepFrame } from '../components/ui/StepFrame';
@@ -1126,8 +1126,8 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
   if (gaps.length === 0) return null;
 
   return (
-    <div className="poller-gaps">
-      <h2 className="poller-gaps-title">{t('pollers.gaps.title')}</h2>
+    <Stack gap={8}>
+      <SectionHead level={2} title={t('pollers.gaps.title')} />
       {/* Shared `.ytable` markup rather than `DataTable`, deliberately. This page's *fleet* table
           is a `DataTable` — it is the pane's content and can own a scroll viewport. This one is a
           stacked subsection under it, and `DataTable` is `flex: 1` (`DataTable.css`), so it would
@@ -1182,7 +1182,7 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
           ))}
         </div>
       </div>
-    </div>
+    </Stack>
   );
 }
 
@@ -1211,15 +1211,16 @@ function PollerNodesSection({
           : null;
 
   return (
-    <div className="poller-gaps">
-      <div className="poller-nodes-head">
-        <h2 className="poller-gaps-title">
-          {t('pollers.nodes.title', { id: data.poller_id })}
-        </h2>
-        <Button variant="outline" onClick={onClose}>
-          {t('pollers.nodes.close')}
-        </Button>
-      </div>
+    <Stack gap={8}>
+      <SectionHead
+        level={2}
+        title={t('pollers.nodes.title', { id: data.poller_id })}
+        actions={
+          <Button variant="outline" onClick={onClose}>
+            {t('pollers.nodes.close')}
+          </Button>
+        }
+      />
       {note && <p className="muted poller-gaps-note">{note}</p>}
       {data.truncated && (
         <p className="muted poller-gaps-note">
@@ -1252,7 +1253,7 @@ function PollerNodesSection({
           </div>
         </div>
       )}
-    </div>
+    </Stack>
   );
 }
 
@@ -1650,7 +1651,7 @@ export function PollersPage() {
   }, []);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.pollers')}
         writePermission="manage_system"
@@ -1663,124 +1664,136 @@ export function PollersPage() {
             certificate store — so a viewer's page is unchanged. */}
         <BusPanel />
 
-        {/* Named, because four unlabelled boxes say nothing about what they are (ADR-055 R1).
-            Paired with the toolbar's poller count below so the screen reads as two lists. */}
-        <p className="section-label">
-          <strong>{t('pollers.pool.stripTitle')}</strong>{' '}
-          {t('pollers.pool.count', { count: pools.length })}
-        </p>
-        {/* A move started by a drag has no dialog to fail into, so its refusal is shown here.
-            The likely one is the server declining a poller it considers offline — the row was
-            drawn from a snapshot a few seconds old. */}
-        {moveError && !confirmMove && <p className="form-error pool-move-error">{moveError}</p>}
+        {/* `DndContext` draws no box of its own (its screen-reader text is hidden or fixed), so
+            the pools and the poller list below stay sections of the page and the page spaces
+            them. It wraps both because a card is where a dragged row lands. */}
         <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-        <div className="pool-strip">
-          {pools.map((p) => {
-            // ADR-107 Inc.4. Both entries come from ONE helper, so this page cannot spell the
-            // question differently from the pill on the card beside it — which is exactly what
-            // it did on the first attempt. See `poolTakeoverActions` in `lib/pollers.ts`.
-            const takeover = poolTakeoverActions(p);
-            return (
-            <PoolCard
-              key={p.pool}
-              pool={p}
-              droppable={canSystem}
-              selected={selectedPools.includes(p.pool)}
-              onSelect={() => togglePool(p.pool)}
-              actions={
-                canSystem
-                  ? [
-                      { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
-                      { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
-                      // ADR-107 Inc.4. Offered only in the state each one answers: cover a pool
-                      // that has members and nothing to poll them, restore one already covered.
-                      // Showing both always would put "stop covering" on 20 pools nobody is
-                      // covering, which reads as a feature that does nothing.
-                      ...(takeover.cover
-                        ? [{ label: t('pollers.pool.coverAction'), onSelect: () => setPoolAction({ pool: p, kind: 'cover' as const }) }]
-                        : []),
-                      ...(takeover.restore
-                        ? [{ label: t('pollers.pool.restoreAction'), onSelect: () => setPoolAction({ pool: p, kind: 'restore' as const }) }]
-                        : []),
-                      { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
-                    ]
-                  : []
+          <Stack gap={12}>
+            {/* Named, because four unlabelled boxes say nothing about what they are (ADR-055 R1).
+                Paired with the toolbar's poller count below so the screen reads as two lists. */}
+            <SectionHead
+              level={2}
+              title={
+                <>
+                  {t('pollers.pool.stripTitle')}
+                  <span className="muted">{t('pollers.pool.count', { count: pools.length })}</span>
+                </>
               }
             />
-            );
-          })}
-          {canSystem && (
-            <button type="button" className="pool-card pool-card-new" onClick={() => setCreatingPool(true)}>
-              {t('pollers.pool.createButton')}
-            </button>
-          )}
-        </div>
+            {/* A move started by a drag has no dialog to fail into, so its refusal is shown here.
+                The likely one is the server declining a poller it considers offline — the row was
+                drawn from a snapshot a few seconds old. */}
+            {moveError && !confirmMove && <p className="form-error">{moveError}</p>}
+            <div className="pool-strip">
+              {pools.map((p) => {
+                // ADR-107 Inc.4. Both entries come from ONE helper, so this page cannot spell the
+                // question differently from the pill on the card beside it — which is exactly what
+                // it did on the first attempt. See `poolTakeoverActions` in `lib/pollers.ts`.
+                const takeover = poolTakeoverActions(p);
+                return (
+                  <PoolCard
+                    key={p.pool}
+                    pool={p}
+                    droppable={canSystem}
+                    selected={selectedPools.includes(p.pool)}
+                    onSelect={() => togglePool(p.pool)}
+                    actions={
+                      canSystem
+                        ? [
+                            { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
+                            { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
+                            // ADR-107 Inc.4. Offered only in the state each one answers: cover a pool
+                            // that has members and nothing to poll them, restore one already covered.
+                            // Showing both always would put "stop covering" on 20 pools nobody is
+                            // covering, which reads as a feature that does nothing.
+                            ...(takeover.cover
+                              ? [{ label: t('pollers.pool.coverAction'), onSelect: () => setPoolAction({ pool: p, kind: 'cover' as const }) }]
+                              : []),
+                            ...(takeover.restore
+                              ? [{ label: t('pollers.pool.restoreAction'), onSelect: () => setPoolAction({ pool: p, kind: 'restore' as const }) }]
+                              : []),
+                            { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
+                          ]
+                        : []
+                    }
+                  />
+                );
+              })}
+              {canSystem && (
+                <button type="button" className="pool-card pool-card-new" onClick={() => setCreatingPool(true)}>
+                  {t('pollers.pool.createButton')}
+                </button>
+              )}
+            </div>
 
-        {/* What the funnels have narrowed the table to, each removable on its own. The same
-            `pool` column filter the cards write, so the column's own control and "clear all
-            filters" release these too (ADR-073). */}
-        {selectedPools.length > 0 && (
-          <div className="pool-filter-chips">
-            {selectedPools.map((name) => (
-              <span key={name} className="pool-filter-chip">
-                <FunnelIcon />
-                <span className="mono">{name}</span>
-                <IconButton
-                  title={t('pollers.pool.clearFilter')}
-                  className="pool-filter-chip-x"
-                  onClick={() => togglePool(name)}
-                >
-                  ×
-                </IconButton>
-              </span>
-            ))}
-          </div>
-        )}
+            {/* What the funnels have narrowed the table to, each removable on its own. The same
+                `pool` column filter the cards write, so the column's own control and "clear all
+                filters" release these too (ADR-073). */}
+            {selectedPools.length > 0 && (
+              <div className="pool-filter-chips">
+                {selectedPools.map((name) => (
+                  <span key={name} className="pool-filter-chip">
+                    <FunnelIcon />
+                    <span className="mono">{name}</span>
+                    <IconButton
+                      title={t('pollers.pool.clearFilter')}
+                      className="pool-filter-chip-x"
+                      onClick={() => togglePool(name)}
+                    >
+                      ×
+                    </IconButton>
+                  </span>
+                ))}
+              </div>
+            )}
+          </Stack>
 
-        <ListToolbar
-          list={filtering}
-          labels={columnLabels(columns)}
-          count={{
-            shown: shown.length,
-            total: pollers.length,
-            noun: (n) => t('common:noun.poller', { count: n }),
-          }}
-        >
-          {canSystem && (
-            <Button variant="primary" onClick={() => setRegistering(true)}>
-              {t('pollers.registerButton')}
-            </Button>
-          )}
-        </ListToolbar>
+          {/* The poller list is the page's own toolbar and table rather than a `Stack`: a toolbar
+              directly in a `Page` is the one whose bottom margin the page takes over. */}
+          <ListToolbar
+            list={filtering}
+            labels={columnLabels(columns)}
+            count={{
+              shown: shown.length,
+              total: pollers.length,
+              noun: (n) => t('common:noun.poller', { count: n }),
+            }}
+          >
+            {canSystem && (
+              <Button variant="primary" onClick={() => setRegistering(true)}>
+                {t('pollers.registerButton')}
+              </Button>
+            )}
+          </ListToolbar>
 
-        <DataTable
-          tableId="settings.pollers"
-          rows={sorting.rows}
-          columns={sorting.columns}
-          sort={sorting.sort}
-          onSortChange={sorting.setSort}
-          rowKey={(p) => p.id}
-          filters={filters}
-          onFiltersChange={setFilters}
-          filterCounts={counts}
-          loading={loading}
-          empty={
-            anyFiltered ? (
-              t('common:filter.noMatch')
-            ) : (
-              <EmptyState
-                text={t('pollers.empty.title')}
-                action={
-                  canSystem && (
-                    <Button variant="primary" onClick={() => setRegistering(true)}>
-                      {t('pollers.registerButton')}
-                    </Button>
-                  )
-                }
-              />
-            )
-          }
-        />
+          <DataTable
+            tableId="settings.pollers"
+            rows={sorting.rows}
+            columns={sorting.columns}
+            sort={sorting.sort}
+            onSortChange={sorting.setSort}
+            rowKey={(p) => p.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={
+              anyFiltered ? (
+                t('common:filter.noMatch')
+              ) : (
+                <EmptyState
+                  text={t('pollers.empty.title')}
+                  action={
+                    canSystem && (
+                      <Button variant="primary" onClick={() => setRegistering(true)}>
+                        {t('pollers.registerButton')}
+                      </Button>
+                    )
+                  }
+                />
+              )
+            }
+          />
         </DndContext>
 
         {creatingPool && (
@@ -1872,6 +1885,6 @@ export function PollersPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }

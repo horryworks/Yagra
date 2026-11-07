@@ -204,7 +204,7 @@ function HandoffModal({
   );
 }
 
-/** The panel. Rendered above the pool summary strip on Settings ▸ Pollers. */
+/** The panel: the first section of the Settings ▸ Pollers page, above the pools. */
 export function BusPanel() {
   const { t } = useTranslation('system');
   // The bus is deployment topology, and the switch reaches the container holding the Docker socket.
@@ -249,9 +249,10 @@ export function BusPanel() {
   // where the address is typed. The panel has no list of site addresses to compare against —
   // none is stored — so the line it once drew here compared against an empty list and never fired.
 
+  // The rows are boxes rather than paragraphs: inside the Pollers `Page` the card spaces what it
+  // holds, and a paragraph's own margins would double that space (ADR-246).
   return (
     <Card
-      className="bus-panel"
       title={t('pollers.bus.title')}
       actions={
         status && (
@@ -271,7 +272,7 @@ export function BusPanel() {
         )
       }
     >
-      <p>
+      <div>
         <Badge tone={enabled ? 'up' : 'neutral'}>
           {enabled ? t('pollers.bus.state.encrypted') : t('pollers.bus.state.internal')}
         </Badge>{' '}
@@ -287,7 +288,7 @@ export function BusPanel() {
             <Badge tone="warning">{t('pollers.bus.cert.pending')}</Badge>
           </>
         )}
-      </p>
+      </div>
 
       {status && !status.can_switch && (
         <p className="form-status">{t('pollers.bus.noSwitch')}</p>
@@ -295,23 +296,23 @@ export function BusPanel() {
 
       {cert ? (
         <Stack gap={12}>
-          <p>
+          <div>
             <span className="muted">{t('pollers.bus.cert.sans')}: </span>
             {extraSans.length > 0 ? (
               <span className="mono">{extraSans.join(', ')}</span>
             ) : (
               <span className="muted">{t('pollers.bus.cert.internalOnly')}</span>
             )}
-          </p>
-          <p className="muted">
+          </div>
+          <div className="muted">
             {t('pollers.bus.cert.expires', {
               when: formatExactTime(cert.not_after),
               days: cert.expires_in_days,
             })}
-          </p>
-          <p className="muted mono" title={cert.fingerprint_sha256}>
+          </div>
+          <div className="muted mono" title={cert.fingerprint_sha256}>
             {t('pollers.bus.cert.fingerprint')}: {cert.fingerprint_sha256.slice(0, 32)}…
-          </p>
+          </div>
           {certWarn &&
             (state === 'expiring' ? (
               <Callout tone="warning">{certWarn}</Callout>
@@ -320,7 +321,7 @@ export function BusPanel() {
             ))}
         </Stack>
       ) : (
-        <p className="muted">{t('pollers.bus.cert.absent')}</p>
+        <div className="muted">{t('pollers.bus.cert.absent')}</div>
       )}
 
       {/* The manual procedure at a site, closed until wanted (ADR-200 kind d). The kit from

@@ -6,6 +6,7 @@ import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type { EventSource } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
 import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -128,7 +129,7 @@ export function EventSourcesPage() {
   const sorting = useClientSort(columns, filtering.shown);
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader title={t('nav:events.webhooks')} />
       <LoadGate load={sources} permission="manage_config">
         <ListToolbar
@@ -192,7 +193,7 @@ export function EventSourcesPage() {
         />
       )}
       {issued && <TokenModal issued={issued} onClose={() => setIssued(null)} />}
-    </div>
+    </Page>
   );
 }
 

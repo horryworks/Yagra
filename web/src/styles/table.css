@@ -151,15 +151,13 @@
 }
 
 .ytable-row:hover .ytable-actions,
-.dt-row:hover .ytable-actions,
-.il-row:hover .il-actions {
+.dt-row:hover .ytable-actions {
   opacity: 1;
 }
 
 /* Keyboard focus inside a faint action group brings it to full strength. */
 .ytable-row:focus-within .ytable-actions,
-.dt-row:focus-within .ytable-actions,
-.il-row:focus-within .il-actions {
+.dt-row:focus-within .ytable-actions {
   opacity: 1;
 }
 
@@ -171,7 +169,6 @@
    pixel-identically. */
 @media (hover: none) {
   .ytable-actions,
-  .il-actions,
   .yt-copy-btn {
     opacity: 1;
   }
@@ -496,7 +493,7 @@ html[data-viewport='mobile'] .ytable {
   color: var(--text-tertiary);
 }
 
-/* Monogram avatar (audit user cell + identity list). Colored by role where applicable. */
+/* Monogram avatar (the audit and Users tables). Colored by role where applicable. */
 .yt-avatar {
   flex: none;
   width: 24px;
@@ -679,94 +676,6 @@ html[data-viewport='mobile'] .ytable {
   box-shadow: inset 0 -2px 0 var(--accent-color);
 }
 
-/* ============================================================ identity list (Users) */
-.identity-list {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--bg-secondary);
-}
-
-.il-row {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: var(--space-3) var(--space-4);
-  border-bottom: var(--border-width) solid var(--border-color);
-  transition: background var(--transition);
-}
-
-.il-row:last-child {
-  border-bottom: none;
-}
-
-.il-row:hover {
-  background: var(--bg-tertiary);
-}
-
-.il-row.is-muted {
-  opacity: 0.62;
-}
-
-.il-id {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.il-line1 {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-
-.il-name {
-  font-size: var(--font-lg);
-  font-weight: var(--weight-medium);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.il-line2 {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-sm);
-  color: var(--text-tertiary);
-  flex-wrap: wrap;
-}
-
-.il-meta-sep {
-  color: var(--border-color);
-}
-
-.il-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: none;
-}
-
-/* Faint at rest, like `.ytable-actions` (ADR-209 decision 6): the Users list is the one list that
-   uses this group, and it was the last whose actions stayed invisible until hovered. */
-.il-actions {
-  display: flex;
-  gap: var(--space-0-5);
-  opacity: var(--row-action-rest-opacity);
-  transition: opacity var(--transition);
-}
-
-.il-empty {
-  padding: 40px var(--space-4);
-  text-align: center;
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-}
-
 /* Inline role select (compact, instant) with a left bar in the role color. */
 .role-select {
   height: 28px;
@@ -845,6 +754,8 @@ html[data-viewport='mobile'] .ytable {
 .you-pill {
   display: inline-flex;
   align-items: center;
+  max-width: 100%;
+  min-width: 0;
   height: 18px;
   padding: 0 var(--space-1-5);
   border-radius: 9px;
@@ -854,32 +765,6 @@ html[data-viewport='mobile'] .ytable {
   text-transform: uppercase;
   color: var(--brand);
   border: var(--border-width) solid var(--brand);
-}
-
-/* mobile (ADR-027 M2): the single-line identity row crowds at ~390px. Wrap the role control +
-   actions onto their own full-width line, enlarge the role select to a touch target, and drop the
-   list's rounded overflow clip so the ⋮ overflow-menu popover isn't cut off on the last rows. */
-html[data-viewport='mobile'] .identity-list {
-  overflow: visible;
-}
-
-html[data-viewport='mobile'] .il-row {
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-}
-
-html[data-viewport='mobile'] .il-right {
-  flex: 1 1 100%;
-  justify-content: space-between;
-}
-
-html[data-viewport='mobile'] .il-right .role-select {
-  flex: 1;
-  height: var(--touch-target);
-}
-
-html[data-viewport='mobile'] .il-right .muted {
-  flex: 1;
 }
 
 /* "Clear all filters" (ADR-053 Inc.2e). A ghost button in the action row, mounted only while

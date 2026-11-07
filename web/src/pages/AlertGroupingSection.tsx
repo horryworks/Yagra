@@ -21,6 +21,8 @@ import { Field, Select } from '../components/ui/Field';
 import { Fields } from '../components/ui/FormLayout';
 import { Segmented } from '../components/ui/Segmented';
 import { InfoTip } from '../components/ui/InfoTip';
+import { Inline, Stack } from '../components/ui/Page';
+import { SectionHead } from '../components/ui/Section';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
@@ -147,12 +149,17 @@ export function AlertGroupingSection({
   const sorting = useClientSort(columns, filtering.shown, { prefix: 'grouping.' });
 
   return (
-    <section className="routing-rules-section">
-      <div className="routing-grouping">
-        <h2 className="table-section-title">
-          {t('grouping.title')}
-          <InfoTip infoKey="alertsConfig:grouping.info" label={t('grouping.title')} />
-        </h2>
+    <Stack as="section" gap={12}>
+      <Stack gap={8} className="routing-grouping">
+        <SectionHead
+          level={2}
+          title={
+            <Inline as="span" gap={6}>
+              {t('grouping.title')}
+              <InfoTip infoKey="alertsConfig:grouping.info" label={t('grouping.title')} />
+            </Inline>
+          }
+        />
         {canSystem ? (
           <Segmented
             ariaLabel={t('grouping.title')}
@@ -197,8 +204,9 @@ export function AlertGroupingSection({
             {replay.truncated && ` ${t('grouping.last7Partial')}`}
           </p>
         )}
-      </div>
+      </Stack>
       <ListToolbar
+        title={t('grouping.folders')}
         list={filtering}
         labels={columnLabels(columns)}
         count={{
@@ -206,7 +214,6 @@ export function AlertGroupingSection({
           total: rows.length,
           noun: (n) => t('noun.folder', { count: n }),
         }}
-        leading={<h3 className="table-section-title">{t('grouping.folders')}</h3>}
       >
         {canSystem && (
           <Button variant="primary" onClick={() => setAdding(true)}>
@@ -253,7 +260,7 @@ export function AlertGroupingSection({
           }}
         />
       )}
-    </section>
+    </Stack>
   );
 }
 

@@ -15,6 +15,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page, Stack } from '../components/ui/Page';
 import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable } from '../components/ui/DataTable';
 import { Button } from '../components/ui/Button';
@@ -134,7 +135,7 @@ export function EventsPage() {
   };
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:events.all')}
         trail={[{ label: t('nav:sections.events') }, { label: t('nav:events.all') }]}
@@ -190,35 +191,40 @@ export function EventsPage() {
           />
         }
       />
-      {/* Said out loud, because the rows below are the answer to a slightly broader question than
-          the one the operator typed. Silently widening would be the worse half of this trade. */}
-      {widened && <p className="ev-widened">{t('events.widened')}</p>}
-      {/* What the page note used to say on every visit, said only when it is true of the rows:
-          beyond the default window the list can be missing the events that matched no rule. */}
-      {reachesPastDefaultWindow(filters, nowMs) && (
-        <p className="ev-retention">
-          <Trans
-            t={t}
-            i18nKey="events.unmatchedKept"
-            components={{ lnk: <ScreenLink to="/settings/system" /> }}
-          />
-        </p>
-      )}
-      <DataTable
-        tableId="events.log"
-        rows={rows}
-        columns={columns}
-        filters={filters}
-        onFiltersChange={setFilters}
-        filterCounts={facets.counts}
-        onFilterOpen={facets.load}
-        renderCard={renderCard}
-        cardEstimatePx={92}
-        rowKey={(r) => r.id}
-        onReachEnd={loadMore}
-        empty={empty}
-        loading={loading}
-      />
-    </div>
+      {/* The two lines below explain the rows, so they sit with the table rather than a page step
+          away from it; the box passes the page's height on to the table. */}
+      <Stack fill gap={8}>
+        {/* Said out loud, because the rows below are the answer to a slightly broader question
+            than the one the operator typed. Silently widening would be the worse half of this
+            trade. */}
+        {widened && <p className="ev-widened">{t('events.widened')}</p>}
+        {/* What the page note used to say on every visit, said only when it is true of the rows:
+            beyond the default window the list can be missing the events that matched no rule. */}
+        {reachesPastDefaultWindow(filters, nowMs) && (
+          <p className="ev-retention">
+            <Trans
+              t={t}
+              i18nKey="events.unmatchedKept"
+              components={{ lnk: <ScreenLink to="/settings/system" /> }}
+            />
+          </p>
+        )}
+        <DataTable
+          tableId="events.log"
+          rows={rows}
+          columns={columns}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={facets.counts}
+          onFilterOpen={facets.load}
+          renderCard={renderCard}
+          cardEstimatePx={92}
+          rowKey={(r) => r.id}
+          onReachEnd={loadMore}
+          empty={empty}
+          loading={loading}
+        />
+      </Stack>
+    </Page>
   );
 }

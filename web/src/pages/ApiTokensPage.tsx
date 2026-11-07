@@ -43,14 +43,13 @@ import {
   type TokenState,
 } from './tokenForm';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, Select, FieldError } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
-import { Stack } from '../components/ui/Page';
+import { Page, Stack } from '../components/ui/Page';
 import { InfoPress } from '../components/ui/InfoTip';
 import { EmptyState } from '../components/ui/EmptyState';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -539,66 +538,65 @@ export function ApiTokensPage() {
   );
 
   return (
-    <div className="page-fill">
+    <Page layout="list">
       <PageHeader
         title={t('nav:settings.apiTokens')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.apiTokens') }]}
       />
 
-      {!authed ? (
-        <Card>
-          <p className="muted">{t('signInPrompt')}</p>
-        </Card>
-      ) : (
-        <LoadGate load={tokens} unavailable={t('unavailable')} permission="manage_users">
-          <ListToolbar
-            list={filtering}
-            labels={columnLabels(columns)}
-            count={{
-              shown: shown.length,
-              total: rows.length,
-              noun: (n) => t('count', { count: n }),
-            }}
-          >
-            {canUsers && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                + {t('add.button')}
-              </Button>
-            )}
-          </ListToolbar>
+      <LoadGate
+        signedIn={authed}
+        load={tokens}
+        unavailable={t('unavailable')}
+        permission="manage_users"
+      >
+        <ListToolbar
+          list={filtering}
+          labels={columnLabels(columns)}
+          count={{
+            shown: shown.length,
+            total: rows.length,
+            noun: (n) => t('count', { count: n }),
+          }}
+        >
+          {canUsers && (
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              + {t('add.button')}
+            </Button>
+          )}
+        </ListToolbar>
 
-          {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error">{error}</p>}
 
-          <DataTable
-            tableId="settings.apiTokens"
-            rows={shown}
-            columns={columns}
-            sort={sort}
-            onSortChange={setSort}
-            filters={filters}
-            onFiltersChange={setFilters}
-            filterCounts={counts}
-            rowKey={(r) => r.id}
-            loading={loading}
-            empty={
-              anyFiltered ? (
-                t('common:filter.noMatch')
-              ) : (
-                <EmptyState
-                  text={t('empty')}
-                  action={
-                    canUsers && (
-                      <Button type="button" variant="primary" onClick={() => setAdding(true)}>
-                        + {t('add.button')}
-                      </Button>
-                    )
-                  }
-                />
-              )
-            }
-          />
-        </LoadGate>
-      )}
+        <DataTable
+          tableId="settings.apiTokens"
+          rows={shown}
+          columns={columns}
+          sort={sort}
+          onSortChange={setSort}
+          filters={filters}
+          onFiltersChange={setFilters}
+          filterCounts={counts}
+          rowKey={(r) => r.id}
+          loading={loading}
+          empty={
+            anyFiltered ? (
+              t('common:filter.noMatch')
+            ) : (
+              <EmptyState
+                text={t('empty')}
+                action={
+                  canUsers && (
+                    <Button type="button" variant="primary" onClick={() => setAdding(true)}>
+                      + {t('add.button')}
+                    </Button>
+                  )
+                }
+              />
+            )
+          }
+        />
+      </LoadGate>
 
       {adding && (
         <CreateTokenModal
@@ -622,6 +620,6 @@ export function ApiTokensPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }

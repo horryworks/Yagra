@@ -6,7 +6,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 3px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
@@ -22,7 +22,7 @@
 
 .eventrules-sig-kind {
   justify-self: start;
-  padding: 1px var(--space-1-5);
+  padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -44,13 +44,9 @@
   border-top: var(--border-width) solid var(--border-color);
 }
 
-/* The row under the target tabs that names the folder or node (ADR-232), as on the threshold tab. */
+/* The row under the target tabs that names the folder or node (ADR-232), as on the threshold tab.
+   An `Inline`; the page spaces it. */
 .eventrules-target {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin: var(--space-2) 0;
   font-size: var(--font-sm);
 }
 

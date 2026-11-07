@@ -1,29 +1,10 @@
-/* Notification delivery (Alerts ▸ Notification delivery) — data-table standard v2 (styles/table.css). Two sections (channels +
-   rules), each a section header + toolbar + `.ytable`. Page-local: section title and spacing. The
-   dialogs are built from the shared form parts (`Fields`, `Field`, `CheckField`). */
-
-.routing-error {
-  margin-bottom: var(--space-3);
-}
-
-/* Section title that sits in the toolbar row, left of the spacer. */
-.table-section-title {
-  font-size: var(--font-lg);
-  font-weight: var(--weight-medium);
-}
-
-/* Separate the second section (rules) from the first (channels). */
-.routing-rules-section {
-  margin-top: var(--space-5);
-}
+/* Notification delivery (Alerts ▸ Notification delivery). The frame is the shared parts (`Page`,
+   `SectionHead`, `ListToolbar`, `DataTable`, `Stack`); what is left here is what only this screen
+   draws. The dialogs are built from the shared form parts (`Fields`, `Field`, `CheckField`). */
 
 /* The env default route above the rules table (ADR-200 Inc.28): name, "all alerts", the kinds. */
 .routing-default-route {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 0 var(--space-2);
+  margin: 0;
   font-size: var(--font-sm);
 }
 
@@ -37,13 +18,9 @@
 }
 
 /* The grouping level above its folder table (ADR-236): the heading with its ⓘ, the four levels, and
-   what the chosen one would do to the outage open now. */
+   what the chosen one would do to the outage open now. Each control keeps its own width. */
 .routing-grouping {
-  display: flex;
-  flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
 }
 
 /* Each level keeps its name and count on one line: the shared control stretches its buttons to
@@ -56,14 +33,8 @@
 
 .routing-grouping .ts-seg button {
   flex: none;
-  padding: 0 14px;
+  padding: 0 var(--space-3);
   white-space: nowrap;
-}
-
-.routing-grouping .table-section-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
 }
 
 /* Send-a-test dialog (ADR-192). The warnings say what the test will do before it is sent; the
@@ -80,17 +51,10 @@
   overflow-wrap: anywhere;
 }
 
-/* The delivery log (ADR-195). An explicit height: the page is not a full-height flex column, so a
-   virtualized table needs a bounded box to scroll inside. */
-.routing-log-section {
-  margin-top: var(--space-5);
-}
-
+/* The delivery log (ADR-195). An explicit height: a `sections` page is not a full-height column,
+   so the virtualized table needs a bounded box to scroll inside. */
 .routing-log-table {
-  display: flex;
-  flex-direction: column;
   height: 520px;
-  min-height: 0;
 }
 
 .routing-log-detail {
@@ -120,5 +84,5 @@
 
 .routing-log-attempts {
   margin: var(--space-1) 0 0;
-  padding-left: 20px;
+  padding-left: var(--space-4);
 }

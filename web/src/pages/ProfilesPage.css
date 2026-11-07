@@ -1,7 +1,10 @@
-/* Device profiles — data-table standard v2 (styles/table.css). The category group header and
-   the per-row expander (template-attachment checklist) are page-local. */
+/* Device profiles — data-table standard v2 (styles/table.css). Page-local: the category band,
+   the row's set checklist, and the table's full height (not a DataTable; the page scrolls). */
 
-/* Role group header — a full-width band separating the category sections. */
+.profiles-table {
+  flex: none;
+}
+
 .profiles-group-head {
   display: flex;
   align-items: baseline;
@@ -11,8 +14,6 @@
   border-bottom: var(--border-width) solid var(--border-color);
   font-size: var(--font-xs);
   font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-secondary);
 }
 
@@ -21,7 +22,6 @@
   color: var(--text-tertiary);
 }
 
-/* Inline editor revealed under a profile row when "Templates" is toggled. */
 .profiles-table .crud-collection {
   padding: var(--space-3) var(--space-4) var(--space-4);
   background: var(--bg-tertiary);

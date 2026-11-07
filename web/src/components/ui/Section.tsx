@@ -18,13 +18,14 @@ export function SectionHead({
 }: {
   title: ReactNode;
   actions?: ReactNode;
-  /** 2 when the heading sits directly under the page header rather than inside a Card. */
+  /** 2 when the heading sits directly on the page rather than inside a Card: a section of a page
+   *  of several lists (Routing, Pollers). It is drawn larger, as nothing frames it but itself. */
   level?: 2 | 3;
 }) {
   const H = level === 2 ? 'h2' : 'h3';
   return (
     <div className="ui-section-head">
-      <H className="ui-section-title">{title}</H>
+      <H className={cx('ui-section-title', level === 2 && 'is-page')}>{title}</H>
       {isShown(actions) && <div className="ui-section-actions">{actions}</div>}
     </div>
   );

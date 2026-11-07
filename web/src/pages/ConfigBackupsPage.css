@@ -16,7 +16,7 @@
 
 /* The Git destination's last push (ADR-210 stage 4), one line above the list. */
 .cfgbl-push {
-  margin: 0 0 var(--space-2);
+  margin: 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -32,20 +32,12 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin: 0 0 var(--space-2);
+  margin: 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
-/* The filter and, while rows are picked, what can be done to them (ADR-224). */
-.cfgbl-tools {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin: 0 0 var(--space-2);
-}
-
+/* While rows are picked, what can be done to them (ADR-224). */
 .cfgbl-bulk {
   display: flex;
   align-items: center;
@@ -54,7 +46,7 @@
 }
 
 /* The filter's labels carry a count, so they keep to one line and size to their text. */
-.cfgbl-tools .ts-seg button {
+.cfgbl-filter .ts-seg button {
   flex: none;
   padding: 0 var(--space-3);
   white-space: nowrap;

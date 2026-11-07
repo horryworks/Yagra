@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Nodes ▸ Collection setup (ADR-231): one heading, a tab per screen, and the screen below. The
 // screens draw no header of their own; the tab is the path, so each keeps its URL filters.
+//
+// A list page (ADR-246): each tab returns its toolbar and table as a fragment, so they are this
+// page's own children - spaced by it, and the table takes the height left under the tabs.
 
 import { useTranslation } from 'react-i18next';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Tabs } from '../components/ui/Tabs';
 import {
@@ -20,7 +24,7 @@ export function CollectionSetupPage() {
   const active = collectionTabOf(pathname);
   const title = t('nodes.collectionSetup');
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={title}
         trail={[
@@ -35,6 +39,6 @@ export function CollectionSetupPage() {
         onChange={(key) => navigate(collectionTabPath(key))}
       />
       <Outlet />
-    </div>
+    </Page>
   );
 }

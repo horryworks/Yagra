@@ -45,22 +45,14 @@
     "dashboard/SharedDashboardPage.css": 3,
     "dashboard/WidgetFrame.css": 5,
     "dashboard/widgets/widgets.css": 12,
-    "pages/AlertRulesPage.css": 1,
     "pages/ChannelTemplateModal.css": 25,
-    "pages/ClassificationRulesPage.css": 2,
-    "pages/CredentialsPage.css": 1,
     "pages/DiscoveryPage.css": 2,
-    "pages/EventRulesPage.css": 2,
     "pages/GeoMapPage.css": 12,
     "pages/InventoryFilterMenu.css": 3,
     "pages/LoginPage.css": 4,
     "pages/NodesPage.css": 6,
-    "pages/PollersPage.css": 15,
-    "pages/ReclassifyPage.css": 1,
-    "pages/RoutingPage.css": 2,
-    "pages/ThresholdsPage.css": 1,
     "reports/reports.css": 3,
-    "styles/table.css": 24,
+    "styles/table.css": 21,
     "troubleshoot/report/report.css": 4,
     "troubleshoot/troubleshoot.css": 44,
     "widgets/AlertNotes.css": 2,
@@ -72,21 +64,8 @@
   "fontSize": {},
   "inlineSpacing": {},
   "legacy": {
-    "pages/ActiveAlertsPage.tsx": 1,
-    "pages/AlertGroupingSection.tsx": 2,
-    "pages/ApiTokensPage.tsx": 1,
-    "pages/AuditPage.tsx": 1,
-    "pages/DeliveryHoursSection.tsx": 1,
-    "pages/DeliveryLog.tsx": 1,
-    "pages/EventsPage.tsx": 1,
-    "pages/ForwardingPage.tsx": 1,
-    "pages/HistoryPage.tsx": 1,
     "pages/NodeDetailPage.tsx": 1,
-    "pages/NodesPage.tsx": 2,
-    "pages/RoutingPage.tsx": 2,
-    "reports/ReportsPage.tsx": 1,
-    "troubleshoot/SavedFindingsPage.tsx": 1,
-    "troubleshoot/ScheduledPage.tsx": 1
+    "pages/NodesPage.tsx": 2
   },
   "uppercase": {
     "components/CollectionEditor/CollectionEditor.css": 1,
@@ -102,13 +81,10 @@
     "dashboard/primitives/Gauge.css": 1,
     "dashboard/primitives/KpiTile.css": 1,
     "dashboard/widgets/widgets.css": 1,
-    "pages/ClassificationRulesPage.css": 1,
     "pages/EventRulesPage.css": 1,
     "pages/integrations/MerakiIntegrationPage.css": 1,
     "pages/InventoryFilterMenu.css": 1,
     "pages/NodesPage.css": 1,
-    "pages/PollersPage.css": 1,
-    "pages/ProfilesPage.css": 1,
     "pages/RolesPage.css": 1,
     "pages/UpgradePage.css": 1,
     "reports/reports.css": 1,
@@ -130,7 +106,7 @@
       "why": "before ADR-246"
     },
     "components/EventLog/eventColumns.css": {
-      "lines": 174,
+      "lines": 172,
       "why": "before ADR-246"
     },
     "components/GroupModal/GroupModal.css": {
@@ -342,7 +318,7 @@
       "why": "before ADR-246"
     },
     "pages/AlertRulesPage.css": {
-      "lines": 20,
+      "lines": 16,
       "why": "before ADR-246"
     },
     "pages/ApiTokensPage.css": {
@@ -358,7 +334,7 @@
       "why": "before ADR-246"
     },
     "pages/ClassificationRulesPage.css": {
-      "lines": 44,
+      "lines": 42,
       "why": "before ADR-246"
     },
     "pages/CollectionTemplatesPage.css": {
@@ -366,7 +342,7 @@
       "why": "before ADR-246"
     },
     "pages/ConfigBackupsPage.css": {
-      "lines": 69,
+      "lines": 61,
       "why": "before ADR-246"
     },
     "pages/ConfigBundlePage.css": {
@@ -386,7 +362,7 @@
       "why": "before ADR-246"
     },
     "pages/EventRulesPage.css": {
-      "lines": 59,
+      "lines": 55,
       "why": "before ADR-246"
     },
     "pages/EventSourcesPage.css": {
@@ -450,7 +426,7 @@
       "why": "before ADR-246"
     },
     "pages/PollersPage.css": {
-      "lines": 490,
+      "lines": 446,
       "why": "before ADR-246"
     },
     "pages/ProfilesPage.css": {
@@ -470,7 +446,7 @@
       "why": "before ADR-246"
     },
     "pages/RoutingPage.css": {
-      "lines": 124,
+      "lines": 88,
       "why": "before ADR-246"
     },
     "pages/SubnetOverlapsPage.css": {
@@ -490,7 +466,7 @@
       "why": "before ADR-246"
     },
     "pages/ThresholdsPage.css": {
-      "lines": 214,
+      "lines": 209,
       "why": "before ADR-246"
     },
     "pages/TlsSettingsPage.css": {
@@ -506,7 +482,7 @@
       "why": "before ADR-246"
     },
     "pages/UsersPage.css": {
-      "lines": 71,
+      "lines": 70,
       "why": "before ADR-246"
     },
     "reports/reports.css": {
@@ -538,7 +514,7 @@
       "why": "before ADR-246"
     },
     "widgets/WatchChips.css": {
-      "lines": 43,
+      "lines": 42,
       "why": "before ADR-246"
     }
   }

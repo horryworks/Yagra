@@ -39,6 +39,11 @@
   gap: var(--space-3);
 }
 
+/* A paragraph's own 1em margins would sit on top of that gap (a notice card, a status line). */
+.ui-page .card-body > p {
+  margin: 0;
+}
+
 /* The action row: under the content, right-aligned like a dialog's footer. */
 .card-footer {
   display: flex;

@@ -175,9 +175,9 @@ export function ReclassifyPage() {
       .finally(() => setBusy(false));
   };
 
+  // A fragment: the toolbar and the table are Collection setup's own children (ADR-246).
   return (
-    <div>
-
+    <>
       <LoadGate load={proposals} permission="manage_config">
         <TableToolbar>
           {canConfig && rows.length > 0 && (
@@ -261,6 +261,6 @@ export function ReclassifyPage() {
           <FormError form={{ error }} />
         </Modal>
       )}
-    </div>
+    </>
   );
 }

@@ -21,7 +21,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { Field, TextInput, Select } from '../components/ui/Field';
 import { CheckField, FieldGroup, FieldRow, Fields } from '../components/ui/FormLayout';
-import { Inline } from '../components/ui/Page';
+import { Inline, Stack } from '../components/ui/Page';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import { rowActionsWidth } from '../lib/rowActions';
@@ -152,8 +152,9 @@ export function DeliveryHoursSection({
   const sorting = useClientSort(columns, filtering.shown, { prefix: 'hours.' });
 
   return (
-    <section className="routing-rules-section">
+    <Stack as="section" gap={12}>
       <ListToolbar
+        title={t('deliveryHours.title')}
         list={filtering}
         labels={columnLabels(columns)}
         count={{
@@ -161,7 +162,6 @@ export function DeliveryHoursSection({
           total: schedules.length,
           noun: (n) => t('noun.schedule', { count: n }),
         }}
-        leading={<h2 className="table-section-title">{t('deliveryHours.title')}</h2>}
       >
         <label className="routing-zone">
           {t('deliveryHours.defaultZone')}
@@ -247,7 +247,7 @@ export function DeliveryHoursSection({
           />
         </ConfirmDeleteModal>
       )}
-    </section>
+    </Stack>
   );
 }
 
