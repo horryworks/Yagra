@@ -181,7 +181,7 @@ test('the dialog reads as Japanese in Japanese, with no raw keys', async ({ page
 
   await expect(dialog.locator('.modal-title')).toHaveText('環境設定');
   const texts = await dialog
-    .locator('.modal-title, .pref-name, .pref-seg-btn')
+    .locator('.modal-title, .ui-setting-name, .pref-seg-btn')
     .allTextContents();
   // Guard the guard: if the selectors stop matching, an empty list must not read as "no raw keys".
   // The title, three names and six choices (ADR-200 removed the note and the three help lines).

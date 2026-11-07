@@ -1,31 +1,10 @@
-/* Roles & privileges: role descriptions + a role-vs-privilege matrix grid. */
+/* Roles & privileges. The frame and the role list are the shared parts (ADR-246); what is left is
+   this screen's own: the role-vs-privilege matrix, and the key and built-in mark in a role's title. */
 
-.roles-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.roles-role {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: var(--space-2) 0;
-  border-bottom: var(--border-width) solid var(--border-color);
-}
-
-.roles-role:last-child {
-  border-bottom: none;
-}
-
-.roles-role-name {
-  font-weight: var(--weight-medium);
-  min-width: 80px;
-}
-
+/* The key and the built-in mark sit in the role's title row; the title's weight is the name's. */
 .roles-role-key {
   font-size: var(--font-xs);
+  font-weight: var(--weight-normal);
   color: var(--text-tertiary);
 }
 
@@ -36,17 +15,8 @@
   color: var(--text-tertiary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  padding: 1px var(--space-1-5);
-}
-
-.roles-role-desc {
-  flex: 1;
-  min-width: 200px;
-  font-size: var(--font-sm);
-}
-
-.roles-matrix-card {
-  margin-top: var(--space-4);
+  padding: var(--space-0-5) var(--space-1-5);
+  font-weight: var(--weight-normal);
 }
 
 .roles-matrix {
@@ -59,7 +29,7 @@
   letter-spacing: 0.01em;
   color: var(--text-tertiary);
   font-weight: var(--weight-medium);
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -68,7 +38,7 @@
 }
 
 .roles-cell {
-  padding: 10px;
+  padding: var(--space-2);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -109,7 +79,7 @@
   width: 1px;
   height: 1px;
   padding: 0;
-  margin: -1px;
+  margin: -1px; /* ui-allow: the visually-hidden idiom's fixed offset, not spacing */
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;

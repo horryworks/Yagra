@@ -1,80 +1,40 @@
-/* Settings ▸ Configuration bundle. Two cards, each a short explanation plus one action and its
-   result. Nothing here grows with the fleet — the section list is bounded by the number of carried
-   tables — so it is plain markup rather than a DataTable. */
+/* Settings ▸ Configuration bundle. The frame, the facts, the warning and the action rows are the
+   shared parts (ADR-246); what is left is this screen's own: the tone of a result line, the list of
+   notes an export or an import produced, and the rule that sets a report off from the file it
+   reports on. */
 
-.cb-help {
+.cb-line {
+  margin: 0;
   font-size: var(--font-sm);
-  margin: 0 0 var(--space-2);
 }
 
-.cb-panel {
-  margin-top: var(--space-3);
+.cb-line.ok {
+  color: var(--status-ok);
 }
 
-.cb-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+/* A dry run - "this is not the final state yet", the same signal the caution before Apply gives. */
+.cb-line.warn {
+  color: var(--status-warning);
 }
 
 .cb-file {
-  display: block;
-  margin-bottom: var(--space-3);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
-.cb-ok {
-  color: var(--status-ok);
-  font-size: var(--font-sm);
-  margin: var(--space-3) 0 var(--space-2);
-}
-
-/* Used for the destructive-action caution and for a dry run — both mean "this is not the final
-   state yet", which is the same signal an operator needs to slow down for. */
-.cb-warn {
-  color: var(--status-warning);
-  font-size: var(--font-sm);
-  margin: var(--space-3) 0 var(--space-2);
-}
-
-.cb-sections,
 .cb-notes {
-  list-style: none;
-  margin: 0 0 var(--space-3);
+  margin: 0;
   padding: 0;
+  list-style: none;
   font-size: var(--font-sm);
-}
-
-.cb-sections li {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-1) 0;
-}
-
-.cb-sections li + li {
-  border-top: var(--border-width) solid var(--border-color);
+  color: var(--text-secondary);
 }
 
 .cb-section-name {
   color: var(--text-primary);
 }
 
-.cb-section-count {
-  color: var(--text-secondary);
-  font-family: var(--font-family);
-  white-space: nowrap;
-}
-
-.cb-notes li {
-  padding: var(--space-1) 0;
-  color: var(--text-secondary);
-}
-
 .cb-report {
-  margin-top: var(--space-4);
   padding-top: var(--space-3);
   border-top: var(--border-width) solid var(--border-color);
 }

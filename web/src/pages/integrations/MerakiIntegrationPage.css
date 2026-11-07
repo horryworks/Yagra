@@ -1,79 +1,12 @@
-/* Settings ▸ Integrations ▸ Cisco Meraki. Uses the shared theme variables (ui-conventions);
-   no hardcoded colors so light/dark both work. */
-
-/* The failure of a write made straight from the page (kill switch, pause/resume) — those have no
-   dialog to report into. `.form-error` supplies the failure colour; this only spaces it. */
-.meraki-page-note {
-  margin: 0 0 var(--space-3);
-}
-
-.meraki-killswitch-card {
-  margin-bottom: var(--space-4);
-}
-
-.meraki-switch {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-weight: var(--weight-semibold);
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.meraki-switch input {
-  cursor: pointer;
-}
-
-.meraki-switch-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.meraki-org-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.meraki-org {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: 10px var(--space-3);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  background: var(--bg-secondary);
-  flex-wrap: wrap;
-}
-
-/* The row's left half: what the organization is, above how its last inventory sync went. */
-.meraki-org-info {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 0;
-  flex: 1 1 18rem;
-}
-
-/* The sync line under it is `MerakiSyncStatus` — its rules moved to that component's own file when
-   the organization's page started rendering the same line. */
-
-.meraki-org-main {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  min-width: 0;
-}
+/* Settings ▸ Integrations ▸ Cisco Meraki. The frame is the shared parts (ADR-246): Page, Card,
+   ItemList, CheckField, ChoiceGroup, Fields. What is left is this screen's own: an organization's
+   name link and its state word, and the dialogs' scrolling pick lists. */
 
 /* A link to the organization's own page. It keeps the row's text colour so the list still reads as
    a list of names — the visible way in is the row's "Devices" button, and this is the shortcut for
    someone who clicks the name expecting it to open. Same hover as the other in-row links
    (`.nd-ap-reported a`). */
 .meraki-org-name {
-  font-weight: var(--weight-semibold);
   color: var(--text-primary);
   text-decoration: none;
 }
@@ -86,7 +19,6 @@
 
 .meraki-org-id {
   color: var(--text-tertiary);
-  font-size: var(--font-sm);
 }
 
 .meraki-org-state {
@@ -106,20 +38,10 @@
   color: var(--text-tertiary);
 }
 
-/* The row's two muted facts: which tiers are collected, and which stored key it is polled with. */
-.meraki-org-tiers,
-.meraki-org-key {
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-}
+/* The sync line under it is `MerakiSyncStatus` — its rules live in that component's own file,
+   because the organization's page renders the same line. */
 
-.meraki-org-actions {
-  display: flex;
-  gap: var(--space-1-5);
-  flex-wrap: wrap;
-}
-
-/* Add-org / cadence modal helpers */
+/* The add dialog's organizations and the networks dialog's networks: a list that scrolls. */
 .meraki-org-picker {
   display: flex;
   flex-direction: column;
@@ -170,34 +92,4 @@
   flex: none;
   color: var(--text-secondary);
   font-size: var(--font-xs);
-}
-
-/* The cadence dialog's tier boxes and the add dialog's key-source choice are the same shape: a
-   short row of labelled native controls. */
-.meraki-tier-row,
-.meraki-source-row {
-  display: flex;
-  gap: 14px;
-  align-items: center;
-}
-
-/* Not a `.modal-field` (it has no label of its own), so it brings its own gap to the field below —
-   smaller than a field's, because the choice and the field it switches read as one question. */
-.meraki-source-row {
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-/* Availability: on in every cadence, so it is a word with no box (decision 17). */
-.meraki-chip-fixed {
-  cursor: default;
-}
-
-.meraki-chip-check,
-.meraki-source-choice {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  color: var(--text-secondary);
-  cursor: pointer;
 }

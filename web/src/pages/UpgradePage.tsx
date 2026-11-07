@@ -17,6 +17,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Inline, Page, Stack } from '../components/ui/Page';
+import { Facts } from '../components/ui/Facts';
+import { Disclosure, SectionHead } from '../components/ui/Section';
+import { CheckField } from '../components/ui/FormLayout';
+import { TextInput } from '../components/ui/Field';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { Card } from '../components/ui/Card';
@@ -99,23 +104,6 @@ const ALIGN_POLL_MS = 5_000;
  *  One missed request is normal; a run of them is core being recreated. */
 const STALE_AFTER_MS = 6_000;
 
-/** One label/value row, mirroring Settings ▸ About so the two read as one family. */
-function Row({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
-  return (
-    <div className="upgrade-row">
-      <div className="upgrade-label muted">{label}</div>
-      <div className={mono ? 'upgrade-value mono' : 'upgrade-value'}>{children}</div>
-    </div>
-  );
-}
-
-/** A section divider inside a card. The cards were merged from eight to five, so what used to be a
- *  card title has to survive as something — a word an operator has learned to look for must stay
- *  findable after the box around it is gone (ADR-055 R1). */
-function Sub({ children, first }: { children: React.ReactNode; first?: boolean }) {
-  return <div className={first ? 'upgrade-subhead first' : 'upgrade-subhead'}>{children}</div>;
-}
-
 /**
  * What is happening right now, from the moment the button is pressed until the outcome is in.
  *
@@ -143,7 +131,7 @@ function Progress({
   const pct = stepProgress(phase);
   const step = phase.kind === 'running' ? phase.step : null;
   return (
-    <div className="upgrade-progress">
+    <Stack gap={12}>
       <p className="upgrade-note">
         {phase.kind === 'starting'
           ? t('run.starting')
@@ -178,7 +166,7 @@ function Progress({
       <p className="upgrade-hint muted">
         {stale ? t('run.reconnecting') : t('run.disconnectWarning')}
       </p>
-    </div>
+    </Stack>
   );
 }
 
@@ -210,7 +198,7 @@ function ConvergeProgress({
     not_connected: '✗',
   };
   return (
-    <div className="upgrade-progress">
+    <Stack gap={12}>
       <p className="upgrade-note">
         {t('converge.count', {
           done: phase.done,
@@ -246,7 +234,7 @@ function ConvergeProgress({
           );
         })}
       </ul>
-    </div>
+    </Stack>
   );
 }
 
@@ -485,32 +473,32 @@ export function UpgradePage() {
 
   if (block) {
     return (
-      <div>
+      <Page layout="sections">
         {header}
         <LoadBlockNotice block={block} unavailable={t('error')} permission="manage_system" />
-      </div>
+      </Page>
     );
   }
 
   if (failed) {
     return (
-      <div>
+      <Page layout="sections">
         {header}
         <Card>
           <p className="upgrade-note">{t('error')}</p>
         </Card>
-      </div>
+      </Page>
     );
   }
 
   if (!status) {
     return (
-      <div>
+      <Page layout="sections">
         {header}
         <Card>
           <p className="upgrade-note muted">{t('loading')}</p>
         </Card>
-      </div>
+      </Page>
     );
   }
 
@@ -625,51 +613,82 @@ export function UpgradePage() {
   const movable = picked === null ? [] : rows.filter((r) => !rowLocked(r, picked));
 
   return (
-    <div>
+    <Page layout="sections">
       {header}
 
       {/* ── 1. What is running, and what schema it is on ─────────────────────────────────── */}
+      {/* The same "name: value" rows as Settings ▸ About, so the two read as one family. */}
       <Card title={t('build.heading')}>
-        <div className="upgrade-grid">
-          <Row label={t('build.coreVersion')} mono>
-            {status.current.core_version}
-          </Row>
-          <Row label={t('build.webuiVersion')} mono>
-            {__APP_VERSION__}
-          </Row>
-          <Row label={t('build.buildProfile')}>
-            {t(`buildKind.${kind}`)}
-            {/* A release needs no hint: its label says it (ADR-200). */}
-            {hasBuildKindHint(kind) && (
-              <div className="upgrade-hint muted">{t(`buildKindHint.${kind}`)}</div>
-            )}
-          </Row>
-          <Row label={t('build.sourceRef')} mono>
-            {ref ? (
-              <span title={status.current.source_ref ?? undefined}>{ref}</span>
-            ) : (
-              <span className="muted">{t('build.unknown')}</span>
-            )}
-          </Row>
-          <Row label={t('build.hostname')} mono>
-            {status.current.hostname ?? <span className="muted">{t('build.unknown')}</span>}
-          </Row>
-          <Row label={t('build.uptime')}>{
-            // Coarse on purpose: this answers "did core restart while nobody was looking?", not
-            // "how long exactly" — so never finer than a minute.
-            formatDuration(status.current.uptime_seconds, { smallest: 'm' })
-          }</Row>
-        </div>
+        <Facts
+          items={[
+            {
+              label: t('build.coreVersion'),
+              value: <span className="mono">{status.current.core_version}</span>,
+            },
+            { label: t('build.webuiVersion'), value: <span className="mono">{__APP_VERSION__}</span> },
+            {
+              label: t('build.buildProfile'),
+              value: (
+                <Stack gap={6}>
+                  {t(`buildKind.${kind}`)}
+                  {/* A release needs no hint: its label says it (ADR-200). */}
+                  {hasBuildKindHint(kind) && (
+                    <div className="upgrade-hint muted">{t(`buildKindHint.${kind}`)}</div>
+                  )}
+                </Stack>
+              ),
+            },
+            {
+              label: t('build.sourceRef'),
+              value: (
+                <span className="mono">
+                  {ref ? (
+                    <span title={status.current.source_ref ?? undefined}>{ref}</span>
+                  ) : (
+                    <span className="muted">{t('build.unknown')}</span>
+                  )}
+                </span>
+              ),
+            },
+            {
+              label: t('build.hostname'),
+              value: (
+                <span className="mono">
+                  {status.current.hostname ?? <span className="muted">{t('build.unknown')}</span>}
+                </span>
+              ),
+            },
+            {
+              label: t('build.uptime'),
+              // Coarse on purpose: this answers "did core restart while nobody was looking?", not
+              // "how long exactly" — so never finer than a minute.
+              value: formatDuration(status.current.uptime_seconds, { smallest: 'm' }),
+            },
+          ]}
+        />
 
-        <Sub>{t('schema.heading')}</Sub>
-        <div className="upgrade-grid">
-          <Row label={t('schema.applied')}>
-            {t('schema.appliedValue', { count: status.schema.applied_count })}
-          </Row>
-          <Row label={t('schema.latest')} mono>
-            {status.schema.latest_version ?? <span className="muted">{t('build.unknown')}</span>}
-          </Row>
-        </div>
+        {/* The cards were merged from eight to five, so what used to be a card title survives as a
+            heading inside one: a word an operator has learned to look for must stay findable after
+            the box around it is gone (ADR-055 R1). */}
+        <SectionHead title={t('schema.heading')} />
+        <Facts
+          items={[
+            {
+              label: t('schema.applied'),
+              value: t('schema.appliedValue', { count: status.schema.applied_count }),
+            },
+            {
+              label: t('schema.latest'),
+              value: (
+                <span className="mono">
+                  {status.schema.latest_version ?? (
+                    <span className="muted">{t('build.unknown')}</span>
+                  )}
+                </span>
+              ),
+            },
+          ]}
+        />
       </Card>
 
       {/* ── 2. The one entrance ──────────────────────────────────────────────────────────── */}
@@ -677,23 +696,20 @@ export function UpgradePage() {
         {/* Five distinct answers — no mechanism here, not deployed, dead, switched off, ready —
             because they call for five different actions. See `mechanism()`. */}
         {status.updater.present && (
-          <div className="upgrade-switch-row">
-            <label className="upgrade-switch">
-              <input
-                type="checkbox"
-                checked={status.upgrade_enabled}
-                disabled={switching || isRunning(status)}
-                onChange={() => void toggle(!status.upgrade_enabled)}
-              />
-              <span>{t('mechanism.switch')}</span>
-            </label>
+          <Inline gap={8}>
+            <CheckField
+              checked={status.upgrade_enabled}
+              disabled={switching || isRunning(status)}
+              onChange={() => void toggle(!status.upgrade_enabled)}
+              label={t('mechanism.switch')}
+            />
             {/* Outside the label: a button inside a wrapping label would become what it names. The
                 one thing worth knowing before flipping it is what holds the Docker socket. */}
             <InfoTip infoKey="settings-upgrade:mechanism.info" label={t('mechanism.switch')} />
             {/* Saved, and not yet seen by the sidecar. A state, so a badge beside the switch it is
                 about, in either direction; it used to show only while turning the switch off. */}
             {switchPending(status) && <Badge tone="neutral">{t('mechanism.switchPending')}</Badge>}
-          </div>
+          </Inline>
         )}
         {switchError && <p className="upgrade-note">{switchError}</p>}
 
@@ -733,7 +749,7 @@ export function UpgradePage() {
             {/* When the list was last fetched, and a way to fetch it again. The automatic check
                 runs every 24 hours by default, so the hour a release is published is the hour this
                 is guaranteed to be stale — which is exactly when someone opens this page. */}
-            <div className="upgrade-checked">
+            <Inline gap={12} justify="between">
               <span className="upgrade-hint muted">
                 {checkedAt === null ? (
                   t('mechanism.neverChecked')
@@ -748,7 +764,7 @@ export function UpgradePage() {
               <Button onClick={() => void checkNow()} disabled={checking || inFlight}>
                 {checking ? t('mechanism.checking') : t('mechanism.checkNow')}
               </Button>
-            </div>
+            </Inline>
             {checkError && <p className="upgrade-note">{checkError}</p>}
 
             {newer.length === 0 && (
@@ -761,18 +777,17 @@ export function UpgradePage() {
             {/* Older releases are folded away. They are the long half of the list and the rare
                 half of the intent — nobody opens this page to go backwards by default. */}
             {older.length > 0 && (
-              <>
-                <button
-                  type="button"
-                  className="upgrade-disclosure"
-                  onClick={() => setShowOlder(!showOlder)}
-                >
-                  {showOlder
+              <Disclosure
+                summary={
+                  showOlder
                     ? t('rollbackList.hide')
-                    : t('rollbackList.show', { count: older.length })}
-                </button>
-                {showOlder && <ul className="upgrade-releases">{older.map(row)}</ul>}
-              </>
+                    : t('rollbackList.show', { count: older.length })
+                }
+                open={showOlder}
+                onToggle={setShowOlder}
+              >
+                <ul className="upgrade-releases">{older.map(row)}</ul>
+              </Disclosure>
             )}
           </>
         )}
@@ -781,7 +796,7 @@ export function UpgradePage() {
             deployment that cannot upgrade itself from here still has an inventory worth reading,
             and a remote site can still be brought across, since that touches nothing on this
             host. */}
-        <Sub>{t('components.heading')}</Sub>
+        <SectionHead title={t('components.heading')} />
         <ul className="upgrade-releases upgrade-components">{rows.map(component)}</ul>
         {/* 🚨 The way in when core is current and only the sites have drifted. It opens the same
             dialog with core's row already excluded, so there is one entrance rather than two.
@@ -791,7 +806,7 @@ export function UpgradePage() {
             updater — gating it on the mechanism would remove a working button from exactly the
             deployments that have remote sites and no updater of their own. `tests/ui/            upgradePick.spec.ts` pins it with the mechanism switched off. */}
         {behind.length > 0 && (
-          <div className="upgrade-checked">
+          <Inline gap={12} justify="between">
             <span className="upgrade-hint muted">
               {t('components.behindHint', {
                 count: behind.length,
@@ -804,7 +819,7 @@ export function UpgradePage() {
             >
               {t('components.bring', { version: status.current.core_version })}
             </Button>
-          </div>
+          </Inline>
         )}
       </Card>
 
@@ -814,16 +829,15 @@ export function UpgradePage() {
           {/* The command that makes the file, built from the release typed below. It used to name a
               fixed v0.2.2 whatever was being installed (ADR-200). */}
           <CopyCommand command={bundleSaveCommand(status.updater.repo, bundleTag)} />
-          <div className="upgrade-bundle">
+          <Inline gap={8} className="upgrade-bundle">
             <input
               type="file"
               accept=".tar,application/x-tar"
               disabled={uploading || !canUploadBundle(status, pending)}
               onChange={(e) => pickBundle(e.target.files?.[0] ?? null)}
             />
-            <input
-              type="text"
-              className="mono"
+            <TextInput
+              className="mono upgrade-bundle-tag"
               placeholder="v0.2.2"
               value={bundleTag}
               disabled={uploading || !canUploadBundle(status, pending)}
@@ -833,7 +847,7 @@ export function UpgradePage() {
             <Button variant="primary" disabled={!bundleReady} onClick={() => void upload()}>
               {t('bundle.button')}
             </Button>
-          </div>
+          </Inline>
           {maxGib !== null && (
             <p className="upgrade-hint muted">{t('bundle.limit', { size: maxGib })}</p>
           )}
@@ -852,11 +866,11 @@ export function UpgradePage() {
         <Card title={t('run.inFlight')}>
           {inFlight && (
             <>
-              <Sub first>{t('converge.thisHost')}</Sub>
+              <SectionHead title={t('converge.thisHost')} />
               <Progress phase={phase} stale={stale} target={pendingTarget} t={t} />
             </>
           )}
-          <Sub first={!inFlight}>{t('converge.heading')}</Sub>
+          <SectionHead title={t('converge.heading')} />
           {cphase.kind === 'running' ? (
             <ConvergeProgress phase={cphase} t={t} />
           ) : (
@@ -867,14 +881,14 @@ export function UpgradePage() {
 
       {!inFlight && last && (
         <Card title={t('run.heading')}>
-          <div className="upgrade-grid">
-            <Row label={t('run.state')}>{lastState ? t(`runState.${lastState}`) : last.state}</Row>
-            <Row label={t('run.target')} mono>
-              {last.target ?? '—'}
-            </Row>
-            <Row label={t('run.message')}>{last.message ?? '—'}</Row>
-            <Row label={t('run.requestedBy')}>{last.requested_by ?? '—'}</Row>
-          </div>
+          <Facts
+            items={[
+              { label: t('run.state'), value: lastState ? t(`runState.${lastState}`) : last.state },
+              { label: t('run.target'), value: <span className="mono">{last.target ?? '—'}</span> },
+              { label: t('run.message'), value: last.message ?? '—' },
+              { label: t('run.requestedBy'), value: last.requested_by ?? '—' },
+            ]}
+          />
         </Card>
       )}
 
@@ -883,21 +897,26 @@ export function UpgradePage() {
           registry, so it used to vanish from every list and the deployment read as aligned. */}
       {cphase.kind === 'done' && (
         <Card title={t('converge.lastHeading')}>
-          <div className="upgrade-grid">
-            <Row label={t('run.state')}>
-              {t('converge.outcome', { done: cphase.done, failed: cphase.failed })}
-              {cphase.failed > 0 && (
-                <>
-                  {' '}
-                  <Badge tone="critical">{t('converge.attention')}</Badge>
-                </>
-              )}
-            </Row>
-            <Row label={t('run.target')} mono>
-              {cphase.conv.tag}
-            </Row>
-            <Row label={t('run.requestedBy')}>{cphase.conv.requested_by}</Row>
-          </div>
+          <Facts
+            items={[
+              {
+                label: t('run.state'),
+                value: (
+                  <>
+                    {t('converge.outcome', { done: cphase.done, failed: cphase.failed })}
+                    {cphase.failed > 0 && (
+                      <>
+                        {' '}
+                        <Badge tone="critical">{t('converge.attention')}</Badge>
+                      </>
+                    )}
+                  </>
+                ),
+              },
+              { label: t('run.target'), value: <span className="mono">{cphase.conv.tag}</span> },
+              { label: t('run.requestedBy'), value: cphase.conv.requested_by },
+            ]}
+          />
           <ConvergeProgress phase={cphase} t={t} />
         </Card>
       )}
@@ -939,162 +958,164 @@ export function UpgradePage() {
             />
           }
         >
-          <div className="upgrade-pick">
-            <div className="upgrade-pick-head">
-              <span />
-              <span>{t('pick.component')}</span>
-              <span>{t('pick.pool')}</span>
-              <span>{t('pick.now')}</span>
-              <span />
-              <span>{t('pick.next')}</span>
-              <span />
-            </div>
-            {rows.map((r) => {
-              const plan = rowPlan(r, picked);
-              const locked = rowLocked(r, picked);
-              const on = selected.includes(r.id) || (r.co_located && selected.includes(CORE_ID));
-              const why = componentReason(r.reason);
-              // Only where it would actually happen: a row this press does not move cannot take
-              // its site off the air, whatever that site last said.
-              const warn = r.needs_site_prep && plan === 'moves';
-              return (
-                <label
-                  key={r.id}
-                  className={
-                    r.co_located
-                      ? 'upgrade-pick-row upgrade-pick-child'
-                      : plan === 'moves'
-                        ? 'upgrade-pick-row'
-                        : 'upgrade-pick-row upgrade-pick-off'
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    disabled={locked}
-                    onChange={(e) =>
-                      setSelected((cur) =>
-                        e.target.checked
-                          ? [...cur, r.id]
-                          : cur.filter((id) => id !== r.id),
-                      )
+          <Stack gap={12}>
+            <div className="upgrade-pick">
+              <div className="upgrade-pick-head">
+                <span />
+                <span>{t('pick.component')}</span>
+                <span>{t('pick.pool')}</span>
+                <span>{t('pick.now')}</span>
+                <span />
+                <span>{t('pick.next')}</span>
+                <span />
+              </div>
+              {rows.map((r) => {
+                const plan = rowPlan(r, picked);
+                const locked = rowLocked(r, picked);
+                const on = selected.includes(r.id) || (r.co_located && selected.includes(CORE_ID));
+                const why = componentReason(r.reason);
+                // Only where it would actually happen: a row this press does not move cannot take
+                // its site off the air, whatever that site last said.
+                const warn = r.needs_site_prep && plan === 'moves';
+                return (
+                  <label
+                    key={r.id}
+                    className={
+                      r.co_located
+                        ? 'upgrade-pick-row upgrade-pick-child'
+                        : plan === 'moves'
+                          ? 'upgrade-pick-row'
+                          : 'upgrade-pick-row upgrade-pick-off'
                     }
-                  />
-                  <span className="mono">{r.kind === 'core' ? t('components.core') : r.id}</span>
-                  <span className="muted">{r.pool ?? '—'}</span>
-                  <span className="mono">{r.version ?? '—'}</span>
-                  <span className="upgrade-pick-arrow">{plan === 'moves' ? '→' : '—'}</span>
-                  <span className="mono">{plan === 'moves' ? picked : '—'}</span>
-                  {/* The reason lives in the row, never in a tooltip: a control whose explanation
-                      is hover-only is one a touch device never explains (ADR-055 R4).
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      disabled={locked}
+                      onChange={(e) =>
+                        setSelected((cur) =>
+                          e.target.checked
+                            ? [...cur, r.id]
+                            : cur.filter((id) => id !== r.id),
+                        )
+                      }
+                    />
+                    <span className="mono">{r.kind === 'core' ? t('components.core') : r.id}</span>
+                    <span className="muted">{r.pool ?? '—'}</span>
+                    <span className="mono">{r.version ?? '—'}</span>
+                    <span className="upgrade-pick-arrow">{plan === 'moves' ? '→' : '—'}</span>
+                    <span className="mono">{plan === 'moves' ? picked : '—'}</span>
+                    {/* The reason lives in the row, never in a tooltip: a control whose explanation
+                        is hover-only is one a touch device never explains (ADR-055 R4).
 
-                      🚨 One span, not two: `.upgrade-pick-row` is a seven-column grid sharing its
-                      template with `.upgrade-pick-head`, so an eighth child slides every row out
-                      from under its own header — and no test can see that.
+                        🚨 One span, not two: `.upgrade-pick-row` is a seven-column grid sharing its
+                        template with `.upgrade-pick-head`, so an eighth child slides every row out
+                        from under its own header — and no test can see that.
 
-                      The site-prep warning outranks the rest when both apply. It is the only entry
-                      here that describes damage rather than cost, and `pick.downgrade` below still
-                      names a row moved back, so nothing is lost by yielding the cell. */}
-                  <span className={warn ? 'upgrade-why upgrade-why-warn' : 'upgrade-why muted'}>
-                    {warn
-                      ? t('sitePrep.row')
-                      : plan === 'already'
-                        ? t('componentReason.already', { version: picked })
-                        : why
-                          ? t(`componentReason.${why}`)
-                          : r.moves_back
-                            ? t('componentReason.moves_back')
-                            : ''}
-                  </span>
-                </label>
-              );
-            })}
-          </div>
-
-          {selected.includes(CORE_ID) && (
-            <p className="upgrade-hint muted">{t('apply.confirmBackup')}</p>
-          )}
-          {!selected.includes(CORE_ID) && (
-            <p className="upgrade-hint muted">{t('pick.coreUntouched')}</p>
-          )}
-          {/* A poller ahead of core is moved *back*. Named individually, because "upgrade" is what
-              the button says and a downgrade is not what it promised. */}
-          {pickedBack.length > 0 && (
-            <p className="upgrade-note">
-              {t('pick.downgrade', {
-                count: pickedBack.length,
-                names: pickedBack.map((r) => r.id).join(', '),
+                        The site-prep warning outranks the rest when both apply. It is the only entry
+                        here that describes damage rather than cost, and `pick.downgrade` below still
+                        names a row moved back, so nothing is lost by yielding the cell. */}
+                    <span className={warn ? 'upgrade-why upgrade-why-warn' : 'upgrade-why muted'}>
+                      {warn
+                        ? t('sitePrep.row')
+                        : plan === 'already'
+                          ? t('componentReason.already', { version: picked })
+                          : why
+                            ? t(`componentReason.${why}`)
+                            : r.moves_back
+                              ? t('componentReason.moves_back')
+                              : ''}
+                    </span>
+                  </label>
+                );
               })}
-            </p>
-          )}
-          {/* 🚨 The most serious thing this dialog can say, so it sits above the rest of them: the
-              others describe a cost the operator is accepting, this one describes a site that may
-              not come back. Recomputed from the checkboxes for the same reason `darkPools` is —
-              unticking a site has to take it out of the sentence, or the sentence stops being
-              about the button.
+            </div>
 
-              The repair is spelled out here rather than pointed at: production is a closed network
-              (ADR-045), so the text on the screen is the manual (ADR-055 R5). And it is the repair
-              that actually clears this warning — telling an operator to set YAGRA_CERT_DIR would
-              make the next upgrade survivable while leaving the row exactly as it is, which is how
-              a warning gets read past.
-
-              🚨 Two repairs, cheapest first, and the order is load-bearing. An apply installs the
-              site's new composition and then recreates `poller` BY NAME — deliberately, because a
-              bare `up -d` would kill the updater running the apply. So the common case after any
-              upgrade is a current file and a stale container, which recreating one service fixes
-              and which no bundle is needed for. Naming only the bundle would send every such site
-              through a token rotation and a trip to the site for a one-line repair. */}
-          {pickedUnprepared.length > 0 && (
-            <>
-              <p className="upgrade-note upgrade-note-warn">
-                {t('sitePrep.warning', {
-                  count: pickedUnprepared.length,
-                  names: pickedUnprepared.join(', '),
+            {selected.includes(CORE_ID) && (
+              <p className="upgrade-hint muted">{t('apply.confirmBackup')}</p>
+            )}
+            {!selected.includes(CORE_ID) && (
+              <p className="upgrade-hint muted">{t('pick.coreUntouched')}</p>
+            )}
+            {/* A poller ahead of core is moved *back*. Named individually, because "upgrade" is what
+                the button says and a downgrade is not what it promised. */}
+            {pickedBack.length > 0 && (
+              <p className="upgrade-note">
+                {t('pick.downgrade', {
+                  count: pickedBack.length,
+                  names: pickedBack.map((r) => r.id).join(', '),
                 })}
               </p>
-              <StepFrame
-                className="upgrade-steps-frame"
-                summary={t('sitePrep.steps.title')}
-                steps={[
-                  <>
-                    {t('sitePrep.steps.s1')}
-                    <CopyCommand command={SITE_UPDATER_RECREATE_COMMAND} />
-                  </>,
-                  <Trans
-                    key="s2"
-                    t={t}
-                    i18nKey="sitePrep.steps.s2"
-                    components={{ lnk: <ScreenLink to="/settings/pollers" /> }}
-                  />,
-                  <>
-                    {t('sitePrep.steps.s3')}
-                    <CopyCommand command={SITE_KIT_UP_COMMAND} />
-                  </>,
-                ]}
-              />
-            </>
-          )}
-          {/* The consequence an operator cannot find out afterwards except from an alert: no
-              maintenance window silences pool coverage, deliberately (ADR-051 decision 13). It is
-              recomputed from the checkboxes — a warning that does not follow them reads exactly the
-              same when it matters as when it does not. */}
-          {pickedDark.length > 0 && (
-            <p className="upgrade-note">
-              {t('pollers.darkPools', {
-                count: pickedDark.length,
-                pools: pickedDark.join(', '),
-              })}
-            </p>
-          )}
-          {back.kind === 'floored' && selected.includes(CORE_ID) && (
-            <p className="upgrade-hint muted">
-              {t('apply.confirmFloor', { minCore: back.minCore })}
-            </p>
-          )}
-          {applyError && <p className="form-error">{applyError}</p>}
+            )}
+            {/* 🚨 The most serious thing this dialog can say, so it sits above the rest of them: the
+                others describe a cost the operator is accepting, this one describes a site that may
+                not come back. Recomputed from the checkboxes for the same reason `darkPools` is —
+                unticking a site has to take it out of the sentence, or the sentence stops being
+                about the button.
+
+                The repair is spelled out here rather than pointed at: production is a closed network
+                (ADR-045), so the text on the screen is the manual (ADR-055 R5). And it is the repair
+                that actually clears this warning — telling an operator to set YAGRA_CERT_DIR would
+                make the next upgrade survivable while leaving the row exactly as it is, which is how
+                a warning gets read past.
+
+                🚨 Two repairs, cheapest first, and the order is load-bearing. An apply installs the
+                site's new composition and then recreates `poller` BY NAME — deliberately, because a
+                bare `up -d` would kill the updater running the apply. So the common case after any
+                upgrade is a current file and a stale container, which recreating one service fixes
+                and which no bundle is needed for. Naming only the bundle would send every such site
+                through a token rotation and a trip to the site for a one-line repair. */}
+            {pickedUnprepared.length > 0 && (
+              <>
+                <p className="upgrade-note upgrade-note-warn">
+                  {t('sitePrep.warning', {
+                    count: pickedUnprepared.length,
+                    names: pickedUnprepared.join(', '),
+                  })}
+                </p>
+                <StepFrame
+                  className="upgrade-steps-frame"
+                  summary={t('sitePrep.steps.title')}
+                  steps={[
+                    <>
+                      {t('sitePrep.steps.s1')}
+                      <CopyCommand command={SITE_UPDATER_RECREATE_COMMAND} />
+                    </>,
+                    <Trans
+                      key="s2"
+                      t={t}
+                      i18nKey="sitePrep.steps.s2"
+                      components={{ lnk: <ScreenLink to="/settings/pollers" /> }}
+                    />,
+                    <>
+                      {t('sitePrep.steps.s3')}
+                      <CopyCommand command={SITE_KIT_UP_COMMAND} />
+                    </>,
+                  ]}
+                />
+              </>
+            )}
+            {/* The consequence an operator cannot find out afterwards except from an alert: no
+                maintenance window silences pool coverage, deliberately (ADR-051 decision 13). It is
+                recomputed from the checkboxes — a warning that does not follow them reads exactly the
+                same when it matters as when it does not. */}
+            {pickedDark.length > 0 && (
+              <p className="upgrade-note">
+                {t('pollers.darkPools', {
+                  count: pickedDark.length,
+                  pools: pickedDark.join(', '),
+                })}
+              </p>
+            )}
+            {back.kind === 'floored' && selected.includes(CORE_ID) && (
+              <p className="upgrade-hint muted">
+                {t('apply.confirmFloor', { minCore: back.minCore })}
+              </p>
+            )}
+            {applyError && <p className="form-error">{applyError}</p>}
+          </Stack>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 }

@@ -18,7 +18,11 @@ import { api, errMsg } from '../services/api';
 import { saveBlob } from '../lib/download';
 import { useCan } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page, Stack } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { Facts } from '../components/ui/Facts';
+import { SaveNote } from '../components/ui/FormLayout';
+import { Callout } from '../components/ui/Section';
 import { Button } from '../components/ui/Button';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { ScreenLink } from '../components/ui/ScreenLink';
@@ -40,38 +44,47 @@ export function ConfigBundlePage() {
   const canSystem = useCan('manage_system');
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.configBundle')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.configBundle') }]}
       />
-      <Card title={t('bundle.export.title')}>
-        <p className="cb-help muted">
-          <Trans
-            t={t}
-            i18nKey="bundle.notBackup"
-            components={{ lnk: <ScreenLink to="/settings/relocation" /> }}
-          />
-        </p>
-        {canSystem ? (
-          <ExportPanel />
-        ) : (
+      {canSystem ? (
+        <ExportCard />
+      ) : (
+        <Card title={t('bundle.export.title')}>
+          <NotBackup />
           <PermissionHint permission="manage_system" />
-        )}
-      </Card>
-      <Card title={t('bundle.import.title')}>
-        {canSystem ? (
-          <ImportPanel />
-        ) : (
+        </Card>
+      )}
+      {canSystem ? (
+        <ImportCard />
+      ) : (
+        <Card title={t('bundle.import.title')}>
           <PermissionHint permission="manage_system" />
-        )}
-      </Card>
-    </div>
+        </Card>
+      )}
+    </Page>
+  );
+}
+
+/** The one sentence that says this is not a backup, with the way to the screen that is. Shown
+ *  whether or not the caller may export. */
+function NotBackup() {
+  const { t } = useTranslation('system');
+  return (
+    <p className="cb-line muted">
+      <Trans
+        t={t}
+        i18nKey="bundle.notBackup"
+        components={{ lnk: <ScreenLink to="/settings/relocation" /> }}
+      />
+    </p>
   );
 }
 
 /** Download the current configuration as a JSON file. */
-function ExportPanel() {
+function ExportCard() {
   const { t } = useTranslation('system');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -95,28 +108,38 @@ function ExportPanel() {
   };
 
   return (
-    <div className="cb-panel">
-      <div className="cb-actions">
-        <Button variant="primary" onClick={download} disabled={busy}>
-          {t('bundle.export.action')}
-        </Button>
-      </div>
-      {error && <p className="form-error">{error}</p>}
+    <Card
+      title={t('bundle.export.title')}
+      footer={
+        <>
+          {error && <SaveNote tone="error">{error}</SaveNote>}
+          {done && (
+            <SaveNote tone="ok">
+              {t('bundle.export.done', {
+                count: bundleRowCount(done),
+                file: bundleFilename(done.exported_at),
+              })}
+            </SaveNote>
+          )}
+          <Button variant="primary" onClick={download} disabled={busy}>
+            {t('bundle.export.action')}
+          </Button>
+        </>
+      }
+    >
+      <NotBackup />
       {done && (
         <>
-          <p className="cb-ok">
-            {t('bundle.export.done', { count: bundleRowCount(done), file: bundleFilename(done.exported_at) })}
-          </p>
           <SectionList bundle={done} />
           <NoteList notes={done.notes ?? []} />
         </>
       )}
-    </div>
+    </Card>
   );
 }
 
 /** Pick a bundle, check it against this deployment, then apply it. */
-function ImportPanel() {
+function ImportCard() {
   const { t } = useTranslation('system');
   const fileRef = useRef<HTMLInputElement>(null);
   const [bundle, setBundle] = useState<ConfigBundle | null>(null);
@@ -164,7 +187,26 @@ function ImportPanel() {
   };
 
   return (
-    <div className="cb-panel">
+    <Card
+      title={t('bundle.import.title')}
+      footer={
+        (error || bundle) && (
+          <>
+            {error && <SaveNote tone="error">{error}</SaveNote>}
+            {bundle && (
+              <>
+                <Button onClick={() => send(true)} disabled={busy}>
+                  {t('bundle.import.check')}
+                </Button>
+                <Button variant="primary" onClick={() => send(false)} disabled={busy}>
+                  {t('bundle.import.apply')}
+                </Button>
+              </>
+            )}
+          </>
+        )
+      }
+    >
       <input
         ref={fileRef}
         type="file"
@@ -173,27 +215,20 @@ function ImportPanel() {
         onChange={(e) => pick(e.target.files?.[0])}
         aria-label={t('bundle.import.pickAria')}
       />
-      {filename && !bundle && !error && <p className="muted">{t('bundle.import.reading')}</p>}
+      {filename && !bundle && !error && (
+        <p className="cb-line muted">{t('bundle.import.reading')}</p>
+      )}
       {bundle && (
         <>
-          <p className="cb-ok">
+          <p className="cb-line ok">
             {t('bundle.import.picked', { file: filename, count: bundleRowCount(bundle) })}
           </p>
           <SectionList bundle={bundle} />
-          <p className="cb-warn">{t('bundle.import.warning')}</p>
-          <div className="cb-actions">
-            <Button onClick={() => send(true)} disabled={busy}>
-              {t('bundle.import.check')}
-            </Button>
-            <Button variant="primary" onClick={() => send(false)} disabled={busy}>
-              {t('bundle.import.apply')}
-            </Button>
-          </div>
+          <Callout tone="warning">{t('bundle.import.warning')}</Callout>
         </>
       )}
-      {error && <p className="form-error">{error}</p>}
       {report && <ReportView report={report} />}
-    </div>
+    </Card>
   );
 }
 
@@ -201,18 +236,15 @@ function ImportPanel() {
 function SectionList({ bundle }: { bundle: ConfigBundle }) {
   const { t } = useTranslation('system');
   const sections = bundleSections(bundle);
-  if (sections.length === 0) return <p className="muted">{t('bundle.empty')}</p>;
+  if (sections.length === 0) return <p className="cb-line muted">{t('bundle.empty')}</p>;
   return (
-    <ul className="cb-sections">
-      {sections.map((s) => (
-        <li key={s.table}>
-          <span className="cb-section-name">
-            {t(`bundle.table.${s.table}`, { defaultValue: s.table })}
-          </span>
-          <span className="cb-section-count">{s.count}</span>
-        </li>
-      ))}
-    </ul>
+    <Facts
+      items={sections.map((s) => ({
+        key: s.table,
+        label: t(`bundle.table.${s.table}`, { defaultValue: s.table }),
+        value: <span className="mono">{s.count}</span>,
+      }))}
+    />
   );
 }
 
@@ -222,8 +254,8 @@ function ReportView({ report }: { report: ImportReport }) {
   const totals = reportTotals(report);
   const changed = report.tables.filter((r) => r.created + r.updated + r.skipped > 0);
   return (
-    <div className="cb-report">
-      <p className={report.dry_run ? 'cb-warn' : 'cb-ok'}>
+    <Stack gap={12} className="cb-report">
+      <p className={report.dry_run ? 'cb-line warn' : 'cb-line ok'}>
         {report.dry_run
           ? t('bundle.report.dryRun', totals)
           : reportIsEmpty(report)
@@ -231,25 +263,24 @@ function ReportView({ report }: { report: ImportReport }) {
             : t('bundle.report.applied', totals)}
       </p>
       {changed.length > 0 && (
-        <ul className="cb-sections">
-          {changed.map((r) => (
-            <li key={r.table}>
-              <span className="cb-section-name">
-                {t(`bundle.table.${r.table}`, { defaultValue: r.table })}
-              </span>
-              <span className="cb-section-count">
+        <Facts
+          items={changed.map((r) => ({
+            key: r.table,
+            label: t(`bundle.table.${r.table}`, { defaultValue: r.table }),
+            value: (
+              <span className="mono">
                 {t('bundle.report.row', {
                   created: r.created,
                   updated: r.updated,
                   skipped: r.skipped,
                 })}
               </span>
-            </li>
-          ))}
-        </ul>
+            ),
+          }))}
+        />
       )}
       <NoteList notes={report.notes} />
-    </div>
+    </Stack>
   );
 }
 
@@ -259,7 +290,7 @@ function NoteList({ notes }: { notes: ImportReport['notes'] }) {
   const { t } = useTranslation('system');
   if (notes.length === 0) return null;
   return (
-    <ul className="cb-notes">
+    <Stack as="ul" gap={8} className="cb-notes">
       {notes.map((n) => (
         <li key={`${n.table}-${n.code}-${n.field ?? ''}`}>
           {t(`bundle.notes.${n.code}`, { defaultValue: n.code })}
@@ -270,6 +301,6 @@ function NoteList({ notes }: { notes: ImportReport['notes'] }) {
           {n.field ? ` (${n.field})` : ''} · {n.count}
         </li>
       ))}
-    </ul>
+    </Stack>
   );
 }

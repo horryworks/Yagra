@@ -4,24 +4,16 @@
 // baked in at compile time (Vite `define`, from package.json). Showing both makes a core/web
 // skew during a rolling upgrade visible. Read-only, no auth needed to render.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { Facts } from '../components/ui/Facts';
 import { api } from '../services/api';
 import './AboutPage.css';
 
 const REPOSITORY = 'https://github.com/horryworks/Yagra';
-
-/** One label/value row. `mono` renders the value in the monospace family (for versions). */
-function InfoRow({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
-  return (
-    <div className="about-row">
-      <div className="about-label muted">{label}</div>
-      <div className={mono ? 'about-value mono' : 'about-value'}>{children}</div>
-    </div>
-  );
-}
 
 export function AboutPage() {
   const { t } = useTranslation('settings');
@@ -46,32 +38,39 @@ export function AboutPage() {
   const core = coreError ? t('about.unavailable') : (coreVersion ?? '…');
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('about.title')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('about.title') }]}
       />
       <Card title={t('nav:shell.wordmark')}>
         <p className="about-tagline muted">{t('about.tagline')}</p>
-        <div className="about-grid">
-          <InfoRow label={t('about.coreVersion')} mono>
-            {core}
-          </InfoRow>
-          <InfoRow label={t('about.webuiVersion')} mono>
-            {__APP_VERSION__}
-          </InfoRow>
-          <InfoRow label={t('about.repository')}>
-            <a href={REPOSITORY} target="_blank" rel="noreferrer">
-              {REPOSITORY}
-            </a>
-          </InfoRow>
-          <InfoRow label={t('about.license')}>
-            <a href={`${REPOSITORY}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
-              AGPL-3.0-only
-            </a>
-          </InfoRow>
-        </div>
+        <Facts
+          items={[
+            { label: t('about.coreVersion'), value: <span className="mono">{core}</span> },
+            {
+              label: t('about.webuiVersion'),
+              value: <span className="mono">{__APP_VERSION__}</span>,
+            },
+            {
+              label: t('about.repository'),
+              value: (
+                <a href={REPOSITORY} target="_blank" rel="noreferrer">
+                  {REPOSITORY}
+                </a>
+              ),
+            },
+            {
+              label: t('about.license'),
+              value: (
+                <a href={`${REPOSITORY}/blob/main/LICENSE`} target="_blank" rel="noreferrer">
+                  AGPL-3.0-only
+                </a>
+              ),
+            },
+          ]}
+        />
       </Card>
-    </div>
+    </Page>
   );
 }

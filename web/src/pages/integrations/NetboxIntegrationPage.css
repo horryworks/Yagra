@@ -4,13 +4,11 @@
  * Every colour and size is a token — no literals (ui-conventions.md). The status colours here are
  * deliberately NOT the `--status-*` node-state palette: a NetBox sync that failed is not a node
  * that is down, and painting it that way puts a red thing on screen that no alert corresponds to.
+ *
+ * The frame, the dialog's fields and the warnings are the shared parts (ADR-246). The server row
+ * stays this screen's own: `ItemRow` keeps its actions on one line, and four controls there leave a
+ * phone no room for the server's name; this row wraps them under it.
  */
-
-.netbox-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
 
 .netbox-row {
   display: flex;
@@ -18,7 +16,7 @@
   gap: var(--space-4);
   flex-wrap: wrap;
   padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: var(--border-width) solid var(--border-color);
 }
 
 .netbox-row:last-child {
@@ -28,7 +26,7 @@
 .netbox-row-main {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--space-1) / 2);
+  gap: var(--space-0-5);
   min-width: 0;
   flex: 1 1 14rem;
 }
@@ -54,7 +52,7 @@
 .netbox-row-sync {
   display: flex;
   flex-direction: column;
-  gap: calc(var(--space-1) / 2);
+  gap: var(--space-0-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
   flex: 1 1 16rem;
@@ -75,28 +73,6 @@
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
-}
-
-.netbox-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-}
-
-.netbox-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-bottom: var(--space-4);
-}
-
-.netbox-field > span:first-child,
-.netbox-field > label:first-child {
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
 }
 
 .netbox-probe {

@@ -12,6 +12,7 @@
 import { useTranslation } from 'react-i18next';
 import { usePrefsStore, type Language, type Theme, type UiMode } from '../../prefs';
 import { Modal } from '../ui/Modal';
+import { Fields, SettingRow } from '../ui/FormLayout';
 import './PreferencesModal.css';
 
 // Theme options carry an i18n key (resolved at render); language options show endonyms (native
@@ -47,60 +48,53 @@ export function PreferencesModal({ onClose }: Props) {
 
   return (
     <Modal title={t('prefs.title')} onClose={onClose}>
-      <div className="pref-row">
-        <div className="pref-label">
-          <div className="pref-name">{t('prefs.theme')}</div>
-        </div>
-        <div className="pref-seg" role="radiogroup" aria-label={t('prefs.theme')}>
-          {THEMES.map((o) => (
-            <button
-              key={o.key}
-              role="radio"
-              aria-checked={theme === o.key}
-              className={theme === o.key ? 'pref-seg-btn active' : 'pref-seg-btn'}
-              onClick={() => setTheme(o.key)}
-            >
-              {t(o.labelKey)}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="pref-row">
-        <div className="pref-label">
-          <div className="pref-name">{t('prefs.language')}</div>
-        </div>
-        <div className="pref-seg" role="radiogroup" aria-label={t('prefs.language')}>
-          {LANGUAGES.map((o) => (
-            <button
-              key={o.key}
-              role="radio"
-              aria-checked={language === o.key}
-              className={language === o.key ? 'pref-seg-btn active' : 'pref-seg-btn'}
-              onClick={() => setLanguage(o.key)}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="pref-row">
-        <div className="pref-label">
-          <div className="pref-name">{t('prefs.layout')}</div>
-        </div>
-        <div className="pref-seg" role="radiogroup" aria-label={t('prefs.layout')}>
-          {UI_MODES.map((o) => (
-            <button
-              key={o.key}
-              role="radio"
-              aria-checked={uiMode === o.key}
-              className={uiMode === o.key ? 'pref-seg-btn active' : 'pref-seg-btn'}
-              onClick={() => setUiMode(o.key)}
-            >
-              {t(o.labelKey)}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Fields>
+        <SettingRow label={t('prefs.theme')}>
+          <div className="pref-seg" role="radiogroup" aria-label={t('prefs.theme')}>
+            {THEMES.map((o) => (
+              <button
+                key={o.key}
+                role="radio"
+                aria-checked={theme === o.key}
+                className={theme === o.key ? 'pref-seg-btn active' : 'pref-seg-btn'}
+                onClick={() => setTheme(o.key)}
+              >
+                {t(o.labelKey)}
+              </button>
+            ))}
+          </div>
+        </SettingRow>
+        <SettingRow label={t('prefs.language')}>
+          <div className="pref-seg" role="radiogroup" aria-label={t('prefs.language')}>
+            {LANGUAGES.map((o) => (
+              <button
+                key={o.key}
+                role="radio"
+                aria-checked={language === o.key}
+                className={language === o.key ? 'pref-seg-btn active' : 'pref-seg-btn'}
+                onClick={() => setLanguage(o.key)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </SettingRow>
+        <SettingRow label={t('prefs.layout')}>
+          <div className="pref-seg" role="radiogroup" aria-label={t('prefs.layout')}>
+            {UI_MODES.map((o) => (
+              <button
+                key={o.key}
+                role="radio"
+                aria-checked={uiMode === o.key}
+                className={uiMode === o.key ? 'pref-seg-btn active' : 'pref-seg-btn'}
+                onClick={() => setUiMode(o.key)}
+              >
+                {t(o.labelKey)}
+              </button>
+            ))}
+          </div>
+        </SettingRow>
+      </Fields>
     </Modal>
   );
 }

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* Settings ▸ Integrations ▸ Cisco Meraki ▸ <organization> (ADR-164 Inc.4/5). Shared theme variables
-   only, so light and dark both work. The table is `DataTable`'s; what is here is the page around
-   it and the cells that carry two lines. */
+/* Settings ▸ Integrations ▸ Cisco Meraki ▸ <organization> (ADR-164 Inc.4/5). The frame is the
+   shared parts (ADR-246): Page, Card and its footer, CheckField, Field, Callout. The table is
+   `DataTable`'s. What is here is this screen's own: the status strip, the width of the cap, the
+   import's result line, the table's height and the cells that carry two lines. */
 
 /* How the organization is doing, in one wrapping line under the header. */
 .meraki-orgpage-status {
@@ -9,7 +10,6 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-0-5) var(--space-3);
-  margin-bottom: var(--space-3);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -18,76 +18,21 @@
   color: var(--text-tertiary);
 }
 
-.meraki-orgpage-settings {
-  margin-bottom: var(--space-3);
-}
-
-/* A checkbox with its sentence and the explanation under it. The box lines up with the first line
-   of text, not with the middle of the block — the hint runs to three lines. */
-.meraki-orgpage-check {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-  cursor: pointer;
-}
-
-.meraki-orgpage-check input {
-  margin-top: 3px;
-  flex: none;
-  cursor: pointer;
-}
-
-.meraki-orgpage-check input:disabled {
-  cursor: not-allowed;
-}
-
-.meraki-orgpage-check-label {
-  color: var(--text-primary);
-  font-weight: var(--weight-medium);
-}
-
 /* The cap is one short number; a full-width box would say it takes a sentence. */
 .meraki-orgpage-max {
   max-width: 16rem;
 }
 
-.meraki-orgpage-save {
-  margin-top: var(--space-3);
-}
-
-/* Something the operator should read, that is not a failure: networks automatic import cannot
-   reach, devices the cap left out. Marked by the bar rather than by the text colour so the numbers
-   stay readable. The accent, not a --status-* colour, for the reason the sync line gives: nothing
-   here is a node that is down. */
-.meraki-orgpage-notice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
-  margin-bottom: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-left: 3px solid var(--accent-color);
-  background: var(--bg-secondary);
-  font-size: var(--font-sm);
-  color: var(--text-primary);
-}
-
-/* The result of the import, or the failure of a write made from the toolbar. */
-.meraki-orgpage-line {
-  margin: 0 0 var(--space-3);
-}
-
-/* Neutral on purpose, like the NetBox page's `.netbox-probe.ok`: a green thing on an integrations
-   screen would read as a node that is up. The ✓ carries the meaning. */
+/* The result of the import. Neutral on purpose, like the NetBox page's `.netbox-probe.ok`: a green
+   thing on an integrations screen would read as a node that is up. The ✓ carries the meaning. */
 .meraki-orgpage-ok {
+  margin: 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
 .meraki-orgpage-back {
-  margin: var(--space-2) 0 0;
+  margin: 0;
 }
 
 .meraki-orgpage-back a {
@@ -146,8 +91,8 @@ html:not([data-viewport='mobile']) .meraki-dev-line .icon-btn {
 }
 
 /* "not watched", under a network's name: automatic import does not reach this device. The accent,
-   for the reason the notice above the table uses it — it wants reading, and it is not a node state.
-   The words carry the meaning; the colour only finds them. */
+   for the reason the callout above the table uses it — it wants reading, and it is not a node
+   state. The words carry the meaning; the colour only finds them. */
 .meraki-dev-flag {
   color: var(--accent-color);
 }

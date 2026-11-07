@@ -1,10 +1,12 @@
 /* Integrations catalog — a responsive card grid. One card per available integration; each links
-   to its detail page. Tokens only (no hardcoded colors); chips are neutral, never status colors. */
+   to its detail page. Tokens only (no hardcoded colors); chips are neutral, never status colors.
+   The page around it is `Page` (ADR-246). The tile is not `Card`: the whole tile is one link with a
+   hover, which `Card` (a section with a title row) has no form for. */
 
 .integrations-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 .integration-card {
@@ -24,16 +26,6 @@
 .integration-card:hover {
   border-color: var(--accent-color);
   background: var(--bg-tertiary);
-}
-
-.integration-card.is-placeholder {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.integration-card.is-placeholder:hover {
-  border-color: var(--border-color);
-  background: var(--bg-secondary);
 }
 
 .integration-card-head {

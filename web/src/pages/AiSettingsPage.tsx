@@ -34,12 +34,14 @@ import {
   type AiFormState,
 } from './aiConfigForm';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page, Inline } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { CheckField, Fields, SaveNote, SettingRow } from '../components/ui/FormLayout';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { InfoTip } from '../components/ui/InfoTip';
 import { SecretInput } from '../components/ui/SecretInput';
-import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
 import './AiSettingsPage.css';
 
 export function AiSettingsPage() {
@@ -174,187 +176,176 @@ export function AiSettingsPage() {
 
   if (block) {
     return (
-      <div>
+      <Page layout="sections">
         <PageHeader
           title={t('nav:settings.ai')}
           trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.ai') }]}
         />
         <LoadBlockNotice block={block} permission="manage_system" />
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.ai')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.ai') }]}
       />
 
       <Card title={t('card.provider')}>
-        <div className="ai-field">
-          <label className="ai-label" htmlFor="ai-provider">
-            {t('provider.label')}
-          </label>
-          <Select
-            id="ai-provider"
-            value={provider}
-            disabled={!canSystem || loading || busy}
-            onChange={(e) => {
-              setProvider(e.target.value);
-              setApiKey('');
-              setClearKey(false);
-              dirty();
-            }}
-          >
-            {providers.map((p) => (
-              <option key={p.key} value={p.key}>
-                {t(`provider.${p.key}`)}
-              </option>
-            ))}
-          </Select>
-        </div>
-
-        <div className="ai-field">
-          <label className="ai-label" htmlFor="ai-model">
-            {t('field.model')}
-          </label>
-          <TextInput
-            id="ai-model"
-            className="mono"
-            value={model}
-            placeholder={choice?.suggested_model ?? ''}
-            disabled={!canSystem || loading || busy}
-            onChange={(e) => {
-              setModel(e.target.value);
-              dirty();
-            }}
-          />
-        </div>
-
-        {choice?.needs_project && (
-          <>
-            <div className="ai-field">
-              <label className="ai-label" htmlFor="ai-project">
-                {t('field.project')}
-              </label>
-              <TextInput
-                id="ai-project"
-                className="mono"
-                value={project}
-                disabled={!canSystem || loading || busy}
-                onChange={(e) => {
-                  setProject(e.target.value);
-                  dirty();
-                }}
-              />
-            </div>
-            <div className="ai-field">
-              <label className="ai-label" htmlFor="ai-location">
-                {t('field.location')}
-              </label>
-              <TextInput
-                id="ai-location"
-                className="mono"
-                value={location}
-                placeholder={choice.suggested_location ?? ''}
-                disabled={!canSystem || loading || busy}
-                onChange={(e) => {
-                  setLocation(e.target.value);
-                  dirty();
-                }}
-              />
-            </div>
-          </>
-        )}
-
-        <div className="ai-field">
-          <label className="ai-label" htmlFor="ai-key">
-            {choice?.needs_project ? t('field.serviceAccount') : t('field.apiKey')}
-            {keyRequired && <RequiredMark />}
-          </label>
-          {!clearKey && (
-            <SecretInput
-              // A new provider, or a fresh read after a save, starts from the stored mark again.
-              key={`${provider}:${stored?.updated_at ?? ''}`}
-              id="ai-key"
-              stored={keyStored}
-              value={apiKey}
-              rows={choice?.needs_project ? 5 : undefined}
-              // Only where an empty box means something other than "keep": with nothing stored,
-              // Vertex runs on the instance's own identity.
-              placeholder={
-                choice?.credential_optional && !keyStored
-                  ? t('field.serviceAccountPlaceholder')
-                  : undefined
-              }
+        <Fields className="ai-fields">
+          <Field label={t('provider.label')}>
+            <Select
+              id="ai-provider"
+              value={provider}
               disabled={!canSystem || loading || busy}
-              onChange={(v) => {
-                setApiKey(v);
+              onChange={(e) => {
+                setProvider(e.target.value);
+                setApiKey('');
+                setClearKey(false);
+                dirty();
+              }}
+            >
+              {providers.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {t(`provider.${p.key}`)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field label={t('field.model')}>
+            <TextInput
+              id="ai-model"
+              className="mono"
+              value={model}
+              placeholder={choice?.suggested_model ?? ''}
+              disabled={!canSystem || loading || busy}
+              onChange={(e) => {
+                setModel(e.target.value);
                 dirty();
               }}
             />
+          </Field>
+
+          {choice?.needs_project && (
+            <>
+              <Field label={t('field.project')}>
+                <TextInput
+                  id="ai-project"
+                  className="mono"
+                  value={project}
+                  disabled={!canSystem || loading || busy}
+                  onChange={(e) => {
+                    setProject(e.target.value);
+                    dirty();
+                  }}
+                />
+              </Field>
+              <Field label={t('field.location')}>
+                <TextInput
+                  id="ai-location"
+                  className="mono"
+                  value={location}
+                  placeholder={choice.suggested_location ?? ''}
+                  disabled={!canSystem || loading || busy}
+                  onChange={(e) => {
+                    setLocation(e.target.value);
+                    dirty();
+                  }}
+                />
+              </Field>
+            </>
           )}
-          {keyStored && choice?.credential_optional && (
-            <label className="ai-check">
-              <input
-                type="checkbox"
+
+          <Field
+            label={choice?.needs_project ? t('field.serviceAccount') : t('field.apiKey')}
+            htmlFor="ai-key"
+            required={keyRequired}
+          >
+            {!clearKey && (
+              <SecretInput
+                // A new provider, or a fresh read after a save, starts from the stored mark again.
+                key={`${provider}:${stored?.updated_at ?? ''}`}
+                id="ai-key"
+                stored={keyStored}
+                value={apiKey}
+                rows={choice?.needs_project ? 5 : undefined}
+                // Only where an empty box means something other than "keep": with nothing stored,
+                // Vertex runs on the instance's own identity.
+                placeholder={
+                  choice?.credential_optional && !keyStored
+                    ? t('field.serviceAccountPlaceholder')
+                    : undefined
+                }
+                disabled={!canSystem || loading || busy}
+                onChange={(v) => {
+                  setApiKey(v);
+                  dirty();
+                }}
+              />
+            )}
+            {keyStored && choice?.credential_optional && (
+              <CheckField
                 checked={clearKey}
                 disabled={!canSystem || busy}
-                onChange={(e) => {
-                  setClearKey(e.target.checked);
+                onChange={(next) => {
+                  setClearKey(next);
                   setApiKey('');
                   dirty();
                 }}
+                label={t('field.useWorkloadIdentity')}
               />
-              <span>{t('field.useWorkloadIdentity')}</span>
-            </label>
-          )}
-        </div>
+            )}
+          </Field>
+        </Fields>
       </Card>
 
       <Card title={t('card.limits')}>
-        <div className="ai-field">
-          <div className="field-head">
-            <label className="ai-label" htmlFor="ai-tokens">
-              {t('field.maxTokens')}
-            </label>
-            <InfoTip infoKey="settings-ai:tokens.info" label={t('field.maxTokens')} />
-          </div>
-          <span className="ai-tokens-row">
-            <TextInput
-              id="ai-tokens"
-              className="ai-tokens mono"
-              value={maxTokens}
-              inputMode="numeric"
-              suffix={t('field.tokensUnit')}
-              disabled={!canSystem || loading || busy}
-              onChange={(e) => {
-                setMaxTokens(e.target.value);
-                dirty();
-              }}
-            />
-            <span className="muted">
-              {t('field.maxTokensBand', { min: MIN_TOKENS, max: MAX_TOKENS })}
-            </span>
-          </span>
-        </div>
-
-        <label className="ai-check">
-          <input
-            type="checkbox"
-            checked={enabled}
+        <SettingRow
+          label={t('field.maxTokens')}
+          info={<InfoTip infoKey="settings-ai:tokens.info" label={t('field.maxTokens')} />}
+        >
+          <TextInput
+            id="ai-tokens"
+            className="ai-tokens mono"
+            value={maxTokens}
+            inputMode="numeric"
+            suffix={t('field.tokensUnit')}
             disabled={!canSystem || loading || busy}
+            aria-label={t('field.maxTokens')}
             onChange={(e) => {
-              setEnabled(e.target.checked);
+              setMaxTokens(e.target.value);
               dirty();
             }}
           />
-          <span>{t('field.enabled')}</span>
-        </label>
+          <span className="muted">{t('field.maxTokensBand', { min: MIN_TOKENS, max: MAX_TOKENS })}</span>
+        </SettingRow>
+
+        <CheckField
+          checked={enabled}
+          disabled={!canSystem || loading || busy}
+          onChange={(next) => {
+            setEnabled(next);
+            dirty();
+          }}
+          label={t('field.enabled')}
+        />
       </Card>
 
-      <div className="ai-actions">
+      {/* One Save for both cards above, so it stands under them rather than in either's footer. */}
+      <Inline gap={12} justify="end">
+        <span className="ai-state muted">
+          {stored == null
+            ? t('state.unconfigured')
+            : t('state.updated', { at: formatExactTime(stored.updated_at) })}
+        </span>
+        {(error ?? loadError) && <SaveNote tone="error">{error ?? loadError}</SaveNote>}
+        {saved && <SaveNote tone="ok">{t('state.saved')}</SaveNote>}
+        {testResult && (
+          <SaveNote tone={testResult.ok ? 'ok' : 'error'}>{testResult.text}</SaveNote>
+        )}
         {canSystem && (
           <>
             <Button variant="primary" onClick={save} disabled={busy || loading}>
@@ -370,19 +361,9 @@ export function AiSettingsPage() {
             </Button>
           </>
         )}
-        <span className="ai-state muted">
-          {stored == null
-            ? t('state.unconfigured')
-            : t('state.updated', { at: formatExactTime(stored.updated_at) })}
-        </span>
-      </div>
+      </Inline>
 
       {!authed && <p className="muted">{t('common:loadBlock.signIn')}</p>}
-      {(error ?? loadError) && <p className="form-error">{error ?? loadError}</p>}
-      {saved && <p className="ai-saved">{t('state.saved')}</p>}
-      {testResult && (
-        <p className={testResult.ok ? 'ai-saved' : 'form-error'}>{testResult.text}</p>
-      )}
 
       {confirming && (
         <ConfirmDeleteModal
@@ -401,6 +382,6 @@ export function AiSettingsPage() {
           {t('egress.leaves')}
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

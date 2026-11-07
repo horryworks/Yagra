@@ -1,41 +1,13 @@
-.auth-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: var(--space-3);
-}
-
-.auth-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.auth-provider {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.auth-provider-name {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.auth-provider-meta {
-  margin-top: var(--space-1);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
+/* Settings ▸ Authentication. The frame is the shared parts (ADR-246): Page, Card and its footer,
+   ItemList for the providers, Fields in the dialog, Callout, Disclosure, CheckField. What is left
+   is this screen's own: the provider chips, the role-map row, the directory card's two-column
+   form and its test result. */
 
 .auth-badge {
   font-size: var(--font-xs);
-  font-weight: 600;
-  padding: 1px var(--space-2);
-  border-radius: 10px;
+  font-weight: var(--weight-semibold);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
   border: var(--border-width) solid var(--border-color);
 }
 .auth-badge.on {
@@ -49,41 +21,10 @@
    enabled/disabled badge next to it, which is the one carrying status. */
 .auth-badge.product {
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
-/* "What Yagra will request" — the scopes and claim a product decides. Disclosed rather than hidden:
-   it is what an operator has to reason about when the IdP refuses a sign-in. */
-.auth-advanced {
-  margin: 0 0 var(--space-3);
-}
-.auth-advanced > summary {
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-  margin-bottom: var(--space-2);
-}
-.auth-advanced > summary:hover {
-  color: var(--text-primary);
-}
-
-/* "Replace secret" / "Enabled" inline checkboxes (mirrors the credentials replace toggle). */
-.auth-replace {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: var(--space-1) 0 var(--space-3);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.auth-rolemap {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-1-5);
-}
-
+/* One IdP group (or directory DN) and the role it maps to, with its Remove button. */
 .auth-rolemap-row {
   display: grid;
   grid-template-columns: 1fr 140px auto;
@@ -93,39 +34,15 @@
 
 /* ── Directory (LDAP/AD) card, ADR-041 ─────────────────────────────────────────────────────── */
 
-/* Label/value pairs. A grid rather than stacked fields because the card carries a dozen short
-   values (DNs, attribute names) and stacking them turns one form into a page of scrolling. */
-.auth-grid {
-  display: grid;
-  grid-template-columns: minmax(150px, max-content) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  margin: var(--space-2) 0 var(--space-3);
-}
+/* The label/value form is `Fields layout="columns"` (ADR-246). */
 
-.auth-grid textarea {
-  width: 100%;
-  resize: vertical;
-  font-family: var(--font-family);
-  font-size: var(--font-md);
-  color: var(--text-primary);
-  background: var(--bg-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: var(--space-1-5) var(--space-2);
-}
-.auth-grid textarea:focus {
-  outline: none;
-  border-color: var(--accent-color);
-}
-
+/* The test's verdict when the person would be let in; a refusal is `.form-error`. */
 .auth-saved {
   color: var(--status-ok);
   font-size: var(--font-sm);
 }
 
 .auth-test {
-  margin-top: var(--space-3);
   padding: var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -140,7 +57,7 @@
 /* Never colour alone: the marker carries the same answer for a colour-blind operator. */
 .auth-stages li::before {
   margin-right: var(--space-2);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .auth-stages li.ok {
   color: var(--status-ok);
@@ -155,27 +72,9 @@
   content: '✗';
 }
 
-/* On mobile the label column would squeeze every DN into two characters. */
-html[data-viewport='mobile'] .auth-grid {
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-1);
-}
-
-/* A state with a consequence the screen cannot otherwise show: the stored OIDC redirect URI no
-   longer matches this address (ADR-044), or saving switches a live directory off. */
-.auth-warning {
-  margin: 0;
-  color: var(--status-warning);
-}
-
-/* The step frames (ADR-200 kind d): under the IdP picker, and under the redirect warning. */
-.auth-steps {
-  margin: var(--space-2) 0 var(--space-3);
-}
-
 /* Where the public board's contents are edited: a link, not a sentence. */
 .auth-compose {
-  margin: var(--space-2) 0;
+  margin: 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }

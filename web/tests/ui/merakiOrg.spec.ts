@@ -106,7 +106,7 @@ test('the settings card shows the stored import settings', async ({ page }) => {
   await expect(card).toContainText(ORG_NAME);
 
   // The two notices under it, each through its own sentence. A class alone would pass on either.
-  const notices = page.locator('.meraki-orgpage-notice');
+  const notices = page.locator('.ui-callout');
   await expect(notices).toHaveCount(2);
   // The generated network list is one network, not watched.
   await expect(notices.nth(0)).toContainText('1 network is not watched');

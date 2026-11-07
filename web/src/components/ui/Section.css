@@ -1,13 +1,12 @@
 /* The one heading look (ADR-246 decision 3): a Card's title, a section's heading inside it, and
-   the label of a fact in a grid. Small, upper case, quiet - the exception to design-system.md
-   §1.4's "no ALL CAPS", which this rule is the only place to spell. */
+   the label of a fact in a grid. Small, quiet, and in sentence case like every other text
+   (design-system.md §1.4). It was upper case until a heading carried data - a pool name, a
+   mount path - and `text-transform` turned `/var/lib/docker` into `/VAR/LIB/DOCKER`. */
 .card-title,
 .ui-section-title,
 .ui-facts.is-grid dt {
   margin: 0;
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
   font-weight: var(--weight-medium);
 }
@@ -136,6 +135,16 @@
 .ui-item-actions {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* On a phone the actions go under the name rather than squeezing it to a few letters. */
+html[data-viewport='mobile'] .ui-item-row {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .ui-item-actions {
+  flex: 1 1 100%;
 }

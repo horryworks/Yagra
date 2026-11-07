@@ -106,6 +106,16 @@ describe('ui-rules.mjs recognises what it is for', () => {
     expect(r.lines).toBe(5);
   });
 
+  it('finds upper-casing in a stylesheet and in an inline style, and nothing else', () => {
+    const css = measureCss(
+      'pages/Fixture.css',
+      '.a { text-transform: uppercase; }\n.b { text-transform: none; }\n/* text-transform: uppercase */\n',
+    );
+    expect(css.uppercase.map((v) => v.line)).toEqual([1]);
+    const tsx = measureTsx('pages/Fixture.tsx', "<span style={{ textTransform: 'uppercase' }} />\n");
+    expect(tsx.uppercase.map((v) => v.line)).toEqual([1]);
+  });
+
   it('leaves tokens, zero, layout sizes, comments and fallbacks alone', () => {
     const r = measureCss(
       'pages/Fixture.css',

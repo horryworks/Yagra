@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { Page } from '../../components/ui/Page';
 import { classifyLoadError } from '../../lib/loadState';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import { blockedChip, chipLabel, loadingChip, type Chip } from './chip';
@@ -57,7 +58,7 @@ export function IntegrationsCatalogPage() {
   }, []);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.integrations')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.integrations') }]}
@@ -79,6 +80,6 @@ export function IntegrationsCatalogPage() {
       </div>
 
       {block && <LoadBlockNotice block={block} />}
-    </div>
+    </Page>
   );
 }

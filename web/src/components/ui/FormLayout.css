@@ -12,6 +12,40 @@
   margin-bottom: 0;
 }
 
+/* columns: each field's label in the first column, its control (and its error) in the second.
+   A field steps aside (`display: contents`) so all labels line up in one column. */
+.ui-fields.is-columns {
+  display: grid;
+  grid-template-columns: minmax(150px, max-content) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+
+.ui-fields.is-columns > .ui-field {
+  display: contents;
+}
+
+.ui-fields.is-columns > .ui-field > .field-head {
+  grid-column: 1;
+}
+
+.ui-fields.is-columns > .ui-field > :not(.field-head) {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.ui-fields.is-columns > :not(.ui-field) {
+  grid-column: 1 / -1;
+}
+
+html[data-viewport='mobile'] .ui-fields.is-columns {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html[data-viewport='mobile'] .ui-fields.is-columns > .ui-field > * {
+  grid-column: 1;
+}
+
 .ui-field-row {
   display: flex;
   gap: var(--space-3);
@@ -45,6 +79,11 @@ html[data-viewport='mobile'] .ui-field-row {
 
 .ui-check.has-detail {
   align-items: flex-start;
+}
+
+/* A finger needs the row, not the 13px box, to land on (ADR-027). */
+html[data-viewport='mobile'] .ui-check {
+  min-height: var(--touch-target);
 }
 
 .ui-check > input {

@@ -24,7 +24,10 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { Fields, FieldRow, SaveNote } from '../components/ui/FormLayout';
+import { Field, Select } from '../components/ui/Field';
 import { Button } from '../components/ui/Button';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { InfoTip } from '../components/ui/InfoTip';
@@ -46,24 +49,24 @@ export function SupportBundlePage() {
   const canSystem = useCan('manage_system');
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.supportBundle')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.supportBundle') }]}
       />
-      <Card title={t('supportBundle.title')} className="support-bundle-card">
-        {canSystem ? (
-          <TakeBundlePanel />
-        ) : (
+      {canSystem ? (
+        <TakeBundleCard />
+      ) : (
+        <Card title={t('supportBundle.title')}>
           <PermissionHint permission="manage_system" />
-        )}
-      </Card>
-    </div>
+        </Card>
+      )}
+    </Page>
   );
 }
 
 /** The window/node controls and the download itself — mounted only for a caller who may use it. */
-function TakeBundlePanel() {
+function TakeBundleCard() {
   const { t } = useTranslation('system');
   const [hours, setHours] = useState<number>(6);
   // Optional: the node this bundle is *about* (ADR-045 Inc.1). Local state, not the URL — a
@@ -90,42 +93,47 @@ function TakeBundlePanel() {
   };
 
   return (
-    <>
-      <div className="sb-actions">
-        <label className="sb-window">
-          <span className="muted">{t('supportBundle.window')}</span>
-          <select
-            className="field"
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
-            disabled={busy}
-            aria-label={t('supportBundle.window')}
-          >
-            {BUNDLE_WINDOWS.map((h) => (
-              <option key={h} value={h}>
-                {t('supportBundle.windowHours', { count: h })}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="sb-node">
-          <span className="muted">{t('supportBundle.node')}</span>
-          <NodePicker
-            value={node?.id ?? null}
-            valueLabel={node?.name}
-            onChange={setNode}
-            placeholder={t('supportBundle.nodeAny')}
-          />
-        </label>
-        <Button variant="primary" onClick={download} disabled={busy}>
-          {busy ? t('supportBundle.busy') : t('supportBundle.action')}
-        </Button>
-        {/* What leaves the deployment is listed inside the archive; that is the one thing worth
-            knowing before pressing the button (ADR-200). */}
-        <InfoTip infoKey="system:supportBundle.info" label={t('supportBundle.action')} />
-      </div>
-      {error && <p className="form-error">{error}</p>}
-      {done && <p className="sb-done">{t('supportBundle.done', done)}</p>}
-    </>
+    <Card
+      title={t('supportBundle.title')}
+      footer={
+        <>
+          {error && <SaveNote tone="error">{error}</SaveNote>}
+          {done && <SaveNote tone="ok">{t('supportBundle.done', done)}</SaveNote>}
+          <Button variant="primary" onClick={download} disabled={busy}>
+            {busy ? t('supportBundle.busy') : t('supportBundle.action')}
+          </Button>
+          {/* What leaves the deployment is listed inside the archive; that is the one thing worth
+              knowing before pressing the button (ADR-200). */}
+          <InfoTip infoKey="system:supportBundle.info" label={t('supportBundle.action')} />
+        </>
+      }
+    >
+      <Fields className="sb-fields">
+        <FieldRow>
+          <Field label={t('supportBundle.window')}>
+            <Select
+              value={hours}
+              onChange={(e) => setHours(Number(e.target.value))}
+              disabled={busy}
+              aria-label={t('supportBundle.window')}
+            >
+              {BUNDLE_WINDOWS.map((h) => (
+                <option key={h} value={h}>
+                  {t('supportBundle.windowHours', { count: h })}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('supportBundle.node')}>
+            <NodePicker
+              value={node?.id ?? null}
+              valueLabel={node?.name}
+              onChange={setNode}
+              placeholder={t('supportBundle.nodeAny')}
+            />
+          </Field>
+        </FieldRow>
+      </Fields>
+    </Card>
   );
 }

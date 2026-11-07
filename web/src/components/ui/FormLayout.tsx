@@ -13,12 +13,52 @@
 // 14px margin, `.form-stack` with a 14px gap - four dialogs nested one in the other and got 28px)
 // or by one of nine page-local copies at 4, 5 or 6px.
 
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
+import { InfoTip } from './InfoTip';
 import { cx, isShown } from './space';
 import './FormLayout.css';
 
-export function Fields({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('ui-fields', className)}>{children}</div>;
+/** Fields one above the other (`stack`, the default), or each label beside its control
+ *  (`columns`) - for a card of a dozen short values (an LDAP directory's DNs and attributes),
+ *  which stacked would scroll a page. On a phone `columns` stacks too. A child that is not a field
+ *  spans both columns. */
+export function Fields({
+  layout = 'stack',
+  className,
+  children,
+}: {
+  layout?: 'stack' | 'columns';
+  className?: string;
+  children: ReactNode;
+}) {
+  return <div className={cx('ui-fields', `is-${layout}`, className)}>{children}</div>;
+}
+
+/** A label for several controls that act together - a set of checkboxes, a list of rows - where
+ *  `Field`'s `<label>` would name only one of them, or none. The controls are announced as a group
+ *  under this name. Looks exactly like a `Field`. */
+export function FieldGroup({
+  label,
+  infoKey,
+  children,
+}: {
+  label: string;
+  /** A namespaced `.info` key, as on `Field`. */
+  infoKey?: string;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <div className="ui-field modal-field" role="group" aria-labelledby={id}>
+      <div className="field-head">
+        <span className="modal-field-label" id={id}>
+          {label}
+        </span>
+        {infoKey && <InfoTip infoKey={infoKey} label={label} />}
+      </div>
+      {children}
+    </div>
+  );
 }
 
 export function FieldRow({ children }: { children: ReactNode }) {

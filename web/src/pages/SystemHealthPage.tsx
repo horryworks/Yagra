@@ -22,6 +22,9 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { InfoTip } from '../components/ui/InfoTip';
+import { Facts } from '../components/ui/Facts';
+import { Inline, Page, Stack } from '../components/ui/Page';
+import { SectionHead } from '../components/ui/Section';
 import { MetricChart } from '../components/MetricChart/MetricChart';
 import { PALETTE } from '../components/MetricChart/palette';
 import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
@@ -43,17 +46,16 @@ import './SystemHealthPage.css';
  *  MetricChart isn't rebuilt each refresh. */
 const PCT_RANGE: [number, number] = [0, 100];
 
-/** One backing dependency as a name + detail + reachability badge. */
-function DependencyRow({ name, dep }: { name: string; dep: DependencyHealth | undefined }) {
+/** One backing dependency's value: its detail and its reachability badge. */
+function DependencyValue({ dep }: { dep: DependencyHealth | undefined }) {
   const { t } = useTranslation('system');
   return (
-    <li className="dep-row">
-      <span className="dep-name">{name}</span>
+    <Inline gap={8} justify="between">
       <span className="dep-detail muted">{dep?.detail ?? '—'}</span>
       <Badge tone={dep?.reachable ? 'up' : 'critical'}>
         {dep?.reachable ? t('health.reachable') : t('health.unreachable')}
       </Badge>
-    </li>
+    </Inline>
   );
 }
 
@@ -87,14 +89,17 @@ function DependencyHealthCard() {
       ) : loading && !data ? (
         <p className="muted">{t('common:loading')}</p>
       ) : (
-        <ul className="dep-list">
-          <DependencyRow name={t('health.deps.postgres')} dep={data?.postgres} />
-          <DependencyRow name={t('health.deps.tsdb')} dep={data?.tsdb} />
-          <DependencyRow name={t('health.deps.logs')} dep={data?.logs} />
-          <DependencyRow name={t('health.deps.flow')} dep={data?.flow} />
-          <DependencyRow name={t('health.deps.bus')} dep={data?.bus} />
-          <DependencyRow name={t('health.deps.webTls')} dep={data?.web_tls} />
-        </ul>
+        <Facts
+          layout="rows"
+          items={[
+            { label: t('health.deps.postgres'), value: <DependencyValue dep={data?.postgres} /> },
+            { label: t('health.deps.tsdb'), value: <DependencyValue dep={data?.tsdb} /> },
+            { label: t('health.deps.logs'), value: <DependencyValue dep={data?.logs} /> },
+            { label: t('health.deps.flow'), value: <DependencyValue dep={data?.flow} /> },
+            { label: t('health.deps.bus'), value: <DependencyValue dep={data?.bus} /> },
+            { label: t('health.deps.webTls'), value: <DependencyValue dep={data?.web_tls} /> },
+          ]}
+        />
       )}
     </Card>
   );
@@ -132,14 +137,22 @@ function HostMetricCard({
   const { t } = useTranslation('system');
   const hasData = timestamps.length > 0;
   return (
-    <div className="host-metric">
-      <div className="host-metric-head">
-        <span className="host-metric-label">
-          {label}
-          {info && <InfoTip infoKey={info} label={label} />}
-        </span>
-        <span className="host-metric-value">{value}</span>
-      </div>
+    <Stack gap={8}>
+      <Facts
+        layout="grid"
+        items={[
+          {
+            key: 'headline',
+            label: (
+              <>
+                {label}
+                {info && <InfoTip infoKey={info} label={label} />}
+              </>
+            ),
+            value: <span className="host-metric-value">{value}</span>,
+          },
+        ]}
+      />
       {hasData ? (
         <MetricChart
           title=""
@@ -155,7 +168,7 @@ function HostMetricCard({
       ) : (
         <p className="muted host-metric-empty">{t('health.noHistory')}</p>
       )}
-    </div>
+    </Stack>
   );
 }
 
@@ -217,25 +230,27 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
       ? `${formatBytes(host.mem_used_bytes)} / ${formatBytes(host.mem_total_bytes)}`
       : formatUtil(host.mem_used_pct ?? null);
 
+  // The heading holds the toggle button rather than being a `Disclosure`: the button carries its own
+  // accessible name (`health.sectionToggleAria`), which a `<summary>` has no slot for.
   return (
-    <section className="host-section">
-      <div className="host-section-head">
-        <button
-          type="button"
-          className="host-section-toggle"
-          aria-expanded={open}
-          aria-label={t('health.sectionToggleAria', { section: title })}
-          onClick={() => setOpen((v) => !v)}
-        >
-          <span className="host-section-caret" aria-hidden="true">
-            {open ? '▾' : '▸'}
-          </span>
-          <span className="host-section-title">{title}</span>
-        </button>
-        {/* The offline marker used to ride on the series label, where the legend named the host.
-            The legend now names 1m/5m/15m, so it has to be said here or not at all. */}
-        {!host.online && <span className="host-section-meta">{t('health.unreachable')}</span>}
-      </div>
+    <Stack as="section" gap={12} className="host-section">
+      <SectionHead
+        title={
+          <button
+            type="button"
+            className="host-section-toggle"
+            aria-expanded={open}
+            aria-label={t('health.sectionToggleAria', { section: title })}
+            onClick={() => setOpen((v) => !v)}
+          >
+            <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+            <span>{title}</span>
+          </button>
+        }
+        // The offline marker used to ride on the series label, where the legend named the host.
+        // The legend now names 1m/5m/15m, so it has to be said here or not at all.
+        actions={!host.online && <span className="host-section-meta">{t('health.unreachable')}</span>}
+      />
 
       {open ? (
         <div className="host-metrics">
@@ -318,23 +333,26 @@ function HostSectionView({ section, range }: { section: HostSection; range: Rang
       ) : (
         // Collapsed still answers "is anything wrong in here" — from the inventory call the page
         // already makes, so folding a section away costs the charts and nothing else.
-        <ul className="host-section-summary">
-          <li className={host.online ? undefined : 'hs-offline'}>
-            <span className="hs-name">{host.instance}</span>
-            <span className="hs-val muted">
-              {t('health.metric.cpu')} <b>{formatUtil(host.cpu_pct ?? null)}</b>
-            </span>
-            <span className="hs-val muted">
-              {t('health.metric.memory')} <b>{formatUtil(host.mem_used_pct ?? null)}</b>
-            </span>
-            <span className="hs-val muted">
-              {t('health.metric.diskShort')} <b>{formatUtil(host.disk_used_pct ?? null)}</b>
-            </span>
-            {!host.online && <span className="hs-val">{t('health.unreachable')}</span>}
-          </li>
-        </ul>
+        <Inline gap={16} align="baseline" className="host-section-summary">
+          <span className={host.online ? 'hs-name' : 'hs-name hs-offline'}>{host.instance}</span>
+          <Facts
+            layout="inline"
+            items={[
+              { label: t('health.metric.cpu'), value: <b>{formatUtil(host.cpu_pct ?? null)}</b> },
+              {
+                label: t('health.metric.memory'),
+                value: <b>{formatUtil(host.mem_used_pct ?? null)}</b>,
+              },
+              {
+                label: t('health.metric.diskShort'),
+                value: <b>{formatUtil(host.disk_used_pct ?? null)}</b>,
+              },
+            ]}
+          />
+          {!host.online && <span>{t('health.unreachable')}</span>}
+        </Inline>
       )}
-    </section>
+    </Stack>
   );
 }
 
@@ -352,26 +370,23 @@ function HostResourcesCard() {
   const sections = useMemo(() => groupHosts(hosts ?? []), [hosts]);
 
   return (
-    <div className="host-resources">
-      <div className="host-head">
-        <span className="host-title">{t('health.hostResources')}</span>
-        <div className="host-controls">
-          <RangeControl value={range} onChange={setRange} />
-        </div>
-      </div>
+    <Card
+      title={t('health.hostResources')}
+      actions={<RangeControl value={range} onChange={setRange} />}
+    >
       {sections.length === 0 ? (
         <p className="muted">{t('common:loading')}</p>
       ) : (
         sections.map((s) => <HostSectionView key={s.key} section={s} range={range} />)
       )}
-    </div>
+    </Card>
   );
 }
 
 export function SystemHealthPage() {
   const { t } = useTranslation('system');
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.systemHealth')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.systemHealth') }]}
@@ -386,9 +401,8 @@ export function SystemHealthPage() {
           <DataCoverageWidget />
         </Card>
       </div>
-      <Card className="host-resources-card">
-        <HostResourcesCard />
-      </Card>
-    </div>
+      {/* Owns its own Card so the range picker can sit in the header actions slot. */}
+      <HostResourcesCard />
+    </Page>
   );
 }

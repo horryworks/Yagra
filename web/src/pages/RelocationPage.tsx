@@ -23,6 +23,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Inline, Page, Stack } from '../components/ui/Page';
+import { Facts } from '../components/ui/Facts';
+import { Callout, Disclosure, SectionHead } from '../components/ui/Section';
+import { CheckField, FieldRow, Fields, SaveNote } from '../components/ui/FormLayout';
+import { Field, TextArea, TextInput } from '../components/ui/Field';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { Card } from '../components/ui/Card';
@@ -123,15 +128,21 @@ export function RelocationPage() {
     );
   if (failed && !status) {
     return (
-      <div>
+      <Page layout="sections">
         <Header />
         <Card>
           <p className="form-error">{t('loadFailed')}</p>
         </Card>
-      </div>
+      </Page>
     );
   }
-  if (!status) return <Header />;
+  if (!status) {
+    return (
+      <Page layout="sections">
+        <Header />
+      </Page>
+    );
+  }
 
   const state = readiness(status);
   const phase = runPhase(status, pending);
@@ -177,9 +188,9 @@ export function RelocationPage() {
   };
 
   return (
-    <div>
+    <Page layout="sections">
       <Header />
-      <WarningCard />
+      <Warning />
       <CarriedCard />
       <ReadinessCard status={status} state={state} />
       {state === 'ready' && (
@@ -199,7 +210,7 @@ export function RelocationPage() {
         onCreate={(o) => void start('archive', o)}
         onChanged={() => void load()}
       />
-    </div>
+    </Page>
   );
 }
 
@@ -215,15 +226,15 @@ function Header() {
 
 /** The two hazards, stated before anything else on the page. The third, Docker installed as
  *  root, is said by the option that does it, where it can be refused. */
-function WarningCard() {
+function Warning() {
   const { t } = useTranslation('settings-relocation');
   return (
-    <Card className="reloc-warning">
-      <ul>
+    <Callout tone="critical">
+      <ul className="reloc-list">
         <li>{t('warning.secrets')}</li>
         <li>{t('warning.ssh')}</li>
       </ul>
-    </Card>
+    </Callout>
   );
 }
 
@@ -236,30 +247,30 @@ function CarriedCard() {
   return (
     <Card title={t('carried.heading')}>
       <div className="reloc-carried">
-        <section>
-          <h4>{t('carried.yes')}</h4>
-          <ul>
+        <Stack gap={6} as="section">
+          <SectionHead title={t('carried.yes')} />
+          <ul className="reloc-list">
             {list('carried.yesItem', 6).map((s) => (
               <li key={s}>{s}</li>
             ))}
           </ul>
-        </section>
-        <section>
-          <h4>{t('carried.no')}</h4>
-          <ul>
+        </Stack>
+        <Stack gap={6} as="section">
+          <SectionHead title={t('carried.no')} />
+          <ul className="reloc-list">
             {list('carried.noItem', 3).map((s) => (
               <li key={s}>{s}</li>
             ))}
           </ul>
-        </section>
-        <section>
-          <h4>{t('carried.again')}</h4>
-          <ul>
+        </Stack>
+        <Stack gap={6} as="section">
+          <SectionHead title={t('carried.again')} />
+          <ul className="reloc-list">
             {list('carried.againItem', 5).map((s) => (
               <li key={s}>{s}</li>
             ))}
           </ul>
-        </section>
+        </Stack>
       </div>
     </Card>
   );
@@ -286,17 +297,25 @@ function ReadinessCard({
           components={{ lnk: <ScreenLink to="/settings/upgrade" /> }}
         />
       </p>
-      <dl className="reloc-space">
-        <dt>{t('space.free')}</dt>
-        <dd>{size(status.free_bytes)}</dd>
-        <dt>
-          {t('space.estimate')}{' '}
-          <InfoTip infoKey="settings-relocation:space.partial.info" label={t('space.estimate')} />
-        </dt>
-        <dd>{size(status.estimate_bytes)}</dd>
-        <dt>{t('space.needed')}</dt>
-        <dd>{size(status.needed_bytes)}</dd>
-      </dl>
+      <Facts
+        items={[
+          { label: t('space.free'), value: size(status.free_bytes) },
+          {
+            key: 'estimate',
+            label: (
+              <>
+                {t('space.estimate')}{' '}
+                <InfoTip
+                  infoKey="settings-relocation:space.partial.info"
+                  label={t('space.estimate')}
+                />
+              </>
+            ),
+            value: size(status.estimate_bytes),
+          },
+          { label: t('space.needed'), value: size(status.needed_bytes) },
+        ]}
+      />
       {room === false && <p className="form-error">{t('space.tight')}</p>}
     </Card>
   );
@@ -327,27 +346,26 @@ function OptionRows({
   disabled: boolean;
 }) {
   const { t } = useTranslation('settings-relocation');
+  // Each option's cost sits under it as a short sub-label (ADR-200 kind 5). Part of the control,
+  // not a tooltip: a tooltip is a thing a touch device never shows (ADR-055 R4), and each of these
+  // four options has a cost the operator has to weigh before ticking it.
   const row = (key: keyof Options, name: string) => (
-    <label className="reloc-opt" key={name}>
-      <input
-        type="checkbox"
-        checked={value[key]}
-        disabled={disabled}
-        onChange={(e) => onChange({ ...value, [key]: e.target.checked })}
-      />
-      <span>
-        <strong>{t(`options.${name}`)}</strong>
-        <em className="muted">{t(`options.${name}Hint`)}</em>
-      </span>
-    </label>
+    <CheckField
+      key={name}
+      checked={value[key]}
+      disabled={disabled}
+      onChange={(next) => onChange({ ...value, [key]: next })}
+      label={<strong>{t(`options.${name}`)}</strong>}
+      detail={t(`options.${name}Hint`)}
+    />
   );
   return (
-    <div className="reloc-opts">
+    <Stack gap={8}>
       {row('metrics', 'metrics')}
       {row('tier2', 'tier2')}
       {row('images', 'images')}
       {row('installDocker', 'installDocker')}
-    </div>
+    </Stack>
   );
 }
 
@@ -396,29 +414,47 @@ function RelocateForm({
   }, [phase.kind]);
 
   const field = (key: 'host' | 'port' | 'user' | 'dir', type = 'text') => (
-    <label className="reloc-field">
-      <span>{t(`push.${key}`)}</span>
-      <input
-        className="field"
+    <Field label={t(`push.${key}`)}>
+      <TextInput
         type={type}
         value={form[key]}
         disabled={locked}
         autoComplete="off"
         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
       />
-    </label>
+    </Field>
   );
 
   return (
-    <Card title={t('push.heading')}>
+    <Card
+      title={t('push.heading')}
+      footer={
+        <>
+          {error && <SaveNote tone="error">{error}</SaveNote>}
+          <Button
+            onClick={() => onStart('preflight', options, sendable)}
+            disabled={locked || problems.length > 0}
+          >
+            {t('push.check')}
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => onStart('push', options, sendable)}
+            disabled={locked || problems.length > 0}
+          >
+            {t('push.go')}
+          </Button>
+        </>
+      }
+    >
       <OptionRows value={options} onChange={setOptions} disabled={locked} />
-      <div className="reloc-target">
-        {field('host')}
-        {field('port')}
-        {field('user')}
-        {field('dir')}
-      </div>
-      <div className="reloc-auth">
+      <Fields>
+        <FieldRow>
+          {field('host')}
+          {field('port')}
+          {field('user')}
+          {field('dir')}
+        </FieldRow>
         <Segmented
           options={RELOCATION_AUTH_KINDS.map((k) => ({ value: k, label: t(`authKind.${k}`) }))}
           value={form.kind}
@@ -426,47 +462,43 @@ function RelocateForm({
           ariaLabel={t('push.authKind')}
         />
         {form.kind === 'password' ? (
-          <label className="reloc-field">
-            <span>{t('push.password')}</span>
-            <input
-              className="field"
+          <Field label={t('push.password')}>
+            <TextInput
               type="password"
               value={form.secret}
               disabled={locked}
               autoComplete="new-password"
               onChange={(e) => setForm({ ...form, secret: e.target.value })}
             />
-          </label>
+          </Field>
         ) : (
-          <label className="reloc-field reloc-key">
-            <span>{t('push.key')}</span>
-            <textarea
-              className="field"
+          // A private key is a dozen lines of base64; a one-line input turns pasting one into a
+          // guess.
+          <Field label={t('push.key')}>
+            <TextArea
               rows={6}
               value={form.secret}
               disabled={locked}
               spellCheck={false}
               onChange={(e) => setForm({ ...form, secret: e.target.value })}
             />
-          </label>
+          </Field>
         )}
         {/* sudo is used only to install Docker, so the field exists only while that is ticked. */}
         {options.installDocker && (
-          <label className="reloc-field">
-            <span>{t('push.sudo')}</span>
-            <input
-              className="field"
+          <Field label={t('push.sudo')}>
+            <TextInput
               type="password"
               value={form.sudo}
               disabled={locked}
               autoComplete="new-password"
               onChange={(e) => setForm({ ...form, sudo: e.target.value })}
             />
-          </label>
+          </Field>
         )}
-      </div>
+      </Fields>
       {problems.length > 0 && form.host !== '' && (
-        <ul className="reloc-problems">
+        <ul className="reloc-list">
           {problems.map((p) => (
             <li key={p} className="form-error">
               {t(`invalid.${p}`)}
@@ -474,22 +506,6 @@ function RelocateForm({
           ))}
         </ul>
       )}
-      <div className="reloc-actions">
-        <Button
-          onClick={() => onStart('preflight', options, sendable)}
-          disabled={locked || problems.length > 0}
-        >
-          {t('push.check')}
-        </Button>
-        <Button
-          variant="primary"
-          onClick={() => onStart('push', options, sendable)}
-          disabled={locked || problems.length > 0}
-        >
-          {t('push.go')}
-        </Button>
-      </div>
-      {error && <p className="form-error">{error}</p>}
     </Card>
   );
 }
@@ -540,9 +556,9 @@ function ProgressCard({ phase, log }: { phase: RunPhase; log: string[] }) {
 function AfterwardsList({ url }: { url: string }) {
   const { t } = useTranslation('settings-relocation');
   return (
-    <>
-      <h4>{t('afterwards.heading')}</h4>
-      <ol className="reloc-afterwards">
+    <Stack gap={8}>
+      <SectionHead title={t('afterwards.heading')} />
+      <ol className="reloc-list">
         <li>
           {t('afterwards.item1')}
           <CopyCommand command={STOP_OLD_SERVER_COMMAND} />
@@ -573,7 +589,7 @@ function AfterwardsList({ url }: { url: string }) {
         <li>{t('afterwards.item4')}</li>
         <li>{t('afterwards.item5')}</li>
       </ol>
-    </>
+    </Stack>
   );
 }
 
@@ -635,43 +651,44 @@ function ManualCard({
 
   return (
     <Card title={t('manual.heading')}>
-      <button type="button" className="reloc-disclose" onClick={() => setOpen(!open)}>
-        {open ? t('manual.hide') : t('manual.show')}
-      </button>
-      {open && (
-        <>
-          <OptionRows value={options} onChange={setOptions} disabled={busy || disabled} />
-          <div className="reloc-actions">
-            <Button onClick={() => onCreate(options)} disabled={busy || disabled}>
-              {t('manual.create')}
-            </Button>
-          </div>
-        </>
-      )}
+      {/* Folded rather than a button: the manual path is the fallback, and a button of the same
+          weight as "Move this deployment" would read as two equal choices. */}
+      <Disclosure
+        summary={open ? t('manual.hide') : t('manual.show')}
+        open={open}
+        onToggle={setOpen}
+      >
+        <OptionRows value={options} onChange={setOptions} disabled={busy || disabled} />
+        <Inline gap={12}>
+          <Button onClick={() => onCreate(options)} disabled={busy || disabled}>
+            {t('manual.create')}
+          </Button>
+        </Inline>
+      </Disclosure>
       {/* 🚨 Deliberately OUTSIDE the disclosure. An archive on disk holds the encryption key and
           every stored credential, so "there is one here" is not a detail of the fallback route —
           it is the single most important fact this screen can tell an operator, and hiding it
           behind a "show the manual route" link would mean the only way to find out is to already
           suspect it. */}
       {archive && (
-        <div className="reloc-archive">
-          <p>{t('manual.waiting')}</p>
-          <p>
+        <Stack gap={12} className="reloc-archive">
+          <div>{t('manual.waiting')}</div>
+          <div>
             <strong>{archive.filename}</strong>{' '}
             <span className="muted">
               {formatBytes(archive.size_bytes)} · {formatTimestamp(archive.modified_at * 1000)}
             </span>
-          </p>
-          <div className="reloc-actions">
+          </div>
+          <Inline gap={12}>
             <Button variant="primary" onClick={download}>
               {t('manual.download')}
             </Button>
             <Button variant="danger" onClick={() => setConfirming(true)}>
               {t('manual.delete')}
             </Button>
-          </div>
+          </Inline>
           <RestoreSteps filename={archive.filename} />
-        </div>
+        </Stack>
       )}
       {error && <p className="form-error">{error}</p>}
       {confirming && (

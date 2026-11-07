@@ -21,10 +21,13 @@ import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import type { NetboxServer, NetboxSiteIdFields, NetboxTestResult } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { Page, Stack } from '../../components/ui/Page';
 import { Card } from '../../components/ui/Card';
+import { CheckField, Fields } from '../../components/ui/FormLayout';
+import { Callout } from '../../components/ui/Section';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
-import { TextInput, TextArea, Select, FieldError } from '../../components/ui/Field';
+import { Field, TextInput, TextArea, Select } from '../../components/ui/Field';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { InfoTip } from '../../components/ui/InfoTip';
@@ -212,112 +215,116 @@ function ServerModal({
         />
       }
     >
-      <label className="netbox-field">
-        <span>{t('netbox.form.name')}</span>
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label className="netbox-field">
-        <span>{t('netbox.form.baseUrl')}</span>
-        <TextInput
-          value={baseUrl}
-          placeholder="https://netbox.example.com"
-          onChange={(e) => setBaseUrl(e.target.value)}
-        />
-        {urlRefused && <FieldError>{t('netbox.form.baseUrlRefused')}</FieldError>}
-      </label>
-      {/* Not a wrapping <label>: the stored state draws a Replace button, and a button inside a
-          label becomes the label's control. */}
-      <div className="netbox-field">
-        <label htmlFor="netbox-token">{t('netbox.form.token')}</label>
-        <SecretInput
-          id="netbox-token"
-          stored={existing !== null}
-          mustReplace={existing !== null && tokenNeeded}
-          value={token}
-          onChange={setToken}
-        />
-        {existing && tokenNeeded && (
-          <p className="form-warning">{t('netbox.form.tokenNewAddressHint')}</p>
-        )}
-      </div>
-      <label className="netbox-field">
-        <span>{t('netbox.form.caCert')}</span>
-        <TextArea
-          className="mono"
-          rows={4}
-          value={caPem}
-          placeholder="-----BEGIN CERTIFICATE-----"
-          onChange={(e) => setCaPem(e.target.value)}
-        />
-        {caIsKey && <FieldError>{t('netbox.form.caCertIsKey')}</FieldError>}
-      </label>
-      <label className="netbox-field">
-        <span>{t('netbox.form.siteIdField')}</span>
-        <Select
-          value={siteIdSelected}
-          onChange={(e) => setSiteIdSelected(e.target.value)}
+      <Fields>
+        <Field label={t('netbox.form.name')}>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field
+          label={t('netbox.form.baseUrl')}
+          error={urlRefused ? t('netbox.form.baseUrlRefused') : null}
         >
-          {siteIdOptions(fields, existing?.site_id_field ?? null).map((o) => {
-            switch (o.kind) {
-              case 'none':
-                return (
-                  <option key="none" value={SITE_ID_NONE}>
-                    {t('netbox.siteIdField.none')}
-                  </option>
-                );
-              case 'builtIn':
-                return (
-                  <option key={o.value} value={o.value}>
-                    {t(`netbox.siteIdField.${o.value}`)}
-                  </option>
-                );
-              // NetBox's own label, so it is shown verbatim rather than translated.
-              case 'custom':
-                return (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                );
-              case 'other':
-                return (
-                  <option key="other" value={SITE_ID_OTHER}>
-                    {t('netbox.siteIdField.other')}
-                  </option>
-                );
-            }
-          })}
-        </Select>
-        {siteIdSelected === SITE_ID_OTHER && (
           <TextInput
-            value={customKeyInput}
-            placeholder={t('netbox.form.siteIdFieldKeyPlaceholder')}
-            autoComplete="off"
-            onChange={(e) => setCustomKeyInput(e.target.value)}
+            value={baseUrl}
+            placeholder="https://netbox.example.com"
+            onChange={(e) => setBaseUrl(e.target.value)}
           />
-        )}
-        {/* 🚨 Said out loud, because otherwise an empty picker looks like "this NetBox has no
-            custom fields" and the operator never finds the row above. */}
-        {fields && !fields.custom_fields_readable && (
-          <p className="form-warning">{t('netbox.form.siteIdFieldUnreadable')}</p>
-        )}
-        {siteIdSelected === SITE_ID_OTHER &&
-          customKeyInput.trim() !== '' &&
-          !customKeyLooksValid(customKeyInput) && (
-            <FieldError>{t('netbox.form.siteIdFieldKeyInvalid')}</FieldError>
+        </Field>
+        <Field label={t('netbox.form.token')} htmlFor="netbox-token">
+          <SecretInput
+            id="netbox-token"
+            stored={existing !== null}
+            mustReplace={existing !== null && tokenNeeded}
+            value={token}
+            onChange={setToken}
+          />
+          {existing && tokenNeeded && (
+            <Callout tone="warning">{t('netbox.form.tokenNewAddressHint')}</Callout>
           )}
-      </label>
-      <label className="netbox-field">
-        <span>{t('netbox.form.interval')}</span>
-        <TextInput
-          type="number"
-          min={60}
-          max={86400}
-          value={intervalSecs}
-          onChange={(e) => setIntervalSecs(e.target.value)}
-        />
-      </label>
-      {probeLine()}
-      <FormError form={form} />
+        </Field>
+        <Field
+          label={t('netbox.form.caCert')}
+          error={caIsKey ? t('netbox.form.caCertIsKey') : null}
+        >
+          <TextArea
+            className="mono"
+            rows={4}
+            value={caPem}
+            placeholder="-----BEGIN CERTIFICATE-----"
+            onChange={(e) => setCaPem(e.target.value)}
+          />
+        </Field>
+        <Field
+          label={t('netbox.form.siteIdField')}
+          htmlFor="netbox-site-id-field"
+          error={
+            siteIdSelected === SITE_ID_OTHER &&
+            customKeyInput.trim() !== '' &&
+            !customKeyLooksValid(customKeyInput)
+              ? t('netbox.form.siteIdFieldKeyInvalid')
+              : null
+          }
+        >
+          <Select
+            id="netbox-site-id-field"
+            value={siteIdSelected}
+            onChange={(e) => setSiteIdSelected(e.target.value)}
+          >
+            {siteIdOptions(fields, existing?.site_id_field ?? null).map((o) => {
+              switch (o.kind) {
+                case 'none':
+                  return (
+                    <option key="none" value={SITE_ID_NONE}>
+                      {t('netbox.siteIdField.none')}
+                    </option>
+                  );
+                case 'builtIn':
+                  return (
+                    <option key={o.value} value={o.value}>
+                      {t(`netbox.siteIdField.${o.value}`)}
+                    </option>
+                  );
+                // NetBox's own label, so it is shown verbatim rather than translated.
+                case 'custom':
+                  return (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  );
+                case 'other':
+                  return (
+                    <option key="other" value={SITE_ID_OTHER}>
+                      {t('netbox.siteIdField.other')}
+                    </option>
+                  );
+              }
+            })}
+          </Select>
+          {siteIdSelected === SITE_ID_OTHER && (
+            <TextInput
+              value={customKeyInput}
+              placeholder={t('netbox.form.siteIdFieldKeyPlaceholder')}
+              autoComplete="off"
+              onChange={(e) => setCustomKeyInput(e.target.value)}
+            />
+          )}
+          {/* 🚨 Said out loud, because otherwise an empty picker looks like "this NetBox has no
+              custom fields" and the operator never finds the row above. */}
+          {fields && !fields.custom_fields_readable && (
+            <Callout tone="warning">{t('netbox.form.siteIdFieldUnreadable')}</Callout>
+          )}
+        </Field>
+        <Field label={t('netbox.form.interval')}>
+          <TextInput
+            type="number"
+            min={60}
+            max={86400}
+            value={intervalSecs}
+            onChange={(e) => setIntervalSecs(e.target.value)}
+          />
+        </Field>
+        {probeLine()}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -428,10 +435,11 @@ function ServerRow({
 
       {canConfig && (
         <div className="netbox-row-actions">
-          <label className="netbox-switch">
-            <input type="checkbox" checked={server.enabled} onChange={toggle} />
-            <span>{server.enabled ? t('netbox.row.enabled') : t('netbox.row.paused')}</span>
-          </label>
+          <CheckField
+            checked={server.enabled}
+            onChange={toggle}
+            label={server.enabled ? t('netbox.row.enabled') : t('netbox.row.paused')}
+          />
           {/* Not drawn while paused: the loop never runs a paused server, so the endpoint refuses
               the request (409) and a button that can only fail is not offered. */}
           {server.enabled && (
@@ -495,7 +503,7 @@ export function NetboxIntegrationPage() {
               }
             />
           ) : (
-            <div className="netbox-list">
+            <Stack gap={12}>
               {servers.map((s) => (
                 <ServerRow
                   key={s.id}
@@ -506,7 +514,7 @@ export function NetboxIntegrationPage() {
                   onSynced={load}
                 />
               ))}
-            </div>
+            </Stack>
           )}
         </Card>
       </LoadGate>
@@ -514,7 +522,7 @@ export function NetboxIntegrationPage() {
   }, [list, servers, canConfig, load, t]);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('netbox.name')}
         writePermission="manage_config"
@@ -563,6 +571,6 @@ export function NetboxIntegrationPage() {
           {t('netbox.delete.body', { name: deleting.name })}
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

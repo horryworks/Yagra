@@ -1,32 +1,7 @@
-/* Settings ▸ Upgrade (ADR-050). Same label/value rhythm as Settings ▸ About — the two answer
-   neighbouring questions and should not look like different products. */
-
-.upgrade-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.upgrade-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-5);
-}
-
-.upgrade-label {
-  flex: 0 0 180px;
-  font-size: var(--font-sm);
-}
-
-.upgrade-value {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
-}
-
-.upgrade-value.mono {
-  font-size: var(--font-sm);
-}
+/* Settings ▸ Upgrade (ADR-050). The frame is the shared parts (ADR-246): Page, Card, Facts for the
+   "name: value" rows (as Settings ▸ About), SectionHead, Disclosure, CheckField. What is left is
+   this screen's own: the release and component rows, the progress track, the per-site
+   convergence list and the dialog's selection table. */
 
 .upgrade-note {
   margin: 0;
@@ -35,53 +10,22 @@
 }
 
 .upgrade-hint {
-  margin: var(--space-1-5) 0 0;
+  margin: 0;
   max-width: 70ch;
   font-size: var(--font-sm);
   line-height: 1.5;
 }
 
-/* The operator's on/off, same shape as the Meraki kill switch so the two read as one family. */
-.upgrade-switch {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  font-size: var(--font-sm);
-}
-
-/* The switch, its info tip and the "applying" badge on one line. The tip sits outside the label so
-   it does not become what the label names. */
-.upgrade-switch-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
 /* The repair steps under the unprepared-site warning in the dialog. */
 .upgrade-steps-frame {
-  margin-top: var(--space-2);
   max-width: 70ch;
-}
-
-.upgrade-switch input {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-  accent-color: var(--accent-color);
-}
-
-.upgrade-switch input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* The release list. This had no styles at all until 2026-08-11 and rendered as a bulleted list with
    the button jammed against the version — a `<ul>` with no rules is not "unstyled", it is wrong. */
 .upgrade-releases {
   list-style: none;
-  margin: var(--space-3) 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -94,8 +38,8 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-2) 14px;
-  border: 1px solid var(--border-color);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
   font-size: var(--font-sm);
@@ -117,21 +61,6 @@
   line-height: 1.4;
 }
 
-.upgrade-disclosure {
-  margin-top: var(--space-3);
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent-color);
-  font-family: var(--ui-font-family);
-  font-size: var(--font-sm);
-  cursor: pointer;
-}
-
-.upgrade-disclosure:hover {
-  color: var(--accent-hover);
-}
-
 @media (max-width: 560px) {
   .upgrade-release {
     flex-direction: column;
@@ -145,30 +74,10 @@
   }
 }
 
-/* Offline bundle: file, tag, go. Wraps rather than scrolls — the file input is the widest thing
-   on the page and its rendered width is the browser's, not ours. */
-.upgrade-bundle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: var(--space-3);
-}
-
-.upgrade-bundle input[type='text'] {
+/* Offline bundle: file, tag, go. The file input is the widest thing on the page and its rendered
+   width is the browser's, not ours, so the row wraps rather than scrolls. */
+.upgrade-bundle-tag {
   width: 12ch;
-  padding: var(--space-1-5) var(--space-2);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-family);
-  font-size: var(--font-sm);
-}
-
-.upgrade-bundle input[type='text']:focus {
-  outline: none;
-  border-color: var(--accent-color);
 }
 
 .upgrade-bundle input[type='file'] {
@@ -178,28 +87,12 @@
   font-size: var(--font-sm);
 }
 
-.upgrade-bundle input:disabled {
+.upgrade-bundle input[type='file']:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* ── When the list was last fetched, and the button that fetches it again ────────────────── */
-.upgrade-checked {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin: var(--space-2) 0 var(--space-3);
-}
-
 /* ── An upgrade in flight ───────────────────────────────────────────────────────────────── */
-.upgrade-progress {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
 .upgrade-steps {
   display: flex;
   flex-wrap: wrap;
@@ -219,36 +112,12 @@
 
 .upgrade-step-now {
   color: var(--accent-color);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .upgrade-step-mark {
   width: 1em;
   text-align: center;
-}
-
-/* ── Section dividers, since eight cards became five ─────────────────────────────────────── */
-.upgrade-subhead {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: var(--space-5) 0 var(--space-3);
-  font-size: var(--font-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.upgrade-subhead::after {
-  content: '';
-  flex: 1;
-  height: var(--border-width);
-  background: var(--border-color);
-}
-
-.upgrade-subhead.first {
-  margin-top: 0;
 }
 
 /* Why a row cannot move, or what it will do. Beside the row rather than in a `title` — a control
@@ -274,7 +143,7 @@
 /* ── The convergence: one line per site ──────────────────────────────────────────────────── */
 .upgrade-sites {
   list-style: none;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -285,7 +154,7 @@
 .upgrade-site {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   padding: var(--space-1-5) var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -334,7 +203,6 @@
    modal (where `DataTable`'s `flex: 1` inner scroller would need an invented height), and its rows
    are form controls rather than data cells. */
 .upgrade-pick {
-  margin-top: 14px;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -345,7 +213,7 @@
   display: grid;
   grid-template-columns: 24px minmax(140px, 1.4fr) 84px 68px 20px 68px minmax(0, 1.5fr);
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   padding: 0 var(--space-3);
   font-size: var(--font-sm);
 }
@@ -362,8 +230,8 @@
 
 .upgrade-pick-row {
   min-height: 38px;
-  padding-top: 7px;
-  padding-bottom: 7px;
+  padding-top: var(--space-1-5);
+  padding-bottom: var(--space-1-5);
   background: var(--bg-primary);
   border-top: var(--border-width) solid var(--border-color);
   cursor: pointer;
@@ -399,7 +267,7 @@
 /* The co-located poller hangs off core's row: it is replaced by the same `docker compose up`, so
    it has no checkbox of its own to be wrong about. */
 .upgrade-pick-child .mono {
-  padding-left: 14px;
+  padding-left: var(--space-3);
   position: relative;
 }
 

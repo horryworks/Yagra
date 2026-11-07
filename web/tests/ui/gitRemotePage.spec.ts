@@ -70,7 +70,7 @@ test.describe('no destination yet', () => {
     await dialog.getByRole('textbox').first().fill('https://example.com/acme/configs.git');
     await dialog.locator('input[placeholder="x-access-token"]').fill('bot');
     await dialog.locator('#git-token').fill('tok-1');
-    await expect(dialog.locator('.form-warning')).toContainText('private, empty repository');
+    await expect(dialog.locator('.ui-callout')).toContainText('private, empty repository');
     const put = page.waitForRequest(
       (r) => r.method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/config-backup-remote',
     );
@@ -93,7 +93,7 @@ test.describe('an SSH destination whose push was refused', () => {
     await page.goto('/settings/integrations/git');
     await expect(page.locator('.git-line.bad')).toContainText('the login was refused');
     await expect(page.locator('.copy-cmd-text')).toContainText('yagra-config-backup');
-    await expect(page.locator('.git-facts')).toContainText('SHA256:+DiY3wvvV6');
+    await expect(page.locator('.ui-facts')).toContainText('SHA256:+DiY3wvvV6');
   });
 
   test('Test connection asks once and says what the destination answered', async ({ page }) => {

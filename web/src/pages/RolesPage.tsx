@@ -13,7 +13,9 @@ import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
 import type { Permission, RoleMatrix } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page, Inline } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { ItemList, ItemRow } from '../components/ui/Section';
 import { useIsMobileViewport } from '../lib/viewport';
 import './RolesPage.css';
 
@@ -33,7 +35,7 @@ export function RolesPage() {
   }, [t]);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.roles')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.roles') }]}
@@ -48,19 +50,24 @@ export function RolesPage() {
       {matrix && (
         <>
           <Card title={t('roles.section.roles')}>
-            <div className="roles-list">
+            <ItemList>
               {matrix.roles.map((r) => (
-                <div className="roles-role" key={r.key}>
-                  <span className="roles-role-name">{r.label}</span>
-                  <span className="roles-role-key mono">{r.key}</span>
-                  {r.builtin && <span className="roles-builtin">{t('roles.builtin')}</span>}
-                  <span className="muted roles-role-desc">{r.description}</span>
-                </div>
+                <ItemRow
+                  key={r.key}
+                  title={
+                    <Inline gap={8} align="baseline">
+                      <span>{r.label}</span>
+                      <span className="roles-role-key mono">{r.key}</span>
+                      {r.builtin && <span className="roles-builtin">{t('roles.builtin')}</span>}
+                    </Inline>
+                  }
+                  detail={r.description}
+                />
               ))}
-            </div>
+            </ItemList>
           </Card>
 
-          <Card title={t('roles.matrixTitle')} className="roles-matrix-card">
+          <Card title={t('roles.matrixTitle')}>
             {/* On mobile the fr columns would crush together, so widen to px-min tracks and let the
                 wrapper scroll sideways (the privilege column is pinned via sticky CSS). */}
             <div className="roles-matrix-scroll">
@@ -94,7 +101,7 @@ export function RolesPage() {
           </Card>
         </>
       )}
-    </div>
+    </Page>
   );
 }
 

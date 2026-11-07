@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Types for `ui-rules.mjs`, so `src/uiBudget.test.ts` can import it under `strict`.
 
-export type Metric = 'spacing' | 'color' | 'fontSize' | 'inlineSpacing' | 'legacy';
+export type Metric = 'spacing' | 'color' | 'fontSize' | 'inlineSpacing' | 'legacy' | 'uppercase';
 
 export interface Finding {
   line: number;
@@ -16,6 +16,7 @@ export interface Measured {
   fontSize: Finding[];
   inlineSpacing: Finding[];
   legacy: Finding[];
+  uppercase: Finding[];
   /** Lines of a page-local stylesheet; `null` for every other file. */
   lines: number | null;
   allowProblems: { line: number; problem: string }[];
@@ -30,6 +31,7 @@ export interface Budget {
   fontSize?: Record<string, number>;
   inlineSpacing?: Record<string, number>;
   legacy?: Record<string, number>;
+  uppercase?: Record<string, number>;
   pageCss?: Record<string, { lines: number; why: string }>;
 }
 

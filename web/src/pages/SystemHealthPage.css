@@ -1,3 +1,7 @@
+/* Settings ▸ System health. The frame is the shared parts (ADR-246): Page, Card, Facts,
+   SectionHead, Stack/Inline. What is here is this screen's own: the grid of status cards, the grid
+   of a host's charts, the heading that folds a host away, and the numbers in mono. */
+
 .system-health-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -5,81 +9,18 @@
   align-items: start;
 }
 
-.dep-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.dep-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  /* Narrow cards (the grid drops to ~300px per column) must not push the reachability
-     badge past the card edge — let the row wrap the badge onto its own line instead. */
-  flex-wrap: wrap;
-}
-
-.dep-name {
-  font-weight: var(--weight-medium);
-  /* Basis keeps the names aligned at comfortable widths (fits the longest, "VictoriaMetrics
-     (TSDB)"), but it can shrink/wrap when the card gets tight. */
-  flex: 0 1 170px;
-  min-width: 0;
-}
-
 .dep-detail {
-  flex: 1 1 140px;
-  min-width: 0;
-  overflow-wrap: anywhere;
   font-size: var(--font-sm);
 }
 
-/* ── Host resources (core + poller CPU/load/mem/disk trends) ── */
-.host-resources-card {
-  margin-top: var(--space-4);
-}
-
-.host-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-4);
-}
-
-.host-title {
-  font-weight: var(--weight-medium);
-  font-size: var(--font-lg);
-}
-
-.host-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-/* One section per host group: core, then each poller pool. */
+/* One section per host: each core, then each poller under its pool name. */
 .host-section + .host-section {
-  margin-top: var(--space-5);
   border-top: var(--border-width) solid var(--border-color);
   padding-top: var(--space-4);
 }
 
-.host-section-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2) var(--space-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-3);
-}
-
-/* The whole title is the hit target, so the caret does not need to be one on touch. */
+/* The heading is the hit target, so the caret does not need to be one on touch. It takes the
+   heading's own look (`SectionHead`), so the button reads as the heading it is. */
 .host-section-toggle {
   display: flex;
   align-items: baseline;
@@ -87,8 +28,10 @@
   background: none;
   border: none;
   padding: 0;
-  color: var(--text-primary);
-  font-family: var(--ui-font-family);
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
   cursor: pointer;
 }
 
@@ -102,53 +45,30 @@ html[data-viewport='mobile'] .host-section-toggle {
   color: var(--accent-color);
 }
 
-.host-section-caret {
-  color: var(--text-tertiary);
-  font-size: var(--font-sm);
-}
-
-.host-section-title {
-  font-weight: var(--weight-medium);
-}
-
 .host-section-meta {
   font-size: var(--font-sm);
 }
 
-/* Collapsed: the current readings the inventory call already carries, one row per host. */
+/* Collapsed: the current readings the inventory call already carries. */
 .host-section-summary {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.host-section-summary li {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2) var(--space-4);
-  flex-wrap: wrap;
   font-size: var(--font-sm);
 }
 
 .host-section-summary .hs-name {
   font-family: var(--font-family);
-  flex: 0 1 200px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 /* Never colour alone: an offline host also says so in words (see ui-conventions). */
-.host-section-summary .hs-offline .hs-name {
+.host-section-summary .hs-offline {
   color: var(--status-unreachable);
 }
 
-.host-section-summary .hs-val b {
+.host-section-summary b,
+.host-metric-value {
   font-family: var(--font-family);
   font-weight: var(--weight-medium);
-  color: var(--text-primary);
 }
 
 .host-metrics {
@@ -158,32 +78,7 @@ html[data-viewport='mobile'] .host-section-toggle {
   align-items: start;
 }
 
-.host-metric {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.host-metric-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.host-metric-label {
-  font-weight: var(--weight-medium);
-  color: var(--text-secondary);
-}
-
-.host-metric-value {
-  font-family: var(--font-family);
-  font-weight: var(--weight-medium);
-}
-
 .host-metric-empty {
   font-size: var(--font-sm);
   margin: 0;
 }
-
-

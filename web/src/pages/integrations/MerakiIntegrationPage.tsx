@@ -30,7 +30,10 @@ import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
-import { TextInput, Select } from '../../components/ui/Field';
+import { Field, TextInput, Select } from '../../components/ui/Field';
+import { CheckField, ChoiceGroup, FieldGroup, Fields } from '../../components/ui/FormLayout';
+import { Inline, Page, Stack } from '../../components/ui/Page';
+import { ItemList, ItemRow } from '../../components/ui/Section';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { InfoTip } from '../../components/ui/InfoTip';
 import { SecretInput } from '../../components/ui/SecretInput';
@@ -182,9 +185,8 @@ function AddOrgModal({
       }
     >
       {orgs === null ? (
-        <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('meraki.addOrg.region')}</label>
+        <Fields>
+          <Field label={t('meraki.addOrg.region')}>
             <Select value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}>
               {MERAKI_REGIONS.map((r) => (
                 <option key={r.base_url} value={r.base_url}>
@@ -196,38 +198,23 @@ function AddOrgModal({
                   one while the request carried this. */}
               {extraRegion && <option value={extraRegion}>{extraRegion}</option>}
             </Select>
-          </div>
+          </Field>
           {/* Drawn only when there is a stored key to choose: with none, the dialog is the one
               box it always was. */}
           {savedKeys.length > 0 && (
-            <div
-              className="meraki-source-row"
-              role="radiogroup"
-              aria-label={t('meraki.addOrg.apiKeyLabel')}
-            >
-              <label className="meraki-source-choice">
-                <input
-                  type="radio"
-                  name="meraki-key-source"
-                  checked={source === 'typed'}
-                  onChange={() => pickSource('typed')}
-                />
-                <span>{t('meraki.addOrg.sourceTyped')}</span>
-              </label>
-              <label className="meraki-source-choice">
-                <input
-                  type="radio"
-                  name="meraki-key-source"
-                  checked={source === 'saved'}
-                  onChange={() => pickSource('saved')}
-                />
-                <span>{t('meraki.addOrg.sourceSaved')}</span>
-              </label>
-            </div>
+            <ChoiceGroup<KeySourceKind>
+              name="meraki-key-source"
+              value={source}
+              onChange={pickSource}
+              label={t('meraki.addOrg.apiKeyLabel')}
+              options={[
+                { value: 'typed', label: t('meraki.addOrg.sourceTyped') },
+                { value: 'saved', label: t('meraki.addOrg.sourceSaved') },
+              ]}
+            />
           )}
           {source === 'saved' ? (
-            <div className="modal-field">
-              <label className="modal-field-label">{t('meraki.addOrg.savedKeyLabel')}</label>
+            <Field label={t('meraki.addOrg.savedKeyLabel')}>
               <Select value={credentialId} onChange={(e) => pickSavedKey(e.target.value)}>
                 {savedKeys.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -235,12 +222,9 @@ function AddOrgModal({
                   </option>
                 ))}
               </Select>
-            </div>
+            </Field>
           ) : (
-            <div className="modal-field">
-              <label className="modal-field-label" htmlFor="meraki-api-key">
-                {t('meraki.addOrg.apiKeyLabel')}
-              </label>
+            <Field label={t('meraki.addOrg.apiKeyLabel')}>
               {/* A key typed here is always a new one, so the field is the plain box. */}
               <SecretInput
                 id="meraki-api-key"
@@ -250,14 +234,17 @@ function AddOrgModal({
                 onChange={setApiKey}
                 autoFocus
               />
-            </div>
+            </Field>
           )}
-        </>
+          <FormError form={form} />
+        </Fields>
       ) : (
         <>
           {/* Nothing left to tick: say so, rather than leave a list of dead checkboxes over a
               disabled "Add 0 organizations" to be worked out. */}
           {allAlreadyAdded(orgs) && <p className="muted">{t('meraki.addOrg.allAdded')}</p>}
+          {/* A scrolling pick list, not `CheckField`s: a row already added keeps its tag at full
+              strength while the rest of it dims, which a disabled `CheckField` cannot do. */}
           <div className="meraki-org-picker">
             {orgs.length === 0 && <p className="muted">{t('meraki.addOrg.noOrgs')}</p>}
             {orgs.map((o) => (
@@ -276,9 +263,9 @@ function AddOrgModal({
               </label>
             ))}
           </div>
+          <FormError form={form} />
         </>
       )}
-      <FormError form={form} />
     </Modal>
   );
 }
@@ -352,28 +339,27 @@ function NetworksModal({
     >
       {/* The checkboxes' own label: a ticked network is one the organization's collects reach. What
           un-ticking one leaves behind is shown where it lands — the row's "N not collected". */}
-      <p className="modal-field-label" id="meraki-networks-label">
-        {t('meraki.networks.collectFrom')}
-      </p>
-      {networks === null ? (
-        <p className="muted">{t('common:loading')}</p>
-      ) : networks.length === 0 ? (
-        <p className="muted">{t('meraki.networks.empty')}</p>
-      ) : (
-        <div className="meraki-org-picker" role="group" aria-labelledby="meraki-networks-label">
-          {networks.map((n) => (
-            <label className="meraki-check-row" key={n.network_id}>
-              <input
-                type="checkbox"
-                checked={monitored.has(n.network_id)}
-                onChange={() => toggle(n.network_id)}
-              />
-              <span className="meraki-check-name">{n.name || n.network_id}</span>
-              <span className="meraki-check-sub mono">{n.network_id}</span>
-            </label>
-          ))}
-        </div>
-      )}
+      <FieldGroup label={t('meraki.networks.collectFrom')}>
+        {networks === null ? (
+          <p className="muted">{t('common:loading')}</p>
+        ) : networks.length === 0 ? (
+          <p className="muted">{t('meraki.networks.empty')}</p>
+        ) : (
+          <div className="meraki-org-picker">
+            {networks.map((n) => (
+              <label className="meraki-check-row" key={n.network_id}>
+                <input
+                  type="checkbox"
+                  checked={monitored.has(n.network_id)}
+                  onChange={() => toggle(n.network_id)}
+                />
+                <span className="meraki-check-name">{n.name || n.network_id}</span>
+                <span className="meraki-check-sub mono">{n.network_id}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </FieldGroup>
       <FormError form={form} />
     </Modal>
   );
@@ -453,8 +439,7 @@ function CadenceModal({
     range: string,
     bounds?: CadenceBounds,
   ) => (
-    <div className="modal-field">
-      <label className="modal-field-label">{label}</label>
+    <Field label={label} error={ok ? null : t('meraki.cadence.outOfRange', { range })}>
       <TextInput
         type="number"
         min={bounds?.min}
@@ -463,8 +448,7 @@ function CadenceModal({
         onChange={(e) => set(e.target.value)}
         suffix={hint}
       />
-      {!ok && <span className="form-error">{t('meraki.cadence.outOfRange', { range })}</span>}
-    </div>
+    </Field>
   );
   // The range each interval accepts comes from `merakiCadence.ts`, which a Rust test holds to the
   // server's own bounds — the hint and the input's min/max are the same two numbers.
@@ -498,47 +482,51 @@ function CadenceModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('meraki.cadence.enabledTiers')}</label>
-        <div className="meraki-tier-row">
-          {/* Availability is drawn as always on, with no box: it is the one tier that says whether
-              a device is up, and the server refuses a cadence without it (decision 17). */}
-          <span className="meraki-chip-check meraki-chip-fixed">
-            {t('meraki.cadence.alwaysOn', { tier: t(`meraki.tier.${REQUIRED_MERAKI_TIER}`) })}
-          </span>
-          {OPTIONAL_MERAKI_TIERS.map((tier) => (
-            <label className="meraki-chip-check" key={tier}>
-              <input type="checkbox" checked={tiers.has(tier)} onChange={() => toggleTier(tier)} />
-              <span>{t(`meraki.tier.${tier}`)}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-      {intervalField(
-        'availability',
-        t('meraki.cadence.availabilityInterval'),
-        availability,
-        setAvailability,
-      )}
-      {intervalField('uplink', t('meraki.cadence.uplinkInterval'), uplink, setUplink)}
-      {intervalField('wireless', t('meraki.cadence.wirelessInterval'), wireless, setWireless)}
-      {intervalField(
-        'switch_ports',
-        t('meraki.cadence.switchPortsInterval'),
-        switchPorts,
-        setSwitchPorts,
-      )}
-      {intervalField('traffic', t('meraki.cadence.trafficInterval'), traffic, setTraffic)}
-      {intervalField('inventory', t('meraki.cadence.inventoryInterval'), inventory, setInventory)}
-      {numField(
-        t('meraki.cadence.rateBudget'),
-        targetRps,
-        setTargetRps,
-        `0–${CADENCE_TARGET_RPS_MAX}`,
-        rps !== null,
-        `0–${CADENCE_TARGET_RPS_MAX}`,
-      )}
-      <FormError form={form} />
+      <Fields>
+        {/* A label over a set of boxes, not over one control - a `FieldGroup`. */}
+        <FieldGroup label={t('meraki.cadence.enabledTiers')}>
+          <Inline gap={12}>
+            {/* Availability is drawn as always on, with no box: it is the one tier that says
+                whether a device is up, and the server refuses a cadence without it (decision 17). */}
+            <span className="muted">
+              {t('meraki.cadence.alwaysOn', { tier: t(`meraki.tier.${REQUIRED_MERAKI_TIER}`) })}
+            </span>
+            {OPTIONAL_MERAKI_TIERS.map((tier) => (
+              <CheckField
+                key={tier}
+                checked={tiers.has(tier)}
+                onChange={() => toggleTier(tier)}
+                label={t(`meraki.tier.${tier}`)}
+              />
+            ))}
+          </Inline>
+        </FieldGroup>
+        {intervalField(
+          'availability',
+          t('meraki.cadence.availabilityInterval'),
+          availability,
+          setAvailability,
+        )}
+        {intervalField('uplink', t('meraki.cadence.uplinkInterval'), uplink, setUplink)}
+        {intervalField('wireless', t('meraki.cadence.wirelessInterval'), wireless, setWireless)}
+        {intervalField(
+          'switch_ports',
+          t('meraki.cadence.switchPortsInterval'),
+          switchPorts,
+          setSwitchPorts,
+        )}
+        {intervalField('traffic', t('meraki.cadence.trafficInterval'), traffic, setTraffic)}
+        {intervalField('inventory', t('meraki.cadence.inventoryInterval'), inventory, setInventory)}
+        {numField(
+          t('meraki.cadence.rateBudget'),
+          targetRps,
+          setTargetRps,
+          `0–${CADENCE_TARGET_RPS_MAX}`,
+          rps !== null,
+          `0–${CADENCE_TARGET_RPS_MAX}`,
+        )}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -580,54 +568,57 @@ function OrgRow({
   const keyName = keyNameFor(org, creds);
 
   return (
-    <div className="meraki-org">
-      <div className="meraki-org-info">
-        <div className="meraki-org-main">
-          <Link className="meraki-org-name" to={merakiOrgPath(org.id)}>
-            {org.name}
-          </Link>
+    <ItemRow
+      title={
+        <Link className="meraki-org-name" to={merakiOrgPath(org.id)}>
+          {org.name}
+        </Link>
+      }
+      detail={
+        <Inline gap={12} align="baseline">
           <span className="meraki-org-id mono">{t('meraki.orgs.orgId', { id: org.org_id })}</span>
           <span className={`meraki-org-state ${org.enabled ? 'on' : 'off'}`}>
             {org.enabled ? t('meraki.orgs.stateEnabled') : t('meraki.orgs.statePaused')}
           </span>
-          <span className="meraki-org-tiers">
+          <span>
             {t('meraki.tiersPrefix')} {tierList(org.enabled_tiers, t)}
           </span>
-          {keyName !== null && (
-            <span className="meraki-org-key">{t('meraki.orgs.key', { name: keyName })}</span>
-          )}
-        </div>
-
+          {keyName !== null && <span>{t('meraki.orgs.key', { name: keyName })}</span>}
+        </Inline>
+      }
+    >
+      {/* The buttons sit under the row rather than in `ItemRow`'s `actions`: that slot does not
+          wrap, and five of them run off a phone's width. */}
+      <Stack gap={8}>
         <MerakiSyncStatus org={org} pollingOn={pollingOn} error={sync.error} />
-      </div>
-
-      <div className="meraki-org-actions">
-        {canConfig && canSyncNow(org, pollingOn) && (
-          <MerakiSyncButton sync={sync} read={orgFullRead(org, pollingOn)} />
-        )}
-        {/* Not behind `canConfig`: it goes to a screen anyone who can read this one can read. The
-            writes on that screen are gated there, each by its own control (ADR-056). */}
-        <Button variant="outline" onClick={() => navigate(merakiOrgPath(org.id))}>
-          {t('meraki.org.devices')}
-        </Button>
-        {canConfig && (
-          <>
-            <Button variant="outline" onClick={onNetworks}>
-              {t('meraki.org.networks')}
-            </Button>
-            <Button variant="outline" onClick={onCadence}>
-              {t('meraki.org.cadence')}
-            </Button>
-            <Button variant="outline" onClick={onToggle}>
-              {org.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
-            </Button>
-            <Button variant="danger" onClick={onDelete}>
-              {t('common:actions.delete')}
-            </Button>
-          </>
-        )}
-      </div>
-    </div>
+        <Inline gap={6}>
+          {canConfig && canSyncNow(org, pollingOn) && (
+            <MerakiSyncButton sync={sync} read={orgFullRead(org, pollingOn)} />
+          )}
+          {/* Not behind `canConfig`: it goes to a screen anyone who can read this one can read. The
+              writes on that screen are gated there, each by its own control (ADR-056). */}
+          <Button variant="outline" onClick={() => navigate(merakiOrgPath(org.id))}>
+            {t('meraki.org.devices')}
+          </Button>
+          {canConfig && (
+            <>
+              <Button variant="outline" onClick={onNetworks}>
+                {t('meraki.org.networks')}
+              </Button>
+              <Button variant="outline" onClick={onCadence}>
+                {t('meraki.org.cadence')}
+              </Button>
+              <Button variant="outline" onClick={onToggle}>
+                {org.enabled ? t('meraki.org.pause') : t('meraki.org.resume')}
+              </Button>
+              <Button variant="danger" onClick={onDelete}>
+                {t('common:actions.delete')}
+              </Button>
+            </>
+          )}
+        </Inline>
+      </Stack>
+    </ItemRow>
   );
 }
 
@@ -707,21 +698,18 @@ export function MerakiIntegrationPage() {
   const content = useMemo(() => {
     return (
       <LoadGate load={list}>
-        {actionError && <p className="form-error meraki-page-note">{actionError}</p>}
-        <Card title={t('meraki.polling.title')} className="meraki-killswitch-card">
-          <div className="meraki-switch-row">
-            <label className="meraki-switch">
-              <input
-                type="checkbox"
-                checked={pollingOn}
-                onChange={togglePolling}
-                disabled={!canConfig}
-              />
-              <span>{pollingOn ? t('meraki.polling.enabled') : t('meraki.polling.paused')}</span>
-            </label>
+        {actionError && <p className="form-error">{actionError}</p>}
+        <Card title={t('meraki.polling.title')}>
+          <Inline gap={8}>
+            <CheckField
+              checked={pollingOn}
+              onChange={togglePolling}
+              disabled={!canConfig}
+              label={pollingOn ? t('meraki.polling.enabled') : t('meraki.polling.paused')}
+            />
             {/* Beside the label, never inside it: a button in a <label> becomes its control. */}
             <InfoTip infoKey="system:meraki.polling.info" label={t('meraki.polling.title')} />
-          </div>
+          </Inline>
         </Card>
 
         <Card
@@ -750,7 +738,7 @@ export function MerakiIntegrationPage() {
               />
             )
           ) : (
-            <div className="meraki-org-list">
+            <ItemList>
               {orgs.map((o) => (
                 <OrgRow
                   key={o.id}
@@ -765,7 +753,7 @@ export function MerakiIntegrationPage() {
                   onDelete={() => setDeleting(o)}
                 />
               ))}
-            </div>
+            </ItemList>
           )}
         </Card>
       </LoadGate>
@@ -774,7 +762,7 @@ export function MerakiIntegrationPage() {
   }, [orgs, creds, loading, list, pollingOn, canConfig, actionError, t]);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('meraki.name')}
         writePermission="manage_config"
@@ -829,6 +817,6 @@ export function MerakiIntegrationPage() {
           />
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

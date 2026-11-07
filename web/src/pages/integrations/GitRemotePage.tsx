@@ -11,10 +11,14 @@ import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import type { RemoteTestResult, RemoteView } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
+import { Page, Inline, Stack } from '../../components/ui/Page';
 import { Card } from '../../components/ui/Card';
+import { Facts, type Fact } from '../../components/ui/Facts';
+import { Fields } from '../../components/ui/FormLayout';
+import { Callout } from '../../components/ui/Section';
 import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
-import { TextInput, FieldError } from '../../components/ui/Field';
+import { Field, TextInput, FieldError } from '../../components/ui/Field';
 import { ConfirmDeleteModal } from '../../components/ui/ConfirmDeleteModal';
 import { CopyCommand } from '../../components/ui/CopyCommand';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -78,50 +82,50 @@ function RemoteModal({
         />
       }
     >
-      <label className="git-field">
-        <span>{t('git.form.url')}</span>
-        <TextInput
-          value={form.url}
-          placeholder="https://github.com/acme/configs.git"
-          onChange={(e) => setForm({ ...form, url: e.target.value })}
-        />
-        {form.url.trim() !== '' && !auth && <FieldError>{t('git.form.urlShape')}</FieldError>}
-      </label>
-      <label className="git-field">
-        <span>{t('git.form.branch')}</span>
-        <TextInput
-          value={form.branch}
-          placeholder="main"
-          onChange={(e) => setForm({ ...form, branch: e.target.value })}
-        />
-      </label>
-      {auth === 'https_token' && (
-        <>
-          <label className="git-field">
-            <span>{t('git.form.username')}</span>
-            <TextInput
-              value={form.username}
-              placeholder="x-access-token"
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
-            />
-          </label>
-          <div className="git-field">
-            <label htmlFor="git-token">{t('git.form.token')}</label>
-            <SecretInput
-              id="git-token"
-              stored={tokenStored}
-              mustReplace={tokenStored && !tokenUsable}
-              value={form.token}
-              onChange={(token) => setForm({ ...form, token })}
-            />
-          </div>
-        </>
-      )}
-      {auth === 'ssh_key' && existing.auth !== 'ssh_key' && (
-        <p className="form-status">{t('git.form.keyMade')}</p>
-      )}
-      {/* The danger, said at the moment it is chosen (ADR-200): what leaves the box. */}
-      <p className="form-warning">{t('git.form.warning')}</p>
+      <Fields>
+        <Field
+          label={t('git.form.url')}
+          error={form.url.trim() !== '' && !auth ? t('git.form.urlShape') : null}
+        >
+          <TextInput
+            value={form.url}
+            placeholder="https://github.com/acme/configs.git"
+            onChange={(e) => setForm({ ...form, url: e.target.value })}
+          />
+        </Field>
+        <Field label={t('git.form.branch')}>
+          <TextInput
+            value={form.branch}
+            placeholder="main"
+            onChange={(e) => setForm({ ...form, branch: e.target.value })}
+          />
+        </Field>
+        {auth === 'https_token' && (
+          <>
+            <Field label={t('git.form.username')}>
+              <TextInput
+                value={form.username}
+                placeholder="x-access-token"
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+              />
+            </Field>
+            <Field label={t('git.form.token')}>
+              <SecretInput
+                id="git-token"
+                stored={tokenStored}
+                mustReplace={tokenStored && !tokenUsable}
+                value={form.token}
+                onChange={(token) => setForm({ ...form, token })}
+              />
+            </Field>
+          </>
+        )}
+        {auth === 'ssh_key' && existing.auth !== 'ssh_key' && (
+          <p className="form-status">{t('git.form.keyMade')}</p>
+        )}
+        {/* The danger, said at the moment it is chosen (ADR-200): what leaves the box. */}
+        <Callout tone="warning">{t('git.form.warning')}</Callout>
+      </Fields>
     </Modal>
   );
 }
@@ -171,16 +175,60 @@ export function GitRemotePage() {
   );
   if (!canManage) {
     return (
-      <div>
+      <Page layout="sections">
         {header}
         <LoadBlockNotice block="forbidden" permission="manage_system" />
-      </div>
+      </Page>
     );
   }
 
   const line = remote ? pushLine(remote.status) : null;
+  const facts: Fact[] = [];
+  if (remote?.configured) {
+    facts.push(
+      { label: t('git.form.url'), value: <span className="mono">{remote.url}</span> },
+      { label: t('git.form.branch'), value: <span className="mono">{remote.branch}</span> },
+    );
+    if (remote.auth === 'https_token') {
+      facts.push({
+        label: t('git.form.username'),
+        value: <span className="mono">{remote.username}</span>,
+      });
+    }
+    if (remote.auth === 'ssh_key' && remote.ssh_public_key) {
+      facts.push({
+        label: t('git.card.deployKey'),
+        value: (
+          <Stack gap={8}>
+            <CopyCommand command={remote.ssh_public_key} />
+            <Inline>
+              <Button onClick={() => setConfirm('key')}>{t('git.card.newKey')}</Button>
+            </Inline>
+          </Stack>
+        ),
+      });
+    }
+    if (remote.host_keys.length > 0) {
+      facts.push({
+        label: t('git.card.hostKeys'),
+        value: (
+          <Stack gap={8}>
+            {remote.host_keys.map((k) => (
+              <div key={k} className="mono">
+                {k}
+              </div>
+            ))}
+            <Inline>
+              <Button onClick={forget}>{t('git.card.forget')}</Button>
+            </Inline>
+            {forgetError && <FieldError>{forgetError}</FieldError>}
+          </Stack>
+        ),
+      });
+    }
+  }
   return (
-    <div>
+    <Page layout="sections">
       {header}
       <LoadGate load={load}>
         {remote && !remote.configured && (
@@ -226,41 +274,7 @@ export function GitRemotePage() {
               </p>
             )}
             {testError && <FieldError>{testError}</FieldError>}
-            <dl className="git-facts">
-              <dt>{t('git.form.url')}</dt>
-              <dd className="mono">{remote.url}</dd>
-              <dt>{t('git.form.branch')}</dt>
-              <dd className="mono">{remote.branch}</dd>
-              {remote.auth === 'https_token' && (
-                <>
-                  <dt>{t('git.form.username')}</dt>
-                  <dd className="mono">{remote.username}</dd>
-                </>
-              )}
-              {remote.auth === 'ssh_key' && remote.ssh_public_key && (
-                <>
-                  <dt>{t('git.card.deployKey')}</dt>
-                  <dd>
-                    <CopyCommand command={remote.ssh_public_key} />
-                    <Button onClick={() => setConfirm('key')}>{t('git.card.newKey')}</Button>
-                  </dd>
-                </>
-              )}
-              {remote.host_keys.length > 0 && (
-                <>
-                  <dt>{t('git.card.hostKeys')}</dt>
-                  <dd>
-                    {remote.host_keys.map((k) => (
-                      <div key={k} className="mono">
-                        {k}
-                      </div>
-                    ))}
-                    <Button onClick={forget}>{t('git.card.forget')}</Button>
-                    {forgetError && <FieldError>{forgetError}</FieldError>}
-                  </dd>
-                </>
-              )}
-            </dl>
+            <Facts items={facts} />
           </Card>
         )}
       </LoadGate>
@@ -294,6 +308,6 @@ export function GitRemotePage() {
           {t(`git.confirm.${confirm}.body`)}
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

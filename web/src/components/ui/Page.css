@@ -9,7 +9,8 @@
 
 /* The page owns the space under its header; the header's own margin would double it. A compound
    selector, so it wins over `.pageheader` whatever order the two stylesheets load in. */
-.ui-page > .pageheader {
+.ui-page > .pageheader,
+.ui-page > .table-toolbar {
   margin-bottom: 0;
 }
 

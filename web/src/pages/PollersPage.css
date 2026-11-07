@@ -171,9 +171,8 @@
   border-bottom: 1px solid var(--accent-color);
 }
 
-/* Checkbox row in the issue-token dialog (ADR-051 Inc.4). Same shape as `.ai-check`, local because
-   a checkbox row is three declarations and a shared class for it would be a fifth surface to keep
-   in step for no behaviour. */
+/* Checkbox row in the issue-token dialog (ADR-051 Inc.4). The shared part for this is `CheckField`
+   since ADR-246; this one moves onto it with the rest of the screen in Inc.5. */
 .poller-check {
   display: flex;
   align-items: center;

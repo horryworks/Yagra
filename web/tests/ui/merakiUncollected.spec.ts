@@ -98,12 +98,12 @@ test('the page says why, and the button watches only the network the quiet node 
   errors,
 }) => {
   await page.goto(MERAKI_ORG_SCREEN);
-  const notice = page.locator('.meraki-orgpage-uncollected');
+  const notice = page.locator('.ui-callout', { hasText: 'in a network that is not watched' });
   await expect(notice).toContainText(
     '1 monitored device is in a network that is not watched, so nothing is collected for it.',
   );
   // The only notice: automatic import is off and nothing is over the cap.
-  await expect(page.locator('.meraki-orgpage-notice')).toHaveCount(1);
+  await expect(page.locator('.ui-callout')).toHaveCount(1);
 
   const asked = page.waitForRequest(
     (r) => r.method() === 'PUT' && new URL(r.url()).pathname.endsWith('/networks'),

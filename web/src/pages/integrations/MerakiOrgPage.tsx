@@ -32,7 +32,10 @@ import { useClientSort } from '../../lib/useClientSort';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { TextInput } from '../../components/ui/Field';
+import { Field, TextInput } from '../../components/ui/Field';
+import { CheckField, SaveNote } from '../../components/ui/FormLayout';
+import { Inline, Page } from '../../components/ui/Page';
+import { Callout } from '../../components/ui/Section';
 import { DataTable, type Column } from '../../components/ui/DataTable';
 import { ListToolbar } from '../../components/ui/ListToolbar';
 import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
@@ -123,66 +126,65 @@ function ImportSettingsCard({
   const locked = !canConfig || busy;
 
   return (
-    <Card className="meraki-orgpage-settings" title={t('meraki.settings.title')}>
-      <label className="meraki-orgpage-check">
-        <input
-          type="checkbox"
-          checked={importDevices}
-          disabled={locked}
-          onChange={(e) => {
-            setEdited(true);
-            setImportDevices(e.target.checked);
-          }}
-        />
-        <span className="meraki-orgpage-check-label">{t('meraki.settings.importDevices')}</span>
-      </label>
+    <Card
+      className="meraki-orgpage-settings"
+      title={t('meraki.settings.title')}
+      footer={
+        canConfig && (
+          <>
+            {error && <SaveNote tone="error">{error}</SaveNote>}
+            <Button variant="primary" disabled={busy || !edited || max === null} onClick={save}>
+              {t('common:actions.save')}
+            </Button>
+          </>
+        )
+      }
+    >
+      <CheckField
+        checked={importDevices}
+        disabled={locked}
+        onChange={(next) => {
+          setEdited(true);
+          setImportDevices(next);
+        }}
+        label={t('meraki.settings.importDevices')}
+      />
 
-      <label className="meraki-orgpage-check">
-        <input
-          type="checkbox"
-          checked={fileByPrefix}
-          disabled={locked}
-          onChange={(e) => {
-            setEdited(true);
-            setFileByPrefix(e.target.checked);
-          }}
-        />
-        {/* The label names the folder everything else goes under: the organization's own. */}
-        <span className="meraki-orgpage-check-label">
-          {t('meraki.settings.fileByPrefix', { folder: org.name })}
-        </span>
-      </label>
+      {/* The label names the folder everything else goes under: the organization's own. */}
+      <CheckField
+        checked={fileByPrefix}
+        disabled={locked}
+        onChange={(next) => {
+          setEdited(true);
+          setFileByPrefix(next);
+        }}
+        label={t('meraki.settings.fileByPrefix', { folder: org.name })}
+      />
 
-      <label className="form-label meraki-orgpage-max" htmlFor="meraki-max-devices">
-        {t('meraki.settings.maxDevices')}
-        <TextInput
-          id="meraki-max-devices"
-          type="number"
-          min={MAX_DEVICES_MIN}
-          max={MAX_DEVICES_MAX}
-          value={maxText}
-          disabled={locked}
-          onChange={(e) => {
-            setEdited(true);
-            setMaxText(e.target.value);
-          }}
-          suffix={MAX_DEVICES_RANGE}
-        />
-      </label>
-
-      {edited && max === null && (
-        <p className="form-error">
-          {t('meraki.settings.maxDevicesInvalid', { min: MAX_DEVICES_MIN, max: MAX_DEVICES_MAX })}
-        </p>
-      )}
-      {error && <p className="form-error">{error}</p>}
-      {canConfig && (
-        <div className="meraki-orgpage-save">
-          <Button variant="primary" disabled={busy || !edited || max === null} onClick={save}>
-            {t('common:actions.save')}
-          </Button>
-        </div>
-      )}
+      <div className="meraki-orgpage-max">
+        <Field
+          label={t('meraki.settings.maxDevices')}
+          error={
+            edited && max === null
+              ? t('meraki.settings.maxDevicesInvalid', { min: MAX_DEVICES_MIN, max: MAX_DEVICES_MAX })
+              : null
+          }
+        >
+          <TextInput
+            id="meraki-max-devices"
+            type="number"
+            min={MAX_DEVICES_MIN}
+            max={MAX_DEVICES_MAX}
+            value={maxText}
+            disabled={locked}
+            onChange={(e) => {
+              setEdited(true);
+              setMaxText(e.target.value);
+            }}
+            suffix={MAX_DEVICES_RANGE}
+          />
+        </Field>
+      </div>
     </Card>
   );
 }
@@ -501,7 +503,7 @@ export function MerakiOrgPage() {
   const selectable = useMemo(() => importableSerials(shown), [shown]);
 
   return (
-    <div className="meraki-orgpage">
+    <Page layout="sections">
       <PageHeader
         title={org?.name ?? t('meraki.name')}
         writePermission="manage_config"
@@ -552,29 +554,31 @@ export function MerakiOrgPage() {
           {/* First, because it is the one about devices already being watched: they have gone
               quiet. Shown whether or not automatic import is on. */}
           {uncollected.count > 0 && (
-            <div className="meraki-orgpage-notice meraki-orgpage-uncollected">
-              <span>{t('meraki.settings.uncollected', { count: uncollected.count })}</span>
-              {canConfig && (
-                <Button variant="outline" onClick={watchThese} disabled={busy}>
-                  {t('meraki.settings.watchThese')}
-                </Button>
-              )}
-            </div>
+            <Callout>
+              <Inline gap={12} justify="between">
+                <span>{t('meraki.settings.uncollected', { count: uncollected.count })}</span>
+                {canConfig && (
+                  <Button variant="outline" onClick={watchThese} disabled={busy}>
+                    {t('meraki.settings.watchThese')}
+                  </Button>
+                )}
+              </Inline>
+            </Callout>
           )}
           {unwatched.length > 0 && (
-            <div className="meraki-orgpage-notice">
-              <span>{t('meraki.settings.unwatched', { count: unwatched.length })}</span>
-              {canConfig && (
-                <Button variant="outline" onClick={watchAll} disabled={busy}>
-                  {t('meraki.settings.watchAll')}
-                </Button>
-              )}
-            </div>
+            <Callout>
+              <Inline gap={12} justify="between">
+                <span>{t('meraki.settings.unwatched', { count: unwatched.length })}</span>
+                {canConfig && (
+                  <Button variant="outline" onClick={watchAll} disabled={busy}>
+                    {t('meraki.settings.watchAll')}
+                  </Button>
+                )}
+              </Inline>
+            </Callout>
           )}
           {org.devices_over_cap > 0 && (
-            <div className="meraki-orgpage-notice">
-              <span>{t('meraki.settings.overCap', { count: org.devices_over_cap })}</span>
-            </div>
+            <Callout>{t('meraki.settings.overCap', { count: org.devices_over_cap })}</Callout>
           )}
 
           <ListToolbar
@@ -615,8 +619,8 @@ export function MerakiOrgPage() {
             )}
           </ListToolbar>
 
-          {actionError && <p className="form-error meraki-orgpage-line">{actionError}</p>}
-          {note && <p className="meraki-orgpage-line meraki-orgpage-ok">✓ {note}</p>}
+          {actionError && <p className="form-error">{actionError}</p>}
+          {note && <p className="meraki-orgpage-ok">✓ {note}</p>}
 
           <div className="meraki-orgpage-table">
             <DataTable
@@ -634,6 +638,6 @@ export function MerakiOrgPage() {
           </div>
         </>
       )}
-    </div>
+    </Page>
   );
 }

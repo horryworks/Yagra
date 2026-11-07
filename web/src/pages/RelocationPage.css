@@ -1,22 +1,18 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* Settings ▸ Move to another server (ADR-121). A form surface with a warning above it and a log
-   below it, so Card is the right container throughout — the same shape as Settings ▸ Support
-   bundle, which is the other write-out action on this shelf.
+/* Settings ▸ Move to another server (ADR-121). The frame is the shared parts (ADR-246): Page, a
+   critical Callout for the two hazards, Card and its footer, Facts, Fields, CheckField, Disclosure.
+   What is left is this screen's own: the three "carried" columns, its lists, the run's log and the
+   rule above a waiting archive. */
 
-   Every colour is a token. The warning card is the only place this screen deviates from the plain
-   Card surface, and it does so with `--status-critical`, the same colour the alert state machine uses for critical. */
-
-.reloc-warning {
-  border-left: 3px solid var(--status-critical);
-}
-
-.reloc-warning ul {
+/* The hazards, the carried lists, the input problems and the steps after a move. */
+.reloc-list {
   margin: 0;
-  padding-left: 20px;
+  padding-left: var(--space-4);
+  font-size: var(--font-sm);
 }
 
-.reloc-warning li + li {
-  margin-top: var(--space-1-5);
+.reloc-list li + li {
+  margin-top: var(--space-1);
 }
 
 /* Three columns of short lists — carried / not carried / decide again. They wrap to one column on
@@ -25,125 +21,7 @@
 .reloc-carried {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 20px;
-}
-
-.reloc-carried h4 {
-  margin: 0 0 var(--space-1-5);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-.reloc-carried ul {
-  margin: 0;
-  padding-left: 18px;
-  font-size: var(--font-sm);
-}
-
-.reloc-carried li + li {
-  margin-top: var(--space-1);
-}
-
-/* The three size numbers, as a definition list so the labels stay aligned with their values. */
-.reloc-space {
-  display: grid;
-  grid-template-columns: max-content max-content;
-  column-gap: var(--space-4);
-  row-gap: var(--space-1);
-  margin: var(--space-3) 0 var(--space-2);
-  font-size: var(--font-sm);
-}
-
-.reloc-space dt {
-  color: var(--text-secondary);
-}
-
-.reloc-space dd {
-  margin: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-/* One checkbox per line with its cost beneath it as a short sub-label (ADR-200 kind 5). Part of
-   the control, not a tooltip: a tooltip is a thing a touch device never shows (ADR-055 R4), and
-   each of these four options has a cost the operator has to weigh before ticking it. */
-.reloc-opts {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: var(--space-3) 0;
-}
-
-.reloc-opt {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 10px;
-  align-items: start;
-  cursor: pointer;
-}
-
-.reloc-opt span {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-0-5);
-}
-
-.reloc-opt em {
-  font-style: normal;
-  font-size: var(--font-sm);
-}
-
-.reloc-target {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-
-.reloc-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  font-size: var(--font-sm);
-}
-
-.reloc-field em {
-  font-style: normal;
-}
-
-.reloc-auth {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-/* A private key is a dozen lines of base64; a one-line input turns pasting one into a guess. */
-.reloc-key textarea {
-  font-family: var(--font-family);
-  font-size: var(--font-sm);
-  resize: vertical;
-}
-
-.reloc-problems {
-  margin: var(--space-3) 0 0;
-  padding-left: 18px;
-  font-size: var(--font-sm);
-}
-
-.reloc-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-}
-
-.reloc-afterwards {
-  margin: var(--space-2) 0 0;
-  padding-left: 20px;
-  font-size: var(--font-sm);
-}
-
-.reloc-afterwards li + li {
-  margin-top: var(--space-1-5);
+  gap: var(--space-5);
 }
 
 .reloc-done {
@@ -153,10 +31,10 @@
 /* The run's own output, and the restore's output from the other host. Scrolls inside itself: it is
    machine text of unbounded width, and letting it widen the page would push the controls off. */
 .reloc-log {
-  margin: var(--space-3) 0 0;
-  padding: 10px var(--space-3);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
   background: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   font-family: var(--font-family);
   font-size: var(--font-sm);
@@ -167,27 +45,11 @@
 }
 
 .reloc-steps {
-  margin-top: var(--space-3);
   max-width: 70ch;
 }
 
+/* An archive on disk is set apart from the manual route above it: it holds every secret. */
 .reloc-archive {
-  margin-top: var(--space-4);
   padding-top: var(--space-4);
-  border-top: 1px solid var(--border-color);
-}
-
-/* A plain text toggle rather than a Button: the manual path is the fallback, and giving it a
-   button of the same weight as "Move this deployment" would read as two equal choices. */
-.reloc-disclose {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--brand);
-  font-size: var(--font-sm);
-  cursor: pointer;
-}
-
-.reloc-disclose:hover {
-  text-decoration: underline;
+  border-top: var(--border-width) solid var(--border-color);
 }

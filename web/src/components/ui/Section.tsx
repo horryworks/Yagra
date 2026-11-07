@@ -31,16 +31,21 @@ export function SectionHead({
 }
 
 /** A band of text the operator should read before going on - not a refusal (that is an error
- *  line) and not an explanation of the screen (ADR-200 keeps those off it). */
+ *  line) and not an explanation of the screen (ADR-200 keeps those off it).
+ *  `live` announces it when it appears (a load that just failed). A band that is part of the
+ *  screen from the start - a standing warning - is not live, or a screen reader would read it out
+ *  every time the screen opens. */
 export function Callout({
   tone = 'info',
+  live,
   children,
 }: {
   tone?: 'info' | 'warning' | 'critical';
+  live?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className={cx('ui-callout', `is-${tone}`)} role={tone === 'critical' ? 'alert' : undefined}>
+    <div className={cx('ui-callout', `is-${tone}`)} role={live ? 'alert' : undefined}>
       {children}
     </div>
   );

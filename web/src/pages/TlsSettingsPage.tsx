@@ -25,7 +25,11 @@ import {
   type ImportBlock,
 } from './tlsSettingsForm';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page, Inline } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { Facts } from '../components/ui/Facts';
+import { Fields, SaveNote } from '../components/ui/FormLayout';
+import { Callout } from '../components/ui/Section';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge, type Tone } from '../components/ui/Badge';
@@ -131,36 +135,43 @@ export function TlsSettingsPage() {
 
   if (loadBlock) {
     return (
-      <div className="tlspage">
+      <Page layout="sections">
         <PageHeader title={t('title')} />
         <LoadBlockNotice
           block={loadBlock}
           unavailable={t('error.load')}
           permission="manage_system"
         />
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="tlspage">
+    <Page layout="sections">
       <PageHeader title={t('title')} />
 
-      {loadError && <div className="tls-alert tls-alert-error">{loadError}</div>}
-
-      {status?.api_port_is_public && (
-        <div className="tls-alert tls-alert-warn">
-          <strong>{t('warning.apiPortPublicTitle')}</strong>
-          <p>{t('warning.apiPortPublic')}</p>
-        </div>
+      {loadError && (
+        <Callout tone="critical" live>
+          {loadError}
+        </Callout>
       )}
 
-      <Card title={t('current.heading')}>
-        {!status && !loadError && <p className="tls-muted">{t('loading')}</p>}
-        {status && !view && <p className="tls-muted">{t('none')}</p>}
+      {status?.api_port_is_public && (
+        <Callout tone="warning">
+          <strong>{t('warning.apiPortPublicTitle')}</strong>
+          <p className="tls-callout-body">{t('warning.apiPortPublic')}</p>
+        </Callout>
+      )}
+
+      <Card
+        title={t('current.heading')}
+        footer={view && <Button onClick={onDownload}>{t('current.download')}</Button>}
+      >
+        {!status && !loadError && <p className="tls-line">{t('loading')}</p>}
+        {status && !view && <p className="tls-line">{t('none')}</p>}
         {view && (
           <>
-            <div className="tls-headline">
+            <Inline gap={8}>
               {/* The source says whether Yagra may replace the certificate on its own — the
                   difference between "this renews itself" and "nothing touches this but you". */}
               <InfoPress
@@ -186,94 +197,113 @@ export function TlsSettingsPage() {
                     {t('notMaterialized.label')}
                   </InfoPress>
                 ))}
-            </div>
+            </Inline>
             {view.key_unreadable && (
-              <div className="tls-alert tls-alert-error">{t('warning.keyUnreadable')}</div>
+              <Callout tone="critical">{t('warning.keyUnreadable')}</Callout>
             )}
 
-            <dl className="tls-facts">
-              <dt>{t('current.subject')}</dt>
-              <dd className="mono">{view.subject}</dd>
-              <dt>{t('current.issuer')}</dt>
-              <dd className="mono">{view.issuer}</dd>
-              <dt>{t('current.sans')}</dt>
-              <dd className="mono">{view.sans.join(', ') || '—'}</dd>
-              <dt>{t('current.validity')}</dt>
-              <dd>
-                {t('current.validityRange', {
-                  from: formatTimestamp(Date.parse(view.not_before)),
-                  to: formatTimestamp(Date.parse(view.not_after)),
-                })}
-              </dd>
-              <dt>{t('current.keyAlgorithm')}</dt>
-              <dd>{view.key_algorithm}</dd>
-              <dt>{t('current.fingerprint')}</dt>
-              <dd className="mono tls-fingerprint">{view.fingerprint_sha256}</dd>
-              <dt>{t('current.importedAt')}</dt>
-              <dd>
-                {formatTimestamp(Date.parse(view.imported_at))}
-                {view.imported_by ? ` (${t('current.importedBy', { user: view.imported_by })})` : ''}
-              </dd>
-            </dl>
-
-            <div className="tls-actions">
-              <Button onClick={onDownload}>{t('current.download')}</Button>
-            </div>
+            <Facts
+              items={[
+                {
+                  label: t('current.subject'),
+                  value: <span className="mono">{view.subject}</span>,
+                },
+                {
+                  label: t('current.issuer'),
+                  value: <span className="mono">{view.issuer}</span>,
+                },
+                {
+                  label: t('current.sans'),
+                  value: <span className="mono">{view.sans.join(', ') || '—'}</span>,
+                },
+                {
+                  label: t('current.validity'),
+                  value: t('current.validityRange', {
+                    from: formatTimestamp(Date.parse(view.not_before)),
+                    to: formatTimestamp(Date.parse(view.not_after)),
+                  }),
+                },
+                { label: t('current.keyAlgorithm'), value: view.key_algorithm },
+                {
+                  label: t('current.fingerprint'),
+                  value: <span className="mono tls-fingerprint">{view.fingerprint_sha256}</span>,
+                },
+                {
+                  label: t('current.importedAt'),
+                  value: (
+                    <>
+                      {formatTimestamp(Date.parse(view.imported_at))}
+                      {view.imported_by
+                        ? ` (${t('current.importedBy', { user: view.imported_by })})`
+                        : ''}
+                    </>
+                  ),
+                },
+              ]}
+            />
           </>
         )}
       </Card>
 
-      <Card title={t('import.heading')}>
-        <label className="tls-label" htmlFor="tls-cert">
-          {t('import.certificate')}
-        </label>
-        <TextArea
-          id="tls-cert"
-          className="mono"
-          rows={8}
-          value={certificate}
-          placeholder={t('import.certificatePlaceholder')}
-          onChange={(e) => setCertificate(e.target.value)}
-        />
-        <div className="tls-row">
-          <input
-            type="file"
-            accept=".crt,.pem,.cer,.cert,application/x-pem-file"
-            onChange={(e) => void onPickFile(e, setCertificate)}
-          />
-        </div>
-
-        <label className="tls-label" htmlFor="tls-key">
-          {t('import.privateKey')}
-        </label>
-        <TextArea
-          id="tls-key"
-          className="mono"
-          rows={6}
-          value={privateKey}
-          placeholder={t('import.privateKeyPlaceholder')}
-          onChange={(e) => setPrivateKey(e.target.value)}
-        />
-        <div className="tls-row">
-          <input
-            type="file"
-            accept=".key,.pem"
-            onChange={(e) => void onPickFile(e, setPrivateKey)}
-          />
-        </div>
-
-        {attempted && block && <FieldError>{t(`import.block.${block}`)}</FieldError>}
-        {saveError && <div className="tls-alert tls-alert-error">{saveError}</div>}
-        {notice && <div className="tls-alert tls-alert-ok">{notice}</div>}
-
-        <div className="tls-actions">
-          <Button variant="primary" onClick={() => void onImport()} disabled={busy}>
-            {busy ? t('import.submitting') : t('import.submit')}
-          </Button>
-        </div>
+      <Card
+        title={t('import.heading')}
+        footer={
+          <>
+            {saveError && <SaveNote tone="error">{saveError}</SaveNote>}
+            {notice && <SaveNote tone="ok">{notice}</SaveNote>}
+            <Button variant="primary" onClick={() => void onImport()} disabled={busy}>
+              {busy ? t('import.submitting') : t('import.submit')}
+            </Button>
+          </>
+        }
+      >
+        <Fields>
+          <Field label={t('import.certificate')} htmlFor="tls-cert">
+            <TextArea
+              id="tls-cert"
+              className="mono"
+              rows={8}
+              value={certificate}
+              placeholder={t('import.certificatePlaceholder')}
+              onChange={(e) => setCertificate(e.target.value)}
+            />
+            <Inline>
+              <input
+                type="file"
+                accept=".crt,.pem,.cer,.cert,application/x-pem-file"
+                onChange={(e) => void onPickFile(e, setCertificate)}
+              />
+            </Inline>
+          </Field>
+          <Field label={t('import.privateKey')} htmlFor="tls-key">
+            <TextArea
+              id="tls-key"
+              className="mono"
+              rows={6}
+              value={privateKey}
+              placeholder={t('import.privateKeyPlaceholder')}
+              onChange={(e) => setPrivateKey(e.target.value)}
+            />
+            <Inline>
+              <input
+                type="file"
+                accept=".key,.pem"
+                onChange={(e) => void onPickFile(e, setPrivateKey)}
+              />
+            </Inline>
+          </Field>
+          {attempted && block && <FieldError>{t(`import.block.${block}`)}</FieldError>}
+        </Fields>
       </Card>
 
-      <Card title={t('regenerate.heading')}>
+      <Card
+        title={t('regenerate.heading')}
+        footer={
+          <Button onClick={() => setConfirmingRegenerate(true)} disabled={busy}>
+            {busy ? t('regenerate.submitting') : t('regenerate.submit')}
+          </Button>
+        }
+      >
         {/* What an empty list means changes what to type, so it is behind the label's ⓘ. */}
         <Field
           label={t('regenerate.names')}
@@ -289,11 +319,6 @@ export function TlsSettingsPage() {
             onChange={(e) => setNames(e.target.value)}
           />
         </Field>
-        <div className="tls-actions">
-          <Button onClick={() => setConfirmingRegenerate(true)} disabled={busy}>
-            {busy ? t('regenerate.submitting') : t('regenerate.submit')}
-          </Button>
-        </div>
       </Card>
 
       {confirmingRegenerate && (
@@ -316,6 +341,6 @@ export function TlsSettingsPage() {
             : t('regenerate.confirmImported')}
         </ConfirmDeleteModal>
       )}
-    </div>
+    </Page>
   );
 }

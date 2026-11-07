@@ -46,32 +46,22 @@
     "dashboard/SharedDashboardPage.css": 3,
     "dashboard/WidgetFrame.css": 5,
     "dashboard/widgets/widgets.css": 12,
-    "pages/AboutPage.css": 2,
     "pages/AlertRulesPage.css": 1,
     "pages/ApiTokensPage.css": 2,
-    "pages/AuthSettingsPage.css": 2,
     "pages/ChannelTemplateModal.css": 27,
     "pages/ClassificationRulesPage.css": 2,
-    "pages/ConfigBundlePage.css": 1,
     "pages/CredentialsPage.css": 1,
     "pages/DiscoveryPage.css": 3,
     "pages/EventRulesPage.css": 2,
     "pages/GeoMapPage.css": 12,
-    "pages/integrations/IntegrationsCatalogPage.css": 1,
-    "pages/integrations/MerakiIntegrationPage.css": 3,
-    "pages/integrations/MerakiOrgPage.css": 1,
     "pages/InventoryFilterMenu.css": 3,
     "pages/LoginPage.css": 4,
     "pages/NodesPage.css": 6,
     "pages/PollersPage.css": 17,
     "pages/ProfilesPage.css": 2,
     "pages/ReclassifyPage.css": 1,
-    "pages/RelocationPage.css": 8,
-    "pages/RolesPage.css": 6,
     "pages/RoutingPage.css": 4,
     "pages/ThresholdsPage.css": 1,
-    "pages/TlsSettingsPage.css": 1,
-    "pages/UpgradePage.css": 11,
     "pages/UsersPage.css": 1,
     "reports/reports.css": 5,
     "styles/table.css": 24,
@@ -108,7 +98,6 @@
     "pages/AlertGroupingSection.tsx": 6,
     "pages/ApiTokensPage.tsx": 15,
     "pages/AuditPage.tsx": 1,
-    "pages/AuthSettingsPage.tsx": 44,
     "pages/BusPanel.tsx": 12,
     "pages/ChannelTemplateModal.tsx": 8,
     "pages/ClassificationRulesPage.tsx": 9,
@@ -123,10 +112,6 @@
     "pages/EventsPage.tsx": 1,
     "pages/ForwardingPage.tsx": 24,
     "pages/HistoryPage.tsx": 1,
-    "pages/integrations/GitRemotePage.tsx": 1,
-    "pages/integrations/MerakiIntegrationPage.tsx": 11,
-    "pages/integrations/MerakiOrgPage.tsx": 1,
-    "pages/integrations/NetboxIntegrationPage.tsx": 2,
     "pages/MibRepositoryPage.tsx": 10,
     "pages/MissingPrefixModals.tsx": 3,
     "pages/NodeDetailPage.tsx": 1,
@@ -139,6 +124,34 @@
     "reports/ReportsPage.tsx": 1,
     "troubleshoot/SavedFindingsPage.tsx": 1,
     "troubleshoot/ScheduledPage.tsx": 1
+  },
+  "uppercase": {
+    "components/CollectionEditor/CollectionEditor.css": 1,
+    "components/InterfaceRules/InterfaceRulesModal.css": 1,
+    "components/NodeDetail/DnsHealth.css": 1,
+    "components/NodeDetail/NeighborsTab.css": 2,
+    "components/NodeDetail/NodeDetail.css": 10,
+    "components/NodeDetail/RangeControl.css": 1,
+    "components/NodeTree/NodeTree.css": 2,
+    "components/shell/SideBar.css": 2,
+    "dashboard/CatalogModal.css": 1,
+    "dashboard/primitives/Donut.css": 1,
+    "dashboard/primitives/Gauge.css": 1,
+    "dashboard/primitives/KpiTile.css": 1,
+    "dashboard/widgets/widgets.css": 1,
+    "pages/ClassificationRulesPage.css": 1,
+    "pages/EventRulesPage.css": 1,
+    "pages/integrations/MerakiIntegrationPage.css": 1,
+    "pages/InventoryFilterMenu.css": 1,
+    "pages/NodesPage.css": 1,
+    "pages/PollersPage.css": 1,
+    "pages/ProfilesPage.css": 1,
+    "pages/RolesPage.css": 1,
+    "pages/UpgradePage.css": 1,
+    "reports/reports.css": 1,
+    "styles/table.css": 1,
+    "troubleshoot/troubleshoot.css": 6,
+    "widgets/StatusSummary.css": 1
   },
   "pageCss": {
     "components/CollectionEditor/CollectionEditor.css": {
@@ -274,7 +287,7 @@
       "why": "before ADR-246"
     },
     "components/shell/PreferencesModal.css": {
-      "lines": 68,
+      "lines": 48,
       "why": "before ADR-246"
     },
     "components/shell/SideBar.css": {
@@ -354,7 +367,7 @@
       "why": "before ADR-246"
     },
     "pages/AboutPage.css": {
-      "lines": 33,
+      "lines": 8,
       "why": "before ADR-246"
     },
     "pages/ActiveAlertsPage.css": {
@@ -362,7 +375,7 @@
       "why": "before ADR-246"
     },
     "pages/AiSettingsPage.css": {
-      "lines": 59,
+      "lines": 16,
       "why": "before ADR-246"
     },
     "pages/AlertRulesPage.css": {
@@ -374,7 +387,7 @@
       "why": "before ADR-246"
     },
     "pages/AuthSettingsPage.css": {
-      "lines": 181,
+      "lines": 80,
       "why": "before ADR-246"
     },
     "pages/ChannelTemplateModal.css": {
@@ -394,7 +407,7 @@
       "why": "before ADR-246"
     },
     "pages/ConfigBundlePage.css": {
-      "lines": 80,
+      "lines": 40,
       "why": "before ADR-246"
     },
     "pages/CredentialsPage.css": {
@@ -426,19 +439,19 @@
       "why": "before ADR-246"
     },
     "pages/integrations/GitRemotePage.css": {
-      "lines": 43,
+      "lines": 15,
       "why": "before ADR-246"
     },
     "pages/integrations/IntegrationsCatalogPage.css": {
-      "lines": 82,
+      "lines": 74,
       "why": "before ADR-246"
     },
     "pages/integrations/MerakiIntegrationPage.css": {
-      "lines": 203,
+      "lines": 95,
       "why": "before ADR-246"
     },
     "pages/integrations/MerakiOrgPage.css": {
-      "lines": 164,
+      "lines": 109,
       "why": "before ADR-246"
     },
     "pages/integrations/MerakiSyncStatus.css": {
@@ -446,7 +459,7 @@
       "why": "before ADR-246"
     },
     "pages/integrations/NetboxIntegrationPage.css": {
-      "lines": 120,
+      "lines": 96,
       "why": "before ADR-246"
     },
     "pages/InventoryFilterMenu.css": {
@@ -474,7 +487,7 @@
       "why": "before ADR-246"
     },
     "pages/PollersPage.css": {
-      "lines": 511,
+      "lines": 510,
       "why": "before ADR-246"
     },
     "pages/ProfilesPage.css": {
@@ -486,11 +499,11 @@
       "why": "before ADR-246"
     },
     "pages/RelocationPage.css": {
-      "lines": 193,
+      "lines": 55,
       "why": "before ADR-246"
     },
     "pages/RolesPage.css": {
-      "lines": 134,
+      "lines": 104,
       "why": "before ADR-246"
     },
     "pages/RoutingPage.css": {
@@ -502,11 +515,11 @@
       "why": "before ADR-246"
     },
     "pages/SupportBundlePage.css": {
-      "lines": 44,
+      "lines": 8,
       "why": "before ADR-246"
     },
     "pages/SystemHealthPage.css": {
-      "lines": 189,
+      "lines": 84,
       "why": "before ADR-246"
     },
     "pages/SystemSettingsPage.css": {
@@ -518,7 +531,7 @@
       "why": "before ADR-246"
     },
     "pages/TlsSettingsPage.css": {
-      "lines": 108,
+      "lines": 18,
       "why": "before ADR-246"
     },
     "pages/TopologyMapPage.css": {
@@ -526,7 +539,7 @@
       "why": "before ADR-246"
     },
     "pages/UpgradePage.css": {
-      "lines": 447,
+      "lines": 315,
       "why": "before ADR-246"
     },
     "pages/UsersPage.css": {

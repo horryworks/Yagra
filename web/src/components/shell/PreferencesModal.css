@@ -1,17 +1,6 @@
-.pref-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-5);
-}
-
-.pref-label {
-  flex: 1;
-}
-
-.pref-name {
-  font-weight: var(--weight-medium);
-}
-
+/* The rows are the shared parts (ADR-246: `Fields`, `SettingRow`). What is left is the choice
+   control, kept as three radio groups rather than the shared `Segmented`, whose buttons are toggle
+   buttons (`aria-pressed`) where these are one exclusive choice (`role="radio"`). */
 .pref-seg {
   display: inline-flex;
   border: var(--border-width) solid var(--border-color);
@@ -47,19 +36,10 @@
   font-size: var(--font-sm);
 }
 
-/* Dialog-only rhythm. As a page these rows sat in a `Card` whose body is a flex column with no
-   gap, so they were flush; inside a dialog the three choices need to read as three. */
-.pref-row + .pref-row {
-  margin-top: var(--space-4);
-}
-
-/* The bottom sheet is narrower than the 520px dialog, and a label plus a two-button segment does
-   not fit on one line there. Layout-mode change, so it is a `data-viewport` selector and not a
-   media query (ui-conventions: three adaptation channels, never mixed). */
-html[data-viewport='mobile'] .pref-row {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-2);
+/* The bottom sheet is narrower than the 520px dialog, so the row puts the choice under its name
+   (`SettingRow`); there the choice takes the whole width, one equal button per option. */
+html[data-viewport='mobile'] .pref-seg {
+  flex: 1;
 }
 
 html[data-viewport='mobile'] .pref-seg-btn {

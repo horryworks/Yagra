@@ -59,7 +59,7 @@ test('a saved key is sent by its id alone, and an organization already added can
 }) => {
   await page.goto('/settings/integrations/meraki');
   // The row names the stored key it is polled with — the name, never the id.
-  await expect(page.locator('.meraki-org-key')).toHaveText(`API key: ${KEY_NAME}`);
+  await expect(page.getByText(`API key: ${KEY_NAME}`, { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: '+ Add organization' }).click();
   const dialog = page.getByRole('dialog');

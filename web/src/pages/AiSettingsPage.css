@@ -1,22 +1,9 @@
-/* Settings ▸ AI analysis — a single provider form (ADR-029). */
+/* Settings ▸ AI analysis — a single provider form (ADR-029). The frame, the fields, the setting row
+   and the save notes are the shared parts (ADR-246); what is left is how wide the form may grow and
+   the width of the one number. */
 
-.ai-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-bottom: var(--space-4);
+.ai-fields {
   max-width: 640px;
-}
-
-.ai-label {
-  font-weight: var(--weight-medium);
-  color: var(--text-primary);
-}
-
-.ai-tokens-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 .ai-tokens {
@@ -24,36 +11,6 @@
   text-align: right;
 }
 
-.ai-check {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.ai-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-  flex-wrap: wrap;
-}
-
 .ai-state {
   font-size: var(--font-sm);
-}
-
-.ai-saved {
-  margin-top: var(--space-3);
-  color: var(--status-ok);
-  font-size: var(--font-sm);
-}
-
-/* Touch targets: the checkboxes are the only in-row controls here, so give them the secondary
-   floor rather than the full 44px (ui-conventions "Responsive / mobile"). */
-@media (hover: none) {
-  .ai-check {
-    min-height: 40px;
-  }
 }

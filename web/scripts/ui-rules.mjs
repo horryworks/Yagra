@@ -13,6 +13,9 @@
 //   fontSize       a raw length in `font-size` (CSS)
 //   inlineSpacing  a literal number or px string for a spacing key inside `style={{ }}` (TSX)
 //   legacy         a class name the shared layout parts replace (TSX outside components/ui)
+//   uppercase      `text-transform: uppercase` (CSS) or `textTransform: 'uppercase'` (TSX):
+//                  design-system.md §1.4 says sentence case everywhere, and a transform also
+//                  rewrites whatever data lands in the text - a mount path, a pool name
 //   lines          the length of a page-local stylesheet (outside styles/ and components/ui/)
 //
 // Each count has a ceiling in the budget that only goes down. A file with no entry has a ceiling
@@ -47,7 +50,7 @@ export const SPACE_STEPS = [
 ];
 
 /** The counted metrics that have a per-file ceiling. `lines` is handled apart (it needs a why). */
-export const METRICS = ['spacing', 'color', 'fontSize', 'inlineSpacing', 'legacy'];
+export const METRICS = ['spacing', 'color', 'fontSize', 'inlineSpacing', 'legacy', 'uppercase'];
 
 /** How far below its ceiling a count may sit before the ceiling must come down with it. */
 export const SLACK = { count: 10, lines: 30 };
@@ -140,6 +143,7 @@ function emptyResult() {
     fontSize: [],
     inlineSpacing: [],
     legacy: [],
+    uppercase: [],
     lines: null,
     allowProblems: [],
     inspected: 0,
@@ -183,6 +187,9 @@ export function measureCss(rel, text) {
       for (const t of bare.match(RAW_LENGTH) ?? []) {
         if (!isZero(t)) result.spacing.push({ line, prop, value, raw: t });
       }
+    } else if (prop === 'text-transform') {
+      result.inspected++;
+      if (/uppercase/.test(bare)) result.uppercase.push({ line, prop, value, raw: 'uppercase' });
     } else if (prop === 'font-size') {
       result.inspected++;
       if (definesTokens) continue;
@@ -251,6 +258,16 @@ export function measureTsx(rel, text) {
     }
   }
 
+  for (const m of code.matchAll(/textTransform\s*:\s*['"`]uppercase['"`]/g)) {
+    result.inspected++;
+    result.uppercase.push({
+      line: lineOf(starts, m.index),
+      prop: 'textTransform',
+      value: 'uppercase',
+      raw: 'uppercase',
+    });
+  }
+
   if (!rel.startsWith('components/ui/')) {
     const legacy = new RegExp(
       `(?<=["'\`\\s{])(${LEGACY_CLASSES.map((c) => c.replace(/-/g, '\\-')).join('|')})(?![\\w-])`,
@@ -284,6 +301,8 @@ export function suggest(v) {
     return n >= 8 ? 'var(--radius-pill) if round at its ends, else var(--radius)' : 'var(--radius)';
   }
   if (v.prop === 'font-size') return 'a --font-* token, or `ui-allow:` for SVG user units';
+  if (v.prop === 'text-transform' || v.prop === 'textTransform')
+    return 'nothing - write the text in sentence case (design-system.md §1.4)';
   if (v.prop === 'className') return 'the shared part that replaces it (ui-conventions.md, "画面の型")';
   if (!px && !/^-?(?:\d+\.?\d*|\.\d+)$/.test(v.raw)) return 'a --space-* step (convert to px first)';
   const n = Math.abs(Number(px ? px[1] : v.raw));
@@ -396,6 +415,30 @@ const DOC =
 
 function main(args) {
   const files = listFiles();
+  // A metric added to METRICS starts from today's counts; every other ceiling is left alone.
+  // `--lower` cannot do this - it never raises, so a new metric would start at zero everywhere.
+  const add = args.indexOf('--add-metric');
+  if (add >= 0) {
+    const metric = args[add + 1];
+    if (!METRICS.includes(metric)) {
+      console.error(`--add-metric needs one of: ${METRICS.join(', ')}`);
+      process.exit(1);
+    }
+    const budget = readBudget();
+    if (budget[metric] && Object.keys(budget[metric]).length) {
+      console.error(`"${metric}" already has ceilings; use --lower.`);
+      process.exit(1);
+    }
+    budget[metric] = {};
+    for (const [rel, abs] of files) {
+      const n = measure(rel, readFileSync(abs, 'utf8'))[metric].length;
+      if (n > 0) budget[metric][rel] = n;
+    }
+    budget._doc = DOC;
+    writeBudget(budget);
+    console.log(`Added "${metric}": ${Object.keys(budget[metric]).length} files`);
+    return;
+  }
   if (args.includes('--init') || args.includes('--lower')) {
     const init = args.includes('--init');
     if (init && existsSync(BUDGET_PATH) && !args.includes('--force')) {

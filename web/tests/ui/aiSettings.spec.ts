@@ -112,5 +112,7 @@ test('Test waits for a save, and the stored key is kept unless replaced', async 
 
   // The output limit carries its unit and range in place of a sentence.
   await expect(page.locator('.field-suffix')).toHaveText('tokens');
-  await expect(page.locator('.ai-tokens-row')).toContainText('(256–65536)');
+  await expect(page.locator('.ui-setting').filter({ has: page.locator('#ai-tokens') })).toContainText(
+    '(256–65536)',
+  );
 });
