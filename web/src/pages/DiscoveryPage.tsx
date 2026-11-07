@@ -655,6 +655,12 @@ export function DiscoveryPage() {
   /** The scan on screen is still producing results. */
   const inFlight = shown ? isScanInFlight(shown.state) : justStarted;
   const unroutedPool = poolIsUnrouted(pools, pool);
+  // ADR-244 decision 4: a pool with no live poller opens the folded settings once, so the line
+  // saying so is seen. Opened through state rather than forced through the prop, so the operator
+  // can still close it after reading.
+  useEffect(() => {
+    if (settingsForcedOpen(unroutedPool)) setHowOpen(true);
+  }, [unroutedPool]);
 
   const requestStop = () => {
     if (!scanId) return;
@@ -1036,7 +1042,7 @@ export function DiscoveryPage() {
                 poller forces it open, because the line saying so is inside. */}
             <details
               className="disco-how"
-              open={howOpen || settingsForcedOpen(unroutedPool)}
+              open={howOpen}
               onToggle={(e) => setHowOpen(e.currentTarget.open)}
             >
               <summary>

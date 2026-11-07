@@ -117,7 +117,9 @@ export const PROSE_CEILING: Record<string, number> = {
   '/events': 93,
   '/events/forwarding': 97,
   '/nodes': 41,
-  '/nodes/discovery': 253,
+  // ADR-244: +54 for the folded Scan settings line, which names what the sweep will use in place
+  // of the four controls it folds away (the mock's pool has no poller, so it opens itself).
+  '/nodes/discovery': 307,
   '/nodes/duplicates': 50,
   '/nodes/missing-prefixes': 145,
   '/nodes/subnet-overlaps': 163,
