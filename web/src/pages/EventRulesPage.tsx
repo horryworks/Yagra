@@ -32,7 +32,8 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { Field, TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { CheckField, FieldRow, Fields } from '../components/ui/FormLayout';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -432,180 +433,155 @@ function RuleModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {t('eventRules.modal.name')} <RequiredMark />
-        </label>
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      </div>
-      <div className="modal-field-row">
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.matchKind')}</label>
-          <Select
-            value={matchKind}
-            onChange={(e) => setMatchKind(e.target.value as 'substring' | 'regex')}
-          >
-            <option value="substring">{t('eventRules.matchKind.substring')}</option>
-            <option value="regex">{t('eventRules.matchKind.regex')}</option>
-          </Select>
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.severity')}</label>
-          <Select value={severity} onChange={(e) => setSeverity(e.target.value as Severity)}>
-            <option value="critical">{severityLabel('critical')}</option>
-            <option value="warning">{severityLabel('warning')}</option>
-            <option value="info">
-              {t('eventRules.modal.severityInfo', { label: severityLabel('info') })}
-            </option>
-          </Select>
-        </div>
-      </div>
-      <Field
-        label={t('eventRules.modal.pattern')}
-        htmlFor="event-rule-pattern"
-        required
-        infoKey="alertsConfig:eventRules.modal.patternCase.info"
-      >
-        <TextInput
-          id="event-rule-pattern"
-          className="mono"
-          placeholder={matchKind === 'regex' ? '(?i)link down|%LINK-3' : 'link down'}
-          value={pattern}
-          onChange={(e) => setPattern(e.target.value)}
-        />
-      </Field>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('eventRules.modal.clearPattern')}</label>
-        <TextInput
-          className="mono"
-          placeholder="link up"
-          value={clearPattern}
-          onChange={(e) => setClearPattern(e.target.value)}
-        />
-      </div>
-      <div className="modal-field-row">
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="event-rule-target">
-            {t('eventRules.modal.target')}
-          </label>
-          <Select
-            id="event-rule-target"
-            value={targetKind}
-            onChange={(e) => {
-              setTargetKind(e.target.value as EventTargetKind);
-              setTargetId('');
-            }}
-          >
-            {EVENT_TARGET_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {t(`eventRules.tabs.${k}`)}
+      <Fields>
+        <Field label={t('eventRules.modal.name')} required>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        <FieldRow>
+          <Field label={t('eventRules.modal.matchKind')}>
+            <Select
+              value={matchKind}
+              onChange={(e) => setMatchKind(e.target.value as 'substring' | 'regex')}
+            >
+              <option value="substring">{t('eventRules.matchKind.substring')}</option>
+              <option value="regex">{t('eventRules.matchKind.regex')}</option>
+            </Select>
+          </Field>
+          <Field label={t('eventRules.modal.severity')}>
+            <Select value={severity} onChange={(e) => setSeverity(e.target.value as Severity)}>
+              <option value="critical">{severityLabel('critical')}</option>
+              <option value="warning">{severityLabel('warning')}</option>
+              <option value="info">
+                {t('eventRules.modal.severityInfo', { label: severityLabel('info') })}
               </option>
-            ))}
-          </Select>
-        </div>
-        {targetKind !== 'global' && (
-          <div className="modal-field">
-            <label className="modal-field-label">
-              {t(`eventRules.tabs.${targetKind}`)} <RequiredMark />
-            </label>
-            {targetKind === 'folder' ? (
-              <GroupPicker
-                options={folderItems}
-                value={targetId}
-                emptyOption={t('eventRules.modal.pickTarget')}
-                onChange={(id) => setTargetId(id)}
-              />
-            ) : (
-              <NodePicker
-                value={targetId || null}
-                valueLabel={targetId ? nodeName(targetId) : undefined}
-                placeholder={t('eventRules.modal.pickTarget')}
-                onChange={(n) => setTargetId(n?.id ?? '')}
-              />
-            )}
-          </div>
-        )}
-      </div>
-      <div className="modal-field-row">
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.sourceKind')}</label>
-          <Select value={sourceKind} onChange={(e) => setSourceKind(e.target.value)}>
-            <option value="">{t('eventRules.any')}</option>
-            <option value="syslog">syslog</option>
-            <option value="trap">trap</option>
-            <option value="webhook">webhook</option>
-          </Select>
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.webhookSource')}</label>
-          <Select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
-            <option value="">{t('eventRules.any')}</option>
-            {sources.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </Select>
-        </div>
-      </div>
-      <div className="modal-field-row">
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.autoClose')}</label>
+            </Select>
+          </Field>
+        </FieldRow>
+        <Field
+          label={t('eventRules.modal.pattern')}
+          htmlFor="event-rule-pattern"
+          required
+          infoKey="alertsConfig:eventRules.modal.patternCase.info"
+        >
           <TextInput
-            type="number"
-            value={ttl}
-            onChange={(e) => setTtl(e.target.value)}
+            id="event-rule-pattern"
+            className="mono"
+            placeholder={matchKind === 'regex' ? '(?i)link down|%LINK-3' : 'link down'}
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
           />
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.fireAfter')}</label>
-          <TextInput
-            type="number"
-            value={minCount}
-            onChange={(e) => setMinCount(e.target.value)}
-          />
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('eventRules.modal.within')}</label>
-          <TextInput
-            type="number"
-            value={windowSecs}
-            onChange={(e) => setWindowSecs(e.target.value)}
-          />
-        </div>
-      </div>
-      {/* Which box, and what it may hold — Save alone going grey says neither. */}
-      {numberProblem && (
-        <p className="form-error">
-          {t('eventRules.modal.numberRange', {
-            field: t(NUMBER_FIELD_LABEL_KEY[numberProblem]),
-            min: EVENT_RULE_BOUNDS[numberProblem].min,
-            max: EVENT_RULE_BOUNDS[numberProblem].max,
-          })}
-        </p>
-      )}
-      <label className="eventrules-enabled">
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        <span>{t('eventRules.modal.enabled')}</span>
-      </label>
-
-      <div className="eventrules-tester">
-        <label className="modal-field-label">{t('eventRules.modal.test')}</label>
-        <div className="eventrules-tester-row">
+        </Field>
+        <Field label={t('eventRules.modal.clearPattern')}>
           <TextInput
             className="mono"
-            placeholder={t('eventRules.modal.samplePlaceholder')}
-            value={sample}
-            onChange={(e) => setSample(e.target.value)}
+            placeholder="link up"
+            value={clearPattern}
+            onChange={(e) => setClearPattern(e.target.value)}
           />
-          <Button variant="outline" onClick={runTest} disabled={pattern.trim() === ''}>
-            {t('eventRules.modal.testBtn')}
-          </Button>
-        </div>
-        {testResult && <p className="eventrules-tester-result">{testResult}</p>}
-      </div>
+        </Field>
+        <FieldRow>
+          <Field label={t('eventRules.modal.target')}>
+            <Select
+              id="event-rule-target"
+              value={targetKind}
+              onChange={(e) => {
+                setTargetKind(e.target.value as EventTargetKind);
+                setTargetId('');
+              }}
+            >
+              {EVENT_TARGET_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {t(`eventRules.tabs.${k}`)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {targetKind !== 'global' && (
+            <Field label={t(`eventRules.tabs.${targetKind}`)} required>
+              {targetKind === 'folder' ? (
+                <GroupPicker
+                  options={folderItems}
+                  value={targetId}
+                  emptyOption={t('eventRules.modal.pickTarget')}
+                  onChange={(id) => setTargetId(id)}
+                />
+              ) : (
+                <NodePicker
+                  value={targetId || null}
+                  valueLabel={targetId ? nodeName(targetId) : undefined}
+                  placeholder={t('eventRules.modal.pickTarget')}
+                  onChange={(n) => setTargetId(n?.id ?? '')}
+                />
+              )}
+            </Field>
+          )}
+        </FieldRow>
+        <FieldRow>
+          <Field label={t('eventRules.modal.sourceKind')}>
+            <Select value={sourceKind} onChange={(e) => setSourceKind(e.target.value)}>
+              <option value="">{t('eventRules.any')}</option>
+              <option value="syslog">syslog</option>
+              <option value="trap">trap</option>
+              <option value="webhook">webhook</option>
+            </Select>
+          </Field>
+          <Field label={t('eventRules.modal.webhookSource')}>
+            <Select value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              <option value="">{t('eventRules.any')}</option>
+              {sources.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </FieldRow>
+        <FieldRow>
+          <Field label={t('eventRules.modal.autoClose')}>
+            <TextInput type="number" value={ttl} onChange={(e) => setTtl(e.target.value)} />
+          </Field>
+          <Field label={t('eventRules.modal.fireAfter')}>
+            <TextInput type="number" value={minCount} onChange={(e) => setMinCount(e.target.value)} />
+          </Field>
+          <Field label={t('eventRules.modal.within')}>
+            <TextInput
+              type="number"
+              value={windowSecs}
+              onChange={(e) => setWindowSecs(e.target.value)}
+            />
+          </Field>
+        </FieldRow>
+        {/* Which box, and what it may hold — Save alone going grey says neither. */}
+        {numberProblem && (
+          <p className="form-error">
+            {t('eventRules.modal.numberRange', {
+              field: t(NUMBER_FIELD_LABEL_KEY[numberProblem]),
+              min: EVENT_RULE_BOUNDS[numberProblem].min,
+              max: EVENT_RULE_BOUNDS[numberProblem].max,
+            })}
+          </p>
+        )}
+        <CheckField checked={enabled} onChange={setEnabled} label={t('eventRules.modal.enabled')} />
 
-      <FormError form={form} />
+        <div className="eventrules-tester">
+          <Field label={t('eventRules.modal.test')} htmlFor="event-rule-sample" status={testResult}>
+            <div className="input-with-action">
+              <TextInput
+                id="event-rule-sample"
+                className="mono"
+                placeholder={t('eventRules.modal.samplePlaceholder')}
+                value={sample}
+                onChange={(e) => setSample(e.target.value)}
+              />
+              <Button variant="outline" onClick={runTest} disabled={pattern.trim() === ''}>
+                {t('eventRules.modal.testBtn')}
+              </Button>
+            </div>
+          </Field>
+        </div>
+
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

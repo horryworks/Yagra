@@ -49,6 +49,8 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, Select, FieldError } from '../components/ui/Field';
+import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
+import { Stack } from '../components/ui/Page';
 import { InfoPress } from '../components/ui/InfoTip';
 import { EmptyState } from '../components/ui/EmptyState';
 import { DataTable, type Column } from '../components/ui/DataTable';
@@ -322,107 +324,100 @@ function CreateTokenModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.name')}</label>
-        <TextInput
-          value={name}
-          placeholder={t('field.namePlaceholder')}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.surfaces')}</label>
-        <div className="tok-surfaces">
-          {TOKEN_SURFACES.map((s) => (
-            <label key={s} className="tok-surface">
-              <input
-                type="checkbox"
+      <Fields>
+        <Field label={t('field.name')}>
+          <TextInput
+            value={name}
+            placeholder={t('field.namePlaceholder')}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </Field>
+        <FieldGroup label={t('field.surfaces')}>
+          <Stack gap={8}>
+            {TOKEN_SURFACES.map((s) => (
+              <CheckField
+                key={s}
                 checked={surfaces.includes(s)}
                 onChange={() => setSurfaces(toggleSurface(surfaces, s, TOKEN_SURFACES))}
+                label={t(`surface.${s}`)}
+                detail={t(`surfaceHint.${s}`)}
               />
-              <span className="tok-surface-name">{t(`surface.${s}`)}</span>
-              <span className="tok-surface-hint">{t(`surfaceHint.${s}`)}</span>
-            </label>
-          ))}
-        </div>
-        {!surfaces.length && <FieldError>{t('err.noSurface')}</FieldError>}
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.role')}</label>
-        <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-          {ROLES.map((r) => (
-            <option key={r} value={r}>
-              {t(`common:role.${r}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      {/* Service accounts are listed first (`ownerChoices`): that order is the recommendation an
-          unattended token should belong to a machine identity. */}
-      <Field
-        label={t('field.owner.label')}
-        htmlFor="tok-owner"
-        infoKey="settings-tokens:field.owner.info"
-      >
-        <Select id="tok-owner" value={owner} onChange={(e) => setOwner(e.target.value)}>
-          {choices.map((u) => (
-            <option key={u.id} value={u.username === username ? '' : u.id}>
-              {u.username === username
-                ? t('field.ownerSelf', { username: u.username })
-                : u.username}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="tok-scope">
-          {t('field.scope')}
-        </label>
+            ))}
+          </Stack>
+          {!surfaces.length && <FieldError>{t('err.noSurface')}</FieldError>}
+        </FieldGroup>
+        <Field label={t('field.role')}>
+          <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {t(`common:role.${r}`)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {/* Service accounts are listed first (`ownerChoices`): that order is the recommendation an
+            unattended token should belong to a machine identity. */}
+        <Field
+          label={t('field.owner.label')}
+          htmlFor="tok-owner"
+          infoKey="settings-tokens:field.owner.info"
+        >
+          <Select id="tok-owner" value={owner} onChange={(e) => setOwner(e.target.value)}>
+            {choices.map((u) => (
+              <option key={u.id} value={u.username === username ? '' : u.id}>
+                {u.username === username
+                  ? t('field.ownerSelf', { username: u.username })
+                  : u.username}
+              </option>
+            ))}
+          </Select>
+        </Field>
         {inherits ? (
           // Not a picker: a token owned by a scoped account inherits that account's scope, and the
-          // API refuses any other value (`400 owner_is_scoped`). A read-only field saying so beats a
-          // control whose every setting is rejected.
-          <TextInput id="tok-scope" readOnly value={t('field.scopeSameAsOwner')} />
-        ) : groups.length === 0 ? (
-          <span className="tok-scope-summary">
-            {t('scope.all')}
-          </span>
+          // API refuses any other value (`400 owner_is_scoped`). A read-only field saying so beats
+          // a control whose every setting is rejected.
+          <Field label={t('field.scope')}>
+            <TextInput id="tok-scope" readOnly value={t('field.scopeSameAsOwner')} />
+          </Field>
         ) : (
-          <>
-            <div className="users-scope-list">
-              {groups.map((g) => (
-                <label key={g.id} className="users-scope-row">
-                  <input
-                    type="checkbox"
-                    checked={scopeGroups.includes(g.id)}
-                    onChange={(e) =>
-                      setScopeGroups((prev) =>
-                        e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id),
-                      )
-                    }
-                  />
-                  <span className="users-scope-name">{g.name}</span>
-                </label>
-              ))}
-            </div>
+          // A label over a set of boxes, not over one control - a `FieldGroup`.
+          <FieldGroup label={t('field.scope')}>
+            {groups.length > 0 && (
+              <div className="users-scope-list">
+                {groups.map((g) => (
+                  <label key={g.id} className="users-scope-row">
+                    <input
+                      type="checkbox"
+                      checked={scopeGroups.includes(g.id)}
+                      onChange={(e) =>
+                        setScopeGroups((prev) =>
+                          e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id),
+                        )
+                      }
+                    />
+                    <span className="users-scope-name">{g.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
             {/* What the ticks add up to, in the list's own words: nothing ticked is the whole
-                fleet, which the box alone does not say. */}
-            <span className="tok-scope-summary">{scopeSummary}</span>
-          </>
+                fleet, which the box alone does not say. With no folder to tick, it is all there
+                is. */}
+            <p className="form-status">{groups.length === 0 ? t('scope.all') : scopeSummary}</p>
+          </FieldGroup>
         )}
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.expiry')}</label>
-        <Select value={expiry} onChange={(e) => setExpiry(e.target.value as ExpiryChoice)}>
-          {EXPIRY_CHOICES.map((c) => (
-            <option key={c} value={c}>
-              {t(`expiry.${c}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <FormError form={form} />
+        <Field label={t('field.expiry')}>
+          <Select value={expiry} onChange={(e) => setExpiry(e.target.value as ExpiryChoice)}>
+            {EXPIRY_CHOICES.map((c) => (
+              <option key={c} value={c}>
+                {t(`expiry.${c}`)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -447,19 +442,19 @@ function RevealTokenModal({ created, onClose }: { created: CreatedApiToken; onCl
       }
     >
       <p className="modal-confirm-text">{t('token.intro')}</p>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('token.label')}</label>
-        <div className="tok-copyrow">
-          <code className="tok-token mono">{created.token}</code>
-          <Button variant="outline" onClick={() => copy(created.token)}>
-            {copied ? t('common:copy.copied') : t('token.copy')}
-          </Button>
-        </div>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('token.usageHint')}</label>
-        <code className="tok-cmd mono">{command}</code>
-      </div>
+      <Fields>
+        <Field label={t('token.label')}>
+          <div className="tok-copyrow">
+            <code className="tok-token mono">{created.token}</code>
+            <Button variant="outline" onClick={() => copy(created.token)}>
+              {copied ? t('common:copy.copied') : t('token.copy')}
+            </Button>
+          </div>
+        </Field>
+        <Field label={t('token.usageHint')}>
+          <code className="tok-cmd mono">{command}</code>
+        </Field>
+      </Fields>
     </Modal>
   );
 }

@@ -7,6 +7,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
+import { CheckField, Fields } from '../components/ui/FormLayout';
+import { Callout } from '../components/ui/Section';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -48,16 +50,15 @@ export function ConfigBackupSwitchOnModal({ ids, skipped, onClose, onSaved }: Pr
         />
       }
     >
-      <label className="cfgbl-check">
-        <input type="checkbox" checked={sshOnly} onChange={(e) => setSshOnly(e.target.checked)} />
-        <span>{t('config.input.ssh')}</span>
-      </label>
-      {skipped.length > 0 && (
-        <p className="form-warning">
-          {t('config.list.switchOn.skipped', { count: skipped.length, names: skipped.join(', ') })}
-        </p>
-      )}
-      <FormError form={form} />
+      <Fields>
+        <CheckField checked={sshOnly} onChange={setSshOnly} label={t('config.input.ssh')} />
+        {skipped.length > 0 && (
+          <Callout tone="warning">
+            {t('config.list.switchOn.skipped', { count: skipped.length, names: skipped.join(', ') })}
+          </Callout>
+        )}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

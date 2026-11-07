@@ -18,7 +18,7 @@
 .tok-token {
   flex: 1;
   min-width: 0;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-tertiary);
@@ -30,48 +30,13 @@
 /* The ready-to-paste MCP client command. */
 .tok-cmd {
   display: block;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   word-break: break-all;
   user-select: all;
-  font-size: var(--font-sm);
-}
-
-/* Surface checkboxes in the create dialog. Each row is the name and a few words beside it, because
-   "MCP" and "REST API" do not tell an admin what they are handing out (ADR-200: a side label, not
-   a sentence). */
-.tok-surfaces {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.tok-surface {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  cursor: pointer;
-}
-
-.tok-surface input {
-  align-self: center;
-}
-
-.tok-surface-name {
-  color: var(--text-primary);
-}
-
-.tok-surface-hint {
-  color: var(--text-tertiary);
-  font-size: var(--font-sm);
-}
-
-/* What the scope ticks add up to ("All groups", "2 groups"). */
-.tok-scope-summary {
-  color: var(--text-tertiary);
   font-size: var(--font-sm);
 }
 

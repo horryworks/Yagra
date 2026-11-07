@@ -9,6 +9,7 @@ import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
+import { Stack } from '../ui/Page';
 import { applyBody, shownRows, unchangedCounts } from './nameFromDevice';
 import './NameFromDeviceModal.css';
 
@@ -71,7 +72,7 @@ export function NameFromDeviceModal({
         />
       }
     >
-      <div className="form-stack">
+      <Stack gap={12}>
         {loadError && (
           <p className="form-error" role="alert">
             {loadError}
@@ -110,7 +111,7 @@ export function NameFromDeviceModal({
           </p>
         )}
         <FormError form={form} />
-      </div>
+      </Stack>
     </Modal>
   );
 }

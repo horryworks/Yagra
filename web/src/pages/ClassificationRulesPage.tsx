@@ -19,7 +19,8 @@ import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { Field, TextInput, Select, RequiredMark, FieldError } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { CheckField, FieldRow, Fields } from '../components/ui/FormLayout';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EntityName } from '../components/ui/EntityName';
@@ -312,83 +313,79 @@ function RuleModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {t('rules.cols.profile')} <RequiredMark />
-        </label>
-        <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-          <option value="">{t('rules.modal.chooseProfile')}</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <Field
-        label={t('rules.modal.oidPrefix')}
-        htmlFor="rule-oid-prefix"
-        error={prefixLacksDot(prefix) ? t('rules.modal.oidPrefixNoDot') : null}
-      >
-        <TextInput
-          id="rule-oid-prefix"
-          className="mono"
-          placeholder={t('rules.modal.oidPrefixPlaceholder')}
-          value={prefix}
-          onChange={(e) => setPrefix(e.target.value)}
-        />
-      </Field>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('rules.modal.descrRegex')}</label>
-        <TextInput
-          className="mono"
-          placeholder={t('rules.modal.descrRegexPlaceholder')}
-          value={regex}
-          onChange={(e) => setRegex(e.target.value)}
-        />
-        {/* Said only when it applies: with both filled, a device has to match both. */}
-        {!hasMatcher ? (
-          <FieldError>{t('rules.modal.matcherRequired')}</FieldError>
-        ) : prefix.trim() !== '' && regex.trim() !== '' ? (
-          <span className="form-status">{t('rules.modal.descrRegexHintBoth')}</span>
-        ) : null}
-      </div>
-      <div className="modal-field-row">
+      <Fields>
+        <Field label={t('rules.cols.profile')} required>
+          <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+            <option value="">{t('rules.modal.chooseProfile')}</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field
-          label={t('rules.cols.priority')}
-          htmlFor="rule-priority"
-          required
-          infoKey="monitoring:rules.modal.priority.info"
+          label={t('rules.modal.oidPrefix')}
+          htmlFor="rule-oid-prefix"
+          error={prefixLacksDot(prefix) ? t('rules.modal.oidPrefixNoDot') : null}
         >
           <TextInput
-            id="rule-priority"
-            type="number"
-            value={priority}
-            onChange={(e) => setPriority(e.target.value)}
+            id="rule-oid-prefix"
+            className="mono"
+            placeholder={t('rules.modal.oidPrefixPlaceholder')}
+            value={prefix}
+            onChange={(e) => setPrefix(e.target.value)}
           />
         </Field>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('rules.modal.maker')}</label>
+        {/* Said only when it applies: with both filled, a device has to match both. */}
+        <Field
+          label={t('rules.modal.descrRegex')}
+          error={hasMatcher ? null : t('rules.modal.matcherRequired')}
+          status={
+            hasMatcher && prefix.trim() !== '' && regex.trim() !== ''
+              ? t('rules.modal.descrRegexHintBoth')
+              : null
+          }
+        >
           <TextInput
-            placeholder={t('shared.optional')}
-            value={vendor}
-            onChange={(e) => setVendor(e.target.value)}
+            className="mono"
+            placeholder={t('rules.modal.descrRegexPlaceholder')}
+            value={regex}
+            onChange={(e) => setRegex(e.target.value)}
           />
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('rules.modal.model')}</label>
-          <TextInput
-            placeholder={t('shared.optional')}
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-          />
-        </div>
-      </div>
-      <label className="classrules-enabled">
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        <span>{t('rules.modal.enabledLabel')}</span>
-      </label>
-      <FormError form={form} />
+        </Field>
+        <FieldRow>
+          <Field
+            label={t('rules.cols.priority')}
+            htmlFor="rule-priority"
+            required
+            infoKey="monitoring:rules.modal.priority.info"
+          >
+            <TextInput
+              id="rule-priority"
+              type="number"
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+            />
+          </Field>
+          <Field label={t('rules.modal.maker')}>
+            <TextInput
+              placeholder={t('shared.optional')}
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value)}
+            />
+          </Field>
+          <Field label={t('rules.modal.model')}>
+            <TextInput
+              placeholder={t('shared.optional')}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
+          </Field>
+        </FieldRow>
+        <CheckField checked={enabled} onChange={setEnabled} label={t('rules.modal.enabledLabel')} />
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

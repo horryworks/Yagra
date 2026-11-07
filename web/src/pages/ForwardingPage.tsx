@@ -42,7 +42,8 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, TextArea, Select } from '../components/ui/Field';
-import { InfoTip } from '../components/ui/InfoTip';
+import { FieldGroup, FieldRow, Fields } from '../components/ui/FormLayout';
+import { Callout } from '../components/ui/Section';
 import { SecretInput } from '../components/ui/SecretInput';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -331,221 +332,203 @@ function DestinationModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.name')}</label>
-        <TextInput
-          value={draft.name}
-          placeholder={t('field.namePlaceholder')}
-          onChange={(e) => update({ name: e.target.value })}
-          autoFocus
-        />
-      </div>
-
-      <div className="fwd-row">
-        <div className="modal-field">
-          <label className="modal-field-label">{t('field.source')}</label>
-          <Select
-            value={draft.source_kind}
-            onChange={(e) => update({ source_kind: e.target.value as ForwardSourceKind })}
-          >
-            {FORWARD_SOURCE_KINDS.map((k) => (
-              <option key={k} value={k}>
-                {t(`source.${k}`)}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('field.dest')}</label>
-          <Select
-            value={draft.dest_kind}
-            onChange={(e) => update({ dest_kind: e.target.value as ForwardDestKind })}
-          >
-            {destKindsForSource(draft.source_kind).map((k) => (
-              <option key={k} value={k}>
-                {t(`dest.${k}`)}
-              </option>
-            ))}
-          </Select>
-        </div>
-      </div>
-
-      <div className="fwd-row">
-        {/* Two target shapes, and the difference is not cosmetic: a relay is addressed by
-            `host:port`, BigQuery by `project.dataset.table`. Relabelling rather than sharing one
-            vague placeholder is what stops an admin typing a host into a table field. */}
-        <Field
-          label={hostPort ? t('field.target') : t('field.targetTable')}
-          htmlFor="fwd-target"
-          error={targetError}
-        >
+      <Fields>
+        <Field label={t('field.name')}>
           <TextInput
-            id="fwd-target"
-            value={draft.target}
-            placeholder={hostPort ? t('field.targetPlaceholder') : t('field.targetTablePlaceholder')}
-            onChange={(e) => update({ target: e.target.value })}
+            value={draft.name}
+            placeholder={t('field.namePlaceholder')}
+            onChange={(e) => update({ name: e.target.value })}
+            autoFocus
           />
         </Field>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('field.pool')}</label>
-          <TextInput
-            value={draft.pool}
-            placeholder={t('field.poolPlaceholder')}
-            onChange={(e) => update({ pool: e.target.value })}
-          />
-        </div>
-      </div>
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.fidelity')}</label>
+        <FieldRow>
+          <Field label={t('field.source')}>
+            <Select
+              value={draft.source_kind}
+              onChange={(e) => update({ source_kind: e.target.value as ForwardSourceKind })}
+            >
+              {FORWARD_SOURCE_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {t(`source.${k}`)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('field.dest')}>
+            <Select
+              value={draft.dest_kind}
+              onChange={(e) => update({ dest_kind: e.target.value as ForwardDestKind })}
+            >
+              {destKindsForSource(draft.source_kind).map((k) => (
+                <option key={k} value={k}>
+                  {t(`dest.${k}`)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </FieldRow>
+
+        <FieldRow>
+          {/* Two target shapes, and the difference is not cosmetic: a relay is addressed by
+              `host:port`, BigQuery by `project.dataset.table`. Relabelling rather than sharing one
+              vague placeholder is what stops an admin typing a host into a table field. */}
+          <Field
+            label={hostPort ? t('field.target') : t('field.targetTable')}
+            htmlFor="fwd-target"
+            error={targetError}
+          >
+            <TextInput
+              id="fwd-target"
+              value={draft.target}
+              placeholder={hostPort ? t('field.targetPlaceholder') : t('field.targetTablePlaceholder')}
+              onChange={(e) => update({ target: e.target.value })}
+            />
+          </Field>
+          <Field label={t('field.pool')}>
+            <TextInput
+              value={draft.pool}
+              placeholder={t('field.poolPlaceholder')}
+              onChange={(e) => update({ pool: e.target.value })}
+            />
+          </Field>
+        </FieldRow>
+
         {/* Each choice says what it does, and one this pairing cannot carry stays in the list,
             disabled, saying why (`fidelityChoices`). BigQuery is neither fidelity: it writes rows,
             so its list of one is disabled rather than leaving "Rebuilt" selected. */}
-        <Select
-          value={rowsOnly ? 'rows' : draft.verbatim ? 'verbatim' : 'rendered'}
-          disabled={fidelity.filter((c) => !c.disabled).length < 2}
-          onChange={(e) => update({ verbatim: e.target.value === 'verbatim' })}
-        >
-          {fidelity.map((c) => (
-            <option key={c.value} value={c.value} disabled={c.disabled}>
-              {t(c.label)} — {t(c.sub)}
-            </option>
-          ))}
-        </Select>
-      </div>
-
-      {usesServiceAccount(draft.dest_kind) && (
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="fwd-sa">
-            {t('field.serviceAccount')}
-          </label>
-          <SecretInput
-            id="fwd-sa"
-            stored={storedKey}
-            rows={5}
-            value={draft.service_account_json}
-            // Only with nothing stored does an empty box mean something other than "keep": there,
-            // it selects the instance's own identity.
-            placeholder={storedKey ? undefined : t('field.serviceAccountPlaceholder')}
-            onChange={(v) => update({ service_account_json: v })}
-          />
-        </div>
-      )}
-
-      {usesTls(draft.dest_kind) && (
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="fwd-ca">
-            {t('field.caCert')}
-          </label>
-          <TextArea
-            id="fwd-ca"
-            value={draft.ca_cert}
-            placeholder={t('field.caCertPlaceholder')}
-            spellCheck={false}
-            onChange={(e) => update({ ca_cert: e.target.value })}
-          />
-        </div>
-      )}
-
-      {usesCommunity(draft.dest_kind) && (
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="fwd-community">
-            {t('field.community')}
-          </label>
-          <SecretInput
-            id="fwd-community"
-            stored={storedCommunity}
-            value={draft.community}
-            placeholder={storedCommunity ? undefined : 'public'}
-            onChange={(v) => update({ community: v })}
-          />
-        </div>
-      )}
-
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="fwd-rate">
-          {t('field.rateLimit')}
-        </label>
-        <TextInput
-          id="fwd-rate"
-          value={draft.rate_limit}
-          inputMode="numeric"
-          suffix={t('field.rateLimitUnit')}
-          placeholder={t('field.rateLimitPlaceholder')}
-          onChange={(e) => update({ rate_limit: e.target.value.replace(/[^0-9]/g, '') })}
-        />
-      </div>
-
-      <div className="modal-field">
-        <div className="field-head">
-          <label className="modal-field-label">{t('filter.label')}</label>
-          {/* A flow export is a template + many records, and records cannot be removed from one
-              without re-encoding it — so one matching record carries the whole datagram. That
-              changes what a filter here is worth, so it is said where the filter is built. */}
-          {filtersWholeDatagram(draft.source_kind, draft.dest_kind) && (
-            <InfoTip
-              infoKey="settings-forwarding:filter.wholeDatagram.info"
-              label={t('filter.label')}
-            />
-          )}
-        </div>
-        <div className="fwd-mode">
+        <Field label={t('field.fidelity')}>
           <Select
-            value={draft.mode}
-            onChange={(e) => update({ mode: e.target.value as 'all' | 'any' })}
+            value={rowsOnly ? 'rows' : draft.verbatim ? 'verbatim' : 'rendered'}
+            disabled={fidelity.filter((c) => !c.disabled).length < 2}
+            onChange={(e) => update({ verbatim: e.target.value === 'verbatim' })}
           >
-            <option value="all">{t('filter.mode.all')}</option>
-            <option value="any">{t('filter.mode.any')}</option>
+            {fidelity.map((c) => (
+              <option key={c.value} value={c.value} disabled={c.disabled}>
+                {t(c.label)} — {t(c.sub)}
+              </option>
+            ))}
           </Select>
-          <Button
-            variant="outline"
-            onClick={() => {
-              const field = fieldsForSource(draft.source_kind)[0];
-              update({
-                conditions: [
-                  ...draft.conditions,
-                  { field, op: opsForField(field)[0], value: '' },
-                ],
-              });
-            }}
-          >
-            + {t('filter.add')}
-          </Button>
-        </div>
-        {draft.conditions.length === 0 ? (
-          <span className="form-status">{t('filter.emptyHint')}</span>
-        ) : (
-          draft.conditions.map((c, i) => (
-            <ConditionRow
-              // Conditions are an ordered list with no stable id; the index is the identity here.
-              key={i}
-              t={t}
-              source={draft.source_kind}
-              condition={c}
-              onChange={(next) =>
-                update({ conditions: draft.conditions.map((old, j) => (j === i ? next : old)) })
-              }
-              onRemove={() =>
-                update({ conditions: draft.conditions.filter((_, j) => j !== i) })
-              }
+        </Field>
+
+        {usesServiceAccount(draft.dest_kind) && (
+          <Field label={t('field.serviceAccount')}>
+            <SecretInput
+              id="fwd-sa"
+              stored={storedKey}
+              rows={5}
+              value={draft.service_account_json}
+              // Only with nothing stored does an empty box mean something other than "keep": there,
+              // it selects the instance's own identity.
+              placeholder={storedKey ? undefined : t('field.serviceAccountPlaceholder')}
+              onChange={(v) => update({ service_account_json: v })}
             />
-          ))
+          </Field>
         )}
-      </div>
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.enabled')}</label>
-        <Select
-          value={draft.enabled ? 'on' : 'off'}
-          onChange={(e) => update({ enabled: e.target.value === 'on' })}
+        {usesTls(draft.dest_kind) && (
+          <Field label={t('field.caCert')}>
+            <TextArea
+              id="fwd-ca"
+              value={draft.ca_cert}
+              placeholder={t('field.caCertPlaceholder')}
+              spellCheck={false}
+              onChange={(e) => update({ ca_cert: e.target.value })}
+            />
+          </Field>
+        )}
+
+        {usesCommunity(draft.dest_kind) && (
+          <Field label={t('field.community')}>
+            <SecretInput
+              id="fwd-community"
+              stored={storedCommunity}
+              value={draft.community}
+              placeholder={storedCommunity ? undefined : 'public'}
+              onChange={(v) => update({ community: v })}
+            />
+          </Field>
+        )}
+
+        <Field label={t('field.rateLimit')}>
+          <TextInput
+            id="fwd-rate"
+            value={draft.rate_limit}
+            inputMode="numeric"
+            suffix={t('field.rateLimitUnit')}
+            placeholder={t('field.rateLimitPlaceholder')}
+            onChange={(e) => update({ rate_limit: e.target.value.replace(/[^0-9]/g, '') })}
+          />
+        </Field>
+
+        {/* A flow export is a template + many records, and records cannot be removed from one
+            without re-encoding it - so one matching record carries the whole datagram. That
+            changes what a filter here is worth, so it is said where the filter is built. */}
+        <FieldGroup
+          label={t('filter.label')}
+          infoKey={
+            filtersWholeDatagram(draft.source_kind, draft.dest_kind)
+              ? 'settings-forwarding:filter.wholeDatagram.info'
+              : undefined
+          }
         >
-          <option value="on">{t('status.enabled')}</option>
-          <option value="off">{t('status.disabled')}</option>
-        </Select>
-      </div>
+          <div className="fwd-mode">
+            <Select
+              value={draft.mode}
+              onChange={(e) => update({ mode: e.target.value as 'all' | 'any' })}
+            >
+              <option value="all">{t('filter.mode.all')}</option>
+              <option value="any">{t('filter.mode.any')}</option>
+            </Select>
+            <Button
+              variant="outline"
+              onClick={() => {
+                const field = fieldsForSource(draft.source_kind)[0];
+                update({
+                  conditions: [
+                    ...draft.conditions,
+                    { field, op: opsForField(field)[0], value: '' },
+                  ],
+                });
+              }}
+            >
+              + {t('filter.add')}
+            </Button>
+          </div>
+          {draft.conditions.length === 0 ? (
+            <span className="form-status">{t('filter.emptyHint')}</span>
+          ) : (
+            draft.conditions.map((c, i) => (
+              <ConditionRow
+                // Conditions are an ordered list with no stable id; the index is the identity here.
+                key={i}
+                t={t}
+                source={draft.source_kind}
+                condition={c}
+                onChange={(next) =>
+                  update({ conditions: draft.conditions.map((old, j) => (j === i ? next : old)) })
+                }
+                onRemove={() =>
+                  update({ conditions: draft.conditions.filter((_, j) => j !== i) })
+                }
+              />
+            ))
+          )}
+        </FieldGroup>
 
-      <p className="form-warning">{t('securityNote')}</p>
-      <FormError form={form} />
+        <Field label={t('field.enabled')}>
+          <Select
+            value={draft.enabled ? 'on' : 'off'}
+            onChange={(e) => update({ enabled: e.target.value === 'on' })}
+          >
+            <option value="on">{t('status.enabled')}</option>
+            <option value="off">{t('status.disabled')}</option>
+          </Select>
+        </Field>
+
+        <Callout tone="warning">{t('securityNote')}</Callout>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

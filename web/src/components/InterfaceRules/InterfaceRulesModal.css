@@ -118,7 +118,7 @@ html[data-viewport='mobile'] .ifrules-headrow {
 }
 
 .ifrules-stored {
-  margin: var(--space-3) 0 0;
+  margin: 0;
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }

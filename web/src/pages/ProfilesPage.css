@@ -28,20 +28,6 @@
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
-.profile-templates {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.profile-template-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  font-size: var(--font-md);
-  cursor: pointer;
-}
-
 .profile-template-name {
   font-weight: var(--weight-medium);
 }
@@ -54,8 +40,8 @@
    Sits under the checklist because ticking a set is what changes the answer. Colour comes from the
    shared status tokens, which are redefined per theme in tokens.css — nothing here is a literal. */
 .profile-gap {
-  margin-top: var(--space-1);
-  padding: var(--space-2) 10px;
+  margin: 0;
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
   font-size: var(--font-xs);
@@ -86,9 +72,12 @@
   margin: var(--space-1) 0 0;
 }
 
-.profile-gap-link,
-.profile-rules-link {
+.profile-gap-link {
   display: inline-block;
   margin-top: var(--space-1-5);
+}
+
+.profile-gap-link,
+.profile-rules-link {
   font-weight: var(--weight-medium);
 }

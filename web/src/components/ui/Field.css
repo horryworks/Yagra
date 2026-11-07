@@ -83,6 +83,11 @@ select.field {
   min-width: 0;
 }
 
+/* A button or link that acts on the field, at the right end of its label row (`action`). */
+.field-head-action {
+  margin-left: auto;
+}
+
 /* `.form-stack` spaces its children with a gap; a `Field` there must not add its own margin. */
 .form-stack > .modal-field {
   margin-bottom: 0;

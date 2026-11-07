@@ -9,7 +9,8 @@ import type { PrefixGap, SitePrefixGaps } from '../types/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 import { Modal } from '../components/ui/Modal';
-import { TextInput } from '../components/ui/Field';
+import { Field, TextInput } from '../components/ui/Field';
+import { Fields } from '../components/ui/FormLayout';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 
 /** "This subnet is meant to stay out of this site's IP prefixes", with an optional note. */
@@ -47,9 +48,8 @@ export function AckGapModal({
         />
       }
     >
-      <div className="form-stack">
-        <label className="modal-field">
-          <span className="modal-field-label">{t('missingPrefixes.ack.note')}</span>
+      <Fields>
+        <Field label={t('missingPrefixes.ack.note')}>
           <TextInput
             value={note}
             placeholder={t('missingPrefixes.ack.notePlaceholder')}
@@ -57,9 +57,9 @@ export function AckGapModal({
             maxLength={200}
             autoFocus
           />
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

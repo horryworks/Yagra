@@ -6,9 +6,12 @@
 }
 
 /* A `Field` still carries `.modal-field` until ADR-246 Inc.8, and with it a bottom margin that
-   spaced fields before `Fields` did. Inside the new parts the gap does that job alone. */
+   spaced fields before `Fields` did. Inside the new parts the gap does that job alone - a field
+   in a `Stack` or an `Inline` too, or it would sit 24px from the next block instead of 12. */
 .ui-fields > .modal-field,
-.ui-field-row > .modal-field {
+.ui-field-row > .modal-field,
+.ui-stack > .modal-field,
+.ui-inline > .modal-field {
   margin-bottom: 0;
 }
 

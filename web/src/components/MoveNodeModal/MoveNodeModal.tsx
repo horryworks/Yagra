@@ -23,6 +23,8 @@ import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { GroupPicker } from '../ui/GroupPicker';
+import { Field } from '../ui/Field';
+import { Fields } from '../ui/FormLayout';
 
 /** What this dialog reads of a node — and nothing more, so a caller that holds the node in another
  *  shape (the detail pane has the full document, not a list row) can still hand it over. */
@@ -94,7 +96,7 @@ export function MoveNodeModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         {!one && (
           <ul className="form-targets scroll-y">
             {targets.map((n) => (
@@ -102,8 +104,7 @@ export function MoveNodeModal({
             ))}
           </ul>
         )}
-        <label className="form-label" htmlFor="movenode-group">
-          {t('field.group')}
+        <Field label={t('field.group')}>
           <GroupPicker
             id="movenode-group"
             options={groupOptions(groups)}
@@ -112,9 +113,9 @@ export function MoveNodeModal({
             emptyOption={t('moveNode.ungroupedOption')}
             disabled={form.busy}
           />
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

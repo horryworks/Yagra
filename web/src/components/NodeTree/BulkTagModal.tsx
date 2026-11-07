@@ -23,6 +23,7 @@ import { partialOutcome } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
+import { FieldGroup, Fields } from '../ui/FormLayout';
 import { ChipInput } from '../ui/ChipInput';
 import { labelsAreValid } from '../ui/labelRules';
 
@@ -78,21 +79,21 @@ export function BulkTagModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         <p className="nd-muted">{t('bulkTag.note')}</p>
 
-        <div className="modal-field nd-tags">
-          <span className="modal-field-label">{t('bulkTag.add')}</span>
+        {/* Groups, not labels: a chip input is several controls (each chip's remove button and the
+            entry box), and the entry box carries its own `aria-label`. */}
+        <FieldGroup label={t('bulkTag.add')}>
           <ChipInput
             value={add}
             onChange={setAdd}
             placeholder={t('field.tagPlaceholder')}
             inputLabel={t('bulkTag.add')}
           />
-        </div>
+        </FieldGroup>
 
-        <div className="modal-field nd-tags">
-          <span className="modal-field-label">{t('bulkTag.removeDirect')}</span>
+        <FieldGroup label={t('bulkTag.removeDirect')}>
           <ChipInput
             value={remove}
             onChange={setRemove}
@@ -100,10 +101,10 @@ export function BulkTagModal({
             inputLabel={t('bulkTag.remove')}
             lenient
           />
-        </div>
+        </FieldGroup>
 
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

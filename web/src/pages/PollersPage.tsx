@@ -30,6 +30,9 @@ import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { Field, TextInput } from '../components/ui/Field';
+import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
+import { Inline, Stack } from '../components/ui/Page';
+import { Callout } from '../components/ui/Section';
 import { InfoPress, InfoTip } from '../components/ui/InfoTip';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { StepFrame } from '../components/ui/StepFrame';
@@ -230,7 +233,7 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         {/* The format is said only when it is broken (ADR-200). The sentence that used to warn
             here — a pool with nodes and no poller drops its jobs silently — now lives on the pool
             card as the "No live poller" badge, beside the pool it is true of. */}
@@ -247,16 +250,15 @@ function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () 
             placeholder="site-a"
           />
         </Field>
-        <label className="form-label">
-          {t('pollers.pool.descLabel')}
+        <Field label={t('pollers.pool.descLabel')}>
           <TextInput
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={t('pollers.pool.descPlaceholder')}
           />
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -302,17 +304,16 @@ function EditPoolModal({
         />
       }
     >
-      <div className="form-stack">
-        <label className="form-label">
-          {t('pollers.pool.descLabel')}
+      <Fields>
+        <Field label={t('pollers.pool.descLabel')}>
           <TextInput
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={t('pollers.pool.descPlaceholder')}
           />
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -372,12 +373,14 @@ function CoverPoolModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         {/* The dialog's one sentence (ADR-200): the false outage this can cause. That "Put them
             back" undoes it is shown, not said — the card's menu offers it once this is done. */}
-        <p className="form-warning">{t('pollers.pool.coverWarning')}</p>
-        <label className="form-label">
-          {t('pollers.pool.coverToLabel')}
+        <Callout tone="warning">{t('pollers.pool.coverWarning')}</Callout>
+        <Field
+          label={t('pollers.pool.coverToLabel')}
+          status={targets.length === 0 && t('pollers.pool.coverNoTarget')}
+        >
           <select className="field mono" value={to} onChange={(e) => setTo(e.target.value)}>
             <option value="">{t('pollers.pool.coverToPlaceholder')}</option>
             {targets.map((p) => (
@@ -386,10 +389,9 @@ function CoverPoolModal({
               </option>
             ))}
           </select>
-        </label>
-        {targets.length === 0 && <p className="form-status">{t('pollers.pool.coverNoTarget')}</p>}
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -434,12 +436,12 @@ function RestorePoolModal({
         />
       }
     >
-      <div className="form-stack">
+      <Stack gap={12}>
         {/* Who is polling them now is on the card ("Polled by …"); what is left to say is the one
             way this goes wrong — putting them back before the site's own poller is. */}
         <p className="modal-confirm-text">{t('pollers.pool.restoreHint', { pool: pool.pool })}</p>
         <FormError form={form} />
-      </div>
+      </Stack>
     </Modal>
   );
 }
@@ -504,7 +506,7 @@ function RenamePoolModal({
         )
       }
     >
-      <div className="form-stack">
+      <Fields>
         {stuck.length > 0 ? (
           <>
             <p className="pool-stop">
@@ -522,10 +524,16 @@ function RenamePoolModal({
           </>
         ) : (
           <>
+            {/* The status line is what the rename carries, counted — the result shown before the
+                click. */}
             <Field
               label={t('pollers.pool.newNameLabel')}
               htmlFor="pool-rename-name"
               error={poolNameShowsError(name) ? t('pollers.pool.nameInvalid') : null}
+              status={t('pollers.pool.renameHint', {
+                nodes: pool.nodes,
+                pollers: passengers.length,
+              })}
             >
               <TextInput
                 id="pool-rename-name"
@@ -534,14 +542,10 @@ function RenamePoolModal({
                 onChange={(e) => setName(e.target.value)}
               />
             </Field>
-            {/* What the rename carries, counted — the result shown before the click. */}
-            <p className="form-status">
-              {t('pollers.pool.renameHint', { nodes: pool.nodes, pollers: passengers.length })}
-            </p>
             <FormError form={form} />
           </>
         )}
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -571,7 +575,7 @@ function DeletePoolModal({
           </Button>
         }
       >
-        <div className="form-stack">
+        <Stack gap={12}>
           <p className="pool-stop">
             <WarningIcon />
             {t('pollers.pool.deleteBlocked')}
@@ -591,7 +595,7 @@ function DeletePoolModal({
               components={{ lnk: <ScreenLink to="/nodes" /> }}
             />
           </p>
-        </div>
+        </Stack>
       </Modal>
     );
   }
@@ -676,9 +680,8 @@ function MovePollerModal({
         </>
       }
     >
-      <div className="form-stack">
-        <label className="form-label">
-          {t('pollers.move.destLabel')}
+      <Fields>
+        <Field label={t('pollers.move.destLabel')}>
           <select className="field mono" value={dest} onChange={(e) => setDest(e.target.value)}>
             <option value="">{t('pollers.move.destNone')}</option>
             {pools
@@ -689,8 +692,8 @@ function MovePollerModal({
                 </option>
               ))}
           </select>
-        </label>
-      </div>
+        </Field>
+      </Fields>
     </Modal>
   );
 }
@@ -744,7 +747,7 @@ function ConfirmMoveModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         <p className="pool-stop">
           <WarningIcon />
           {t('pollers.move.emptyWarn', { pool: from })}
@@ -771,7 +774,7 @@ function ConfirmMoveModal({
           </span>
         </label>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -899,7 +902,7 @@ function PollerTokenModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         <Field
           label={t('pollers.token.host.label')}
           htmlFor="poller-token-host"
@@ -920,31 +923,29 @@ function PollerTokenModal({
             README alone, which is read at the site by whoever unpacks it and not by whoever
             decided. The label names the container; the ⓘ names the Docker socket it holds and
             where the site can change its mind (ADR-055 R6, ADR-200). The ⓘ sits beside the
-            label, never inside it: a button in a <label> becomes the label's control. */}
-        <div className="poller-check-row">
-          <label className="poller-check">
-            <input
-              type="checkbox"
-              checked={selfUpgrade}
-              disabled={form.busy}
-              onChange={(e) => setSelfUpgrade(e.target.checked)}
-            />
-            <span>{t('pollers.token.selfUpgrade.label')}</span>
-          </label>
+            label, never inside it: a button in a <label> becomes the label's control. `CheckField`
+            has no ⓘ slot of its own, so the two sit side by side. */}
+        <Inline gap={8}>
+          <CheckField
+            checked={selfUpgrade}
+            disabled={form.busy}
+            onChange={setSelfUpgrade}
+            label={t('pollers.token.selfUpgrade.label')}
+          />
           <InfoTip
             infoKey="system:pollers.token.selfUpgrade.info"
             label={t('pollers.token.selfUpgrade.label')}
           />
-        </div>
+        </Inline>
         {/* Said before the click. Re-issuing invalidates the archive the site is currently using. */}
-        {poller.has_token && <p className="form-warning">{t('pollers.token.reissueWarning')}</p>}
+        {poller.has_token && <Callout tone="warning">{t('pollers.token.reissueWarning')}</Callout>}
         {issued && (
           <p className="form-status" role="status">
             {t('pollers.token.downloaded')}
           </p>
         )}
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -1008,111 +1009,108 @@ function RegisterPollerModal({ onClose }: { onClose: () => void }) {
         </Button>
       }
     >
-      {/* The procedure, behind a closed frame (ADR-200 kind d). It used to be a 357-character
-          paragraph at the head of the dialog, read once and then in the way. */}
-      <StepFrame
-        className="poller-register-steps"
-        summary={t('pollers.register.steps.title')}
-        steps={[
-          t('pollers.register.steps.s1'),
-          t('pollers.register.steps.s2'),
-          t('pollers.register.steps.s3'),
-        ]}
-      />
-
-      <Field
-        label={t('pollers.register.fields.id.label')}
-        htmlFor="poller-register-id"
-        error={idBad ? t('pollers.register.invalidToken') : null}
-      >
-        <TextInput
-          id="poller-register-id"
-          className="mono"
-          value={id}
-          onChange={(e) => setId(e.target.value)}
-          placeholder="site-a-1"
-          autoFocus
+      <Fields>
+        {/* The procedure, behind a closed frame (ADR-200 kind d). It used to be a 357-character
+            paragraph at the head of the dialog, read once and then in the way. */}
+        <StepFrame
+          summary={t('pollers.register.steps.title')}
+          steps={[
+            t('pollers.register.steps.s1'),
+            t('pollers.register.steps.s2'),
+            t('pollers.register.steps.s3'),
+          ]}
         />
-      </Field>
 
-      <Field
-        label={t('pollers.register.fields.pool.label')}
-        htmlFor="poller-register-pool"
-        error={poolBad ? t('pollers.register.invalidToken') : null}
-      >
-        <TextInput
-          id="poller-register-pool"
-          className="mono"
-          value={pool}
-          onChange={(e) => setPool(e.target.value)}
-          placeholder="site-a"
-        />
-      </Field>
+        <Field
+          label={t('pollers.register.fields.id.label')}
+          htmlFor="poller-register-id"
+          error={idBad ? t('pollers.register.invalidToken') : null}
+        >
+          <TextInput
+            id="poller-register-id"
+            className="mono"
+            value={id}
+            onChange={(e) => setId(e.target.value)}
+            placeholder="site-a-1"
+            autoFocus
+          />
+        </Field>
 
-      {/* The recommended path, so it sits above the manual one. `useCan` rather than `disabled`
-          (ADR-056): a viewer is not shown a button they cannot press. */}
-      {canSystem && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('pollers.register.fields.kit.label')}</label>
-          <div className="poller-copyrow">
-            <Button variant="primary" onClick={issue} disabled={!canIssue || issuing}>
-              {t('pollers.register.issue')}
-            </Button>
-          </div>
-          {issued && (
-            <p className="form-status" role="status">
-              {t('pollers.register.issued')}
-            </p>
-          )}
-          {issueError && <p className="form-error">{issueError}</p>}
-        </div>
-      )}
+        <Field
+          label={t('pollers.register.fields.pool.label')}
+          htmlFor="poller-register-pool"
+          error={poolBad ? t('pollers.register.invalidToken') : null}
+        >
+          <TextInput
+            id="poller-register-pool"
+            className="mono"
+            value={pool}
+            onChange={(e) => setPool(e.target.value)}
+            placeholder="site-a"
+          />
+        </Field>
 
-      {/* The manual path, for a site whose composition is already there. A heading says that
-          now, where a sentence in the introduction used to. */}
-      <p className="pool-subhead poller-register-manual">{t('pollers.register.manual')}</p>
-
-      <div className="modal-field">
-        <label className="modal-field-label">{t('pollers.register.fields.busUrl.label')}</label>
-        <TextInput
-          value={busUrl}
-          onChange={(e) => setBusUrl(e.target.value)}
-          placeholder="tls://poller:<password>@yagra.example.com:4222"
-        />
-      </div>
-
-      <div className="modal-field">
-        <label className="modal-field-label">{t('pollers.register.fields.caFile.label')}</label>
-        <TextInput
-          value={caFile}
-          onChange={(e) => setCaFile(e.target.value)}
-          placeholder="/certs/ca.pem"
-        />
-      </div>
-
-      <div className="modal-field">
-        <label className="modal-field-label">{t('pollers.register.fields.env.label')}</label>
-        {ready ? (
-          <div className="poller-copyrow">
-            <pre className="poller-snippet mono">{env}</pre>
-            <Button variant="outline" onClick={() => copy(env, 'env')}>
-              {copied === 'env' ? t('common:copy.copied') : t('pollers.register.copy')}
-            </Button>
-          </div>
-        ) : (
-          <p className="muted poller-snippet-empty">{t('pollers.register.snippetEmpty')}</p>
+        {/* The recommended path, so it sits above the manual one. `useCan` rather than `disabled`
+            (ADR-056): a viewer is not shown a button they cannot press. A group rather than a
+            `Field`: a label tied to the button would replace the button's own name. */}
+        {canSystem && (
+          <FieldGroup label={t('pollers.register.fields.kit.label')}>
+            <div className="poller-copyrow">
+              <Button variant="primary" onClick={issue} disabled={!canIssue || issuing}>
+                {t('pollers.register.issue')}
+              </Button>
+            </div>
+            {issued && (
+              <p className="form-status" role="status">
+                {t('pollers.register.issued')}
+              </p>
+            )}
+            {issueError && <p className="form-error">{issueError}</p>}
+          </FieldGroup>
         )}
-      </div>
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('pollers.register.fields.bringUp.label')}</label>
-        <div className="poller-copyrow">
-          <code className="poller-snippet mono">{POLLER_UP_COMMAND}</code>
-          <Button variant="outline" onClick={() => copy(POLLER_UP_COMMAND, 'cmd')}>
-            {copied === 'cmd' ? t('common:copy.copied') : t('pollers.register.copy')}
-          </Button>
-        </div>
-      </div>
+        {/* The manual path, for a site whose composition is already there. A heading says that
+            now, where a sentence in the introduction used to. */}
+        <p className="pool-subhead poller-register-manual">{t('pollers.register.manual')}</p>
+
+        <Field label={t('pollers.register.fields.busUrl.label')}>
+          <TextInput
+            value={busUrl}
+            onChange={(e) => setBusUrl(e.target.value)}
+            placeholder="tls://poller:<password>@yagra.example.com:4222"
+          />
+        </Field>
+
+        <Field label={t('pollers.register.fields.caFile.label')}>
+          <TextInput
+            value={caFile}
+            onChange={(e) => setCaFile(e.target.value)}
+            placeholder="/certs/ca.pem"
+          />
+        </Field>
+
+        <FieldGroup label={t('pollers.register.fields.env.label')}>
+          {ready ? (
+            <div className="poller-copyrow">
+              <pre className="poller-snippet mono">{env}</pre>
+              <Button variant="outline" onClick={() => copy(env, 'env')}>
+                {copied === 'env' ? t('common:copy.copied') : t('pollers.register.copy')}
+              </Button>
+            </div>
+          ) : (
+            <p className="muted poller-snippet-empty">{t('pollers.register.snippetEmpty')}</p>
+          )}
+        </FieldGroup>
+
+        <FieldGroup label={t('pollers.register.fields.bringUp.label')}>
+          <div className="poller-copyrow">
+            <code className="poller-snippet mono">{POLLER_UP_COMMAND}</code>
+            <Button variant="outline" onClick={() => copy(POLLER_UP_COMMAND, 'cmd')}>
+              {copied === 'cmd' ? t('common:copy.copied') : t('pollers.register.copy')}
+            </Button>
+          </div>
+        </FieldGroup>
+      </Fields>
     </Modal>
   );
 }

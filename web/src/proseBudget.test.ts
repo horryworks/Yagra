@@ -175,7 +175,11 @@ const INFO_TEXT_SITES: Record<string, string> = {
 const INFO_PER_FILE = 3;
 
 /** The components that ARE the ⓘ, not screens that use one. */
-const INFO_PRIMITIVES = ['components/ui/Field.tsx', 'components/ui/InfoTip.tsx'];
+const INFO_PRIMITIVES = [
+  'components/ui/Field.tsx',
+  'components/ui/FormLayout.tsx',
+  'components/ui/InfoTip.tsx',
+];
 
 /** Keys that end in `.info` and are not an explanation: the `info` member of an enum, read with a
  *  built key (`severity.${s}`). Checked both ways, so a listed key that goes away leaves the list. */
@@ -373,14 +377,16 @@ describe('G8: an explanation behind ⓘ is short, keyed, and counted', () => {
     const src = [
       '// <InfoTip infoKey="a:x.info" label="x" />',
       '<Field label={l} htmlFor="f" infoKey="a:f.info">',
+      '<FieldGroup label={l} infoKey="a:g.info">',
+      '<Fields layout="stack">',
       "<InfoTip infoKey='a:y.info' label={t('y')} />",
       '<InfoPress infoKey={k} className="badge">{n}</InfoPress>',
       '<InfoPress text={meaning}>{label}</InfoPress>',
       "const K = { s: 'a:z.info' };",
     ].join('\n');
-    expect(infoSites(src)).toEqual({ tip: 2, press: 1, pressText: 1 });
-    expect(infoKeyLiterals(src)).toEqual(['a:f.info', 'a:y.info', 'a:z.info']);
-    expect(infoKeyAttrs(src)).toEqual(['a:f.info', 'a:y.info']);
+    expect(infoSites(src)).toEqual({ tip: 3, press: 1, pressText: 1 });
+    expect(infoKeyLiterals(src)).toEqual(['a:f.info', 'a:g.info', 'a:y.info', 'a:z.info']);
+    expect(infoKeyAttrs(src)).toEqual(['a:f.info', 'a:g.info', 'a:y.info']);
     expect(infoKeys({ a: { en: { x: { info: 'i' }, info: 'j', infoText: 'k' } } })).toEqual([
       'a:info',
       'a:x.info',

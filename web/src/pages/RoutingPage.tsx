@@ -33,7 +33,9 @@ import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
-import { TextInput, Select } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
+import { Inline, Stack } from '../components/ui/Page';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -404,20 +406,25 @@ function TestChannelModal({
         />
       }
     >
-      {/* Only what the test will do that the operator cannot see from here: it pages someone, the
-          payload is not marked as a test, the channel is off. Each is one sentence (ADR-200). */}
-      {warn.pages && <p className="routing-test-warn">{t('routing.test.pages')}</p>}
-      {warn.unmarkedBody && <p className="routing-test-warn">{t('routing.test.unmarkedBody')}</p>}
-      {warn.disabled && <p className="routing-test-warn">{t('routing.test.disabled')}</p>}
-      {verdict && (
-        <p
-          className={verdictOk(verdict) ? 'routing-test-result' : 'routing-test-result form-error'}
-          role="status"
-        >
-          {t(VERDICT_KEYS[verdict], { error: result?.error ?? '' })}
-        </p>
-      )}
-      <FormError form={form} />
+      <Stack gap={12}>
+        {/* Only what the test will do that the operator cannot see from here: it pages someone,
+            the payload is not marked as a test, the channel is off. Each is one sentence
+            (ADR-200). */}
+        {warn.pages && <p className="routing-test-warn">{t('routing.test.pages')}</p>}
+        {warn.unmarkedBody && (
+          <p className="routing-test-warn">{t('routing.test.unmarkedBody')}</p>
+        )}
+        {warn.disabled && <p className="routing-test-warn">{t('routing.test.disabled')}</p>}
+        {verdict && (
+          <p
+            className={verdictOk(verdict) ? 'routing-test-result' : 'routing-test-result form-error'}
+            role="status"
+          >
+            {t(VERDICT_KEYS[verdict], { error: result?.error ?? '' })}
+          </p>
+        )}
+        <FormError form={form} />
+      </Stack>
     </Modal>
   );
 }
@@ -496,92 +503,87 @@ function AddChannelModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('routing.channelModal.name')}</label>
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('routing.channelModal.kind')}</label>
-        <Select value={kind} onChange={(e) => setKind(e.target.value as ChannelKind)}>
-          {/* Derived from `CHANNEL_KINDS`, which is what its doc comment always claimed and what
-              nothing actually did — these were four `<option>` literals, so the union and the list
-              an operator can pick from were two copies. A fifth kind is now a compile error in
-              `lib/channelKinds.ts` rather than an option nobody adds. */}
-          {channelKindOptions().map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </Select>
-      </div>
-      {kind === 'webhook' && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('routing.channelModal.webhookUrl')}</label>
-          <TextInput
-            className="mono"
-            placeholder="https://hooks.example/…"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-        </div>
-      )}
-      {kind === 'email' && (
-        <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.smtpHost')}</label>
-            <TextInput value={host} onChange={(e) => setHost(e.target.value)} />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.from')}</label>
-            <TextInput value={from} onChange={(e) => setFrom(e.target.value)} />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.to')}</label>
-            <TextInput value={to} onChange={(e) => setTo(e.target.value)} />
-          </div>
-        </>
-      )}
-      {kind === 'pagerduty' && (
-        <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.routingKey')}</label>
+      <Fields>
+        <Field label={t('routing.channelModal.name')}>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        <Field label={t('routing.channelModal.kind')}>
+          <Select value={kind} onChange={(e) => setKind(e.target.value as ChannelKind)}>
+            {/* Derived from `CHANNEL_KINDS`, which is what its doc comment always claimed and what
+                nothing actually did — these were four `<option>` literals, so the union and the
+                list an operator can pick from were two copies. A fifth kind is now a compile error
+                in `lib/channelKinds.ts` rather than an option nobody adds. */}
+            {channelKindOptions().map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {kind === 'webhook' && (
+          <Field label={t('routing.channelModal.webhookUrl')}>
             <TextInput
               className="mono"
-              placeholder="R0XXXXXXXXXXXXXXXXXXXXXXXXX"
-              value={routingKey}
-              onChange={(e) => setRoutingKey(e.target.value)}
+              placeholder="https://hooks.example/…"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
             />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.region')}</label>
-            <Select value={pdRegion} onChange={(e) => setPdRegion(e.target.value as 'us' | 'eu')}>
-              <option value="us">{t('routing.channelModal.regionUs')}</option>
-              <option value="eu">{t('routing.channelModal.regionEu')}</option>
-            </Select>
-          </div>
-        </>
-      )}
-      {kind === 'jsm' && (
-        <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.apiUrl')}</label>
-            <TextInput
-              className="mono"
-              value={jsmUrl}
-              onChange={(e) => setJsmUrl(e.target.value)}
-            />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('routing.channelModal.apiKey')}</label>
-            <TextInput
-              className="mono"
-              value={jsmKey}
-              onChange={(e) => setJsmKey(e.target.value)}
-            />
-          </div>
-        </>
-      )}
-      <FormError form={form} />
+          </Field>
+        )}
+        {kind === 'email' && (
+          <>
+            <Field label={t('routing.channelModal.smtpHost')}>
+              <TextInput value={host} onChange={(e) => setHost(e.target.value)} />
+            </Field>
+            <Field label={t('routing.channelModal.from')}>
+              <TextInput value={from} onChange={(e) => setFrom(e.target.value)} />
+            </Field>
+            <Field label={t('routing.channelModal.to')}>
+              <TextInput value={to} onChange={(e) => setTo(e.target.value)} />
+            </Field>
+          </>
+        )}
+        {kind === 'pagerduty' && (
+          <>
+            <Field label={t('routing.channelModal.routingKey')}>
+              <TextInput
+                className="mono"
+                placeholder="R0XXXXXXXXXXXXXXXXXXXXXXXXX"
+                value={routingKey}
+                onChange={(e) => setRoutingKey(e.target.value)}
+              />
+            </Field>
+            <Field label={t('routing.channelModal.region')}>
+              <Select
+                value={pdRegion}
+                onChange={(e) => setPdRegion(e.target.value as 'us' | 'eu')}
+              >
+                <option value="us">{t('routing.channelModal.regionUs')}</option>
+                <option value="eu">{t('routing.channelModal.regionEu')}</option>
+              </Select>
+            </Field>
+          </>
+        )}
+        {kind === 'jsm' && (
+          <>
+            <Field label={t('routing.channelModal.apiUrl')}>
+              <TextInput
+                className="mono"
+                value={jsmUrl}
+                onChange={(e) => setJsmUrl(e.target.value)}
+              />
+            </Field>
+            <Field label={t('routing.channelModal.apiKey')}>
+              <TextInput
+                className="mono"
+                value={jsmKey}
+                onChange={(e) => setJsmKey(e.target.value)}
+              />
+            </Field>
+          </>
+        )}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -874,31 +876,32 @@ function RuleModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('routing.ruleModal.name')}</label>
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('routing.ruleModal.severity')}</label>
-        <Select value={severity} onChange={(e) => setSeverity(e.target.value as '' | Severity)}>
-          <option value="">{t('routing.ruleModal.anySeverity')}</option>
-          <option value="critical">{severityLabel('critical')}</option>
-          <option value="warning">{severityLabel('warning')}</option>
-          <option value="info">{severityLabel('info')}</option>
-        </Select>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('routing.ruleModal.channels')}</label>
-        <div className="routing-picks">
-          {channels.map((c) => (
-            <label key={c.id} className="routing-pick">
-              <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
-              {c.name}
-            </label>
-          ))}
-        </div>
-      </div>
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('routing.ruleModal.name')}>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        <Field label={t('routing.ruleModal.severity')}>
+          <Select value={severity} onChange={(e) => setSeverity(e.target.value as '' | Severity)}>
+            <option value="">{t('routing.ruleModal.anySeverity')}</option>
+            <option value="critical">{severityLabel('critical')}</option>
+            <option value="warning">{severityLabel('warning')}</option>
+            <option value="info">{severityLabel('info')}</option>
+          </Select>
+        </Field>
+        <FieldGroup label={t('routing.ruleModal.channels')}>
+          <Inline gap={12}>
+            {channels.map((c) => (
+              <CheckField
+                key={c.id}
+                checked={selected.has(c.id)}
+                onChange={() => toggle(c.id)}
+                label={c.name}
+              />
+            ))}
+          </Inline>
+        </FieldGroup>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

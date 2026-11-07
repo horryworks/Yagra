@@ -18,6 +18,7 @@ import type {
 } from '../../types/api';
 import { Button } from '../ui/Button';
 import { TextInput, Select } from '../ui/Field';
+import { Inline } from '../ui/Page';
 import { SearchField } from '../ui/SearchField';
 import { IconButton } from '../ui/IconButton';
 import { ClippedText } from '../ui/ClippedText';
@@ -176,7 +177,7 @@ export function CollectionEditor({
       {canEdit && (
         <div className="ce-new">
           <div className="ce-add-h">{t('editor.newMetric')}</div>
-          <div className="ce-add form-row">
+          <Inline gap={12} align="end" stackOnPhone className="ce-add">
             <TextInput
               placeholder={t('editor.metricNamePlaceholder')}
               value={metricName}
@@ -210,7 +211,7 @@ export function CollectionEditor({
             <Button variant="primary" onClick={add} disabled={!valid || busy}>
               {t('editor.addMetric')}
             </Button>
-          </div>
+          </Inline>
           {/* The catalog picker belongs with the form it fills in, so it moved with it. */}
           {picking && (
             <div className="ce-picker">

@@ -21,8 +21,10 @@ import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/
 import { Button } from '../ui/Button';
 import { IconButton } from '../ui/IconButton';
 import { Modal } from '../ui/Modal';
-import { FieldError, Select, TextInput } from '../ui/Field';
-import { DnsCheckFields, Row, UrlCheckFields } from './CheckFields';
+import { Field, Select, TextInput } from '../ui/Field';
+import { CheckField, FieldGroup, FieldRow, Fields } from '../ui/FormLayout';
+import { Stack } from '../ui/Page';
+import { DnsCheckFields, UrlCheckFields } from './CheckFields';
 import {
   deviceNameOffer,
   nodeEditDraftFrom,
@@ -134,17 +136,25 @@ export function EditNodeModal({
   // demands instead of a branch that quietly falls through to the device form.
   const rows: Record<NodeEditField, ReactNode> = {
     name: (
-      <Row label={t('field.name')} required>
+      <Field
+        label={t('field.name')}
+        required
+        htmlFor="edit-node-name"
+        error={nameInvalid ? t('field.nameRequired') : null}
+      >
         <div className="input-with-action">
-          <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
+          <TextInput
+            id="edit-node-name"
+            value={d.name}
+            onChange={(e) => set('name', e.target.value)}
+          />
           {nameOffer && (
             <Button onClick={() => set('name', nameOffer)}>
               {t('editNode.useDeviceName', { name: nameOffer })}
             </Button>
           )}
         </div>
-        {nameInvalid && <FieldError>{t('field.nameRequired')}</FieldError>}
-      </Row>
+      </Field>
     ),
     urlCheck: d.url ? (
       <UrlCheckFields draft={d.url} onChange={(url) => set('url', url)} />
@@ -153,9 +163,9 @@ export function EditNodeModal({
       <DnsCheckFields draft={d.dns} onChange={(dns) => set('dns', dns)} />
     ) : null,
     profile: (
-      <Row
+      <Field
         label={t(spec.profileLabelKey)}
-        hint={
+        status={
           profileIsOffKind(node.kind, profiles, d.profileId)
             ? t('editNode.profileOffKind')
             : undefined
@@ -175,25 +185,20 @@ export function EditNodeModal({
             </option>
           ))}
         </Select>
-      </Row>
+      </Field>
     ),
-    // Not a `Row`: the checkbox carries its own label, and that label says what the lock does
+    // Not a `Field`: the checkbox carries its own label, and that label says what the lock does
     // ("keep this profile when classification rules change") — which is also why Reclassify
     // leaves the node out, so that is not said again under it (ADR-200 Inc.24).
     profileLock: (
-      <div className="modal-field nd-profile-lock">
-        <label className="nd-profile-lock-check">
-          <input
-            type="checkbox"
-            checked={d.profileLocked}
-            onChange={(e) => set('profileLocked', e.target.checked)}
-          />
-          <span>{t('editNode.profileLock')}</span>
-        </label>
-      </div>
+      <CheckField
+        checked={d.profileLocked}
+        onChange={(next) => set('profileLocked', next)}
+        label={t('editNode.profileLock')}
+      />
     ),
     snmpCredential: (
-      <Row label={t('field.snmpCredential')}>
+      <Field label={t('field.snmpCredential')}>
         <Select value={d.credentialId} onChange={(e) => set('credentialId', e.target.value)}>
           <option value="">{t('add.none')}</option>
           {credentials.map((c) => (
@@ -202,106 +207,101 @@ export function EditNodeModal({
             </option>
           ))}
         </Select>
-      </Row>
+      </Field>
     ),
     identity: (
-      <div className="modal-field-row">
-        <Row label={t('field.maker')}>
+      <FieldRow>
+        <Field label={t('field.maker')}>
           <TextInput
             value={d.vendor}
             onChange={(e) => set('vendor', e.target.value)}
             placeholder={t('field.makerPlaceholder')}
           />
-        </Row>
-        <Row label={t('field.model')}>
+        </Field>
+        <Field label={t('field.model')}>
           <TextInput
             className="mono"
             value={d.model}
             onChange={(e) => set('model', e.target.value)}
             placeholder={t('field.modelPlaceholder')}
           />
-        </Row>
-      </div>
+        </Field>
+      </FieldRow>
     ),
     pool: (
-      <Row label={t('field.pool')}>
+      <Field label={t('field.pool')} error={poolInvalid ? t('field.poolInvalid') : null}>
         <TextInput
           className="mono"
           value={d.pool}
           onChange={(e) => set('pool', e.target.value)}
           placeholder={poolPlaceholder(inheritedPool, t)}
         />
-        {poolInvalid && <FieldError>{t('field.poolInvalid')}</FieldError>}
-      </Row>
+      </Field>
     ),
-    // ⚠️ Not wrapped in `Row`: that renders a `<label>`, and a label holding several inputs and a
-    // button gives every one of them the same accessible name and sends a click on the label to
-    // whichever came first. Each input carries its own `aria-label` instead.
+    // ⚠️ Not a `<label>`: a label holding several inputs and a button gives every one of them the
+    // same accessible name and sends a click on the label to whichever came first. Each input
+    // carries its own `aria-label` instead, and each group is named by its heading.
     tags: (
-      <div className="modal-field nd-tags">
+      <Stack gap={12}>
         {/* The count beside the label is the cap the entry box closes at; "sent with alerts" is
-            where a tag goes. Both used to be a 206-character hint under the field (ADR-200). */}
-        <span className="modal-field-label">
-          {t('field.tags')}
-          <span className="nd-field-sub">{t('field.sentWithAlerts')}</span>
-          <span className="nd-field-sub mono">
-            {d.tags.length} / {LABELS_MAX}
-          </span>
-        </span>
-        <ChipInput
-          value={d.tags}
-          onChange={(next) => set('tags', next)}
-          placeholder={t('field.tagPlaceholder')}
-          inputLabel={t('field.tags')}
-        />
-        {/* What the folder chain supplies, and the refusals over it. Hidden entirely when this
-            node inherits nothing and refuses nothing — an empty section would be a claim nobody
-            made. */}
-        {(inherited.length > 0 || d.tagsExcluded.length > 0) && (
-          <div className="nd-inherited-tags">
-            {inherited.length > 0 && (
-              <>
-                <span className="modal-field-label">{t('field.tagsInherited')}</span>
-                <ul className="nd-tag-badges">
-                  {inherited.map((label) => (
-                    <li key={label}>
-                      <Badge tone="tag">{label}</Badge>
-                      {/* ✕ here EXCLUDES rather than deletes: the label lives on the folder, and
-                          this node cannot edit it — only refuse it. */}
-                      <IconButton
-                        title={t('field.tagExclude', { label })}
-                        onClick={() => set('tagsExcluded', [...d.tagsExcluded, label])}
-                      >
-                        ✕
-                      </IconButton>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-            {d.tagsExcluded.length > 0 && (
-              <>
-                <span className="modal-field-label">{t('field.tagsExcluded')}</span>
-                {/* Every refusal, including ones naming a label no folder currently supplies: an
-                    exclusion that cannot be seen cannot be undone, and it stays meaningful because
-                    an ancestor may re-add that label later. `lenient`, because a stored label may
-                    predate the rules new ones follow. */}
-                <ChipInput
-                  value={d.tagsExcluded}
-                  onChange={(next) => set('tagsExcluded', next)}
-                  inputLabel={t('field.tagsExcluded')}
-                  lenient
-                />
-              </>
-            )}
-          </div>
+            where a tag goes. Both used to be a 206-character hint under the field (ADR-200). A
+            stored tag the rules now refuse (migration 0109) is marked on its chip; the error says
+            why Save is held, since a chip's reason is otherwise a hover. */}
+        <FieldGroup
+          label={
+            <>
+              {t('field.tags')}
+              <span className="nd-field-sub">{t('field.sentWithAlerts')}</span>
+              <span className="nd-field-sub mono">
+                {d.tags.length} / {LABELS_MAX}
+              </span>
+            </>
+          }
+          error={tagsInvalid ? t(`field.tagErr.${firstLabelProblem(d.tags)}`) : null}
+        >
+          <ChipInput
+            value={d.tags}
+            onChange={(next) => set('tags', next)}
+            placeholder={t('field.tagPlaceholder')}
+            inputLabel={t('field.tags')}
+          />
+        </FieldGroup>
+        {/* What the folder chain supplies, and the refusals over it. Each is left out when it is
+            empty - an empty section would be a claim nobody made. */}
+        {inherited.length > 0 && (
+          <FieldGroup label={t('field.tagsInherited')}>
+            <ul className="nd-tag-badges">
+              {inherited.map((label) => (
+                <li key={label}>
+                  <Badge tone="tag">{label}</Badge>
+                  {/* ✕ here EXCLUDES rather than deletes: the label lives on the folder, and
+                      this node cannot edit it — only refuse it. */}
+                  <IconButton
+                    title={t('field.tagExclude', { label })}
+                    onClick={() => set('tagsExcluded', [...d.tagsExcluded, label])}
+                  >
+                    ✕
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          </FieldGroup>
         )}
-        {/* A stored tag the rules now refuse (migration 0109) is marked on its chip; this line
-            says why Save is held, since a chip's reason is otherwise a hover. */}
-        {tagsInvalid && (
-          <FieldError>{t(`field.tagErr.${firstLabelProblem(d.tags)}`)}</FieldError>
+        {d.tagsExcluded.length > 0 && (
+          <FieldGroup label={t('field.tagsExcluded')}>
+            {/* Every refusal, including ones naming a label no folder currently supplies: an
+                exclusion that cannot be seen cannot be undone, and it stays meaningful because
+                an ancestor may re-add that label later. `lenient`, because a stored label may
+                predate the rules new ones follow. */}
+            <ChipInput
+              value={d.tagsExcluded}
+              onChange={(next) => set('tagsExcluded', next)}
+              inputLabel={t('field.tagsExcluded')}
+              lenient
+            />
+          </FieldGroup>
         )}
-      </div>
+      </Stack>
     ),
   };
 
@@ -319,21 +319,23 @@ export function EditNodeModal({
         />
       }
     >
-      {fields.map((f, i) => {
-        const section = NODE_EDIT_FIELD_META[f].section;
-        // A heading where the section changes, and only when this kind has both halves: a device's
-        // fields are all "the node", and heading a one-part form is noise.
-        const opensSection = i === 0 || NODE_EDIT_FIELD_META[fields[i - 1]].section !== section;
-        return (
-          <Fragment key={f}>
-            {headed && opensSection && (
-              <p className="nd-edit-section">{t(`editNode.section.${section}`)}</p>
-            )}
-            {rows[f]}
-          </Fragment>
-        );
-      })}
-      <FormError form={form} />
+      <Fields>
+        {fields.map((f, i) => {
+          const section = NODE_EDIT_FIELD_META[f].section;
+          // A heading where the section changes, and only when this kind has both halves: a
+          // device's fields are all "the node", and heading a one-part form is noise.
+          const opensSection = i === 0 || NODE_EDIT_FIELD_META[fields[i - 1]].section !== section;
+          return (
+            <Fragment key={f}>
+              {headed && opensSection && (
+                <p className="nd-edit-section">{t(`editNode.section.${section}`)}</p>
+              )}
+              {rows[f]}
+            </Fragment>
+          );
+        })}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

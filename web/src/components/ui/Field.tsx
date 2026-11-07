@@ -5,6 +5,7 @@
 
 import {
   cloneElement,
+  Fragment,
   isValidElement,
   useId,
   type InputHTMLAttributes,
@@ -16,6 +17,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { InfoTip } from './InfoTip';
+import { isShown } from './space';
 import './Field.css';
 
 /** `inputRef` reaches the element itself, the way `SearchField` takes it: React 18 does not pass
@@ -50,8 +52,10 @@ export function TextInput({
  *
  * `htmlFor` may be left out: the field then makes an id and gives it to its one child, so the label
  * names the control without the screen inventing ids (137 of 160 hand-written labels named nothing
- * when this was measured). A child that already has an `id` keeps it. `error` is a validation
- * message for this field, shown in the critical colour.
+ * when this was measured). A child that already has an `id` keeps it; a fragment or a list of
+ * children gets none, so pass `htmlFor` and put that id on the control. `status` is a line the
+ * field shows because of its state (the value in force, a count, "Loading"), under the control;
+ * `error` is a validation message, shown in the critical colour.
  *
  * It still carries `.modal-field` until ADR-246 Inc.8, so a dialog not yet moved onto `Fields`
  * keeps its spacing.
@@ -61,19 +65,31 @@ export function Field({
   htmlFor,
   required,
   infoKey,
+  infoLabel,
+  action,
+  status,
   error,
   children,
 }: {
-  label: string;
+  /** Plain words almost always; markup only where the label must emphasise a part of itself. */
+  label: ReactNode;
   htmlFor?: string;
   required?: boolean;
   /** A namespaced `.info` key (`settings-tokens:field.owner.info`). */
   infoKey?: string;
+  /** What the ⓘ is about, when `label` is not plain text. */
+  infoLabel?: string;
+  /** A small button or link at the right end of the label row ("Use built-in", "Default order"). */
+  action?: ReactNode;
+  status?: ReactNode;
   error?: string | null;
   children: ReactNode;
 }) {
   const auto = useId();
-  const child = isValidElement<{ id?: string }>(children) ? (children as ReactElement<{ id?: string }>) : null;
+  const child =
+    isValidElement<{ id?: string }>(children) && children.type !== Fragment
+      ? (children as ReactElement<{ id?: string }>)
+      : null;
   const ownId = child?.props.id;
   const id = htmlFor ?? ownId ?? auto;
   const control = child && !htmlFor && !ownId ? cloneElement(child, { id }) : children;
@@ -84,9 +100,13 @@ export function Field({
           {label}
           {required && <RequiredMark />}
         </label>
-        {infoKey && <InfoTip infoKey={infoKey} label={label} />}
+        {infoKey && (
+          <InfoTip infoKey={infoKey} label={infoLabel ?? (typeof label === 'string' ? label : '')} />
+        )}
+        {isShown(action) && <span className="field-head-action">{action}</span>}
       </div>
       {control}
+      {isShown(status) && <p className="form-status">{status}</p>}
       {error && (
         <p className="field-error" role="alert">
           {error}

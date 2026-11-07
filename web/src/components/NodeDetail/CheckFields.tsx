@@ -4,15 +4,18 @@
 // They were the body of a standalone `UrlCheckModal`/`DnsCheckModal` reachable only from the ⋮ menu
 // on the Overview health card. "Edit node" now renders them for those kinds, so they live here as
 // presentational components: the parent owns the draft, the error and the save, and these own the
-// layout and the one dictionary fetch a URL form needs.
+// layout and the one dictionary fetch a URL form needs. They are drawn with the shared form parts
+// (`Field`, `FieldRow`, `CheckField`, ADR-246) and sit inside the dialog's own `Fields`.
 //
 // The judgement stays where it was — `checkConfigForm.ts` — because Vitest never runs a `.tsx`.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { Button } from '../ui/Button';
-import { FieldError, RequiredMark, Select, TextInput } from '../ui/Field';
+import { Field, FieldError, Select, TextInput } from '../ui/Field';
+import { CheckField, FieldGroup, FieldRow } from '../ui/FormLayout';
+import { Stack } from '../ui/Page';
 import { isHttpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary } from '../../types/api';
 import {
@@ -28,35 +31,6 @@ import {
 
 const HTTP_METHODS = ['GET', 'HEAD', 'POST'] as const;
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME'] as const;
-
-/** One labelled row. Exported because both this file's forms and the dialog that hosts them spell
- *  a field the same way; the shared `Field` exports the controls, not the label+hint wrapper.
- *  `sub` is a few words beside the label (ADR-200 kind 5), never a sentence; `hint` is for a state
- *  the field is in, not for explaining it. */
-export function Row({
-  label,
-  sub,
-  required,
-  hint,
-  children,
-}: {
-  label: string;
-  sub?: string;
-  required?: boolean;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <label className="modal-field">
-      <span className="modal-field-label">
-        {label} {required && <RequiredMark />}
-        {sub && <span className="nd-field-sub">{sub}</span>}
-      </span>
-      {children}
-      {hint && <span className="form-status">{hint}</span>}
-    </label>
-  );
-}
 
 /** What a URL monitor probes and what counts as healthy. */
 export function UrlCheckFields({
@@ -86,10 +60,10 @@ export function UrlCheckFields({
 
   return (
     <>
-      <Row label={t('checkEdit.url')} required>
+      <Field label={t('checkEdit.url')} required>
         <TextInput value={d.url} onChange={(e) => set('url', e.target.value)} />
-      </Row>
-      <Row label={t('checkEdit.method')}>
+      </Field>
+      <Field label={t('checkEdit.method')}>
         <Select
           value={d.method}
           onChange={(e) => set('method', e.target.value as UrlCheckDraft['method'])}
@@ -100,8 +74,8 @@ export function UrlCheckFields({
             </option>
           ))}
         </Select>
-      </Row>
-      <Row label={t('checkEdit.expectedStatus')}>
+      </Field>
+      <Field label={t('checkEdit.expectedStatus')}>
         <Select
           value={d.statusMode}
           onChange={(e) => set('statusMode', e.target.value as UrlCheckDraft['statusMode'])}
@@ -112,61 +86,60 @@ export function UrlCheckFields({
             </option>
           ))}
         </Select>
-      </Row>
+      </Field>
       {d.statusMode === 'exact' && (
-        <Row label={t('checkEdit.statusCodes')}>
+        <Field label={t('checkEdit.statusCodes')}>
           <TextInput
             value={d.statusCodes}
             placeholder="200, 204"
             onChange={(e) => set('statusCodes', e.target.value)}
           />
-        </Row>
+        </Field>
       )}
       {d.statusMode === 'range' && (
-        <div className="modal-field-row">
-          <Row label={t('checkEdit.statusLo')}>
+        <FieldRow>
+          <Field label={t('checkEdit.statusLo')}>
             <TextInput
               value={d.statusLo}
               inputMode="numeric"
               placeholder="200"
               onChange={(e) => set('statusLo', e.target.value)}
             />
-          </Row>
-          <Row label={t('checkEdit.statusHi')}>
+          </Field>
+          <Field label={t('checkEdit.statusHi')}>
             <TextInput
               value={d.statusHi}
               inputMode="numeric"
               placeholder="299"
               onChange={(e) => set('statusHi', e.target.value)}
             />
-          </Row>
-        </div>
+          </Field>
+        </FieldRow>
       )}
-      <Row label={t('checkEdit.timeoutMs')}>
+      <Field label={t('checkEdit.timeoutMs')}>
         <TextInput
           value={d.timeoutMs}
           inputMode="numeric"
           onChange={(e) => set('timeoutMs', e.target.value)}
         />
-      </Row>
-      <label className="nd-check-toggle">
-        <input
-          type="checkbox"
-          checked={d.verifyTls}
-          onChange={(e) => set('verifyTls', e.target.checked)}
-        />
-        <span>{t('checkEdit.verifyTls')}</span>
-      </label>
+      </Field>
+      <CheckField
+        checked={d.verifyTls}
+        onChange={(next) => set('verifyTls', next)}
+        label={t('checkEdit.verifyTls')}
+      />
       {!d.verifyTls && <FieldError>{t('checkEdit.verifyTlsWarning')}</FieldError>}
-      <label className="nd-check-toggle">
-        <input
-          type="checkbox"
-          checked={d.followRedirects}
-          onChange={(e) => set('followRedirects', e.target.checked)}
-        />
-        <span>{t('checkEdit.followRedirects')}</span>
-      </label>
-      <Row label={t('checkEdit.credential')}>
+      <CheckField
+        checked={d.followRedirects}
+        onChange={(next) => set('followRedirects', next)}
+        label={t('checkEdit.followRedirects')}
+      />
+      {/* The server refuses a credential without TLS verification (400 credential_needs_tls);
+          saying so here avoids a round trip, and says *why* rather than just refusing. */}
+      <Field
+        label={t('checkEdit.credential')}
+        error={d.credentialId !== '' && !d.verifyTls ? t('checkEdit.credentialNeedsTls') : null}
+      >
         <Select value={d.credentialId} onChange={(e) => set('credentialId', e.target.value)}>
           <option value="">{t('checkEdit.credentialNone')}</option>
           {creds.map((c) => (
@@ -175,23 +148,15 @@ export function UrlCheckFields({
             </option>
           ))}
         </Select>
-      </Row>
-      {/* The server refuses this pair (400 credential_needs_tls); saying so here avoids a round
-          trip, and says *why* rather than just refusing. */}
-      {d.credentialId !== '' && !d.verifyTls && (
-        <FieldError>{t('checkEdit.credentialNeedsTls')}</FieldError>
-      )}
-      <label className="nd-check-toggle">
-        <input
-          type="checkbox"
-          checked={d.bodyMatchEnabled}
-          onChange={(e) => set('bodyMatchEnabled', e.target.checked)}
-        />
-        <span>{t('checkEdit.bodyMatch')}</span>
-      </label>
+      </Field>
+      <CheckField
+        checked={d.bodyMatchEnabled}
+        onChange={(next) => set('bodyMatchEnabled', next)}
+        label={t('checkEdit.bodyMatch')}
+      />
       {d.bodyMatchEnabled && (
         <>
-          <Row label={t('checkEdit.bodyModeLabel')}>
+          <Field label={t('checkEdit.bodyModeLabel')}>
             <Select
               value={d.bodyMode}
               onChange={(e) => set('bodyMode', e.target.value as UrlCheckDraft['bodyMode'])}
@@ -202,18 +167,29 @@ export function UrlCheckFields({
                 </option>
               ))}
             </Select>
-          </Row>
-          <Row label={t('checkEdit.bodyPattern')} sub={t('checkEdit.bodyPatternSub')} required>
+          </Field>
+          {/* The few words beside the label (ADR-200 kind 5) say how the keyword matches. */}
+          <Field
+            label={
+              <>
+                {t('checkEdit.bodyPattern')}
+                <span className="nd-field-sub">{t('checkEdit.bodyPatternSub')}</span>
+              </>
+            }
+            required
+          >
             <TextInput
               value={d.bodyPattern}
               placeholder={'"status":"ok"'}
               onChange={(e) => set('bodyPattern', e.target.value)}
             />
-          </Row>
+          </Field>
         </>
       )}
-      <Row label={t('checkEdit.jsonExtract')}>
-        <div className="nd-extract-rows">
+      {/* A group, not a label: each row holds two inputs and a button, and each input carries its
+          own `aria-label`. */}
+      <FieldGroup label={t('checkEdit.jsonExtract')}>
+        <Stack gap={8}>
           {d.extracts.map((row, i) => (
             <div className="nd-extract-row" key={i}>
               <TextInput
@@ -240,24 +216,24 @@ export function UrlCheckFields({
               {t('checkEdit.extractAdd')}
             </Button>
           )}
-        </div>
-      </Row>
+        </Stack>
+      </FieldGroup>
+      {/* Shown only while something reads the body, so the label alone says what it bounds. A
+          keyword past the limit is a failed check, and the Overview card says so when it happens
+          (`overview.bodyTruncated`). A HEAD request has no body to read: refused server-side too,
+          and saying it here says why before a round trip. */}
       {readsBody && (
-        <>
-          {/* Shown only while something reads the body, so the label alone says what it bounds.
-              A keyword past the limit is a failed check, and the Overview card says so when it
-              happens (`overview.bodyTruncated`). */}
-          <Row label={t('checkEdit.bodyMaxBytes')}>
-            <TextInput
-              value={d.bodyMaxBytes}
-              inputMode="numeric"
-              suffix={t('checkEdit.bytes')}
-              onChange={(e) => set('bodyMaxBytes', e.target.value)}
-            />
-          </Row>
-          {/* Refused server-side too; saying it here says why before a round trip. */}
-          {d.method === 'HEAD' && <FieldError>{t('checkEdit.bodyMatchNeedsBody')}</FieldError>}
-        </>
+        <Field
+          label={t('checkEdit.bodyMaxBytes')}
+          error={d.method === 'HEAD' ? t('checkEdit.bodyMatchNeedsBody') : null}
+        >
+          <TextInput
+            value={d.bodyMaxBytes}
+            inputMode="numeric"
+            suffix={t('checkEdit.bytes')}
+            onChange={(e) => set('bodyMaxBytes', e.target.value)}
+          />
+        </Field>
       )}
     </>
   );
@@ -277,10 +253,10 @@ export function DnsCheckFields({
 
   return (
     <>
-      <Row label={t('checkEdit.dnsName')} required>
+      <Field label={t('checkEdit.dnsName')} required>
         <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
-      </Row>
-      <Row label={t('checkEdit.recordType')}>
+      </Field>
+      <Field label={t('checkEdit.recordType')}>
         <Select
           value={d.recordType}
           onChange={(e) => set('recordType', e.target.value as DnsCheckDraft['recordType'])}
@@ -291,41 +267,41 @@ export function DnsCheckFields({
             </option>
           ))}
         </Select>
-      </Row>
-      <div className="modal-field-row">
+      </Field>
+      <FieldRow>
         {/* Blank means the poller's own resolver, so the placeholder says that rather than showing
             an example address that would read as the default. */}
-        <Row label={t('checkEdit.resolver')}>
+        <Field label={t('checkEdit.resolver')}>
           <TextInput
             value={d.resolver}
             placeholder={t('add.resolverPlaceholder')}
             onChange={(e) => set('resolver', e.target.value)}
           />
-        </Row>
-        <Row label={t('checkEdit.resolverPort')}>
+        </Field>
+        <Field label={t('checkEdit.resolverPort')}>
           <TextInput
             value={d.resolverPort}
             inputMode="numeric"
             onChange={(e) => set('resolverPort', e.target.value)}
           />
-        </Row>
-      </div>
-      <div className="modal-field-row">
-        <Row label={t('checkEdit.maxDepth')}>
+        </Field>
+      </FieldRow>
+      <FieldRow>
+        <Field label={t('checkEdit.maxDepth')}>
           <TextInput
             value={d.maxDepth}
             inputMode="numeric"
             onChange={(e) => set('maxDepth', e.target.value)}
           />
-        </Row>
-        <Row label={t('checkEdit.timeoutMs')}>
+        </Field>
+        <Field label={t('checkEdit.timeoutMs')}>
           <TextInput
             value={d.timeoutMs}
             inputMode="numeric"
             onChange={(e) => set('timeoutMs', e.target.value)}
           />
-        </Row>
-      </div>
+        </Field>
+      </FieldRow>
     </>
   );
 }

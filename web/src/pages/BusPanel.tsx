@@ -20,7 +20,10 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, FieldError } from '../components/ui/Field';
+import { Field, TextInput, FieldError } from '../components/ui/Field';
+import { FieldGroup, Fields } from '../components/ui/FormLayout';
+import { Stack } from '../components/ui/Page';
+import { Callout } from '../components/ui/Section';
 import { StepFrame } from '../components/ui/StepFrame';
 import { busCertState, externalBusNames, parseBusNames } from '../lib/busCert';
 import { formatExactTime } from '../lib/format';
@@ -66,21 +69,20 @@ function ReissueModal({
         />
       }
     >
-      <div className="form-stack">
-        <label className="form-label">
-          {t('pollers.bus.names.label')}
+      <Fields>
+        <Field label={t('pollers.bus.names.label')}>
           <TextInput
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="yagra.example.net, 203.0.113.10"
             autoFocus
           />
-        </label>
+        </Field>
         {/* The dialog's one sentence (ADR-200): what the sites lose until they are handed the
             new file. That the bus serves it only after a restart shows on the panel as a badge. */}
         <p className="modal-confirm-text">{t('pollers.bus.reissue.afterward')}</p>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -121,28 +123,27 @@ function SwitchModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         <p className="modal-confirm-text">
           {enabling ? t('pollers.bus.enable.intro') : t('pollers.bus.disable.intro')}
         </p>
         {enabling && (
-          <>
-            <label className="form-label">
-              {t('pollers.bus.names.label')}
-              <TextInput
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="yagra.example.net, 203.0.113.10"
-                autoFocus
-              />
-            </label>
-            {!ready && <FieldError>{t('pollers.bus.names.required')}</FieldError>}
-          </>
+          <Field
+            label={t('pollers.bus.names.label')}
+            error={ready ? null : t('pollers.bus.names.required')}
+          >
+            <TextInput
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="yagra.example.net, 203.0.113.10"
+              autoFocus
+            />
+          </Field>
         )}
         {/* The cost, stated before the click rather than discovered after it. */}
-        <p className="form-warning">{t('pollers.bus.outage')}</p>
+        <Callout tone="warning">{t('pollers.bus.outage')}</Callout>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -168,10 +169,11 @@ function HandoffModal({
         </Button>
       }
     >
-      <div className="form-stack">
+      <Fields>
+        {/* Groups rather than `Field`s: each is a value and its Copy button, with no input for a
+            label to name. */}
         {accepted.poller_secret && (
-          <div className="modal-field">
-            <label className="modal-field-label">{t('pollers.bus.handoff.secret')}</label>
+          <FieldGroup label={t('pollers.bus.handoff.secret')}>
             <div className="poller-copyrow">
               <code className="poller-snippet mono">{accepted.poller_secret}</code>
               <Button variant="outline" onClick={() => copy(accepted.poller_secret ?? '', 'secret')}>
@@ -179,11 +181,10 @@ function HandoffModal({
               </Button>
             </div>
             <FieldError>{t('pollers.bus.handoff.onceOnly')}</FieldError>
-          </div>
+          </FieldGroup>
         )}
         {accepted.ca_certificate && (
-          <div className="modal-field">
-            <label className="modal-field-label">{t('pollers.bus.handoff.ca')}</label>
+          <FieldGroup label={t('pollers.bus.handoff.ca')}>
             <div className="poller-copyrow">
               <pre className="poller-snippet mono">{accepted.ca_certificate}</pre>
               <Button
@@ -193,12 +194,12 @@ function HandoffModal({
                 {copied === 'ca' ? t('common:copy.copied') : t('pollers.register.copy')}
               </Button>
             </div>
-          </div>
+          </FieldGroup>
         )}
         <p className="form-status" role="status">
           {t('pollers.bus.handoff.restarting')}
         </p>
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -241,6 +242,9 @@ export function BusPanel() {
   const state = busCertState(cert);
   const enabled = status?.remote_enabled ?? false;
   const extraSans = externalBusNames(cert?.sans);
+  // One line, worst first — see `busCertState`. "Pending restart" is the badge beside the state.
+  const certWarn =
+    state !== 'ok' && state !== 'not_materialized' ? t(`pollers.bus.cert.warn.${state}`) : null;
   // "Can a site at that address connect?" is answered in the kit dialog (`PollerTokenModal`),
   // where the address is typed. The panel has no list of site addresses to compare against —
   // none is stored — so the line it once drew here compared against an empty list and never fired.
@@ -290,7 +294,7 @@ export function BusPanel() {
       )}
 
       {cert ? (
-        <div className="form-stack">
+        <Stack gap={12}>
           <p>
             <span className="muted">{t('pollers.bus.cert.sans')}: </span>
             {extraSans.length > 0 ? (
@@ -308,13 +312,13 @@ export function BusPanel() {
           <p className="muted mono" title={cert.fingerprint_sha256}>
             {t('pollers.bus.cert.fingerprint')}: {cert.fingerprint_sha256.slice(0, 32)}…
           </p>
-          {/* One line, worst first — see `busCertState`. "Pending restart" is the badge above. */}
-          {state !== 'ok' && state !== 'not_materialized' && (
-            <p className={state === 'expiring' ? 'form-warning' : 'form-error'}>
-              {t(`pollers.bus.cert.warn.${state}`)}
-            </p>
-          )}
-        </div>
+          {certWarn &&
+            (state === 'expiring' ? (
+              <Callout tone="warning">{certWarn}</Callout>
+            ) : (
+              <p className="form-error">{certWarn}</p>
+            ))}
+        </Stack>
       ) : (
         <p className="muted">{t('pollers.bus.cert.absent')}</p>
       )}

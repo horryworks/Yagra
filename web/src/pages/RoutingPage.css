@@ -1,9 +1,9 @@
 /* Notification delivery (Alerts ▸ Notification delivery) — data-table standard v2 (styles/table.css). Two sections (channels +
-   rules), each a section header + toolbar + `.ytable`. Page-local: section title, spacing, and
-   the channel checkbox picks inside the add-rule modal. */
+   rules), each a section header + toolbar + `.ytable`. Page-local: section title and spacing. The
+   dialogs are built from the shared form parts (`Fields`, `Field`, `CheckField`). */
 
 .routing-error {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
 }
 
 /* Section title that sits in the toolbar row, left of the spacer. */
@@ -66,32 +66,17 @@
   gap: var(--space-1-5);
 }
 
-/* Channel multi-select inside the add-rule modal. */
-.routing-picks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-2) 0 var(--space-0-5);
-}
-
-.routing-pick {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  font-size: var(--font-sm);
-  cursor: pointer;
-}
-
 /* Send-a-test dialog (ADR-192). The warnings say what the test will do before it is sent; the
    result line says what it did. No --status-* colour here: those mean network state (tokens.css),
-   and a delivered test is not a healthy device. A failure uses the shared .form-error instead. */
+   and a delivered test is not a healthy device. A failure uses the shared .form-error instead.
+   The dialog's `Stack` spaces the lines, so neither carries a margin of its own. */
 .routing-test-warn {
-  margin: 0 0 10px;
+  margin: 0;
   font-weight: var(--weight-medium);
 }
 
 .routing-test-result {
-  margin: var(--space-3) 0 0;
+  margin: 0;
   overflow-wrap: anywhere;
 }
 

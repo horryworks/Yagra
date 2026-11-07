@@ -129,7 +129,11 @@ export function sentenceCount(s: string): number {
  *  draws one inside), and `<InfoPress`. A press given `text=` rather than a key (a metric's
  *  generated meaning) is counted apart as `pressText`, because no `.info` key stands behind it. */
 export function infoSites(src: string): { tip: number; press: number; pressText: number } {
-  const fields = openingTags(src, 'Field').filter((tag) => /\binfoKey=/.test(tag)).length;
+  // `Field` and `FieldGroup` draw the InfoTip their `infoKey` names (ADR-246), so each one that
+  // takes a key is one ⓘ on the screen, the same as a hand-placed `<InfoTip`.
+  const fields = ['Field', 'FieldGroup']
+    .flatMap((name) => openingTags(src, name))
+    .filter((tag) => /\binfoKey=/.test(tag)).length;
   const presses = openingTags(src, 'InfoPress');
   const withText = presses.filter((tag) => /\btext=/.test(tag)).length;
   return {

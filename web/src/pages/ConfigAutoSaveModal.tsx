@@ -7,6 +7,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
+import { FieldGroup, Fields } from '../components/ui/FormLayout';
+import { Callout } from '../components/ui/Section';
 import { Segmented } from '../components/ui/Segmented';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
@@ -44,20 +46,21 @@ export function ConfigAutoSaveModal({ schedule, onClose, onSaved }: Props) {
         />
       }
     >
-      <div className="modal-field">
-        <span className="modal-field-label">{t('config.autoSave.title')}</span>
-        <Segmented
-          ariaLabel={t('config.autoSave.title')}
-          options={[
-            { value: 'on', label: t('config.autoSave.on') },
-            { value: 'off', label: t('config.autoSave.off') },
-          ]}
-          value={enabled ? 'on' : 'off'}
-          onChange={(next) => setEnabled(next === 'on')}
-        />
-      </div>
-      {enabled && <p className="form-warning">{t('config.autoSave.warning')}</p>}
-      <FormError form={form} />
+      <Fields>
+        <FieldGroup label={t('config.autoSave.title')}>
+          <Segmented
+            ariaLabel={t('config.autoSave.title')}
+            options={[
+              { value: 'on', label: t('config.autoSave.on') },
+              { value: 'off', label: t('config.autoSave.off') },
+            ]}
+            value={enabled ? 'on' : 'off'}
+            onChange={(next) => setEnabled(next === 'on')}
+          />
+        </FieldGroup>
+        {enabled && <Callout tone="warning">{t('config.autoSave.warning')}</Callout>}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

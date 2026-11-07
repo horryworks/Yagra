@@ -65,3 +65,8 @@
 .ui-inline.align-end {
   align-items: flex-end;
 }
+
+html[data-viewport='mobile'] .ui-inline.is-phone-stack {
+  flex-direction: column;
+  align-items: stretch;
+}

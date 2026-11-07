@@ -10,7 +10,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
-import { Select } from '../components/ui/Field';
+import { Field, Select } from '../components/ui/Field';
+import { CheckField, Fields } from '../components/ui/FormLayout';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -90,9 +91,11 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
         />
       }
     >
-      <div className="rb">
-        <label className="rb-field">
-          <span>{t('schedule.analysis')}</span>
+      <Fields>
+        <Field
+          label={t('schedule.analysis')}
+          status={!flowEnabled && t('schedule.flowHidden')}
+        >
           <Select
             value={form.tool}
             onChange={(e) => set('tool', e.target.value as AnalysisToolKey)}
@@ -103,20 +106,17 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
               </option>
             ))}
           </Select>
-          {!flowEnabled && <span className="form-status">{t('schedule.flowHidden')}</span>}
-        </label>
+        </Field>
 
-        <div className="rb-field">
-          <span>{t('fields.scope')}</span>
+        <Field label={t('fields.scope')}>
           <ScopePicker
             value={form.scope}
             onChange={(v: ScopeValue) => set('scope', v)}
             className="ts-field-full"
           />
-        </div>
+        </Field>
 
-        <label className="rb-field">
-          <span>{t('fields.timeWindow')}</span>
+        <Field label={t('fields.timeWindow')}>
           <Select
             value={String(form.windowSecs)}
             onChange={(e) => set('windowSecs', Number(e.target.value))}
@@ -127,12 +127,12 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
 
-        <label className="rb-field">
-          <span>{t('fields.sensitivity')}</span>
+        <Field label={t('fields.sensitivity')} htmlFor="ts-schedule-sensitivity">
           <div className="ts-slider-row">
             <input
+              id="ts-schedule-sensitivity"
               className="ts-slider"
               type="range"
               min={1}
@@ -142,10 +142,9 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
             />
             <span className="ts-slider-val">{SENS_LABELS[form.sensitivity - 1]}</span>
           </div>
-        </label>
+        </Field>
 
-        <label className="rb-field">
-          <span>{t('schedule.frequency')}</span>
+        <Field label={t('schedule.frequency')}>
           <Select
             value={form.frequency}
             onChange={(e) => set('frequency', e.target.value as Cadence)}
@@ -158,11 +157,10 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
 
         {form.frequency === 'weekly' && (
-          <label className="rb-field">
-            <span>{t('reports:schedule.dayOfWeek')}</span>
+          <Field label={t('reports:schedule.dayOfWeek')}>
             <Select
               value={String(form.dayOfWeek)}
               onChange={(e) => set('dayOfWeek', Number(e.target.value))}
@@ -173,12 +171,11 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
                 </option>
               ))}
             </Select>
-          </label>
+          </Field>
         )}
 
         {form.frequency === 'monthly' && (
-          <label className="rb-field">
-            <span>{t('reports:schedule.dayOfMonth')}</span>
+          <Field label={t('reports:schedule.dayOfMonth')}>
             <Select
               value={String(form.dayOfMonth)}
               onChange={(e) => set('dayOfMonth', Number(e.target.value))}
@@ -189,11 +186,10 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
                 </option>
               ))}
             </Select>
-          </label>
+          </Field>
         )}
 
-        <label className="rb-field">
-          <span>{t('reports:schedule.time', { zone: zoneAbbreviation(form.timeZone) })}</span>
+        <Field label={t('reports:schedule.time', { zone: zoneAbbreviation(form.timeZone) })}>
           <input
             className="field"
             type="time"
@@ -205,28 +201,22 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
               }
             }}
           />
-        </label>
+        </Field>
 
-        <label className="rb-check">
-          <input
-            type="checkbox"
-            checked={form.notify}
-            onChange={(e) => set('notify', e.target.checked)}
-          />
-          <span>{t('schedule.notify')}</span>
-        </label>
+        <CheckField
+          checked={form.notify}
+          onChange={(next) => set('notify', next)}
+          label={t('schedule.notify')}
+        />
 
-        <label className="rb-check">
-          <input
-            type="checkbox"
-            checked={form.enabled}
-            onChange={(e) => set('enabled', e.target.checked)}
-          />
-          <span>{t('reports:schedule.enabled')}</span>
-        </label>
+        <CheckField
+          checked={form.enabled}
+          onChange={(next) => set('enabled', next)}
+          label={t('reports:schedule.enabled')}
+        />
 
         <FormError form={save} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

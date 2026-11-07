@@ -18,7 +18,8 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
-import { TextInput } from '../ui/Field';
+import { Field, TextInput } from '../ui/Field';
+import { Fields } from '../ui/FormLayout';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
 import { MIN_PW, validateOwnPasswordChange } from '../../lib/password';
@@ -62,38 +63,39 @@ export function ChangeMyPasswordModal({ onClose, onChanged }: Props) {
         />
       }
     >
+      {/* Above the fields rather than among them: `.pref-note` (PreferencesModal.css) keeps its
+          own 16px below, which inside `Fields` would add to the gap. */}
       <p className="pref-note muted">{t('password.note')}</p>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('password.current')}</label>
-        <TextInput
-          type="password"
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          autoComplete="current-password"
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('password.next', { min: MIN_PW })}</label>
-        <TextInput
-          type="password"
-          value={next}
-          onChange={(e) => setNext(e.target.value)}
-          autoComplete="new-password"
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('password.confirm')}</label>
-        <TextInput
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          autoComplete="new-password"
-        />
-      </div>
-      {inlineProblem === 'mismatch' && <p className="form-error">{t('password.err.mismatch')}</p>}
-      {inlineProblem === 'unchanged' && <p className="form-error">{t('password.err.unchanged')}</p>}
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('password.current')}>
+          <TextInput
+            type="password"
+            value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+            autoComplete="current-password"
+            autoFocus
+          />
+        </Field>
+        <Field label={t('password.next', { min: MIN_PW })}>
+          <TextInput
+            type="password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+            autoComplete="new-password"
+          />
+        </Field>
+        <Field label={t('password.confirm')}>
+          <TextInput
+            type="password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+          />
+        </Field>
+        {inlineProblem === 'mismatch' && <p className="form-error">{t('password.err.mismatch')}</p>}
+        {inlineProblem === 'unchanged' && <p className="form-error">{t('password.err.unchanged')}</p>}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

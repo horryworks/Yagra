@@ -299,12 +299,6 @@
   gap: var(--space-1);
 }
 
-/* What the add dialog's port words take on the loaded list — a result, not an instruction. */
-.so-port-preview {
-  color: var(--text-secondary);
-  font-size: var(--font-xs);
-}
-
 html[data-viewport='mobile'] .so-tiles {
   grid-template-columns: minmax(0, 1fr);
 }

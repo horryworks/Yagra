@@ -22,29 +22,6 @@
   margin: 0 0 var(--space-3);
 }
 
-/* Three controls side by side, wrapping to one column when the pane is narrow — the split view
-   makes this pane arbitrarily thin, so a fixed row would push the folder picker off the edge. */
-.nd-ap-form {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
-.nd-ap-form .form-label {
-  min-width: 180px;
-  flex: 1 1 180px;
-}
-
-/* The switch reads as a sentence rather than a labelled field, so it opts out of the column. */
-.nd-ap-switch {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 0 0 auto;
-  min-width: 0;
-}
-
 .nd-ap-save {
   margin-top: var(--space-3);
 }

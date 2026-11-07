@@ -30,7 +30,9 @@ import type {
 } from '../../types/api';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
-import { TextInput, Select, RequiredMark, FieldError } from '../ui/Field';
+import { Field, TextInput, Select } from '../ui/Field';
+import { CheckField, FieldRow, Fields } from '../ui/FormLayout';
+import { Callout } from '../ui/Section';
 import {
   createRequest,
   duplicateWarning,
@@ -154,56 +156,45 @@ export function AddNodeModal({
   const targetFields: Record<AddableKind, ReactNode> = {
     url: (
       <>
-        <label className="form-label">
-          <span>
-            {t('field.url')} <RequiredMark />
-          </span>
+        <Field label={t('field.url')} required>
           <TextInput
             className="mono"
             value={form.url}
             onChange={(e) => set('url', e.target.value)}
             placeholder="https://api.example.com/health"
           />
-        </label>
-        <div className="form-row">
-          <label className="form-label">
-            {t('add.method')}
-            <Select
-              value={form.urlMethod}
-              onChange={(e) => set('urlMethod', e.target.value as AddNodeForm['urlMethod'])}
-            >
-              <option value="GET">GET</option>
-              <option value="HEAD">HEAD</option>
-              <option value="POST">POST</option>
-            </Select>
-          </label>
-          <label className="form-label form-check">
-            <input
-              type="checkbox"
-              checked={form.verifyTls}
-              onChange={(e) => set('verifyTls', e.target.checked)}
-            />
-            <span>{t('add.verifyTls')}</span>
-          </label>
-        </div>
+        </Field>
+        {/* The checkbox sits under the method rather than beside it, as it does in Edit node's
+            URL fields (`CheckFields.tsx`), so the two dialogs lay a URL monitor out the same way. */}
+        <Field label={t('add.method')}>
+          <Select
+            value={form.urlMethod}
+            onChange={(e) => set('urlMethod', e.target.value as AddNodeForm['urlMethod'])}
+          >
+            <option value="GET">GET</option>
+            <option value="HEAD">HEAD</option>
+            <option value="POST">POST</option>
+          </Select>
+        </Field>
+        <CheckField
+          checked={form.verifyTls}
+          onChange={(next) => set('verifyTls', next)}
+          label={t('add.verifyTls')}
+        />
       </>
     ),
     dns: (
       <>
-        <label className="form-label">
-          <span>
-            {t('field.dnsName')} <RequiredMark />
-          </span>
+        <Field label={t('field.dnsName')} required>
           <TextInput
             className="mono"
             value={form.dnsName}
             onChange={(e) => set('dnsName', e.target.value)}
             placeholder={t('add.dnsNamePlaceholder')}
           />
-        </label>
-        <div className="form-row">
-          <label className="form-label">
-            {t('field.recordType')}
+        </Field>
+        <FieldRow>
+          <Field label={t('field.recordType')}>
             <Select
               value={form.dnsRecordType}
               onChange={(e) => set('dnsRecordType', e.target.value as DnsRecordType)}
@@ -212,25 +203,21 @@ export function AddNodeModal({
               <option value="AAAA">AAAA</option>
               <option value="CNAME">CNAME</option>
             </Select>
-          </label>
-          <label className="form-label">
-            {t('add.resolverOptional')}
+          </Field>
+          <Field label={t('add.resolverOptional')}>
             <TextInput
               className="mono"
               value={form.dnsResolver}
               onChange={(e) => set('dnsResolver', e.target.value)}
               placeholder={t('add.resolverPlaceholder')}
             />
-          </label>
-        </div>
+          </Field>
+        </FieldRow>
       </>
     ),
     device: (
       <>
-        <label className="form-label">
-          <span>
-            {t('field.ipAddress')} <RequiredMark />
-          </span>
+        <Field label={t('field.ipAddress')} required>
           <TextInput
             className="mono"
             value={form.address}
@@ -241,9 +228,8 @@ export function AddNodeModal({
             }}
             placeholder={t('add.addressPlaceholder')}
           />
-        </label>
-        <label className="form-label">
-          {t('add.deviceProfileOptional')}
+        </Field>
+        <Field label={t('add.deviceProfileOptional')}>
           <Select value={form.profileId} onChange={(e) => set('profileId', e.target.value)}>
             <option value="">{t('add.none')}</option>
             {profiles.map((p) => (
@@ -252,9 +238,8 @@ export function AddNodeModal({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="form-label">
-          {t('add.snmpCredentialOptional')}
+        </Field>
+        <Field label={t('add.snmpCredentialOptional')}>
           <Select value={form.credentialId} onChange={(e) => set('credentialId', e.target.value)}>
             <option value="">{t('add.none')}</option>
             {credentials.map((c) => (
@@ -263,7 +248,7 @@ export function AddNodeModal({
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
       </>
     ),
   };
@@ -273,25 +258,23 @@ export function AddNodeModal({
     url: null,
     dns: null,
     device: (
-      <div className="form-row">
-        <label className="form-label">
-          {t('add.makerOptional')}
+      <FieldRow>
+        <Field label={t('add.makerOptional')}>
           <TextInput
             value={form.vendor}
             onChange={(e) => set('vendor', e.target.value)}
             placeholder={t('field.makerPlaceholder')}
           />
-        </label>
-        <label className="form-label">
-          {t('add.modelOptional')}
+        </Field>
+        <Field label={t('add.modelOptional')}>
           <TextInput
             className="mono"
             value={form.model}
             onChange={(e) => set('model', e.target.value)}
             placeholder={t('field.modelPlaceholder')}
           />
-        </label>
-      </div>
+        </Field>
+      </FieldRow>
     ),
   };
 
@@ -327,20 +310,18 @@ export function AddNodeModal({
         </>
       }
     >
-      <div className="form-stack">
+      <Fields>
         {/* Where it lands. Same control and the same keys as MoveNodeModal — one semantic
             (`setNodeGroup`), one widget. */}
-        <label className="form-label">
-          {t('field.group')}
+        <Field label={t('field.group')}>
           <GroupPicker
             options={groupOptions(groups)}
             value={group}
             onChange={setGroup}
             emptyOption={t('moveNode.ungroupedOption')}
           />
-        </label>
-        <label className="form-label">
-          {t('add.monitoringType')}
+        </Field>
+        <Field label={t('add.monitoringType')}>
           <Select
             value={kind}
             onChange={(e) => {
@@ -358,27 +339,25 @@ export function AddNodeModal({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="form-label">
-          <span>
-            {t('field.name')} <RequiredMark />
-          </span>
+        </Field>
+        <Field label={t('field.name')} required>
           <TextInput value={form.name} onChange={(e) => set('name', e.target.value)} autoFocus />
-        </label>
+        </Field>
         {targetFields[kind]}
         {trailingFields[kind]}
-        <label className="form-label">
-          {t('add.poolOptional')}
+        <Field
+          label={t('add.poolOptional')}
+          error={poolValid ? null : t('field.poolInvalid')}
+        >
           <TextInput
             className="mono"
             value={form.pool}
             onChange={(e) => set('pool', e.target.value)}
             placeholder={poolPlaceholder(fallbackPool(groups, group || null), t)}
           />
-          {!poolValid && <FieldError>{t('field.poolInvalid')}</FieldError>}
-        </label>
+        </Field>
         {sameAddress && (
-          <div className="form-warning" role="alert">
+          <Callout tone="warning" live>
             <p>{t('add.duplicateLead', { address: form.address.trim() })}</p>
             <ul>
               {sameAddress.map((n) => (
@@ -388,10 +367,10 @@ export function AddNodeModal({
               ))}
             </ul>
             <p>{t('add.duplicateHint')}</p>
-          </div>
+          </Callout>
         )}
         {error && <p className="form-error">{error}</p>}
-      </div>
+      </Fields>
     </Modal>
   );
 }

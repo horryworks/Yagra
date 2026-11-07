@@ -25,7 +25,9 @@ import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { FieldGroup, Fields } from '../components/ui/FormLayout';
+import { Callout } from '../components/ui/Section';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
@@ -358,56 +360,47 @@ function AddUserModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {t('users.field.username')} <RequiredMark />
-        </label>
-        <TextInput
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          autoComplete="off"
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('users.field.kind')}</label>
-        <Select
-          value={kind}
-          onChange={(e) => setKind(e.target.value as CreatableUserKind)}
-        >
-          {/* The sub-label says what the kind is for, in the option itself (ADR-200 kind 5). */}
-          {CREATABLE_USER_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {t(`users.kind.${k}`)} — {t(`users.kindSub.${k}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      {kind !== 'service' && (
-        <div className="modal-field">
-          <label className="modal-field-label">
-            {t('users.field.password', { min: MIN_PW })} <RequiredMark />
-          </label>
+      <Fields>
+        <Field label={t('users.field.username')} required>
           <TextInput
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+            autoFocus
           />
-        </div>
-      )}
-      <div className="modal-field">
-        <label className="modal-field-label">{t('users.field.role')}</label>
-        <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-          {/* What each role may do, in a word beside its name; Settings > Roles has the matrix. */}
-          {ROLES.map((r) => (
-            <option key={r} value={r}>
-              {t(`role.${r}`)} — {t(`users.roleSub.${r}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <FormError form={form} />
+        </Field>
+        <Field label={t('users.field.kind')}>
+          <Select value={kind} onChange={(e) => setKind(e.target.value as CreatableUserKind)}>
+            {/* The sub-label says what the kind is for, in the option itself (ADR-200 kind 5). */}
+            {CREATABLE_USER_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {t(`users.kind.${k}`)} — {t(`users.kindSub.${k}`)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {kind !== 'service' && (
+          <Field label={t('users.field.password', { min: MIN_PW })} required>
+            <TextInput
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+            />
+          </Field>
+        )}
+        <Field label={t('users.field.role')}>
+          <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
+            {/* What each role may do, in a word beside its name; Settings > Roles has the matrix. */}
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {t(`role.${r}`)} — {t(`users.roleSub.${r}`)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -453,27 +446,29 @@ function ChangePasswordModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('users.changePw.newPassword', { min: MIN_PW })}</label>
-        <TextInput
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoComplete="new-password"
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('users.changePw.confirm')}</label>
-        <TextInput
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          autoComplete="new-password"
-        />
-      </div>
-      {mismatch && <p className="form-error">{t('users.changePw.mismatch')}</p>}
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('users.changePw.newPassword', { min: MIN_PW })}>
+          <TextInput
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+            autoFocus
+          />
+        </Field>
+        <Field
+          label={t('users.changePw.confirm')}
+          error={mismatch ? t('users.changePw.mismatch') : null}
+        >
+          <TextInput
+            type="password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            autoComplete="new-password"
+          />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -537,38 +532,43 @@ function ChangeScopeModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('users.scopeModal.groups')}</label>
-        {groups === null ? (
-          <p className="muted">{t('common:loading')}</p>
-        ) : groups.length === 0 ? (
-          <p className="muted">{t('users.scopeModal.noGroups')}</p>
-        ) : (
-          <div className="users-scope-list">
-            {groups.map((g) => (
-              <label key={g.id} className="users-scope-row">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(g.id)}
-                  onChange={(e) =>
-                    setSelected((prev) =>
-                      e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id),
-                    )
-                  }
-                />
-                <span className="users-scope-name">{g.name}</span>
-              </label>
-            ))}
-          </div>
-        )}
-        <p className="form-status">
-          {selected.length === 0
-            ? t('users.scopeModal.hintAll')
-            : t('users.scopeModal.hintGroups', { count: selected.length })}
-        </p>
-        <p className="form-warning">{t('users.scopeModal.revokes')}</p>
-      </div>
-      <FormError form={form} />
+      <Fields>
+        {/* A label over a set of boxes, not over one control - a `FieldGroup`. The boxes stay a
+            bounded, scrolling pick list (`users-scope-list`, shared with the token dialog): the
+            folder tree grows with the estate, and each row is a hover band of touch height, which
+            a `CheckField` does not draw. */}
+        <FieldGroup label={t('users.scopeModal.groups')}>
+          {groups === null ? (
+            <p className="muted">{t('common:loading')}</p>
+          ) : groups.length === 0 ? (
+            <p className="muted">{t('users.scopeModal.noGroups')}</p>
+          ) : (
+            <div className="users-scope-list">
+              {groups.map((g) => (
+                <label key={g.id} className="users-scope-row">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(g.id)}
+                    onChange={(e) =>
+                      setSelected((prev) =>
+                        e.target.checked ? [...prev, g.id] : prev.filter((x) => x !== g.id),
+                      )
+                    }
+                  />
+                  <span className="users-scope-name">{g.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <p className="form-status">
+            {selected.length === 0
+              ? t('users.scopeModal.hintAll')
+              : t('users.scopeModal.hintGroups', { count: selected.length })}
+          </p>
+        </FieldGroup>
+        <Callout tone="warning">{t('users.scopeModal.revokes')}</Callout>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

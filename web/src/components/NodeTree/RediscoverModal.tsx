@@ -15,6 +15,8 @@ import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { ScreenLink } from '../ui/ScreenLink';
 import { FormError, FormFooter } from '../ui/FormFooter';
+import { Stack } from '../ui/Page';
+import { Callout } from '../ui/Section';
 import {
   applicable,
   applyBody,
@@ -210,7 +212,7 @@ export function RediscoverModal({
         />
       }
     >
-      <div className="form-stack">
+      <Stack gap={12}>
         {startError && (
           <p className="form-error" role="alert">
             {startError.key ? (
@@ -224,7 +226,8 @@ export function RediscoverModal({
             )}
           </p>
         )}
-        {status && <p className={polling ? 'muted' : 'form-warning'}>{status}</p>}
+        {status &&
+          (polling ? <p className="muted">{status}</p> : <Callout tone="warning">{status}</Callout>)}
         {comparison && (
           <>
             {comparison.sys_descr && (
@@ -269,7 +272,7 @@ export function RediscoverModal({
           </>
         )}
         <FormError form={form} />
-      </div>
+      </Stack>
     </Modal>
   );
 }

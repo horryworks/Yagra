@@ -88,29 +88,13 @@
   border-top: var(--border-width) solid var(--border-color);
 }
 
+/* The two columns of the folded settings: the credentials, then the pool and the two switches. */
 .disco-how-body .disco-f-creds {
   flex: 2 1 280px;
-  min-width: 0;
-}
-
-.disco-how-body .disco-f-creds > .cred-picker {
-  width: 100%;
 }
 
 .disco-how-side {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   flex: 1 1 240px;
-  min-width: 0;
-}
-
-.disco-how-side .disco-f-pool {
-  max-width: 240px;
-}
-
-.disco-how-side .disco-f-pool > .field {
-  width: 100%;
 }
 
 html[data-viewport='mobile'] .disco-target .btn {
@@ -337,8 +321,8 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   min-width: 0;
 }
 
-/* The credentials Detect tries, above the table and sized like the Scan tab's field. */
-.disco-seen-creds {
+/* The credentials Detect tries and where an import goes, above the table. */
+.disco-seen-fields {
   max-width: 760px;
 }
 

@@ -29,9 +29,9 @@ import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { FormError, FormFooter } from '../ui/FormFooter';
-import { TextInput, Select, RequiredMark, FieldError } from '../ui/Field';
+import { Field, TextInput, Select } from '../ui/Field';
+import { FieldGroup, FieldRow, Fields } from '../ui/FormLayout';
 import { IconButton } from '../ui/IconButton';
-import { InfoTip } from '../ui/InfoTip';
 import './GroupModal.css';
 
 /** Add/edit a group: name, type, and parent (parent doubles as 'move'). */
@@ -180,15 +180,11 @@ export function GroupModal({
         />
       }
     >
-      <div className="form-stack">
-        <label className="form-label">
-          <span>
-            {t('field.name')} <RequiredMark />
-          </span>
+      <Fields>
+        <Field label={t('field.name')} required>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        </label>
-        <label className="form-label">
-          {t('group.type')}
+        </Field>
+        <Field label={t('group.type')}>
           <Select value={type} onChange={(e) => setType(e.target.value as GroupType)}>
             {GROUP_TYPES.map((gt) => (
               <option key={gt} value={gt}>
@@ -196,87 +192,74 @@ export function GroupModal({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="form-label">
-          {t('group.parentGroup')}
+        </Field>
+        <Field label={t('group.parentGroup')}>
           <GroupPicker
             options={parentChoices}
             value={parent}
             onChange={setParent}
             emptyOption={t('group.topLevelOption')}
           />
-        </label>
-        <label className="form-label">
-          {t('group.pool')}
+        </Field>
+        <Field label={t('group.pool')} error={poolInvalid ? t('field.poolInvalid') : null}>
           <TextInput
             className="mono"
             value={pool}
             onChange={(e) => setPool(e.target.value)}
             placeholder={poolPlaceholder(inherited, t)}
           />
-          {poolInvalid && <FieldError>{t('field.poolInvalid')}</FieldError>}
-        </label>
-        {/* Not wrapped in a `<label>`: that gives every control inside it the same accessible name
-            and sends a click on the text to whichever came first. The chip input carries its own
-            `aria-label`. */}
-        <div className="modal-field">
-          <div className="field-head">
-            <span className="modal-field-label">{t('group.tags')}</span>
-            <InfoTip infoKey="nodes:group.tagsInherit.info" label={t('group.tags')} />
-          </div>
+        </Field>
+        {/* A group, not a `<label>`: a label gives every control inside it the same accessible
+            name and sends a click on the text to whichever came first. Each chip input carries its
+            own `aria-label`. */}
+        <FieldGroup label={t('group.tags')} infoKey="nodes:group.tagsInherit.info">
           <ChipInput
             value={tagDraft.tags}
             onChange={(next) => setTagDraft((prev) => ({ ...prev, tags: next }))}
             placeholder={t('field.tagPlaceholder')}
             inputLabel={t('group.tags')}
           />
-          {/* What this folder itself inherits, and what it refuses. Server-resolved on the row
-              (`effective_tags` minus `tags`), so there is no client-side walk of the tree here —
-              the thing `web/src/lib/pool.ts` has to do for the pool, with a warning attached. */}
-          {inheritedTags.length > 0 && (
-            <>
-              <span className="modal-field-label">{t('field.tagsInherited')}</span>
-              <ul className="nd-tag-badges">
-                {inheritedTags.map((label) => (
-                  <li key={label}>
-                    <Badge tone="tag">{label}</Badge>
-                    <IconButton
-                      title={t('field.tagExclude', { label })}
-                      onClick={() =>
-                        setTagDraft((prev) => ({
-                          ...prev,
-                          tagsExcluded: [...prev.tagsExcluded, label],
-                        }))
-                      }
-                    >
-                      ✕
-                    </IconButton>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          {tagDraft.tagsExcluded.length > 0 && (
-            <>
-              <span className="modal-field-label">{t('field.tagsExcluded')}</span>
-              <ChipInput
-                value={tagDraft.tagsExcluded}
-                onChange={(next) => setTagDraft((prev) => ({ ...prev, tagsExcluded: next }))}
-                inputLabel={t('field.tagsExcluded')}
-                lenient
-              />
-            </>
-          )}
-        </div>
+        </FieldGroup>
+        {/* What this folder itself inherits, and what it refuses. Server-resolved on the row
+            (`effective_tags` minus `tags`), so there is no client-side walk of the tree here —
+            the thing `web/src/lib/pool.ts` has to do for the pool, with a warning attached. */}
+        {inheritedTags.length > 0 && (
+          <FieldGroup label={t('field.tagsInherited')}>
+            <ul className="nd-tag-badges">
+              {inheritedTags.map((label) => (
+                <li key={label}>
+                  <Badge tone="tag">{label}</Badge>
+                  <IconButton
+                    title={t('field.tagExclude', { label })}
+                    onClick={() =>
+                      setTagDraft((prev) => ({
+                        ...prev,
+                        tagsExcluded: [...prev.tagsExcluded, label],
+                      }))
+                    }
+                  >
+                    ✕
+                  </IconButton>
+                </li>
+              ))}
+            </ul>
+          </FieldGroup>
+        )}
+        {tagDraft.tagsExcluded.length > 0 && (
+          <FieldGroup label={t('field.tagsExcluded')}>
+            <ChipInput
+              value={tagDraft.tagsExcluded}
+              onChange={(next) => setTagDraft((prev) => ({ ...prev, tagsExcluded: next }))}
+              inputLabel={t('field.tagsExcluded')}
+              lenient
+            />
+          </FieldGroup>
+        )}
         {/* The folder's IP ranges (ADR-131). A sub-resource with its own endpoint, saved after the
             group body exactly as the pin is. Ranges a sync maintains are listed above the editable
             ones and are disabled rather than hidden: the value is worth reading, and only the
             action goes (`ui-conventions.md`). */}
-        <div className="form-label gm-prefixes">
-          <div className="field-head">
-            <span>{t('group.prefixes')}</span>
-            <InfoTip infoKey="nodes:group.prefixesUse.info" label={t('group.prefixes')} />
-          </div>
+        <FieldGroup label={t('group.prefixes')} infoKey="nodes:group.prefixesUse.info">
           {syncRows.length > 0 && (
             <>
               {syncRows.map((r) => (
@@ -331,10 +314,9 @@ export function GroupModal({
               {t('group.prefixAdd')}
             </Button>
           </div>
-        </div>
-        <div className="form-row">
-          <label className="form-label">
-            {t('group.latitude')}
+        </FieldGroup>
+        <FieldRow>
+          <Field label={t('group.latitude')}>
             <TextInput
               className="mono"
               inputMode="decimal"
@@ -342,9 +324,8 @@ export function GroupModal({
               onChange={(e) => setGeo({ ...geo, latitude: e.target.value })}
               placeholder="35.681"
             />
-          </label>
-          <label className="form-label">
-            {t('group.longitude')}
+          </Field>
+          <Field label={t('group.longitude')}>
             <TextInput
               className="mono"
               inputMode="decimal"
@@ -352,16 +333,15 @@ export function GroupModal({
               onChange={(e) => setGeo({ ...geo, longitude: e.target.value })}
               placeholder="139.767"
             />
-          </label>
-        </div>
+          </Field>
+        </FieldRow>
         {/* Said only when it is true. Nothing is said when the supplying ancestor is outside the
             caller's scope — naming a folder they cannot see would be worse than saying nothing. A
             half-entered pin is refused on save with its own error (`geoFields.ts`). */}
         {pinnedAt && (
           <p className="form-status">{t('group.geoInherited', { name: pinnedAt.name })}</p>
         )}
-        <label className="form-label">
-          {t('group.timeZone')}
+        <Field label={t('group.timeZone')}>
           {netboxZone ? (
             <TextInput value={t('group.timeZoneFromNetbox', { zone: netboxZone })} disabled />
           ) : (
@@ -374,9 +354,9 @@ export function GroupModal({
               ))}
             </Select>
           )}
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

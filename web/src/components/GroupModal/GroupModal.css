@@ -1,10 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* The group dialog's IP-range rows (ADR-131). Everything else in this dialog uses the shared
-   `.form-*` classes from index.css; only the repeating three-column row needs its own rule. */
-
-.gm-prefixes {
-  gap: var(--space-1-5);
-}
+/* The group dialog's IP-range rows (ADR-131). Everything else in this dialog is built from the
+   shared form parts (`Field`, `FieldGroup`, ADR-246); only the repeating three-column row needs
+   its own rule. */
 
 /* Range, description, and the row's one control. The range is the fixed-width column because it
    is monospace and bounded; the description takes what is left. */

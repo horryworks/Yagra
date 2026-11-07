@@ -5,7 +5,7 @@
 .tpl-intro {
   font-size: var(--font-sm);
   color: var(--text-tertiary);
-  margin-bottom: 14px;
+  margin: 0;
 }
 
 .tpl-hint {
@@ -26,16 +26,9 @@
   align-items: start;
 }
 
-.tpl-edit {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
 /* Under the width at which two columns are readable, the preview goes below the editor. Asked of
-   the dialog's body, not of the window, since the dialog can be resized (ADR-198). */
-.modal-body:has(> .tpl-layout) {
+   the dialog's body (any depth: it holds a `Stack`), not the window - the dialog resizes (ADR-198). */
+.modal-body:has(.tpl-layout) {
   container-type: inline-size;
 }
 
@@ -45,17 +38,11 @@
   }
 }
 
-/* "Wrap long lines", above the two columns. */
+/* "Wrap long lines", above the two columns at their right edge: a view setting, kept small. */
 .tpl-wrap {
+  display: flex;
   justify-content: flex-end;
-  margin: calc(-1 * var(--space-1-5)) 0 10px;
   font-size: var(--font-xs);
-}
-
-/* Free layout (ADR-199): under the body field, before the hints that explain it. */
-.tpl-free-layout {
-  margin: var(--space-2) 0 var(--space-1);
-  font-size: var(--font-sm);
 }
 
 /* Not wrapping (ADR-198 decision 4): each line is drawn whole and the box scrolls sideways, so the
@@ -115,9 +102,8 @@
   margin: 0;
 }
 
-/* The box itself is the shared .form-warning; only the wrapping of a long snippet is local. */
+/* The box itself is the shared `Callout`; only the wrapping of a long snippet is local. */
 .tpl-unsupported p {
-  margin: 0;
   overflow-wrap: anywhere;
 }
 
@@ -723,11 +709,6 @@
   color: var(--text-secondary);
 }
 
-/* A webhook subject that is saved and reaches no one (decision 8). */
-.tpl-unsent p {
-  margin: var(--space-0-5) 0 0;
-}
-
 /* The built-in JSON's keys, explained (decision 9). */
 .tpl-keys {
   font-size: var(--font-xs);
@@ -788,18 +769,12 @@
   gap: var(--space-2);
 }
 
-.tpl-code-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
 .tpl-insert .tpl-link {
   margin-right: 10px;
   font-size: var(--font-xs);
 }
 
-.tpl-code-head .tpl-link {
+/* The code view's "use built-in" link, at the end of its field's label row. */
+.field-head-action > .tpl-link {
   font-size: var(--font-xs);
 }

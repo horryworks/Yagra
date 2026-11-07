@@ -18,7 +18,8 @@ import { done, partialOutcome } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
-import { TextInput, FieldError } from '../ui/Field';
+import { Field, TextInput } from '../ui/Field';
+import { Fields } from '../ui/FormLayout';
 
 export function SetPoolModal({
   target,
@@ -83,7 +84,7 @@ export function SetPoolModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         {names.length > 0 && (
           <ul className="form-targets scroll-y">
             {names.map((name, i) => (
@@ -91,8 +92,7 @@ export function SetPoolModal({
             ))}
           </ul>
         )}
-        <label className="form-label">
-          {t('field.pool')}
+        <Field label={t('field.pool')} error={invalid ? t('field.poolInvalid') : null}>
           <TextInput
             className="mono"
             value={pool}
@@ -100,10 +100,9 @@ export function SetPoolModal({
             placeholder={poolPlaceholder(inheritedPool, t)}
             autoFocus
           />
-          {invalid && <FieldError>{t('field.poolInvalid')}</FieldError>}
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

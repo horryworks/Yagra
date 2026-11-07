@@ -1,4 +1,4 @@
-/* Reports feature styles (builder, schedule modal, viewer overlay). All colors/space
+/* Reports feature styles (builder, viewer overlay). All colors/space
    reference design tokens (ui-conventions: no hardcoded values). */
 
 /* ── Row action clusters (tables, builder section header) ── */
@@ -9,32 +9,7 @@
   align-items: center;
 }
 
-/* ── Builder / schedule form ── */
-.rb {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.rb-field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-}
-.rb-field > span {
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-.rb-field .field {
-  width: 100%;
-}
-.rb-check {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
+/* ── Builder: the section list and its catalog (the fields are the shared form parts) ── */
 .rb-sections-head {
   display: flex;
   align-items: center;
@@ -109,22 +84,6 @@
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
   color: var(--text-primary);
-}
-.rb-section-settings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: var(--space-2);
-}
-.rb-setting {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-width: 140px;
-}
-.rb-setting > span {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
 }
 /* Match the shared IconButton chrome (borderless, transparent until hover); dense 24px for the
    report-builder section rows. */
@@ -215,19 +174,10 @@
   transition: width var(--transition);
 }
 
-/* ── Mobile reflow ─────────────────────────────────────────────────────────────────────────────
-   Desktop rendering is untouched: layout-mode rules are scoped to html[data-viewport='mobile'] and
-   touch affordances to (hover:none). The builder/schedule forms live in the shared Modal, which is
-   already a bottom-sheet on mobile — these rules only fix what the sheet can't: cramped side-by-side
-   setting fields and mouse-sized hit targets. */
-
-/* Builder section settings sit side-by-side (min-width:140px) on desktop; on a phone sheet give each
-   its own full-width row so the number/select controls aren't squeezed. */
-html[data-viewport='mobile'] .rb-setting {
-  min-width: 100%;
-}
-
-/* Touch: the builder's dense ↑/↓/× icon buttons need real tap targets. */
+/* ── Touch ─────────────────────────────────────────────────────────────────────────────────────
+   The builder/schedule forms live in the shared Modal, which is already a bottom-sheet on mobile,
+   and a section's settings stack there by themselves (`FieldRow`). What the sheet cannot fix is a
+   mouse-sized hit target: the builder's dense ↑/↓/× icon buttons need real tap targets. */
 @media (hover: none) {
   .rb-icon {
     width: var(--touch-target);

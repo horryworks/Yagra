@@ -171,30 +171,10 @@
   border-bottom: 1px solid var(--accent-color);
 }
 
-/* Checkbox row in the issue-token dialog (ADR-051 Inc.4). The shared part for this is `CheckField`
-   since ADR-246; this one moves onto it with the rest of the screen in Inc.5. */
-.poller-check {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-/* The register dialog: its step frame, and the heading over the manual half (ADR-200). */
-.poller-register-steps {
-  margin-bottom: 14px;
-}
-
+/* The register dialog's heading over its manual half (ADR-200): the dialog's gap below it, twice
+   that above, so it reads as the start of the second half rather than a line of the first. */
 .pool-subhead.poller-register-manual {
-  margin: 18px 0 var(--space-2);
-}
-
-/* The checkbox row and its ⓘ, which stays outside the <label> (ADR-200). */
-.poller-check-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 /* ============================================================ pool management (ADR-107) */

@@ -8,7 +8,9 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
-import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { FieldRow, Fields } from '../components/ui/FormLayout';
+import { Stack } from '../components/ui/Page';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -127,30 +129,25 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
         />
       }
     >
-      <div className="rb">
-        <label className="rb-field">
-          <span>
-            {t('builder.name')} <RequiredMark />
-          </span>
+      <Fields>
+        <Field label={t('builder.name')} required>
           <TextInput
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={t('builder.namePlaceholder')}
             autoFocus
           />
-        </label>
+        </Field>
 
-        <label className="rb-field">
-          <span>{t('builder.description')}</span>
+        <Field label={t('builder.description')}>
           <TextInput
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={t('builder.descriptionPlaceholder')}
           />
-        </label>
+        </Field>
 
-        <label className="rb-field">
-          <span>{t('builder.timeWindow')}</span>
+        <Field label={t('builder.timeWindow')}>
           <Select
             value={String(rangeSecs)}
             onChange={(e) => setRangeSecs(Number(e.target.value))}
@@ -161,7 +158,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
 
         <div className="rb-sections-head">
           <span>{t('builder.sectionsCount', { count: sections.length })}</span>
@@ -198,7 +195,7 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
           {sections.map((sec, i) => {
             const def = defByKind.get(sec.kind);
             return (
-              <div key={sec.id} className="rb-section">
+              <Stack key={sec.id} gap={8} className="rb-section">
                 <div className="rb-section-top">
                   <span className="rb-section-title">{def?.title ?? sec.kind}</span>
                   <div className="rp-actions">
@@ -228,12 +225,11 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                   </div>
                 </div>
                 {def && def.settings.length > 0 && (
-                  <div className="rb-section-settings">
+                  <FieldRow>
                     {def.settings.map((setting) => {
                       const value = sec.settings[setting.key] ?? setting.default;
                       return (
-                        <label key={setting.key} className="rb-setting">
-                          <span>{setting.label}</span>
+                        <Field key={setting.key} label={setting.label}>
                           {setting.kind === 'select' ? (
                             <Select
                               value={String(value)}
@@ -254,18 +250,18 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                               }
                             />
                           )}
-                        </label>
+                        </Field>
                       );
                     })}
-                  </div>
+                  </FieldRow>
                 )}
-              </div>
+              </Stack>
             );
           })}
         </div>
 
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

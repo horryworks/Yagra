@@ -40,6 +40,7 @@ import { NodePicker } from '../NodePicker/NodePicker';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
 import { Field, Select, TextInput } from '../ui/Field';
+import { FieldGroup, Fields } from '../ui/FormLayout';
 import { MultiSelectList } from '../ui/MultiSelectList';
 import { useEntityNames } from '../ui/entityNames';
 import { groupOptions } from '../../lib/nodeTree';
@@ -102,18 +103,15 @@ function ScopeIdField({
     );
 
   if (kind === 'none') {
-    return (
-      <div className="modal-field">
-        <p className="form-status">{t('thresholds.addModal.globalScope')}</p>
-      </div>
-    );
+    return <p className="form-status">{t('thresholds.addModal.globalScope')}</p>;
   }
   // What the target list needs said, by level: a folder reaches the folders inside it. The others
   // say nothing — the picker names its own targets (ADR-200).
   const hint = kind === 'folderGroup' ? t('thresholds.addModal.folderGroupHint') : null;
+  // A group, not one labelled control: the targets are a set of chips and a picker, or a list of
+  // options, or a fixed port.
   return (
-    <div className="modal-field">
-      <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
+    <FieldGroup label={t('thresholds.addModal.scopeId')}>
       {kind === 'node' ? (
         <>
           {form.scopeIds.length > 0 && (
@@ -167,7 +165,7 @@ function ScopeIdField({
         </>
       )}
       {hint && <span className="form-status">{hint}</span>}
-    </div>
+    </FieldGroup>
   );
 }
 /** A port the operator picked, with what the port-rule dialog needs to open on it. */
@@ -211,8 +209,7 @@ function PortPick({
 
   return (
     <>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.scopeLevel.node')}</label>
+      <Field label={t('thresholds.scopeLevel.node')}>
         <NodePicker
           value={node?.id ?? null}
           valueLabel={node?.name}
@@ -222,12 +219,9 @@ function PortPick({
           }}
           placeholder={t('thresholds.addModal.scopeIdPlaceholder.node')}
         />
-      </div>
+      </Field>
       {node && (
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="threshold-port">
-            {t('thresholds.addModal.port')}
-          </label>
+        <Field label={t('thresholds.addModal.port')} htmlFor="threshold-port">
           {ports === null ? (
             <p className="form-status">{t('common:loading')}</p>
           ) : ports.length === 0 ? (
@@ -253,7 +247,7 @@ function PortPick({
               ))}
             </Select>
           )}
-        </div>
+        </Field>
       )}
     </>
   );
@@ -385,40 +379,41 @@ export function ThresholdModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.scopeLevel')}</label>
-        <Select
-          value={form.level}
-          onChange={(e) =>
-            // Clear the targets with the level. Ids are not interchangeable across levels — a
-            // profile UUID left behind on a folder-group rule is a rule that matches nothing —
-            // and every control below is a picker, so nothing an operator would want is carried.
-            {
-              setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeIds: [] }));
-              setPort(null);
+      <Fields>
+        <Field label={t('thresholds.addModal.scopeLevel')}>
+          <Select
+            value={form.level}
+            onChange={(e) =>
+              // Clear the targets with the level. Ids are not interchangeable across levels — a
+              // profile UUID left behind on a folder-group rule is a rule that matches nothing —
+              // and every control below is a picker, so nothing an operator would want is carried.
+              {
+                setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeIds: [] }));
+                setPort(null);
+              }
             }
-          }
-        >
-          {levels.map((l) => (
-            <option key={l} value={l}>
-              {t(`thresholds.scopeLevel.${l}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      {portMode ? (
-        <PortPick picked={port} onPick={setPort} />
-      ) : (
-        <ScopeIdField
-          form={form}
-          onChange={(scopeIds) => set('scopeIds', scopeIds)}
-          portNames={portNames}
-        />
-      )}
-      {!portMode && (
-        <ThresholdFields form={form} set={set} lockedMetric={lockedMetric} noBounds={noBounds} />
-      )}
-      <FormError form={save} />
+          >
+            {levels.map((l) => (
+              <option key={l} value={l}>
+                {t(`thresholds.scopeLevel.${l}`)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {portMode ? (
+          <PortPick picked={port} onPick={setPort} />
+        ) : (
+          <ScopeIdField
+            form={form}
+            onChange={(scopeIds) => set('scopeIds', scopeIds)}
+            portNames={portNames}
+          />
+        )}
+        {!portMode && (
+          <ThresholdFields form={form} set={set} lockedMetric={lockedMetric} noBounds={noBounds} />
+        )}
+        <FormError form={save} />
+      </Fields>
     </Modal>
   );
 }
@@ -438,8 +433,7 @@ function ThresholdFields({
   const { t } = useTranslation('alertsConfig');
   return (
     <>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
+      <Field label={t('thresholds.addModal.metric')}>
         {lockedMetric ? (
           // Why there are no bounds is said once, beside the breach count below.
           <p className="thresholds-fixed">{t('format:liveness')}</p>
@@ -453,7 +447,7 @@ function ThresholdFields({
             onlyPerInterface={form.level === 'interface'}
           />
         )}
-      </div>
+      </Field>
       {/* ADR-143: which rows of a table metric the rule reaches — one memory pool, one board. Not
           offered for a port rule, which already names exactly one thing and which the server refuses
           a pattern on; the form sends none there even if one was typed before the level changed. */}
@@ -480,8 +474,7 @@ function ThresholdFields({
           and the two could disagree: the form let a rule be saved saying `above` with bounds that
           only made sense downward, which stored, listed, and never fired. */}
       {!noBounds && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('thresholds.addModal.bounds')}</label>
+        <FieldGroup label={t('thresholds.addModal.bounds')}>
           <div className="thresholds-bound-row">
             <span className="thresholds-bound-side">{t('thresholds.addModal.belowSide')}</span>
             <TextInput
@@ -512,7 +505,7 @@ function ThresholdFields({
               onChange={(e) => set('criticalAbove', e.target.value)}
             />
           </div>
-        </div>
+        </FieldGroup>
       )}
       {/* The label and the unit say what the number is; the ⓘ is the one case where a reading is
           not a poll (the per-minute interface metrics). An empty box sends the default, so the
@@ -521,6 +514,7 @@ function ThresholdFields({
         label={t('thresholds.addModal.dwell.label')}
         htmlFor="threshold-dwell"
         infoKey="alertsConfig:thresholds.addModal.dwell.info"
+        status={noBounds ? t('thresholds.livenessMetric') : null}
       >
         <div className="thresholds-bounds">
           <TextInput
@@ -532,7 +526,6 @@ function ThresholdFields({
             onChange={(e) => set('dwell', e.target.value)}
           />
         </div>
-        {noBounds && <span className="form-status">{t('thresholds.livenessMetric')}</span>}
       </Field>
     </>
   );

@@ -44,7 +44,9 @@ import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { FormError, FormFooter } from '../ui/FormFooter';
-import { Select, TextInput } from '../ui/Field';
+import { Field, Select, TextInput } from '../ui/Field';
+import { FieldGroup, Fields } from '../ui/FormLayout';
+import { Callout } from '../ui/Section';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
 import { InfoTip } from '../ui/InfoTip';
 import './InterfaceRulesModal.css';
@@ -384,133 +386,132 @@ function PortRuleFormView({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('interfaces.rules.subject')}</label>
-        <Select
-          value={form.subject}
-          onChange={(e) => setForm(newPortRuleForm(e.target.value as PortRuleSubject))}
-        >
-          {PORT_RULE_SUBJECTS.map((s) => (
-            <option key={s} value={s}>
-              {t(`interfaces.rules.subjects.${s}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-
-      {spec.hasBasis && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('interfaces.rules.basis')}</label>
-          <div className="ifrules-basis">
-            {PORT_RULE_BASES.map((b) => (
-              <label key={b} className="ifrules-radio">
-                <input
-                  type="radio"
-                  name="port-rule-basis"
-                  checked={form.basis === b}
-                  onChange={() => set('basis', b as PortRuleBasis)}
-                />
-                <span>{t(`interfaces.rules.basis_${b}`)}</span>
-              </label>
+      <Fields>
+        <Field label={t('interfaces.rules.subject')}>
+          <Select
+            value={form.subject}
+            onChange={(e) => setForm(newPortRuleForm(e.target.value as PortRuleSubject))}
+          >
+            {PORT_RULE_SUBJECTS.map((s) => (
+              <option key={s} value={s}>
+                {t(`interfaces.rules.subjects.${s}`)}
+              </option>
             ))}
-          </div>
-          {speedMissing && <p className="form-warning">{t('interfaces.rules.noSpeed')}</p>}
-        </div>
-      )}
+          </Select>
+        </Field>
 
-      {spec.fixedBounds ? (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('interfaces.rules.when')}</label>
-          <p className="ifrules-fixed">
-            {t('interfaces.rules.linkNotUp')}{' '}
-            <InfoTip
-              infoKey="nodes:interfaces.rules.linkState.info"
-              label={t('interfaces.rules.linkNotUp')}
-            />
-          </p>
-        </div>
-      ) : (
-        <div className="modal-field">
-          <label className="modal-field-label">
-            {t(spec.direction === 'above' ? 'interfaces.rules.above' : 'interfaces.rules.below')}
-          </label>
+        {spec.hasBasis && (
+          <FieldGroup label={t('interfaces.rules.basis')}>
+            <div className="ifrules-basis">
+              {PORT_RULE_BASES.map((b) => (
+                <label key={b} className="ifrules-radio">
+                  <input
+                    type="radio"
+                    name="port-rule-basis"
+                    checked={form.basis === b}
+                    onChange={() => set('basis', b as PortRuleBasis)}
+                  />
+                  <span>{t(`interfaces.rules.basis_${b}`)}</span>
+                </label>
+              ))}
+            </div>
+            {speedMissing && <Callout tone="warning">{t('interfaces.rules.noSpeed')}</Callout>}
+          </FieldGroup>
+        )}
+
+        {spec.fixedBounds ? (
+          <Field label={t('interfaces.rules.when')}>
+            <p className="ifrules-fixed">
+              {t('interfaces.rules.linkNotUp')}{' '}
+              <InfoTip
+                infoKey="nodes:interfaces.rules.linkState.info"
+                label={t('interfaces.rules.linkNotUp')}
+              />
+            </p>
+          </Field>
+        ) : (
+          <FieldGroup
+            label={t(spec.direction === 'above' ? 'interfaces.rules.above' : 'interfaces.rules.below')}
+          >
+            <div className="ifrules-bounds">
+              <TextInput
+                className="ifrules-num"
+                placeholder={t('interfaces.rules.warnPlaceholder')}
+                value={form.warning}
+                onChange={(e) => set('warning', e.target.value)}
+              />
+              <TextInput
+                className="ifrules-num"
+                placeholder={t('interfaces.rules.critPlaceholder')}
+                value={form.critical}
+                onChange={(e) => set('critical', e.target.value)}
+              />
+              {unitLabel === null ? (
+                <Select value={form.unit} onChange={(e) => set('unit', e.target.value as RateUnit)}>
+                  {RATE_UNITS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <span className="ifrules-unit">{unitLabel}</span>
+              )}
+            </div>
+            {/* What the percentage actually means on this port. Without it, "90%" is a number the
+                operator has to do arithmetic on against a speed shown on another surface. A port
+                that reports no speed has nothing to convert, and the warning above says so. */}
+            {unitLabel === '%' &&
+              (() => {
+                const crit = Number(form.critical);
+                const bps = Number.isFinite(crit) ? bpsOfPercent(crit, speedBps) : null;
+                return bps == null ? null : (
+                  <p className="form-status">
+                    {t('interfaces.rules.percentOf', {
+                      pct: crit,
+                      speed: formatBps(speedBps),
+                      value: formatBps(bps),
+                    })}
+                  </p>
+                );
+              })()}
+          </FieldGroup>
+        )}
+
+        <Field label={t('interfaces.rules.dwell')} htmlFor="port-rule-dwell">
           <div className="ifrules-bounds">
             <TextInput
+              id="port-rule-dwell"
               className="ifrules-num"
-              placeholder={t('interfaces.rules.warnPlaceholder')}
-              value={form.warning}
-              onChange={(e) => set('warning', e.target.value)}
+              value={form.dwell}
+              onChange={(e) => set('dwell', e.target.value)}
             />
-            <TextInput
-              className="ifrules-num"
-              placeholder={t('interfaces.rules.critPlaceholder')}
-              value={form.critical}
-              onChange={(e) => set('critical', e.target.value)}
-            />
-            {unitLabel === null ? (
-              <Select value={form.unit} onChange={(e) => set('unit', e.target.value as RateUnit)}>
-                {RATE_UNITS.map((u) => (
-                  <option key={u} value={u}>
-                    {u}
-                  </option>
-                ))}
-              </Select>
-            ) : (
-              <span className="ifrules-unit">{unitLabel}</span>
-            )}
+            <span className="ifrules-unit">
+              {/* Deliberately different wording per subject: the derived metrics are evaluated
+                  once a minute by a leader loop, the polled ones once per poll. Calling both
+                  "samples" is what made the delay unguessable. On a node polled less often than
+                  once a minute the minutes become polls (ADR-144), which the minutes wording
+                  says. */}
+              {t(
+                spec.cadence === 'minutes'
+                  ? 'interfaces.rules.dwellMinutes'
+                  : 'interfaces.rules.dwellPolls',
+              )}
+            </span>
           </div>
-          {/* What the percentage actually means on this port. Without it, "90%" is a number the
-              operator has to do arithmetic on against a speed shown on another surface. A port
-              that reports no speed has nothing to convert, and the warning above says so. */}
-          {unitLabel === '%' &&
-            (() => {
-              const crit = Number(form.critical);
-              const bps = Number.isFinite(crit) ? bpsOfPercent(crit, speedBps) : null;
-              return bps == null ? null : (
-                <p className="form-status">
-                  {t('interfaces.rules.percentOf', {
-                    pct: crit,
-                    speed: formatBps(speedBps),
-                    value: formatBps(bps),
-                  })}
-                </p>
-              );
-            })()}
-        </div>
-      )}
+        </Field>
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('interfaces.rules.dwell')}</label>
-        <div className="ifrules-bounds">
-          <TextInput
-            className="ifrules-num"
-            value={form.dwell}
-            onChange={(e) => set('dwell', e.target.value)}
-          />
-          <span className="ifrules-unit">
-            {/* Deliberately different wording per subject: the derived metrics are evaluated once
-                a minute by a leader loop, the polled ones once per poll. Calling both "samples"
-                is what made the delay unguessable. On a node polled less often than once a minute
-                the minutes become polls (ADR-144), which the minutes wording says. */}
-            {t(
-              spec.cadence === 'minutes'
-                ? 'interfaces.rules.dwellMinutes'
-                : 'interfaces.rules.dwellPolls',
-            )}
-          </span>
-        </div>
-      </div>
-
-      {/* The rule this becomes, in the vocabulary the rules screen and the API use. Small, but it
-          is the only thing tying this form to what an operator will later see listed there. */}
-      <p className="ifrules-stored mono">
-        {t('interfaces.rules.storedAs', {
-          metric: body.metric,
-          direction: body.direction,
-          value: storedBound(body) ?? '—',
-        })}
-      </p>
-      <FormError form={save} />
+        {/* The rule this becomes, in the vocabulary the rules screen and the API use. Small, but it
+            is the only thing tying this form to what an operator will later see listed there. */}
+        <p className="ifrules-stored mono">
+          {t('interfaces.rules.storedAs', {
+            metric: body.metric,
+            direction: body.direction,
+            value: storedBound(body) ?? '—',
+          })}
+        </p>
+        <FormError form={save} />
+      </Fields>
     </Modal>
   );
 }

@@ -13,7 +13,8 @@ import { done, partialOutcome } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
-import { TextInput, Select } from '../ui/Field';
+import { Field, TextInput, Select } from '../ui/Field';
+import { FieldGroup, Fields } from '../ui/FormLayout';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
@@ -133,112 +134,108 @@ export function AddMaintenanceWindowModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('maintenanceForm.name')}</label>
-        <TextInput
-          placeholder={t('maintenanceForm.namePlaceholder')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
+      <Fields>
+        <Field label={t('maintenanceForm.name')}>
+          <TextInput
+            placeholder={t('maintenanceForm.namePlaceholder')}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </Field>
 
-      {batch ? (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
-          <p className="form-status">{t('maintenanceForm.lockedNodes', { count: names.length })}</p>
-          <ul className="form-targets scroll-y">
-            {names.map((n, i) => (
-              <li key={`${n}-${i}`}>{n}</li>
-            ))}
-          </ul>
-        </div>
-      ) : locked ? (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
-          <p className="form-status">
-            {initialScope?.kind === 'group'
-              ? t('maintenanceForm.lockedGroup')
-              : t('maintenanceForm.lockedNode')}
-            :{' '}
-            <strong>{initialScope && initialScope.kind !== 'nodes' ? initialScope.name : ''}</strong>
-            {initialScope?.kind === 'group' && t('maintenanceForm.inclSubgroups')}
-          </p>
-        </div>
-      ) : (
-        <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('maintenanceForm.scopeLevel')}</label>
-            <Select
-              value={scope}
-              onChange={(e) => {
-                setScope(e.target.value as CreateScope);
-                setScopeId('');
-                setNodeLabel('');
-              }}
-            >
-              <option value="node">{t('maintenanceForm.level.node')}</option>
-              <option value="group_id">
-                {`${t('maintenanceForm.level.groupId')}${t('maintenanceForm.inclSubgroups')}`}
-              </option>
-              {profiles.length > 0 && (
-                <option value="profile">{t('maintenanceForm.level.profile')}</option>
-              )}
-            </Select>
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('maintenanceForm.scope')}</label>
-            {scope === 'node' ? (
-              <NodePicker
-                id="maint-node"
-                value={scopeId || null}
-                valueLabel={nodeLabel || undefined}
-                onChange={(n) => {
-                  setScopeId(n?.id ?? '');
-                  setNodeLabel(n?.name ?? '');
+        {batch ? (
+          // A group: the scope here is a list of nodes, not one control.
+          <FieldGroup label={t('maintenanceForm.scope')}>
+            <p className="form-status">{t('maintenanceForm.lockedNodes', { count: names.length })}</p>
+            <ul className="form-targets scroll-y">
+              {names.map((n, i) => (
+                <li key={`${n}-${i}`}>{n}</li>
+              ))}
+            </ul>
+          </FieldGroup>
+        ) : locked ? (
+          <Field label={t('maintenanceForm.scope')}>
+            <p className="form-status">
+              {initialScope?.kind === 'group'
+                ? t('maintenanceForm.lockedGroup')
+                : t('maintenanceForm.lockedNode')}
+              :{' '}
+              <strong>{initialScope && initialScope.kind !== 'nodes' ? initialScope.name : ''}</strong>
+              {initialScope?.kind === 'group' && t('maintenanceForm.inclSubgroups')}
+            </p>
+          </Field>
+        ) : (
+          <>
+            <Field label={t('maintenanceForm.scopeLevel')}>
+              <Select
+                value={scope}
+                onChange={(e) => {
+                  setScope(e.target.value as CreateScope);
+                  setScopeId('');
+                  setNodeLabel('');
                 }}
-                placeholder={t('maintenanceForm.pickNode')}
-              />
-            ) : scope === 'profile' ? (
-              <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
-                <option value="">{t('maintenanceForm.pickProfile')}</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
+              >
+                <option value="node">{t('maintenanceForm.level.node')}</option>
+                <option value="group_id">
+                  {`${t('maintenanceForm.level.groupId')}${t('maintenanceForm.inclSubgroups')}`}
+                </option>
+                {profiles.length > 0 && (
+                  <option value="profile">{t('maintenanceForm.level.profile')}</option>
+                )}
               </Select>
-            ) : (
-              <GroupPicker
-                options={groupItems}
-                value={scopeId}
-                onChange={setScopeId}
-                emptyOption={t('maintenanceForm.pickGroup')}
-              />
-            )}
-          </div>
-        </>
-      )}
+            </Field>
+            <Field label={t('maintenanceForm.scope')}>
+              {scope === 'node' ? (
+                <NodePicker
+                  id="maint-node"
+                  value={scopeId || null}
+                  valueLabel={nodeLabel || undefined}
+                  onChange={(n) => {
+                    setScopeId(n?.id ?? '');
+                    setNodeLabel(n?.name ?? '');
+                  }}
+                  placeholder={t('maintenanceForm.pickNode')}
+                />
+              ) : scope === 'profile' ? (
+                <Select value={scopeId} onChange={(e) => setScopeId(e.target.value)}>
+                  <option value="">{t('maintenanceForm.pickProfile')}</option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <GroupPicker
+                  options={groupItems}
+                  value={scopeId}
+                  onChange={setScopeId}
+                  emptyOption={t('maintenanceForm.pickGroup')}
+                />
+              )}
+            </Field>
+          </>
+        )}
 
-      <div className="modal-field">
-        <label className="modal-field-label">{t('common:range.from')}</label>
-        <TextInput
-          type="datetime-local"
-          suffix={TZ}
-          value={startsAt}
-          onChange={(e) => setStartsAt(e.target.value)}
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('common:range.to')}</label>
-        <TextInput
-          type="datetime-local"
-          suffix={TZ}
-          value={endsAt}
-          onChange={(e) => setEndsAt(e.target.value)}
-        />
-      </div>
-      <FormError form={form} />
+        <Field label={t('common:range.from')}>
+          <TextInput
+            type="datetime-local"
+            suffix={TZ}
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+          />
+        </Field>
+        <Field label={t('common:range.to')}>
+          <TextInput
+            type="datetime-local"
+            suffix={TZ}
+            value={endsAt}
+            onChange={(e) => setEndsAt(e.target.value)}
+          />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

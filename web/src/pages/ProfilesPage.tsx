@@ -25,7 +25,9 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select, RequiredMark } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { CheckField, FieldRow, Fields } from '../components/ui/FormLayout';
+import { Stack } from '../components/ui/Page';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -411,57 +413,51 @@ function ProfileModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {t('profiles.cols.name')} <RequiredMark />
-        </label>
-        <TextInput
-          placeholder={t('profiles.modal.namePlaceholder')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field-row">
-        <div className="modal-field">
-          <label className="modal-field-label">{t('profiles.modal.role')}</label>
-          <Select value={category} onChange={(e) => setCategory(e.target.value)}>
-            {PROFILE_CATEGORIES.map((c) => (
-              <option key={c.token} value={c.token}>
-                {t(c.labelKey)}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label">{t('profiles.cols.vendor')}</label>
+      <Fields>
+        <Field label={t('profiles.cols.name')} required>
           <TextInput
-            placeholder={t('shared.optional')}
-            value={vendor}
-            onChange={(e) => setVendor(e.target.value)}
+            placeholder={t('profiles.modal.namePlaceholder')}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
           />
-        </div>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="profile-poll-interval">
-          {t('profiles.cols.pollInterval')}
-        </label>
+        </Field>
+        <FieldRow>
+          <Field label={t('profiles.modal.role')}>
+            <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+              {PROFILE_CATEGORIES.map((c) => (
+                <option key={c.token} value={c.token}>
+                  {t(c.labelKey)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label={t('profiles.cols.vendor')}>
+            <TextInput
+              placeholder={t('shared.optional')}
+              value={vendor}
+              onChange={(e) => setVendor(e.target.value)}
+            />
+          </Field>
+        </FieldRow>
         {/* Blank inherits the system default, so the placeholder is that default's real value. The
             10–3600 range is said by `err.pollInterval` when Save is pressed outside it. */}
-        <TextInput
-          id="profile-poll-interval"
-          placeholder={
-            systemDefault === null
-              ? t('profiles.filter.interval.inherited')
-              : t('profiles.modal.pollIntervalPlaceholder', { secs: systemDefault })
-          }
-          value={pollInterval}
-          onChange={(e) => setPollInterval(e.target.value)}
-          inputMode="numeric"
-          suffix={t('profiles.modal.pollIntervalUnit')}
-        />
-      </div>
-      <FormError form={form} />
+        <Field label={t('profiles.cols.pollInterval')}>
+          <TextInput
+            id="profile-poll-interval"
+            placeholder={
+              systemDefault === null
+                ? t('profiles.filter.interval.inherited')
+                : t('profiles.modal.pollIntervalPlaceholder', { secs: systemDefault })
+            }
+            value={pollInterval}
+            onChange={(e) => setPollInterval(e.target.value)}
+            inputMode="numeric"
+            suffix={t('profiles.modal.pollIntervalUnit')}
+          />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -589,22 +585,26 @@ function ProfileTemplates({
     return <p className="muted">{t('profiles.templates.empty')}</p>;
   }
   return (
-    <div className="profile-templates">
-      {templates.map((tmpl) => (
-        <label key={tmpl.id} className="profile-template-row">
-          <input
-            type="checkbox"
+    <Fields>
+      <Stack gap={8}>
+        {templates.map((tmpl) => (
+          <CheckField
+            key={tmpl.id}
             checked={attached.has(tmpl.id)}
             disabled={!canEdit || busy}
             onChange={() => toggle(tmpl.id)}
+            label={
+              <>
+                <span className="profile-template-name">{tmpl.name}</span>{' '}
+                <span className="muted profile-template-meta">
+                  {tmpl.description ? `${tmpl.description} · ` : ''}
+                  {t('shared.metricsCount', { count: tmpl.item_count })}
+                </span>
+              </>
+            }
           />
-          <span className="profile-template-name">{tmpl.name}</span>
-          <span className="muted profile-template-meta">
-            {tmpl.description ? `${tmpl.description} · ` : ''}
-            {t('shared.metricsCount', { count: tmpl.item_count })}
-          </span>
-        </label>
-      ))}
+        ))}
+      </Stack>
       {error && <p className="form-error">{error}</p>}
       {gap?.kind === 'gaps' && (
         <div className="profile-gap warn">
@@ -638,6 +638,6 @@ function ProfileTemplates({
           ? t('nav:alerts.rules')
           : t('profiles.templates.rules', { count: ruleCount })}
       </Link>
-    </div>
+    </Fields>
   );
 }

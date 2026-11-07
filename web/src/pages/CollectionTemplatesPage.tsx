@@ -17,7 +17,8 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, RequiredMark } from '../components/ui/Field';
+import { Field, TextInput } from '../components/ui/Field';
+import { Fields } from '../components/ui/FormLayout';
 import { IconButton } from '../components/ui/IconButton';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -242,26 +243,24 @@ function AddTemplateModal({ onClose, onDone }: { onClose: () => void; onDone: ()
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {t('sets.cols.name')} <RequiredMark />
-        </label>
-        <TextInput
-          placeholder={t('sets.modal.namePlaceholder')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('sets.cols.description')}</label>
-        <TextInput
-          placeholder={t('sets.modal.descPlaceholder')}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-      </div>
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('sets.cols.name')} required>
+          <TextInput
+            placeholder={t('sets.modal.namePlaceholder')}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </Field>
+        <Field label={t('sets.cols.description')}>
+          <TextInput
+            placeholder={t('sets.modal.descPlaceholder')}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

@@ -47,21 +47,31 @@ export function Stack({ gap = 12, as: Tag = 'div', className, children }: BoxPro
   );
 }
 
-/** Children side by side, wrapping when they do not fit. */
+/** Children side by side, wrapping when they do not fit. `stackOnPhone` puts them one above the
+ *  other, full width, on a phone - a row of unlabelled inputs and their buttons, which wrapped
+ *  two to a line would read as two forms. */
 export function Inline({
   gap = 8,
   as: Tag = 'div',
   justify = 'start',
   align = 'center',
+  stackOnPhone,
   className,
   children,
 }: BoxProps & {
   justify?: 'start' | 'end' | 'between';
   align?: 'center' | 'start' | 'baseline' | 'end';
+  stackOnPhone?: boolean;
 }) {
   return (
     <Tag
-      className={cx('ui-inline', `justify-${justify}`, `align-${align}`, className)}
+      className={cx(
+        'ui-inline',
+        `justify-${justify}`,
+        `align-${align}`,
+        stackOnPhone && 'is-phone-stack',
+        className,
+      )}
       style={{ gap: spaceVar(gap) }}
     >
       {children}

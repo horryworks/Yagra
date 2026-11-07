@@ -11,6 +11,8 @@ import type { NodeGroup } from '../../types/api';
 import { groupOptions } from '../../lib/nodeTree';
 import type { SetupDestination } from '../../pages/discoveredEndpoints';
 import { GroupPicker } from '../ui/GroupPicker';
+import { Field } from '../ui/Field';
+import { CheckField, Fields } from '../ui/FormLayout';
 
 interface Props {
   groups: NodeGroup[];
@@ -32,9 +34,8 @@ export function EndpointDestination({
   const { t } = useTranslation('monitoring');
   const options = useMemo(() => groupOptions(groups), [groups]);
   return (
-    <div className="ep-dest">
-      <label className="form-label">
-        {t('discovery.seen.dest.label')}
+    <Fields>
+      <Field label={t('discovery.seen.dest.label')}>
         <GroupPicker
           options={options}
           value={value.groupId}
@@ -42,19 +43,16 @@ export function EndpointDestination({
           emptyOption={t('discovery.dest.root')}
           disabled={disabled}
         />
-      </label>
+      </Field>
       {/* No hint: each row's preview line (`seen.dest.line.*`) says where it goes and why. */}
       {offerFilingByRange && (
-        <label className="form-label form-check">
-          <input
-            type="checkbox"
-            checked={value.fileByPrefix}
-            disabled={disabled}
-            onChange={(e) => onChange({ ...value, fileByPrefix: e.target.checked })}
-          />
-          {t('discovery.seen.dest.byRange')}
-        </label>
+        <CheckField
+          checked={value.fileByPrefix}
+          disabled={disabled}
+          onChange={(fileByPrefix) => onChange({ ...value, fileByPrefix })}
+          label={t('discovery.seen.dest.byRange')}
+        />
       )}
-    </div>
+    </Fields>
   );
 }

@@ -40,11 +40,24 @@ export function Fields({
 export function FieldGroup({
   label,
   infoKey,
+  infoLabel,
+  action,
+  status,
+  error,
   children,
 }: {
-  label: string;
+  /** Plain words almost always, as on `Field`. */
+  label: ReactNode;
   /** A namespaced `.info` key, as on `Field`. */
   infoKey?: string;
+  /** What the ⓘ is about, when `label` is not plain text. */
+  infoLabel?: string;
+  /** A small button or link at the right end of the label row, as on `Field`. */
+  action?: ReactNode;
+  /** A line the group shows because of its state, under the controls, as on `Field`. */
+  status?: ReactNode;
+  /** Why the group's value is refused, as on `Field`. */
+  error?: string | null;
   children: ReactNode;
 }) {
   const id = useId();
@@ -54,9 +67,18 @@ export function FieldGroup({
         <span className="modal-field-label" id={id}>
           {label}
         </span>
-        {infoKey && <InfoTip infoKey={infoKey} label={label} />}
+        {infoKey && (
+          <InfoTip infoKey={infoKey} label={infoLabel ?? (typeof label === 'string' ? label : '')} />
+        )}
+        {isShown(action) && <span className="field-head-action">{action}</span>}
       </div>
       {children}
+      {isShown(status) && <p className="form-status">{status}</p>}
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
@@ -78,6 +100,7 @@ export function CheckField({
   detail,
   disabled,
   name,
+  id,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
@@ -86,11 +109,14 @@ export function CheckField({
   detail?: ReactNode;
   disabled?: boolean;
   name?: string;
+  /** The checkbox's own id, for a screen that points at it from elsewhere. */
+  id?: string;
 }) {
   return (
     <label className={cx('ui-check', isShown(detail) && 'has-detail', disabled && 'is-disabled')}>
       <input
         type="checkbox"
+        id={id}
         name={name}
         checked={checked}
         disabled={disabled}

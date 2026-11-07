@@ -19,7 +19,9 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TextInput, Select } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { CheckField, FieldGroup, FieldRow, Fields } from '../components/ui/FormLayout';
+import { Inline } from '../components/ui/Page';
 import { GroupPicker } from '../components/ui/GroupPicker';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import { rowActionsWidth } from '../lib/rowActions';
@@ -307,81 +309,76 @@ function ScheduleModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="dh-name">
-          {t('deliveryHours.modal.name')}
-        </label>
-        <TextInput
-          id="dh-name"
-          value={draft.name}
-          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <span className="modal-field-label">{t('deliveryHours.modal.days')}</span>
-        <div className="routing-picks">
-          {WEEKDAYS.map((d) => (
-            <label key={d} className="routing-pick">
-              <input type="checkbox" checked={draft.days.includes(d)} onChange={() => toggleDay(d)} />
-              {weekdayName(t, d)}
-            </label>
-          ))}
-        </div>
-      </div>
-      <div className="form-row">
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="dh-start">
-            {t('deliveryHours.modal.start')}
-          </label>
+      <Fields>
+        <Field label={t('deliveryHours.modal.name')}>
           <TextInput
-            id="dh-start"
-            type="time"
-            value={draft.start}
-            onChange={(e) => setDraft({ ...draft, start: e.target.value })}
+            id="dh-name"
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            autoFocus
           />
-        </div>
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="dh-end">
-            {t('deliveryHours.modal.end')}
-          </label>
-          <TextInput
-            id="dh-end"
-            type="time"
-            value={draft.end}
-            onChange={(e) => setDraft({ ...draft, end: e.target.value })}
-          />
-        </div>
-      </div>
-      <div className="modal-field">
-        <span className="modal-field-label">{t('deliveryHours.modal.folders')}</span>
-        {draft.groupIds.length > 0 && (
-          <div className="routing-picks">
-            {draft.groupIds.map((id) => (
-              <Button
-                key={id}
-                variant="outline"
-                aria-label={t('deliveryHours.modal.removeFolder', { name: groupName(id) })}
-                onClick={() =>
-                  setDraft({ ...draft, groupIds: draft.groupIds.filter((x) => x !== id) })
-                }
-              >
-                {groupName(id)} ✕
-              </Button>
+        </Field>
+        <FieldGroup label={t('deliveryHours.modal.days')}>
+          <Inline gap={12}>
+            {WEEKDAYS.map((d) => (
+              <CheckField
+                key={d}
+                checked={draft.days.includes(d)}
+                onChange={() => toggleDay(d)}
+                label={weekdayName(t, d)}
+              />
             ))}
-          </div>
-        )}
-        <GroupPicker
-          options={options}
-          value={picking}
-          placeholder={t('deliveryHours.modal.addFolder')}
-          onChange={(id) => {
-            if (id) setDraft({ ...draft, groupIds: [...draft.groupIds, id] });
-            setPicking('');
-          }}
-        />
-      </div>
-      <FormError form={form} />
+          </Inline>
+        </FieldGroup>
+        <FieldRow>
+          <Field label={t('deliveryHours.modal.start')}>
+            <TextInput
+              id="dh-start"
+              type="time"
+              value={draft.start}
+              onChange={(e) => setDraft({ ...draft, start: e.target.value })}
+            />
+          </Field>
+          <Field label={t('deliveryHours.modal.end')}>
+            <TextInput
+              id="dh-end"
+              type="time"
+              value={draft.end}
+              onChange={(e) => setDraft({ ...draft, end: e.target.value })}
+            />
+          </Field>
+        </FieldRow>
+        {/* A group, not one field: the folders already chosen (each a button that removes it) and
+            the picker that adds one act together, and the picker keeps its own "Add folder" name. */}
+        <FieldGroup label={t('deliveryHours.modal.folders')}>
+          {draft.groupIds.length > 0 && (
+            <Inline gap={12}>
+              {draft.groupIds.map((id) => (
+                <Button
+                  key={id}
+                  variant="outline"
+                  aria-label={t('deliveryHours.modal.removeFolder', { name: groupName(id) })}
+                  onClick={() =>
+                    setDraft({ ...draft, groupIds: draft.groupIds.filter((x) => x !== id) })
+                  }
+                >
+                  {groupName(id)} ✕
+                </Button>
+              ))}
+            </Inline>
+          )}
+          <GroupPicker
+            options={options}
+            value={picking}
+            placeholder={t('deliveryHours.modal.addFolder')}
+            onChange={(id) => {
+              if (id) setDraft({ ...draft, groupIds: [...draft.groupIds, id] });
+              setPicking('');
+            }}
+          />
+        </FieldGroup>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

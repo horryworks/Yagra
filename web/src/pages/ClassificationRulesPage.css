@@ -42,12 +42,3 @@
   white-space: nowrap;
   min-width: 0;
 }
-
-/* Enabled checkbox row in the modal. (.modal-field-row is shared — see ui/Modal.css.) */
-.classrules-enabled {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  cursor: pointer;
-}

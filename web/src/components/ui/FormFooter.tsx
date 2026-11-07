@@ -6,9 +6,8 @@
 // two batch dialogs kept "Cancel" after part of the batch had landed, and almost no error line
 // carried `role="alert"`, so a screen reader never heard why a save failed.
 //
-// Deliberately NOT a whole-dialog wrapper: dialog bodies are laid out two ways (`.form-stack` and
-// `.modal-field`), and a wrapper that added the error line would move it in one of them.
-// `FormError` goes where the dialog's error paragraph already was.
+// Deliberately NOT a whole-dialog wrapper: a dialog's body is its own `Fields` (ADR-246 Inc.4), and
+// `FormError` goes inside it, after the fields, so the one gap spaces the error line too.
 //
 // `lib/submitState.test.ts` fails the build for a footer written by hand anywhere else.
 

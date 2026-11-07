@@ -43,6 +43,16 @@
   border-left-color: var(--status-critical);
 }
 
+/* A callout that holds a list: the paragraphs and the list sit close, as in one note. */
+.ui-callout p,
+.ui-callout ul {
+  margin: 0 0 var(--space-1);
+}
+
+.ui-callout ul {
+  padding-left: var(--space-4);
+}
+
 .ui-callout > :first-child {
   margin-top: 0;
 }

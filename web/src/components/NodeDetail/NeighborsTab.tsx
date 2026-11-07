@@ -37,7 +37,7 @@ import { initialCredentialIds } from '../../pages/discoveryScans';
 import { useEndpointSetup, type SetupTarget } from '../../lib/useEndpointSetup';
 import { EndpointSetupCell } from '../discovery/EndpointSetupCell';
 import { CredentialPicker } from '../ui/CredentialPicker';
-import { InfoTip } from '../ui/InfoTip';
+import { FieldGroup, Fields } from '../ui/FormLayout';
 import { EndpointDestination } from '../discovery/EndpointDestination';
 import {
   DEFAULT_SETUP_DESTINATION,
@@ -780,24 +780,24 @@ function SetupPanel({
       body = (
         <>
           {ap && <p className="nd-muted">{t('neighbors.setup.apHint')}</p>}
-          {/* Not a <label>: the info tip is a button, and a button inside a label becomes the
-              label's control. The picker is a list of checkboxes with their own labels. */}
-          <div className="form-label nd-nb-setup-creds">
-            <div className="field-head">
-              <span>{tm('discovery.credsLabel')}</span>
-              <InfoTip infoKey="nodes:neighbors.setup.credsOrder.info" label={tm('discovery.credsLabel')} />
-            </div>
-            <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
-            <Link className="field-link" to="/nodes/credentials">
-              {tm('discovery.manageCreds')}
-            </Link>
-          </div>
-          <EndpointDestination
-            groups={groups}
-            value={destination}
-            onChange={onDestinationChange}
-            offerFilingByRange={setup.offerFilingByRange}
-          />
+          <Fields className="nd-nb-setup-fields">
+            {/* A group: the picker is a list of checkboxes with their own labels. */}
+            <FieldGroup
+              label={tm('discovery.credsLabel')}
+              infoKey="nodes:neighbors.setup.credsOrder.info"
+            >
+              <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
+              <Link className="field-link" to="/nodes/credentials">
+                {tm('discovery.manageCreds')}
+              </Link>
+            </FieldGroup>
+            <EndpointDestination
+              groups={groups}
+              value={destination}
+              onChange={onDestinationChange}
+              offerFilingByRange={setup.offerFilingByRange}
+            />
+          </Fields>
           <EndpointSetupCell
             target={target}
             setup={setup}

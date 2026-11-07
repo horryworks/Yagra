@@ -17,7 +17,8 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
-import { Select } from '../components/ui/Field';
+import { Field, Select } from '../components/ui/Field';
+import { Fields } from '../components/ui/FormLayout';
 import { Segmented } from '../components/ui/Segmented';
 import { InfoTip } from '../components/ui/InfoTip';
 import { GroupPicker } from '../components/ui/GroupPicker';
@@ -297,32 +298,30 @@ function FolderLevelModal({
         />
       }
     >
-      <div className="modal-field">
-        <span className="modal-field-label">{t('grouping.cols.folder')}</span>
-        <GroupPicker
-          options={options}
-          value={groupId}
-          placeholder={t('grouping.modal.pickFolder')}
-          onChange={setGroupId}
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="grouping-level">
-          {t('grouping.cols.level')}
-        </label>
-        <Select
-          id="grouping-level"
-          value={level}
-          onChange={(e) => isGroupingLevel(e.target.value) && setLevel(e.target.value)}
-        >
-          {GROUPING_LEVELS.map((l) => (
-            <option key={l} value={l}>
-              {t(`grouping.level.${l}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('grouping.cols.folder')}>
+          <GroupPicker
+            options={options}
+            value={groupId}
+            placeholder={t('grouping.modal.pickFolder')}
+            onChange={setGroupId}
+          />
+        </Field>
+        <Field label={t('grouping.cols.level')}>
+          <Select
+            id="grouping-level"
+            value={level}
+            onChange={(e) => isGroupingLevel(e.target.value) && setLevel(e.target.value)}
+          >
+            {GROUPING_LEVELS.map((l) => (
+              <option key={l} value={l}>
+                {t(`grouping.level.${l}`)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

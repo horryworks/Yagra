@@ -66,10 +66,10 @@ import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { Button } from '../components/ui/Button';
-import { TextInput, TextArea, Select, FieldError } from '../components/ui/Field';
+import { Field, TextInput, TextArea, Select, FieldError } from '../components/ui/Field';
+import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Segmented } from '../components/ui/Segmented';
 import { settingsForcedOpen, settingsSummary } from './discoveryScanSettings';
-import { InfoTip } from '../components/ui/InfoTip';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EndpointSetupCell } from '../components/discovery/EndpointSetupCell';
@@ -1077,27 +1077,35 @@ export function DiscoveryPage() {
                 </span>
               </summary>
               <div className="disco-how-body">
-                {/* Not a <label>: the picker holds controls of its own (a checkbox per row and the
-                    order's up / down, ADR-205 Inc.3), and a click on a label is forwarded to its
-                    first control. */}
-                <div className="form-label disco-f-creds">
-                  {t('discovery.credsLabel')}
-                  <CredentialPicker
-                    options={snmpCreds}
-                    selected={selectedCredIds}
-                    onChange={setSelectedCredIds}
-                    disabled={inFlight}
-                  />
-                  <Link className="field-link" to="/nodes/credentials">
-                    {t('discovery.manageCreds')}
-                  </Link>
-                </div>
+                {/* A group, not a <label>: the picker holds controls of its own (a checkbox per row
+                    and the order's up / down, ADR-205 Inc.3). */}
+                <Fields className="disco-f-creds">
+                  <FieldGroup label={t('discovery.credsLabel')}>
+                    <CredentialPicker
+                      options={snmpCreds}
+                      selected={selectedCredIds}
+                      onChange={setSelectedCredIds}
+                      disabled={inFlight}
+                    />
+                    <Link className="field-link" to="/nodes/credentials">
+                      {t('discovery.manageCreds')}
+                    </Link>
+                  </FieldGroup>
+                </Fields>
 
-                <div className="disco-how-side">
+                <Fields className="disco-how-side">
                   {/* Which site the sweep runs from (ADR-068): before this, a remote-site poller
                       could sweep head office, reach nothing and report an empty success. */}
-                  <label className="form-label disco-f-pool">
-                    {t('discovery.pool.label')}
+                  <Field
+                    label={t('discovery.pool.label')}
+                    error={
+                      unroutedPool
+                        ? !pool
+                          ? t('discovery.pool.anyHint')
+                          : t('discovery.pool.deadHint')
+                        : null
+                    }
+                  >
                     <Select
                       value={pool ?? ''}
                       disabled={inFlight}
@@ -1110,39 +1118,28 @@ export function DiscoveryPage() {
                         </option>
                       ))}
                     </Select>
-                    {unroutedPool && (
-                      <FieldError>
-                        {!pool ? t('discovery.pool.anyHint') : t('discovery.pool.deadHint')}
-                      </FieldError>
-                    )}
-                  </label>
+                  </Field>
 
                   {/* File each device into the folder whose IP range contains it (ADR-131). Drawn
                       only when some folder carries a range, the same expression the toggle above
                       uses. Each result row says where it will go and why. */}
                   {siteOptions.length > 0 && (
-                    <label className="form-label form-check">
-                      <input
-                        type="checkbox"
-                        checked={fileByPrefix}
-                        onChange={(e) => setFileByPrefix(e.target.checked)}
-                      />
-                      {t('discovery.fileByPrefix.label')}
-                    </label>
+                    <CheckField
+                      checked={fileByPrefix}
+                      onChange={setFileByPrefix}
+                      label={t('discovery.fileByPrefix.label')}
+                    />
                   )}
 
                   {/* The ICMP gate (ADR-068 Inc.3). The label carries its cost. The input stays
                       enabled mid-sweep; only the button that acts on it goes away. */}
-                  <label className="form-label form-check">
-                    <input
-                      type="checkbox"
-                      checked={snmpWhenUnreachable}
-                      disabled={inFlight}
-                      onChange={(e) => setSnmpWhenUnreachable(e.target.checked)}
-                    />
-                    {t('discovery.icmpGate.label')}
-                  </label>
-                </div>
+                  <CheckField
+                    checked={snmpWhenUnreachable}
+                    disabled={inFlight}
+                    onChange={setSnmpWhenUnreachable}
+                    label={t('discovery.icmpGate.label')}
+                  />
+                </Fields>
               </div>
             </details>
           </>
@@ -1511,29 +1508,24 @@ function SeenOnNetworkCard({
       {/* What Detect tries, in order — the Scan tab's picker, over the same list. Drawn only with
           the permission Detect needs (ADR-056): without it there is nothing to try them with. */}
       {canConfig && (
-        <div className="form-label disco-seen-creds">
-          {/* Not a <label>: the info tip beside the name is a button, and a button inside a label
-              becomes the label's control. The picker is a list of checkboxes with their own. */}
-          <div className="field-head">
-            <span>{t('discovery.credsLabel')}</span>
-            <InfoTip
-              infoKey="monitoring:discovery.seen.detect.credsOrder.info"
-              label={t('discovery.credsLabel')}
-            />
-          </div>
-          <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
-          <Link className="field-link" to="/nodes/credentials">
-            {t('discovery.manageCreds')}
-          </Link>
-        </div>
-      )}
-      {canConfig && (
-        <EndpointDestination
-          groups={groups}
-          value={destination}
-          onChange={setDestination}
-          offerFilingByRange={setup.offerFilingByRange}
-        />
+        <Fields className="disco-seen-fields">
+          {/* A group: the picker is a list of checkboxes with their own labels. */}
+          <FieldGroup
+            label={t('discovery.credsLabel')}
+            infoKey="monitoring:discovery.seen.detect.credsOrder.info"
+          >
+            <CredentialPicker options={snmpCreds} selected={probeCredIds} onChange={onProbeCredsChange} />
+            <Link className="field-link" to="/nodes/credentials">
+              {t('discovery.manageCreds')}
+            </Link>
+          </FieldGroup>
+          <EndpointDestination
+            groups={groups}
+            value={destination}
+            onChange={setDestination}
+            offerFilingByRange={setup.offerFilingByRange}
+          />
+        </Fields>
       )}
       <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>
         {/* `off` names the switch as a link to the screen that holds it (ADR-200 Inc.11); the

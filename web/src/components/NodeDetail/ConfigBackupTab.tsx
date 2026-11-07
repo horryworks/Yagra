@@ -23,7 +23,8 @@ import { LoadGate } from '../ui/LoadGate';
 import { Button } from '../ui/Button';
 import { Segmented } from '../ui/Segmented';
 import { Switch } from '../ui/Switch';
-import { Select } from '../ui/Field';
+import { Field, Select } from '../ui/Field';
+import { FieldGroup } from '../ui/FormLayout';
 import { EmptyState } from '../ui/EmptyState';
 import { ScreenLink } from '../ui/ScreenLink';
 import { CredentialPicker } from '../ui/CredentialPicker';
@@ -449,10 +450,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               </summary>
               <div className="cfgb-settings-body">
                 <div className="cfgb-settings-grid">
-                  <div className="modal-field">
-                    <label className="modal-field-label" htmlFor="cfgb-model">
-                      {t('config.model')}
-                    </label>
+                  <Field label={t('config.model')}>
                     <Select
                       id="cfgb-model"
                       value={form.model}
@@ -470,11 +468,8 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                         </option>
                       ))}
                     </Select>
-                  </div>
-                  <div className="modal-field">
-                    <label className="modal-field-label" htmlFor="cfgb-speed">
-                      {t('config.scanMode')}
-                    </label>
+                  </Field>
+                  <Field label={t('config.scanMode')}>
                     <Select
                       id="cfgb-speed"
                       value={form.scanMode}
@@ -487,7 +482,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                         </option>
                       ))}
                     </Select>
-                  </div>
+                  </Field>
                 </div>
                 <label className="nd-check-toggle">
                   <input
@@ -500,21 +495,24 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                 </label>
                 {canStart && (
                   <div className="cfgb-logins">
-                    <div className="cfgb-logins-head">
-                      <span className="modal-field-label">{t('config.logins')}</span>
-                      {form.order !== null && (
-                        <Button onClick={() => setForm({ ...form, order: null })}>{t('config.defaultOrder')}</Button>
-                      )}
-                    </div>
-                    <CredentialPicker
-                      options={logins}
-                      selected={pickedLogins(form, v)}
-                      onChange={(ids) => setForm({ ...form, order: ids })}
-                      disabled={busy}
-                    />
-                    <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
-                      {t('config.addLogin')}
-                    </Link>
+                    <FieldGroup
+                      label={t('config.logins')}
+                      action={
+                        form.order !== null && (
+                          <Button onClick={() => setForm({ ...form, order: null })}>{t('config.defaultOrder')}</Button>
+                        )
+                      }
+                    >
+                      <CredentialPicker
+                        options={logins}
+                        selected={pickedLogins(form, v)}
+                        onChange={(ids) => setForm({ ...form, order: ids })}
+                        disabled={busy}
+                      />
+                      <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
+                        {t('config.addLogin')}
+                      </Link>
+                    </FieldGroup>
                   </div>
                 )}
                 {canStart && (

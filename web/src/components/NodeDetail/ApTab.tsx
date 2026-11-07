@@ -36,7 +36,8 @@ import { ListToolbar } from '../../components/ui/ListToolbar';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { GroupPicker } from '../ui/GroupPicker';
-import { TextInput } from '../ui/Field';
+import { Field, TextInput } from '../ui/Field';
+import { CheckField, FieldRow, Fields } from '../ui/FormLayout';
 import { PermissionHint } from '../ui/PermissionHint';
 import { EntityName } from '../ui/EntityName';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
@@ -355,53 +356,50 @@ function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps
 
       {canConfig ? (
         <>
-          <div className="nd-ap-form">
-            <label className="form-label nd-ap-switch">
-              <input
-                type="checkbox"
-                checked={importAps}
-                disabled={busy}
-                onChange={(e) => {
-                  setEdited(true);
-                  setImportAps(e.target.checked);
-                }}
-              />
-              {t('ap.settings.importAps')}
-            </label>
-            <label className="form-label" htmlFor="ap-max">
-              {t('ap.settings.maxAps')}
-              <TextInput
-                id="ap-max"
-                type="number"
-                min={MAX_APS_MIN}
-                max={MAX_APS_HARD}
-                value={maxAps}
-                disabled={busy}
-                onChange={(e) => {
-                  setEdited(true);
-                  setMaxAps(e.target.value);
-                }}
-              />
-            </label>
-            <label className="form-label" htmlFor="ap-group">
-              {t('ap.settings.group')}
-              <GroupPicker
-                id="ap-group"
-                options={groupOptions(groups)}
-                value={group}
-                onChange={(id) => {
-                  setEdited(true);
-                  setGroup(id);
-                }}
-                emptyOption={t('ap.settings.groupDefault')}
-                disabled={busy}
-              />
-            </label>
-          </div>
-          {!maxValid && (
-            <p className="form-error">{t('ap.err.maxAps', { min: MAX_APS_MIN, max: MAX_APS_HARD })}</p>
-          )}
-          {error && <p className="form-error">{error}</p>}
+          <Fields>
+            <CheckField
+              checked={importAps}
+              disabled={busy}
+              onChange={(next) => {
+                setEdited(true);
+                setImportAps(next);
+              }}
+              label={t('ap.settings.importAps')}
+            />
+            <FieldRow>
+              <Field label={t('ap.settings.maxAps')}>
+                <TextInput
+                  id="ap-max"
+                  type="number"
+                  min={MAX_APS_MIN}
+                  max={MAX_APS_HARD}
+                  value={maxAps}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setEdited(true);
+                    setMaxAps(e.target.value);
+                  }}
+                />
+              </Field>
+              <Field label={t('ap.settings.group')}>
+                <GroupPicker
+                  id="ap-group"
+                  options={groupOptions(groups)}
+                  value={group}
+                  onChange={(id) => {
+                    setEdited(true);
+                    setGroup(id);
+                  }}
+                  emptyOption={t('ap.settings.groupDefault')}
+                  disabled={busy}
+                />
+              </Field>
+            </FieldRow>
+            {!maxValid && (
+              <p className="form-error">{t('ap.err.maxAps', { min: MAX_APS_MIN, max: MAX_APS_HARD })}</p>
+            )}
+            {error && <p className="form-error">{error}</p>}
+          </Fields>
           <div className="nd-ap-save">
             <Button variant="primary" disabled={busy || !edited || !maxValid} onClick={save}>
               {t('ap.settings.save')}

@@ -1,7 +1,6 @@
 {
   "_doc": "ADR-246. Per-file ceilings that only go down: a count over its ceiling fails src/uiBudget.test.ts, and so does one 10 or more below it (30 for lines) - lower the ceiling in the same change. A file with no entry has a ceiling of 0; a page-local stylesheet must be listed in pageCss with the reason it exists. `node scripts/ui-rules.mjs --lower` lowers every ceiling to today's count and never raises one.",
   "spacing": {
-    "components/CollectionEditor/CollectionEditor.css": 4,
     "components/discovery/EndpointSetupCell.css": 1,
     "components/EventLog/eventColumns.css": 1,
     "components/HealthBar/HealthBar.css": 1,
@@ -13,7 +12,7 @@
     "components/NodeDetail/DnsHealth.css": 3,
     "components/NodeDetail/FlowTab.css": 6,
     "components/NodeDetail/NeighborsTab.css": 5,
-    "components/NodeDetail/NodeDetail.css": 101,
+    "components/NodeDetail/NodeDetail.css": 100,
     "components/NodeDetail/RangeControl.css": 5,
     "components/NodePicker/NodePicker.css": 1,
     "components/NodeTree/NodeTree.css": 12,
@@ -47,23 +46,20 @@
     "dashboard/WidgetFrame.css": 5,
     "dashboard/widgets/widgets.css": 12,
     "pages/AlertRulesPage.css": 1,
-    "pages/ApiTokensPage.css": 2,
-    "pages/ChannelTemplateModal.css": 27,
+    "pages/ChannelTemplateModal.css": 25,
     "pages/ClassificationRulesPage.css": 2,
     "pages/CredentialsPage.css": 1,
-    "pages/DiscoveryPage.css": 3,
+    "pages/DiscoveryPage.css": 2,
     "pages/EventRulesPage.css": 2,
     "pages/GeoMapPage.css": 12,
     "pages/InventoryFilterMenu.css": 3,
     "pages/LoginPage.css": 4,
     "pages/NodesPage.css": 6,
-    "pages/PollersPage.css": 17,
-    "pages/ProfilesPage.css": 2,
+    "pages/PollersPage.css": 15,
     "pages/ReclassifyPage.css": 1,
-    "pages/RoutingPage.css": 4,
+    "pages/RoutingPage.css": 2,
     "pages/ThresholdsPage.css": 1,
-    "pages/UsersPage.css": 1,
-    "reports/reports.css": 5,
+    "reports/reports.css": 3,
     "styles/table.css": 24,
     "troubleshoot/report/report.css": 4,
     "troubleshoot/troubleshoot.css": 44,
@@ -76,51 +72,18 @@
   "fontSize": {},
   "inlineSpacing": {},
   "legacy": {
-    "components/AddNodeModal/AddNodeModal.tsx": 21,
-    "components/CollectionEditor/CollectionEditor.tsx": 1,
-    "components/discovery/EndpointDestination.tsx": 3,
-    "components/GroupModal/GroupModal.tsx": 14,
-    "components/InterfaceRules/InterfaceRulesModal.tsx": 11,
-    "components/MoveNodeModal/MoveNodeModal.tsx": 2,
-    "components/NameFromDeviceModal/NameFromDeviceModal.tsx": 1,
-    "components/NodeDetail/ApTab.tsx": 3,
-    "components/NodeDetail/CheckFields.tsx": 5,
-    "components/NodeDetail/ConfigBackupTab.tsx": 5,
-    "components/NodeDetail/EditNodeModal.tsx": 6,
-    "components/NodeDetail/NeighborsTab.tsx": 1,
-    "components/NodeTree/BulkTagModal.tsx": 5,
-    "components/NodeTree/RediscoverModal.tsx": 2,
-    "components/SetPoolModal/SetPoolModal.tsx": 2,
-    "components/shell/ChangeMyPasswordModal.tsx": 6,
-    "components/suppression/AddMaintenanceWindowModal.tsx": 14,
-    "components/ThresholdModal/ThresholdModal.tsx": 13,
     "pages/ActiveAlertsPage.tsx": 1,
-    "pages/AlertGroupingSection.tsx": 6,
-    "pages/ApiTokensPage.tsx": 15,
+    "pages/AlertGroupingSection.tsx": 2,
+    "pages/ApiTokensPage.tsx": 1,
     "pages/AuditPage.tsx": 1,
-    "pages/BusPanel.tsx": 12,
-    "pages/ChannelTemplateModal.tsx": 8,
-    "pages/ClassificationRulesPage.tsx": 9,
-    "pages/CollectionTemplatesPage.tsx": 4,
-    "pages/ConfigAutoSaveModal.tsx": 3,
-    "pages/ConfigBackupSwitchOnModal.tsx": 1,
-    "pages/DeliveryHoursSection.tsx": 12,
+    "pages/DeliveryHoursSection.tsx": 1,
     "pages/DeliveryLog.tsx": 1,
-    "pages/DiscoveryPage.tsx": 7,
-    "pages/EventRulesPage.tsx": 27,
-    "pages/EventSourcesPage.tsx": 8,
     "pages/EventsPage.tsx": 1,
-    "pages/ForwardingPage.tsx": 24,
+    "pages/ForwardingPage.tsx": 1,
     "pages/HistoryPage.tsx": 1,
-    "pages/MibRepositoryPage.tsx": 10,
-    "pages/MissingPrefixModals.tsx": 3,
     "pages/NodeDetailPage.tsx": 1,
     "pages/NodesPage.tsx": 2,
-    "pages/PollersPage.tsx": 25,
-    "pages/ProfilesPage.tsx": 9,
-    "pages/RoutingPage.tsx": 28,
-    "pages/SubnetOverlapModals.tsx": 13,
-    "pages/UsersPage.tsx": 15,
+    "pages/RoutingPage.tsx": 2,
     "reports/ReportsPage.tsx": 1,
     "troubleshoot/SavedFindingsPage.tsx": 1,
     "troubleshoot/ScheduledPage.tsx": 1
@@ -159,7 +122,7 @@
       "why": "before ADR-246"
     },
     "components/discovery/EndpointSetupCell.css": {
-      "lines": 116,
+      "lines": 108,
       "why": "before ADR-246"
     },
     "components/discovery/SameDeviceNote.css": {
@@ -171,7 +134,7 @@
       "why": "before ADR-246"
     },
     "components/GroupModal/GroupModal.css": {
-      "lines": 34,
+      "lines": 31,
       "why": "before ADR-246"
     },
     "components/HealthBar/HealthBar.css": {
@@ -199,7 +162,7 @@
       "why": "before ADR-246"
     },
     "components/NodeDetail/ApTab.css": {
-      "lines": 160,
+      "lines": 137,
       "why": "before ADR-246"
     },
     "components/NodeDetail/AvailabilitySection.css": {
@@ -207,7 +170,7 @@
       "why": "before ADR-246"
     },
     "components/NodeDetail/ConfigBackupTab.css": {
-      "lines": 420,
+      "lines": 410,
       "why": "before ADR-246"
     },
     "components/NodeDetail/DnsHealth.css": {
@@ -227,7 +190,7 @@
       "why": "before ADR-246"
     },
     "components/NodeDetail/NodeDetail.css": {
-      "lines": 2545,
+      "lines": 2517,
       "why": "before ADR-246"
     },
     "components/NodeDetail/PinButton.css": {
@@ -383,7 +346,7 @@
       "why": "before ADR-246"
     },
     "pages/ApiTokensPage.css": {
-      "lines": 105,
+      "lines": 70,
       "why": "before ADR-246"
     },
     "pages/AuthSettingsPage.css": {
@@ -391,11 +354,11 @@
       "why": "before ADR-246"
     },
     "pages/ChannelTemplateModal.css": {
-      "lines": 805,
+      "lines": 780,
       "why": "before ADR-246"
     },
     "pages/ClassificationRulesPage.css": {
-      "lines": 53,
+      "lines": 44,
       "why": "before ADR-246"
     },
     "pages/CollectionTemplatesPage.css": {
@@ -403,7 +366,7 @@
       "why": "before ADR-246"
     },
     "pages/ConfigBackupsPage.css": {
-      "lines": 76,
+      "lines": 69,
       "why": "before ADR-246"
     },
     "pages/ConfigBundlePage.css": {
@@ -415,7 +378,7 @@
       "why": "before ADR-246"
     },
     "pages/DiscoveryPage.css": {
-      "lines": 597,
+      "lines": 581,
       "why": "before ADR-246"
     },
     "pages/DuplicateNodesPage.css": {
@@ -423,15 +386,15 @@
       "why": "before ADR-246"
     },
     "pages/EventRulesPage.css": {
-      "lines": 86,
+      "lines": 59,
       "why": "before ADR-246"
     },
     "pages/EventSourcesPage.css": {
-      "lines": 19,
+      "lines": 12,
       "why": "before ADR-246"
     },
     "pages/ForwardingPage.css": {
-      "lines": 88,
+      "lines": 69,
       "why": "before ADR-246"
     },
     "pages/GeoMapPage.css": {
@@ -487,11 +450,11 @@
       "why": "before ADR-246"
     },
     "pages/PollersPage.css": {
-      "lines": 510,
+      "lines": 490,
       "why": "before ADR-246"
     },
     "pages/ProfilesPage.css": {
-      "lines": 94,
+      "lines": 83,
       "why": "before ADR-246"
     },
     "pages/ReclassifyPage.css": {
@@ -507,11 +470,11 @@
       "why": "before ADR-246"
     },
     "pages/RoutingPage.css": {
-      "lines": 139,
+      "lines": 124,
       "why": "before ADR-246"
     },
     "pages/SubnetOverlapsPage.css": {
-      "lines": 314,
+      "lines": 308,
       "why": "before ADR-246"
     },
     "pages/SupportBundlePage.css": {
@@ -547,7 +510,7 @@
       "why": "before ADR-246"
     },
     "reports/reports.css": {
-      "lines": 236,
+      "lines": 186,
       "why": "before ADR-246"
     },
     "troubleshoot/report/report.css": {

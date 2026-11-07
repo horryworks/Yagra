@@ -17,7 +17,9 @@ import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
-import { Select, TextInput } from '../components/ui/Field';
+import { Field, Select, TextInput } from '../components/ui/Field';
+import { Fields } from '../components/ui/FormLayout';
+import { Stack } from '../components/ui/Page';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { draftFrom, portMatches, ruleBody, toggled, type RuleDraft } from './subnetOverlaps';
@@ -71,7 +73,7 @@ export function OverlapRulesModal({
         </>
       }
     >
-      <div className="form-stack">
+      <Stack gap={12}>
         <p className="muted">{t('subnetOverlaps.rules.text')}</p>
         <ul className="so-rules">
           {rules.map((r) => (
@@ -109,7 +111,7 @@ export function OverlapRulesModal({
             {error}
           </p>
         )}
-      </div>
+      </Stack>
       {deleting && (
         <ConfirmDeleteModal
           title={t('subnetOverlaps.rules.deleteTitle')}
@@ -169,37 +171,39 @@ export function OverlapRuleModal({
         />
       }
     >
-      <div className="form-stack">
-        <label className="modal-field">
-          <span className="modal-field-label">{t('subnetOverlaps.rules.form.portText')}</span>
+      <Fields>
+        {/* The preview keeps its own live region: `status` draws the line, the span announces it. */}
+        <Field
+          label={t('subnetOverlaps.rules.form.portText')}
+          status={
+            matches && (
+              <span aria-live="polite">
+                {matches.count === 0
+                  ? t('subnetOverlaps.rules.form.portMatchesNone')
+                  : t('subnetOverlaps.rules.form.portMatches', {
+                      count: matches.count,
+                      ports: matches.names.join(', ') + (matches.count > matches.names.length ? ', …' : ''),
+                    })}
+              </span>
+            )
+          }
+        >
           <TextInput
             value={draft.portText}
             placeholder="dialer"
             onChange={(e) => set({ portText: e.target.value })}
             maxLength={200}
           />
-          {matches && (
-            <span className="so-port-preview" aria-live="polite">
-              {matches.count === 0
-                ? t('subnetOverlaps.rules.form.portMatchesNone')
-                : t('subnetOverlaps.rules.form.portMatches', {
-                    count: matches.count,
-                    ports: matches.names.join(', ') + (matches.count > matches.names.length ? ', …' : ''),
-                  })}
-            </span>
-          )}
-        </label>
-        <label className="modal-field">
-          <span className="modal-field-label">{t('subnetOverlaps.rules.form.range')}</span>
+        </Field>
+        <Field label={t('subnetOverlaps.rules.form.range')}>
           <TextInput
             className="mono"
             value={draft.range}
             placeholder={t('subnetOverlaps.rules.form.rangeAny')}
             onChange={(e) => set({ range: e.target.value })}
           />
-        </label>
-        <label className="modal-field">
-          <span className="modal-field-label">{t('subnetOverlaps.rules.form.reason')}</span>
+        </Field>
+        <Field label={t('subnetOverlaps.rules.form.reason')}>
           <Select
             value={draft.reason}
             onChange={(e) => set({ reason: e.target.value as ExclusionReason })}
@@ -210,13 +214,12 @@ export function OverlapRuleModal({
               </option>
             ))}
           </Select>
-        </label>
-        <label className="modal-field">
-          <span className="modal-field-label">{t('subnetOverlaps.rules.form.note')}</span>
+        </Field>
+        <Field label={t('subnetOverlaps.rules.form.note')}>
           <TextInput value={draft.note} onChange={(e) => set({ note: e.target.value })} maxLength={200} />
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }
@@ -250,10 +253,9 @@ export function AckOverlapModal({
         />
       }
     >
-      <div className="form-stack">
+      <Fields>
         <p className="muted">{t('subnetOverlaps.ack.text', { count: overlap.site_count })}</p>
-        <label className="modal-field">
-          <span className="modal-field-label">{t('subnetOverlaps.ack.note')}</span>
+        <Field label={t('subnetOverlaps.ack.note')}>
           <TextInput
             value={note}
             placeholder={t('subnetOverlaps.ack.notePlaceholder')}
@@ -261,9 +263,9 @@ export function AckOverlapModal({
             maxLength={200}
             autoFocus
           />
-        </label>
+        </Field>
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

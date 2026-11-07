@@ -1,10 +1,10 @@
 /* Users — the "identity list" (variant B). The list chrome, monogram, role select,
    status/you pills, and segmented filter all come from the table standard (styles/table.css);
-   only the error spacing is page-local. The modal form fields use the shared `.modal-*` classes
-   defined on the Modal component. */
+   only the error spacing is page-local. The dialogs are built from the shared form parts
+   (`Fields`, `Field`, `FieldGroup`). */
 
 .users-error {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
 }
 
 /* Scope dialog: a bounded, scrollable list of node groups. Bounded because the group tree is the

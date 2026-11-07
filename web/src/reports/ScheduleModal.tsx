@@ -5,7 +5,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
-import { Select, RequiredMark } from '../components/ui/Field';
+import { Field, Select } from '../components/ui/Field';
+import { CheckField, Fields } from '../components/ui/FormLayout';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -91,11 +92,8 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
         />
       }
     >
-      <div className="rb">
-        <label className="rb-field">
-          <span>
-            {t('schedule.report')} <RequiredMark />
-          </span>
+      <Fields>
+        <Field label={t('schedule.report')} required>
           <Select value={definitionId} onChange={(e) => setDefinitionId(e.target.value)}>
             {definitions.map((d) => (
               <option key={d.id} value={d.id}>
@@ -103,10 +101,9 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
 
-        <label className="rb-field">
-          <span>{t('schedule.frequency')}</span>
+        <Field label={t('schedule.frequency')}>
           <Select
             value={frequency}
             onChange={(e) => setFrequency(e.target.value as Cadence)}
@@ -124,11 +121,10 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
               </option>
             ))}
           </Select>
-        </label>
+        </Field>
 
         {frequency === 'weekly' && (
-          <label className="rb-field">
-            <span>{t('schedule.dayOfWeek')}</span>
+          <Field label={t('schedule.dayOfWeek')}>
             <Select value={String(dayOfWeek)} onChange={(e) => setDayOfWeek(Number(e.target.value))}>
               {WEEKDAY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -136,12 +132,11 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
                 </option>
               ))}
             </Select>
-          </label>
+          </Field>
         )}
 
         {frequency === 'monthly' && (
-          <label className="rb-field">
-            <span>{t('schedule.dayOfMonth')}</span>
+          <Field label={t('schedule.dayOfMonth')}>
             <Select
               value={String(dayOfMonth)}
               onChange={(e) => setDayOfMonth(Number(e.target.value))}
@@ -152,26 +147,22 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
                 </option>
               ))}
             </Select>
-          </label>
+          </Field>
         )}
 
-        <label className="rb-field">
-          <span>{t('schedule.time', { zone: zoneAbbreviation(zone) })}</span>
+        <Field label={t('schedule.time', { zone: zoneAbbreviation(zone) })}>
           <input
             className="field"
             type="time"
             value={time}
             onChange={(e) => setTime(e.target.value)}
           />
-        </label>
+        </Field>
 
-        <label className="rb-check">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          <span>{t('schedule.enabled')}</span>
-        </label>
+        <CheckField checked={enabled} onChange={setEnabled} label={t('schedule.enabled')} />
 
         <FormError form={form} />
-      </div>
+      </Fields>
     </Modal>
   );
 }

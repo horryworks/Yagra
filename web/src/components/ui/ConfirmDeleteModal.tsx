@@ -11,7 +11,7 @@ import { isImeComposing } from '../../lib/ime';
 import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { confirmPhraseMatches } from './confirmPhrase';
-import { TextInput } from './Field';
+import { Field, TextInput } from './Field';
 import { FormError, FormFooter } from './FormFooter';
 import { Modal } from './Modal';
 
@@ -72,15 +72,16 @@ export function ConfirmDeleteModal({
     >
       <p className="modal-confirm-text">{children}</p>
       {confirmPhrase !== undefined && (
-        <label className="form-label">
-          <span>
+        <Field
+          label={
             <Trans
               t={t}
               i18nKey="confirmDelete.typeToConfirm"
               values={{ phrase: confirmPhrase }}
               components={{ b: <strong /> }}
             />
-          </span>
+          }
+        >
           <TextInput
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
@@ -93,7 +94,7 @@ export function ConfirmDeleteModal({
             autoComplete="off"
             spellCheck={false}
           />
-        </label>
+        </Field>
       )}
       <FormError form={form} />
     </Modal>

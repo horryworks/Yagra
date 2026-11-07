@@ -31,7 +31,8 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
+import { Field, TextInput, Select } from '../components/ui/Field';
+import { Fields } from '../components/ui/FormLayout';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -95,51 +96,48 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('mib.modal.metricName')}</label>
-        <TextInput
-          placeholder={t('mib.modal.metricNamePlaceholder')}
-          value={metricName}
-          onChange={(e) => setMetricName(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('mib.modal.oid')}</label>
-        <TextInput
-          className="mono"
-          placeholder={t('mib.modal.oidPlaceholder')}
-          value={oid}
-          onChange={(e) => setOid(e.target.value)}
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('mib.modal.collection')}</label>
-        <Select
-          value={collection}
-          onChange={(e) => setCollection(e.target.value as CollectionKind)}
-        >
-          <option value="scalar">{t('enum.scalar')}</option>
-          <option value="table">{t('enum.table')}</option>
-        </Select>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('mib.modal.metricKind')}</label>
-        <Select value={metricKind} onChange={(e) => setMetricKind(e.target.value as MetricKind)}>
-          <option value="gauge">{t('enum.gauge')}</option>
-          <option value="counter">{t('enum.counter')}</option>
-        </Select>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('mib.modal.vendor')}</label>
+      <Fields>
+        <Field label={t('mib.modal.metricName')}>
+          <TextInput
+            placeholder={t('mib.modal.metricNamePlaceholder')}
+            value={metricName}
+            onChange={(e) => setMetricName(e.target.value)}
+            autoFocus
+          />
+        </Field>
+        <Field label={t('mib.modal.oid')}>
+          <TextInput
+            className="mono"
+            placeholder={t('mib.modal.oidPlaceholder')}
+            value={oid}
+            onChange={(e) => setOid(e.target.value)}
+          />
+        </Field>
+        <Field label={t('mib.modal.collection')}>
+          <Select
+            value={collection}
+            onChange={(e) => setCollection(e.target.value as CollectionKind)}
+          >
+            <option value="scalar">{t('enum.scalar')}</option>
+            <option value="table">{t('enum.table')}</option>
+          </Select>
+        </Field>
+        <Field label={t('mib.modal.metricKind')}>
+          <Select value={metricKind} onChange={(e) => setMetricKind(e.target.value as MetricKind)}>
+            <option value="gauge">{t('enum.gauge')}</option>
+            <option value="counter">{t('enum.counter')}</option>
+          </Select>
+        </Field>
         {/* Blank is a standard OID, which the list calls "standard" — so that is the placeholder. */}
-        <TextInput
-          placeholder={t('mib.standard')}
-          value={vendor}
-          onChange={(e) => setVendor(e.target.value)}
-        />
-      </div>
-      <FormError form={form} />
+        <Field label={t('mib.modal.vendor')}>
+          <TextInput
+            placeholder={t('mib.standard')}
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+          />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }

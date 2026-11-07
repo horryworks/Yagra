@@ -10,7 +10,8 @@ import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput } from '../components/ui/Field';
+import { Field, TextInput } from '../components/ui/Field';
+import { FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -228,16 +229,17 @@ function AddSourceModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('eventSources.addModal.name')}</label>
-        <TextInput
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t('eventSources.addModal.namePlaceholder')}
-          autoFocus
-        />
-      </div>
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('eventSources.addModal.name')}>
+          <TextInput
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t('eventSources.addModal.namePlaceholder')}
+            autoFocus
+          />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -277,11 +279,12 @@ function EditSourceModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('eventSources.editModal.name')}</label>
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      </div>
-      <FormError form={form} />
+      <Fields>
+        <Field label={t('eventSources.editModal.name')}>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -339,24 +342,24 @@ function TokenModal({
         {t('eventSources.token.sendAs')}
         <span className="mono"> Authorization: Bearer &lt;token&gt;</span>.
       </p>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('eventSources.token.label')}</label>
-        <div className="eventsources-copyrow">
-          <code className="eventsources-token mono">{issued.token}</code>
-          <Button variant="outline" onClick={() => copy(issued.token, 'token')}>
-            {copied === 'token' ? t('common:copy.copied') : t('eventSources.token.copy')}
-          </Button>
-        </div>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('eventSources.token.url')}</label>
-        <div className="eventsources-copyrow">
-          <code className="eventsources-token mono">{url}</code>
-          <Button variant="outline" onClick={() => copy(url, 'url')}>
-            {copied === 'url' ? t('common:copy.copied') : t('eventSources.token.copy')}
-          </Button>
-        </div>
-      </div>
+      <Fields>
+        <FieldGroup label={t('eventSources.token.label')}>
+          <div className="input-with-action">
+            <code className="eventsources-token mono">{issued.token}</code>
+            <Button variant="outline" onClick={() => copy(issued.token, 'token')}>
+              {copied === 'token' ? t('common:copy.copied') : t('eventSources.token.copy')}
+            </Button>
+          </div>
+        </FieldGroup>
+        <FieldGroup label={t('eventSources.token.url')}>
+          <div className="input-with-action">
+            <code className="eventsources-token mono">{url}</code>
+            <Button variant="outline" onClick={() => copy(url, 'url')}>
+              {copied === 'url' ? t('common:copy.copied') : t('eventSources.token.copy')}
+            </Button>
+          </div>
+        </FieldGroup>
+      </Fields>
     </Modal>
   );
 }
