@@ -919,15 +919,17 @@ export function DiscoveryPage() {
                 folded line below that says what it will use. The toggle exists only when some
                 folder carries a range, since with none there is nothing to choose between. */}
             {siteOptions.length > 0 && (
-              <Segmented
-                ariaLabel={t('discovery.target.label')}
-                options={[
-                  { value: 'range', label: t('discovery.target.range') },
-                  { value: 'site', label: t('discovery.target.site') },
-                ]}
-                value={siteId ? 'site' : 'range'}
-                onChange={(v) => chooseTarget(v === 'site')}
-              />
+              <div className="disco-toggle">
+                <Segmented
+                  ariaLabel={t('discovery.target.label')}
+                  options={[
+                    { value: 'range', label: t('discovery.target.range') },
+                    { value: 'site', label: t('discovery.target.site') },
+                  ]}
+                  value={siteId ? 'site' : 'range'}
+                  onChange={(v) => chooseTarget(v === 'site')}
+                />
+              </div>
             )}
 
             {/* 🚨 **The site's ranges and the free-text field are one control, in two shapes.**

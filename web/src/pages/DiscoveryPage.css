@@ -5,6 +5,17 @@
  *
  * 🚨 Every rule that overrides a shared one names two classes. Vite emits the page's CSS before
  * `index.css`, so a bare class of equal specificity loses to the shared rule by source order. */
+/* The IP range | Site toggle is as wide as its two words (ADR-244). The shared `.ts-seg` stretches
+   its buttons across the whole row, which here made a two-word choice span the card. */
+.disco-toggle .ts-seg {
+  display: inline-flex;
+}
+
+.disco-toggle .ts-seg button {
+  flex: none;
+  padding: 0 16px;
+}
+
 .disco-target {
   display: flex;
   flex-wrap: wrap;
