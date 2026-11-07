@@ -19,17 +19,16 @@
 //! channel, and the writer is the only thing that waits on the store. This tier is explicitly
 //! loss-tolerant: a dropped batch is counted and reported, not retried.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::Instant;
-use uuid::Uuid;
 use yagra_bus::FlowBatch;
 use yagra_telemetry::CancellationToken;
 
+use crate::inventory::address_book::{AddressBook, AddressBookCache};
 use crate::passive::flowstore::{FlowRow, FlowStore};
 use yagra_base::repo::NodeRepo;
 
@@ -37,7 +36,9 @@ use yagra_base::repo::NodeRepo;
 const FLOW_INSERT_MAX_ROWS: usize = 10_000;
 /// How often the flow writer flushes accumulated rows to ClickHouse.
 const FLOW_INSERT_FLUSH_SECS: u64 = 5;
-/// How often the flow consumer refreshes its exporter-IP → node-id snapshot.
+/// How old the shared address book (ADR-245) may be before the flow consumer refreshes it itself.
+/// The event engine refreshes the same book every 30 s, so this normally finds it fresh and reads
+/// nothing.
 const FLOW_ADDR_REFRESH_SECS: u64 = 60;
 /// Cap on the flow consumer's "already-missed" exporter set (throttles miss-triggered addr-map
 /// reloads to once per distinct exporter). Bounded well above any realistic exporter count; a
@@ -93,14 +94,15 @@ pub(crate) async fn bound_clickhouse_system_logs(store: &Arc<dyn FlowStore>, day
 
 /// Build the ClickHouse rows for one edge-aggregated flow batch: resolve the exporter to a node and
 /// fill in only the AS numbers the exporter didn't provide from the offline IP→ASN table (the
-/// exporter's own BGP view is authoritative — ADR-031). Returns `None` when the exporter isn't
-/// mapped to a node (the batch is dropped by the caller). Pure — unit-tested.
+/// exporter's own BGP view is authoritative — ADR-031). The exporter is looked up by every address a
+/// node is known by, narrowed by the receiving pool (ADR-245). Returns `None` when it names no node
+/// (the batch is dropped by the caller). Pure — unit-tested.
 fn flow_rows_from_batch(
     batch: &FlowBatch,
-    addr_map: &HashMap<std::net::IpAddr, Uuid>,
+    book: &AddressBook,
     ipasn: Option<&Arc<crate::passive::ipasn::IpAsnDb>>,
 ) -> Option<Vec<FlowRow>> {
-    let node_id = addr_map.get(&batch.exporter_ip).copied()?;
+    let node_id = book.resolve(batch.exporter_ip, Some(&batch.pool))?.node;
     let mut rows = Vec::with_capacity(batch.records.len());
     for rec in &batch.records {
         let mut src_as = rec.src_as;
@@ -163,11 +165,12 @@ fn send_flow_rows(tx: &tokio::sync::mpsc::Sender<FlowRow>, rows: Vec<FlowRow>) -
 /// genuinely just-added node is still picked up: its first miss reloads immediately, and thereafter
 /// it is present in the map; anything still unmapped is caught by the periodic refresh (S27 follow-up).
 fn should_reload_on_miss(
-    addr_map: &HashMap<std::net::IpAddr, Uuid>,
+    book: &AddressBook,
     missed: &mut std::collections::HashSet<std::net::IpAddr>,
     exporter_ip: std::net::IpAddr,
+    pool: &str,
 ) -> bool {
-    !addr_map.contains_key(&exporter_ip) && missed.insert(exporter_ip)
+    book.resolve(exporter_ip, Some(pool)).is_none() && missed.insert(exporter_ip)
 }
 
 /// Consume verbatim flow datagrams from `yagra.flows.raw` and tee them to the forwarder (ADR-034
@@ -188,7 +191,7 @@ pub(crate) async fn consume_raw_flows<S>(
 }
 
 /// Consume edge-aggregated flow batches from the bus, resolve each exporter to a node (via the same
-/// address map the event pipeline uses), enrich AS numbers, and hand the rows to the ClickHouse
+/// address book the event pipeline uses, ADR-245), enrich AS numbers, and hand the rows to the ClickHouse
 /// writer over a bounded queue. Never awaits ClickHouse, so a slow/hung ClickHouse can't stall the
 /// `yagra.flows` subscription into a silent NATS slow-consumer drop (ADR-024/025 match/persist split,
 /// S27). Spawned via `spawn_cancellable` — the writer owns the final flush on shutdown.
@@ -196,20 +199,25 @@ pub(crate) async fn consume_flows<S>(
     mut flows: S,
     tx: tokio::sync::mpsc::Sender<FlowRow>,
     repo: Arc<NodeRepo>,
+    book: Arc<AddressBookCache>,
     ipasn: crate::passive::ipasn::IpAsnHandle,
 ) where
     S: Stream<Item = FlowBatch> + Unpin,
 {
-    let mut addr_map = repo.address_map().await.unwrap_or_default();
+    let max_age = Duration::from_secs(FLOW_ADDR_REFRESH_SECS);
+    if let Err(e) = book.refresh_if_older(&repo, max_age).await {
+        tracing::warn!(error = %e, "flow ingest could not load the node address book");
+    }
     let mut last_refresh = Instant::now();
     // Exporters we've already tried (and failed) to resolve since startup — throttles the
     // miss-triggered reload below to once per distinct exporter (see `should_reload_on_miss`).
     let mut missed: std::collections::HashSet<std::net::IpAddr> = std::collections::HashSet::new();
     while let Some(batch) = flows.next().await {
-        // Refresh the exporter→node snapshot periodically (nodes are added/removed at runtime).
-        if last_refresh.elapsed() >= Duration::from_secs(FLOW_ADDR_REFRESH_SECS) {
-            if let Ok(m) = repo.address_map().await {
-                addr_map = m;
+        // Keep the shared book current (nodes are added/removed at runtime). Normally the event
+        // engine's 30 s reload already did, and this reads nothing.
+        if last_refresh.elapsed() >= max_age {
+            if let Err(e) = book.refresh_if_older(&repo, max_age).await {
+                tracing::debug!(error = %e, "flow ingest could not refresh the node address book");
             }
             last_refresh = Instant::now();
         }
@@ -218,15 +226,14 @@ pub(crate) async fn consume_flows<S>(
         if missed.len() >= FLOW_MISS_CACHE_MAX {
             missed.clear();
         }
-        if should_reload_on_miss(&addr_map, &mut missed, batch.exporter_ip) {
-            if let Ok(m) = repo.address_map().await {
-                addr_map = m;
-                last_refresh = Instant::now();
-            }
+        if should_reload_on_miss(&book.current(), &mut missed, batch.exporter_ip, &batch.pool)
+            && book.refresh(&repo).await.is_ok()
+        {
+            last_refresh = Instant::now();
         }
         // Snapshot the hot-swappable IP→ASN table once per batch (not per record).
         let ipasn_now = ipasn.read().unwrap().clone();
-        let Some(rows) = flow_rows_from_batch(&batch, &addr_map, ipasn_now.as_ref()) else {
+        let Some(rows) = flow_rows_from_batch(&batch, &book.current(), ipasn_now.as_ref()) else {
             metrics::counter!("yagra_flow_batches_unmapped_total").increment(1);
             tracing::debug!(exporter = %batch.exporter_ip, "flow batch from unmapped exporter — dropped");
             continue;
@@ -282,6 +289,7 @@ async fn flush_flow(store: &Arc<dyn FlowStore>, buf: &mut Vec<FlowRow>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
     use yagra_bus::DEFAULT_POOL;
 
     // ---- Flow ingest match/persist split (S27, ADR-031) ----
@@ -321,9 +329,23 @@ mod tests {
         }
     }
 
+    /// A book whose nodes are known by exactly these inventory addresses.
+    fn book_of(pairs: &[(std::net::IpAddr, Uuid)]) -> AddressBook {
+        let managed: Vec<yagra_base::repo::ManagedAddress> = pairs
+            .iter()
+            .map(|&(address, node)| yagra_base::repo::ManagedAddress {
+                node,
+                address,
+                pool: None,
+                group: None,
+            })
+            .collect();
+        AddressBook::build(&managed, &[], &crate::fleet::poolres::PoolResolver::empty())
+    }
+
     #[test]
     fn flow_rows_dropped_when_exporter_unmapped() {
-        let addr_map: HashMap<std::net::IpAddr, Uuid> = HashMap::new();
+        let addr_map = book_of(&[]);
         let batch = flow_batch(
             "198.51.100.7",
             vec![flow_rec("10.0.0.1", "8.8.8.8", 0, 0, 100)],
@@ -339,31 +361,61 @@ mod tests {
         use std::collections::HashSet;
         use std::net::IpAddr;
         let mapped: IpAddr = "10.0.0.1".parse().unwrap();
-        let addr_map: HashMap<IpAddr, Uuid> = HashMap::from([(mapped, Uuid::from_u128(1))]);
+        let addr_map = book_of(&[(mapped, Uuid::from_u128(1))]);
         let mut missed: HashSet<IpAddr> = HashSet::new();
 
         // A mapped exporter never triggers a reload and is never recorded as missed.
-        assert!(!should_reload_on_miss(&addr_map, &mut missed, mapped));
+        assert!(!should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            mapped,
+            DEFAULT_POOL
+        ));
         assert!(missed.is_empty());
 
         // First batch from an unmapped exporter reloads once…
         let unknown: IpAddr = "198.51.100.7".parse().unwrap();
-        assert!(should_reload_on_miss(&addr_map, &mut missed, unknown));
+        assert!(should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown,
+            DEFAULT_POOL
+        ));
         // …and every subsequent batch from the same still-unmapped exporter is throttled (no reload).
-        assert!(!should_reload_on_miss(&addr_map, &mut missed, unknown));
-        assert!(!should_reload_on_miss(&addr_map, &mut missed, unknown));
+        assert!(!should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown,
+            DEFAULT_POOL
+        ));
+        assert!(!should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown,
+            DEFAULT_POOL
+        ));
 
         // A different unmapped exporter still gets its own one-shot reload.
         let unknown2: IpAddr = "203.0.113.9".parse().unwrap();
-        assert!(should_reload_on_miss(&addr_map, &mut missed, unknown2));
-        assert!(!should_reload_on_miss(&addr_map, &mut missed, unknown2));
+        assert!(should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown2,
+            DEFAULT_POOL
+        ));
+        assert!(!should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown2,
+            DEFAULT_POOL
+        ));
     }
 
     #[test]
     fn flow_rows_resolve_node_and_preserve_fields() {
         let exporter: std::net::IpAddr = "198.51.100.7".parse().unwrap();
         let node = Uuid::from_u128(42);
-        let addr_map: HashMap<std::net::IpAddr, Uuid> = HashMap::from([(exporter, node)]);
+        let addr_map = book_of(&[(exporter, node)]);
         let batch = flow_batch(
             "198.51.100.7",
             vec![
@@ -380,6 +432,29 @@ mod tests {
         assert_eq!((rows[0].src_as, rows[0].dst_as), (0, 0));
     }
 
+    /// A router exporting from a loopback or another interface is still that router (ADR-245).
+    #[test]
+    fn flow_rows_resolve_an_exporter_by_its_interface_address() {
+        let node = Uuid::from_u128(42);
+        let managed = [yagra_base::repo::ManagedAddress {
+            node,
+            address: "192.0.2.1".parse().unwrap(),
+            pool: None,
+            group: None,
+        }];
+        let book = AddressBook::build(
+            &managed,
+            &[(node, "198.51.100.7".parse().unwrap())],
+            &crate::fleet::poolres::PoolResolver::empty(),
+        );
+        let batch = flow_batch(
+            "198.51.100.7",
+            vec![flow_rec("10.0.0.1", "8.8.8.8", 0, 0, 100)],
+        );
+        let rows = flow_rows_from_batch(&batch, &book, None).expect("an interface address maps");
+        assert!(rows.iter().all(|r| r.node_id == node));
+    }
+
     #[test]
     fn flow_as_enrichment_fills_only_zeros() {
         // Offline IP→ASN table maps 8.8.8.0/24 → AS15169; an exporter's own non-zero AS still wins.
@@ -387,7 +462,7 @@ mod tests {
             crate::passive::ipasn::IpAsnDb::from_tsv("8.8.8.0\t8.8.8.255\t15169\tUS\tGOOGLE\n");
         let exporter: std::net::IpAddr = "198.51.100.7".parse().unwrap();
         let node = Uuid::from_u128(7);
-        let addr_map: HashMap<std::net::IpAddr, Uuid> = HashMap::from([(exporter, node)]);
+        let addr_map = book_of(&[(exporter, node)]);
         let batch = flow_batch(
             "198.51.100.7",
             vec![

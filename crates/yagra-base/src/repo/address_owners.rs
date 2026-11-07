@@ -16,8 +16,106 @@
 use super::{AddressClaim, DeviceIdentity, GroupFilter, NodeRepo};
 use sqlx::Row;
 use std::net::IpAddr;
+use uuid::Uuid;
+
+/// One node's inventory address, with what its effective poll pool is resolved from (ADR-245).
+///
+/// The pool is carried as its two inputs rather than resolved here, because resolving it needs the
+/// folder tree (`poolres`), which lives above this crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedAddress {
+    pub node: Uuid,
+    pub address: IpAddr,
+    /// The node's own `pool` column, as stored (blank and `None` both mean unset).
+    pub pool: Option<String>,
+    /// The folder the node is filed in.
+    pub group: Option<Uuid>,
+}
+
+/// Whether the interface-address lists changed since the last read (ADR-245 decision 3).
+///
+/// `last_seen` cannot say this: every walk bumps it, so with tens of thousands of nodes walked
+/// hourly it moves on almost every refresh. `first_seen` resets only when a node's set changes,
+/// and a new node's row is born with it; a deleted node's row goes, which the count notices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CarriedAddressesMark {
+    pub rows: i64,
+    /// `max(first_seen)` in microseconds since the epoch; `None` when the table is empty.
+    pub newest_us: Option<i64>,
+}
 
 impl NodeRepo {
+    /// Every node's inventory address with its pool inputs — the first half of the event and flow
+    /// address book (ADR-245). Cheap enough to read on every refresh: one row per node, no JSON.
+    pub async fn managed_addresses(&self) -> anyhow::Result<Vec<ManagedAddress>> {
+        let rows = sqlx::query("SELECT id, host(address) AS address, pool, group_id FROM nodes")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let address: String = row.try_get("address")?;
+            // A stored address that does not parse names nobody a datagram could come from.
+            let Ok(address) = address.parse::<IpAddr>() else {
+                continue;
+            };
+            out.push(ManagedAddress {
+                node: row.try_get("id")?,
+                address,
+                pool: row.try_get("pool")?,
+                group: row.try_get("group_id")?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The mark that says whether [`Self::carried_addresses`] would answer differently from last
+    /// time. One aggregate over `node_l3` without touching the JSON documents.
+    pub async fn carried_addresses_mark(&self) -> anyhow::Result<CarriedAddressesMark> {
+        let row = sqlx::query(
+            "SELECT count(*) AS n, \
+                    (extract(epoch FROM max(first_seen)) * 1000000)::bigint AS newest \
+             FROM node_l3",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(CarriedAddressesMark {
+            rows: row.try_get("n")?,
+            newest_us: row.try_get("newest")?,
+        })
+    }
+
+    /// Every `(node, address)` an interface of a node carries, minus the types that do not identify
+    /// one node (anycast, broadcast) — the second half of the address book (ADR-245). Which of the
+    /// remaining addresses are usable as a datagram's source is the book's decision, not this one.
+    ///
+    /// ⚠️ Reads every list whole, so it is asked only when [`Self::carried_addresses_mark`] moved.
+    pub async fn carried_addresses(&self) -> anyhow::Result<Vec<(Uuid, IpAddr)>> {
+        let not_identifying: Vec<&str> = yagra_common::L3AddrType::ALL
+            .into_iter()
+            .filter(|t| !t.identifies_a_node())
+            .map(yagra_common::L3AddrType::as_str)
+            .collect();
+        let rows = sqlx::query(
+            "SELECT l.node_id, a->>'ip' AS ip \
+             FROM node_l3 l \
+             CROSS JOIN LATERAL jsonb_array_elements(l.addresses->'addresses') a \
+             WHERE COALESCE(a->>'addr_type', '') <> ALL($1::text[])",
+        )
+        .bind(&not_identifying)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let Some(ip) = row.try_get::<Option<String>, _>("ip")? else {
+                continue;
+            };
+            if let Ok(ip) = ip.parse::<IpAddr>() {
+                out.push((row.try_get("node_id")?, ip));
+            }
+        }
+        Ok(out)
+    }
+
     /// The device nodes the caller may see whose **own interface-address list** carries one of
     /// `addresses`, paired with the address it carries (ADR-139 Inc.3).
     ///

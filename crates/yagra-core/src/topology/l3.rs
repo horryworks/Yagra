@@ -439,6 +439,57 @@ mod address_owner_reads {
             .unwrap();
     }
 
+    /// The address book's second half (ADR-245): every identifying interface address, and a mark
+    /// that moves when a set changes or a node goes, and stays put when a walk confirms the same set.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn carried_addresses_and_their_mark(pool: sqlx::PgPool) {
+        let repo = pgtest::repo(pool.clone());
+        let a = pgtest::node_at(&pool, "rtr-a", ip("192.0.2.1"), None).await;
+        let b = pgtest::node_at(&pool, "rtr-b", ip("192.0.2.2"), None).await;
+        let empty = repo.carried_addresses_mark().await.unwrap();
+        assert_eq!((empty.rows, empty.newest_us), (0, None));
+
+        l3_typed(
+            &pool,
+            a,
+            &[
+                ("203.0.113.1", L3AddrType::Unicast),
+                ("2001:db8::1", L3AddrType::Unknown),
+                ("203.0.113.255", L3AddrType::Broadcast),
+                ("203.0.113.100", L3AddrType::Anycast),
+            ],
+        )
+        .await;
+        l3(&pool, b, &["198.51.100.1"]).await;
+        let mut got = repo.carried_addresses().await.unwrap();
+        got.sort();
+        let mut want = vec![
+            (a, ip("203.0.113.1")),
+            (a, ip("2001:db8::1")),
+            (b, ip("198.51.100.1")),
+        ];
+        want.sort();
+        assert_eq!(got, want, "anycast and broadcast identify no one node");
+
+        let first = repo.carried_addresses_mark().await.unwrap();
+        assert_eq!(first.rows, 2);
+        // The same set again: last_seen moves, the mark must not.
+        l3(&pool, b, &["198.51.100.1"]).await;
+        assert_eq!(repo.carried_addresses_mark().await.unwrap(), first);
+        // A changed set moves it.
+        l3(&pool, b, &["198.51.100.2"]).await;
+        let changed = repo.carried_addresses_mark().await.unwrap();
+        assert_ne!(changed, first);
+        // A deleted node moves it.
+        sqlx::query("DELETE FROM nodes WHERE id = $1")
+            .bind(a)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(repo.carried_addresses_mark().await.unwrap().rows, 1);
+    }
+
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn claims_cover_node_and_interface_addresses_v4_and_v6(pool: sqlx::PgPool) {

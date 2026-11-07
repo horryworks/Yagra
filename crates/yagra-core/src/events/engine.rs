@@ -13,7 +13,6 @@ use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::net::IpAddr;
 use std::sync::{Arc, Mutex, RwLock};
 use yagra_common::ratelimit::TokenBucket;
 
@@ -23,6 +22,7 @@ use yagra_bus::{EventKind, EventMsg};
 use yagra_common::{trap_oid_name, CheckId, NodeId, NodeState, Severity};
 
 use crate::alerts::{check_id, AlertManager, NotifyAction};
+use crate::inventory::address_book::AddressBookCache;
 use yagra_base::repo::NodeRepo;
 
 // The vocabulary lives in the parent, which a child can see without any widening — see
@@ -34,12 +34,11 @@ use super::*;
 
 // ─── Engine ────────────────────────────────────────────────────────────────────────
 
-/// The compiled-rules + address-map snapshot (refreshed by the 30s loop and inline
-/// after rule/source edits).
+/// The compiled-rules snapshot (refreshed by the 30s loop and inline after rule/source edits).
+/// The source-address half is the shared [`AddressBookCache`] (ADR-245).
 #[derive(Default)]
 struct Snapshot {
     rules: Vec<CompiledRule>,
-    addresses: HashMap<IpAddr, Uuid>,
 }
 
 /// An active (raised, not yet resolved) event alert — tracks the TTL deadline so the
@@ -134,6 +133,9 @@ pub struct EventEngine {
     /// "notified but not recorded" unwritable here (ADR-092).
     sink: Arc<dyn AlertSink>,
     snapshot: RwLock<Snapshot>,
+    /// Which node a source address belongs to — every address a node is known by (ADR-245).
+    /// Shared with the flow ingest through [`Self::address_book`].
+    addresses: Arc<AddressBookCache>,
     runtime: Mutex<Runtime>,
     /// Ingest token buckets per (already-verified) webhook source: (tokens, last-refill ms).
     ingest_rate: Mutex<HashMap<Uuid, TokenBucket>>,
@@ -160,6 +162,7 @@ impl EventEngine {
             alerts,
             sink,
             snapshot: RwLock::new(Snapshot::default()),
+            addresses: Arc::new(AddressBookCache::new()),
             runtime: Mutex::new(Runtime::new()),
             ingest_rate: Mutex::new(HashMap::new()),
             persist_tx,
@@ -200,20 +203,22 @@ impl EventEngine {
                 None
             }
         };
-        let addresses = match nodes.address_map().await {
-            Ok(map) => Some(map),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load node address map; keeping previous snapshot");
-                None
-            }
-        };
-        let mut snap = self.snapshot.write().expect("snapshot rwlock poisoned");
+        if let Err(e) = self.addresses.refresh(nodes).await {
+            tracing::warn!(error = %e, "failed to load the node address book; keeping the previous one");
+        }
         if let Some(rules) = rules {
-            snap.rules = rules;
+            self.snapshot
+                .write()
+                .expect("snapshot rwlock poisoned")
+                .rules = rules;
         }
-        if let Some(addresses) = addresses {
-            snap.addresses = addresses;
-        }
+    }
+
+    /// The source-address book this engine matches against, for the flow ingest to share
+    /// (ADR-245 decision 3).
+    #[must_use]
+    pub fn address_book(&self) -> Arc<AddressBookCache> {
+        self.addresses.clone()
     }
 
     /// Feed one event through the pipeline (bus consumer passes `source: None`;
@@ -239,11 +244,15 @@ impl EventEngine {
             }
         }
 
-        // Correlate: webhook source binding wins, else source-IP → inventory.
+        // Correlate: webhook source binding wins, else the source IP against every address a node
+        // is known by (ADR-245).
         let node_id: Option<Uuid> = source.as_ref().and_then(|s| s.node_id).or_else(|| {
-            let snap = self.snapshot.read().expect("snapshot rwlock poisoned");
-            msg.source_ip
-                .and_then(|ip| snap.addresses.get(&ip).copied())
+            let resolved = msg
+                .source_ip
+                .and_then(|ip| self.addresses.current().resolve(ip, msg.pool.as_deref()))?;
+            metrics::counter!("yagra_events_matched_node_total", "via" => resolved.via.as_str())
+                .increment(1);
+            Some(resolved.node)
         });
         if node_id.is_none() {
             metrics::counter!("yagra_events_unmatched_node_total").increment(1);

@@ -1584,6 +1584,9 @@ impl LeaderTasks {
                     flow_stream,
                     flow_tx,
                     self.repo.clone(),
+                    // The same book the event matcher reads, so the interface lists are read once
+                    // for both (ADR-245 decision 3).
+                    self.event_engine.address_book(),
                     self.ipasn.clone(),
                 ),
             );

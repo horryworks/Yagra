@@ -2027,24 +2027,6 @@ impl NodeRepo {
             .collect()
     }
 
-    /// Address → node-id map for correlating passive events (syslog/trap source IPs) to
-    /// inventory. Snapshotted by the event engine's periodic reload. If two nodes share an
-    /// address the first row wins.
-    pub async fn address_map(&self) -> anyhow::Result<HashMap<IpAddr, Uuid>> {
-        let rows = sqlx::query("SELECT id, host(address) AS address FROM nodes")
-            .fetch_all(&self.pool)
-            .await?;
-        let mut map = HashMap::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id")?;
-            let addr: String = row.try_get("address")?;
-            if let Ok(addr) = addr.parse::<IpAddr>() {
-                map.entry(addr).or_insert(id);
-            }
-        }
-        Ok(map)
-    }
-
     /// The folder each of these nodes is filed in (`None` = ungrouped), unscoped. A node that does not
     /// exist is absent. Read by the map to tell which site a node and its default gateway are in
     /// (ADR-191 Inc.10).
@@ -3288,7 +3270,8 @@ mod tests {
     ///
     /// 🚨 This test used to assert the opposite — four rows — and said so in its doc: ADR-115
     /// decision 3 pinned the duplicate rather than deciding what to do about it. ADR-139 decided. The
-    /// cost it names is still the reason: [`NodeRepo::address_map`] is keyed by address, so of two
+    /// cost it names is still the reason: the event and flow address book (ADR-245) is keyed by
+    /// address and an inventory address is matched first-row-wins, so of two
     /// nodes at one address one is silently never attributed a syslog line or a flow.
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
@@ -3307,7 +3290,7 @@ mod tests {
         assert_eq!(second.created, 0);
         assert_eq!(second.skipped, vec![0, 1], "both rows, by position");
         assert_eq!(pgtest::rows(&pool, "nodes").await, 2, "nothing duplicated");
-        assert_eq!(repo.address_map().await.expect("map").len(), 2);
+        assert_eq!(repo.managed_addresses().await.expect("rows").len(), 2);
     }
 
     /// A URL or DNS monitor at an address does not stop the device there from being imported —
@@ -3635,16 +3618,28 @@ mod tests {
         assert!(scoped.contains_key(&a));
     }
 
-    /// The address map is keyed by the address the node was created with.
+    /// The address book's first half carries the address the node was created with, and the two
+    /// columns its pool is resolved from (ADR-245).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn the_address_map_is_keyed_by_address(pool: sqlx::PgPool) {
-        let id = pgtest::node(&pool, "mapped", 42, None).await;
+    async fn the_managed_addresses_carry_the_address_and_the_pool_inputs(pool: sqlx::PgPool) {
+        let folder = pgtest::group(&pool, "Tokyo").await;
+        let id = pgtest::node(&pool, "mapped", 42, Some(folder)).await;
+        sqlx::query("UPDATE nodes SET pool = 'tokyo' WHERE id = $1")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("pool");
         let repo = pgtest::repo(pool);
-        let map = repo.address_map().await.expect("map");
+        let rows = repo.managed_addresses().await.expect("rows");
         assert_eq!(
-            map.get(&"10.0.0.42".parse::<IpAddr>().expect("address")),
-            Some(&id)
+            rows,
+            vec![crate::repo::ManagedAddress {
+                node: id,
+                address: "10.0.0.42".parse::<IpAddr>().expect("address"),
+                pool: Some("tokyo".to_owned()),
+                group: Some(folder),
+            }]
         );
     }
 

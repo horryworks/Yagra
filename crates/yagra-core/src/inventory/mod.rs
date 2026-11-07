@@ -2,6 +2,9 @@
 //! The inventory tree read as sites and ranges: subnet overlaps, missing prefixes, sites, effective
 //! labels and pins (ADR-135/146/170/187).
 
+/// Which node a syslog line, a trap or a flow export came from, by every address a node is known
+/// by (ADR-245). Shared by the event matcher and the flow ingest.
+pub(crate) mod address_book;
 /// Per-account pins on the inventory tree (ADR-146).
 pub(crate) mod pins;
 // Which subnets a folder's devices carry that its IP ranges do not cover (ADR-170).

@@ -82,6 +82,7 @@ mod guards;
 // ⚠️ `InterfaceIdent` is flagged unused and is re-exported anyway: it is the return type of a `pub`
 // method here, and no caller happens to write the name. Dropping it would make that signature
 // unnameable from outside `repo` — a narrowing of the surface disguised as a warning fix.
+pub use address_owners::{CarriedAddressesMark, ManagedAddress};
 #[allow(unused_imports)]
 pub use interfaces::{
     InterfaceBatchRow, InterfaceIdent, InterfaceMeta, InterfaceUpsert, INTERFACE_STALE_SECS,

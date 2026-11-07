@@ -111,11 +111,18 @@ impl PoolResolver {
     /// it allocates nothing.
     #[must_use]
     pub fn resolve_pool<'a>(&'a self, node: &'a Node) -> &'a str {
-        if let Some(own) = meaningful(node.pool.as_deref()) {
+        self.pool_of(node.pool.as_deref(), node.group.map(|g| g.as_uuid()))
+    }
+
+    /// The same answer as [`Self::resolve_pool`] from the two columns it reads, for a caller that
+    /// holds those rather than a whole [`Node`] (the event and flow address book, ADR-245).
+    #[must_use]
+    pub fn pool_of<'a>(&'a self, own: Option<&'a str>, group: Option<Uuid>) -> &'a str {
+        if let Some(own) = meaningful(own) {
             return own;
         }
-        node.group
-            .and_then(|g| self.by_group.get(&g.as_uuid()))
+        group
+            .and_then(|g| self.by_group.get(&g))
             .map_or(yagra_bus::DEFAULT_POOL, |(pool, _)| pool.as_str())
     }
 }
