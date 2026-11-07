@@ -209,6 +209,8 @@ export function DiscoveryPage() {
    *  would be worse than usual: the operator would have no way to tell which one the Scan button
    *  was about to read. */
   const [siteId, setSiteId] = useState<string>('');
+  /** The folder list has answered, so `siteId` is the page's answer about `?group=` (ADR-244). */
+  const [groupsReady, setGroupsReady] = useState(false);
   /** Which of the chosen site's ranges are ticked. Keyed by the CIDR itself, so a folder whose
    *  prefixes change under us drops the stale ticks rather than sweeping them (`specFor`). */
   const [checkedPrefixes, setCheckedPrefixes] = useState<Set<string>>(() => new Set());
@@ -347,9 +349,8 @@ export function DiscoveryPage() {
       .catch(() => undefined);
     // The site picker's options, and the deep link the node tree's context menu uses.
     //
-    // ⚠️ `?group=` is read **once, here, and never written back**. The URL is owned by the
-    // `?scan=` effect below, and a second writer acting on the params it captured at render would
-    // silently undo the first — the comment on that effect is about exactly this.
+    // ⚠️ `?group=` is read **once, here**. It is written back only by the one URL effect below,
+    // from `siteId`, once `groupsReady` says this list has answered.
     api
       .listNodeGroups()
       .then((groups) => {
@@ -358,9 +359,11 @@ export function DiscoveryPage() {
         setGroups(groups);
         const wanted = arrivedWithGroup.current;
         const picked = wanted ? options.find((o) => o.id === wanted) : undefined;
-        if (!picked) return;
-        setSiteId(picked.id);
-        setCheckedPrefixes(defaultChecked(prefixRows(picked.prefixes)));
+        if (picked) {
+          setSiteId(picked.id);
+          setCheckedPrefixes(defaultChecked(prefixRows(picked.prefixes)));
+        }
+        setGroupsReady(true);
       })
       .catch(() => undefined);
   }, []);
@@ -384,13 +387,25 @@ export function DiscoveryPage() {
 
   // The one place the URL is written. Two handlers each calling `setSearchParams` would have the
   // second silently undo the first, because both act on the params they captured at render.
+  //
+  // It owns `?group=` too (ADR-244): the chosen site, or nothing for an IP range. The shell
+  // remembers each screen's last URL (ADR-134), so a `?group=` left behind after switching to
+  // IP range brought the operator back to Site. Not written until the folders have loaded, so the
+  // deep link is not dropped in the moment before it can be resolved.
   useEffect(() => {
-    if ((searchParams.get('scan') ?? null) === scanId) return;
+    const group = groupsReady ? siteId || null : searchParams.get('group');
+    if (
+      (searchParams.get('scan') ?? null) === scanId &&
+      (searchParams.get('group') ?? null) === group
+    )
+      return;
     const next = new URLSearchParams(searchParams);
     if (scanId) next.set('scan', scanId);
     else next.delete('scan');
+    if (group) next.set('group', group);
+    else next.delete('group');
     setSearchParams(next, { replace: true });
-  }, [scanId, searchParams, setSearchParams]);
+  }, [scanId, siteId, groupsReady, searchParams, setSearchParams]);
 
   const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
 

@@ -62,3 +62,27 @@ test('the toggle is as wide as its two words, and Scan sits beside the target', 
   expect((await toggle.boundingBox())?.width ?? 0).toBeLessThan(260);
   expect(errors.uncaught).toEqual([]);
 });
+
+// The shell reopens each screen at its last URL (ADR-134), so the toggle has to leave the URL
+// saying which side it is on. It used to keep a `?group=` from the node tree's menu after
+// switching to IP range, and the operator came back to Site.
+test('coming back to Discovery opens the side the toggle was left on', async ({ page, errors }) => {
+  await page.goto('/nodes/discovery?group=00000000-0000-4000-8000-0000000000c1');
+  const toggle = page.locator('.disco-toggle .ts-seg');
+  await expect(toggle.getByRole('button', { name: 'Site' })).toHaveAttribute('aria-pressed', 'true');
+
+  await toggle.getByRole('button', { name: 'IP range' }).click();
+  await expect(page).not.toHaveURL(/[?&]group=/);
+
+  await page.goto('/nodes');
+  await page.locator('.sidebar-item', { hasText: 'Discovery' }).first().click();
+  await expect(toggle.getByRole('button', { name: 'IP range' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  // And the other way: a site chosen here is the one the page comes back to.
+  await toggle.getByRole('button', { name: 'Site' }).click();
+  await expect(page).toHaveURL(/[?&]group=00000000-0000-4000-8000-0000000000c1/);
+  expect(errors.uncaught).toEqual([]);
+});
