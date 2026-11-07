@@ -19,6 +19,14 @@ export type AlertNote =
   | { kind: 'waitingNeighbour' }
   | { kind: 'held'; releaseAt: string | null };
 
+/** Every kind of note, in the order a row draws them — also the Notes column's filter options and
+ *  its sort order. The two lines under it fail to compile when this list and `AlertNote` disagree,
+ *  in either direction. */
+export const NOTE_KINDS = ['upstream', 'self', 'flapping', 'waitingNeighbour', 'held'] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export const NOTE_KINDS_MATCH_ALERT_NOTE: Same<NoteKind, AlertNote['kind']> = true;
+
 /** The fields the notes read off an alert. */
 export interface NotedAlert extends HasSubject {
   root_cause?: string | null;

@@ -15,12 +15,14 @@
 // territory — not adding a query parameter.
 //
 // **ADR-243 put the screen on the shared table with History's columns.** The filters are the
-// columns History filters — severity, node, what, state — under History's URL keys, so a link moves
-// between the two screens by changing the path. The scope (all / a folder / a node) is History's
+// columns History filters — severity, node, what, state, when — under History's URL keys, so a link
+// moves between the two screens by changing the path. Notes is this screen's own column and key. The scope (all / a folder / a node) is History's
 // too, read from the same `node_id` / `group_id` keys, but decided here in the browser.
 
 import { alertSubject, subjectNodeId, subjectText, type HasSubject } from '../lib/alertSubject';
+import { NOTE_KINDS, type NoteKind } from '../lib/alertNotes';
 import { TEXT_MODES, type ColumnFilterSpec } from '../lib/columnFilter';
+import { clientRangePresets } from '../lib/filterPresets';
 import { severityLabel, stateLabel } from '../lib/format';
 import type { TFunction } from 'i18next';
 import type { NodeState, Severity } from '../types/api';
@@ -34,14 +36,18 @@ export interface FilterableAlert extends HasSubject {
   severity: Severity;
   state: NodeState;
   metric?: string | null;
+  at_unix_ms: number;
 }
 
 /** Resolve a node id to its display name; the raw id when it has not resolved yet. */
 export type NameOf = (id: string) => string;
 
+/** The kinds of note a row carries — the caller's `alertNotes`, which needs the held list. */
+export type NotesOf<A> = (a: A) => readonly NoteKind[];
+
 /**
  * The screen's filters, keyed by column — and the keys are the URL keys, the same ones Alerts ▸
- * History uses (`severity` / `node_q` / `metric` / `state`).
+ * History uses (`severity` / `node_q` / `metric` / `state` / `range`), plus `notes`.
  *
  * ⚠️ **`nameOf` is read only by the node column's `readText`.** That resolver is `useEntityNames`'
  * lazy one: asking it about an id *enqueues* that id for the next batch request. `buildPredicate`
@@ -53,12 +59,13 @@ export type NameOf = (id: string) => string;
  * raw id is included because it is the handle in a deep link and in an API error, so pasting one
  * has to find its row.
  */
-export function activeAlertFilters(
+export function activeAlertFilters<A extends FilterableAlert>(
   t: TFunction,
   nameOf: NameOf,
+  notesOf: NotesOf<A>,
   severities: readonly Severity[],
   states: readonly NodeState[],
-): Record<string, ColumnFilterSpec<FilterableAlert>> {
+): Record<string, ColumnFilterSpec<A>> {
   return {
     severity: {
       kind: 'enum',
@@ -95,6 +102,24 @@ export function activeAlertFilters(
       readValue: (a) => a.state,
       allLabel: t('history.filter.allStates'),
       counts: 'client',
+    },
+    // Which kinds of note a row carries — a row may carry several, so it matches when any of them is
+    // ticked. Sorted by its first note, in the order the column draws them; a row with none sorts
+    // last.
+    notes: {
+      kind: 'enum',
+      options: NOTE_KINDS.map((k) => ({ value: k, label: t(`active.noteKind.${k}`) })),
+      readValue: (a) => notesOf(a),
+      allLabel: t('active.filter.allNotes'),
+      counts: 'client',
+    },
+    // History's time column, under History's key, over the same presets every browser-held list
+    // offers. `all` is the default: an open alert does not get less open with age.
+    range: {
+      kind: 'range',
+      presets: clientRangePresets(t),
+      defaultPreset: 'all',
+      readTime: (a) => a.at_unix_ms,
     },
   };
 }

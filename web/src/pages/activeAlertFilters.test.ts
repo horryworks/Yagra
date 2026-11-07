@@ -25,6 +25,10 @@ import {
   type GroupOf,
   type NameOf,
 } from './activeAlertFilters';
+import type { NoteKind } from '../lib/alertNotes';
+
+/** A row as the tests build it: the notes are stated outright rather than derived. */
+type TestAlert = FilterableAlert & { kinds?: NoteKind[] };
 
 const NODE = 'aaaaaaaa-0000-0000-0000-000000000001';
 const OTHER = 'aaaaaaaa-0000-0000-0000-000000000002';
@@ -35,15 +39,25 @@ const nameOf: NameOf = (id) => NAMES[id] ?? id;
 const t = ((k: string) => k) as unknown as Parameters<typeof activeAlertFilters>[0];
 
 const cols = (resolver: NameOf = nameOf) =>
-  specColumns(activeAlertFilters(t, resolver, SEVERITIES, SEVERITY_ORDER as readonly NodeState[]));
+  specColumns(
+    activeAlertFilters<TestAlert>(
+      t,
+      resolver,
+      (a) => a.kinds ?? [],
+      SEVERITIES,
+      SEVERITY_ORDER as readonly NodeState[],
+    ),
+  );
 
 const DEFAULTS = defaultFilters(cols());
 const withFilters = (over: FilterState): FilterState => ({ ...DEFAULTS, ...over });
-const matches = (a: FilterableAlert, f: FilterState, resolver: NameOf = nameOf) =>
-  buildPredicate(cols(resolver), f, 0)(a);
+const NOW = Date.UTC(2026, 10, 7);
+const matches = (a: TestAlert, f: FilterState, resolver: NameOf = nameOf) =>
+  buildPredicate(cols(resolver), f, NOW)(a);
 
-const nodeAlert = (over: Partial<FilterableAlert> = {}): FilterableAlert => ({
+const nodeAlert = (over: Partial<TestAlert> = {}): TestAlert => ({
   node: NODE,
+  at_unix_ms: NOW - 60_000,
   subject_kind: 'node',
   severity: 'critical',
   state: 'unreachable',
@@ -51,8 +65,9 @@ const nodeAlert = (over: Partial<FilterableAlert> = {}): FilterableAlert => ({
   ...over,
 });
 
-const poolAlert = (over: Partial<FilterableAlert> = {}): FilterableAlert => ({
+const poolAlert = (over: Partial<TestAlert> = {}): TestAlert => ({
   node: 'pool:tokyo',
+  at_unix_ms: NOW - 60_000,
   subject_kind: 'pool',
   subject_name: 'tokyo',
   severity: 'warning',
@@ -65,7 +80,28 @@ const read = (qs: string) => normalizeSets(cols(), readFilterParams(cols(), new 
 
 describe('the columns', () => {
   it('are History’s filter keys, so a link moves between the two screens by its path', () => {
-    expect(cols().map((c) => c.key)).toEqual(['severity', 'node_q', 'metric', 'state']);
+    expect(cols().map((c) => c.key)).toEqual(['severity', 'node_q', 'metric', 'state', 'notes', 'range']);
+  });
+});
+
+describe('the Notes and When columns', () => {
+  it('keeps a row carrying any ticked kind of note, and drops a row with none', () => {
+    const f = withFilters({ notes: 'flapping,held' });
+    expect(matches(nodeAlert({ kinds: ['self', 'flapping'] }), f)).toBe(true);
+    expect(matches(nodeAlert({ kinds: ['held'] }), f)).toBe(true);
+    expect(matches(nodeAlert({ kinds: ['upstream'] }), f)).toBe(false);
+    expect(matches(nodeAlert(), f)).toBe(false);
+  });
+
+  it('keeps an alert raised inside the window and drops an older one', () => {
+    const f = withFilters({ range: '24h' });
+    expect(matches(nodeAlert({ at_unix_ms: NOW - 3600_000 }), f)).toBe(true);
+    expect(matches(nodeAlert({ at_unix_ms: NOW - 2 * 86400_000 }), f)).toBe(false);
+  });
+
+  it('opens on every age, so an old open alert is not hidden by default', () => {
+    expect(matches(nodeAlert({ at_unix_ms: NOW - 400 * 86400_000 }), DEFAULTS)).toBe(true);
+    expect(isAnyFiltered(cols(), DEFAULTS)).toBe(false);
   });
 });
 
@@ -154,7 +190,14 @@ describe('isAnyFiltered', () => {
 describe('the URL codec', () => {
   it('reads an empty query as the default view, and round-trips every field', () => {
     expect(read('')).toEqual(DEFAULTS);
-    const f: FilterState = { severity: 'warning', node_q: 'rtr-01', metric: 'icmp', state: 'maintenance' };
+    const f: FilterState = {
+      severity: 'warning',
+      node_q: 'rtr-01',
+      metric: 'icmp',
+      state: 'maintenance',
+      notes: 'flapping',
+      range: '7d',
+    };
     const params = new URLSearchParams();
     writeFilterParams(cols(), params, f);
     expect(read(params.toString())).toEqual(f);

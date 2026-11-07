@@ -94,8 +94,9 @@ test('the table has History’s header row and funnels, and severity reads as a 
   for (const h of ['Severity', 'Node', 'What', 'State', 'Notes', 'When']) {
     await expect(head).toContainText(h);
   }
-  // Funnels beside the headers, as History has, and no toolbar funnel standing in for them.
-  await expect(head.locator('.hf-trigger')).toHaveCount(4);
+  // Funnels beside every data column's header — History's four, plus Notes and When — and no
+  // toolbar funnel standing in for them.
+  await expect(head.locator('.hf-trigger')).toHaveCount(6);
   await expect(page.locator('.mfilt-menu')).toHaveCount(0);
   await expect(page.locator('.dt-row')).toHaveCount(4);
   await expect(page.locator('.dt-row').first()).toContainText('Critical');
@@ -147,4 +148,17 @@ test('a node scope keeps that node’s alerts', async ({ page }) => {
   await page.goto(`/alerts?node_id=${node(2)}`);
   await expect(page.locator('.dt-row')).toHaveCount(1);
   await expect(page.locator('.dt-row')).toContainText(`${MOCK_PREFIX}sw-2`);
+});
+
+test('a note kind in the URL keeps the rows carrying it, and When sorts by age', async ({ page }) => {
+  // Only node 0's alert is flapping.
+  await page.goto('/alerts?notes=flapping');
+  await expect(page.locator('.dt-row')).toHaveCount(1);
+  await expect(page.locator('.dt-row').first()).toContainText(`${MOCK_PREFIX}sw-0`);
+  // Oldest first: node 3's alert is the oldest of the four.
+  await page.goto('/alerts?sort=range&dir=asc');
+  await expect(page.locator('.dt-row').first()).toContainText(`${MOCK_PREFIX}sw-3`);
+  // A window that every alert falls inside keeps all four.
+  await page.goto('/alerts?range=24h');
+  await expect(page.locator('.dt-row')).toHaveCount(4);
 });

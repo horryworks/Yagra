@@ -6,6 +6,16 @@
     "cols": {
       "notes": "Notes",
       "actions": "Actions"
+    },
+    "noteKind": {
+      "upstream": "Caused upstream",
+      "self": "This node’s outage",
+      "flapping": "Flapping",
+      "waitingNeighbour": "Waiting for a neighbour",
+      "held": "Held"
+    },
+    "filter": {
+      "allNotes": "All notes"
     }
   },
   "row": {

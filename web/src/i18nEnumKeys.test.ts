@@ -237,6 +237,7 @@ import jaTopology from './locales/ja/topology.json';
 import enSuppression from './locales/en/suppression.json';
 import jaSuppression from './locales/ja/suppression.json';
 import { SCOPE_TABS } from './pages/thresholdQuery';
+import { NOTE_KINDS } from './lib/alertNotes';
 
 type Json = Record<string, unknown>;
 
@@ -358,6 +359,11 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enAlerts, ja: jaAlerts };
     // The phase filter's two options and the row badge read the same keys, so one miss shows twice.
     expectKeys('history phase', locales, 'history.phase.', ['fired', 'cleared'] as const);
+  });
+
+  it('every kind of active-alert note has a filter label (alerts:active.noteKind.*)', () => {
+    // The Notes column's funnel offers one option per kind (ADR-243).
+    expectKeys('note kind', { en: enAlerts, ja: jaAlerts }, 'active.noteKind.', NOTE_KINDS);
   });
 
   it('every audit action and status class has a label (access:audit.*)', () => {

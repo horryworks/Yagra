@@ -70,11 +70,18 @@ export function ActiveAlertsPage() {
   const { nodeName, nodeGroup, groups, groupName } = useEntityNames();
   const held = useHeldNotifications();
 
+  // One answer per row to "which notes", shared by the cell, the Notes filter and its sort.
+  const notesOf = useCallback(
+    (a: Alert) => alertNotes(a, held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a))),
+    [held],
+  );
+  const noteKindsOf = useCallback((a: Alert) => notesOf(a).map((n) => n.kind), [notesOf]);
+
   // The filters live in the URL under History's keys, so a narrowed triage view survives a reload
   // and can be pasted to whoever is looking at the same incident.
   const specs = useMemo(
-    () => activeAlertFilters(t, nodeName, SEVERITIES, SEVERITY_ORDER),
-    [t, nodeName],
+    () => activeAlertFilters<Alert>(t, nodeName, noteKindsOf, SEVERITIES, SEVERITY_ORDER),
+    [t, nodeName, noteKindsOf],
   );
   const filterCols = useMemo(() => specColumns(specs), [specs]);
   const { filters, setFilters } = useFilterParams(filterCols);
@@ -124,13 +131,13 @@ export function ActiveAlertsPage() {
     if (onlySilenced) rows = rows.filter(isSilenced);
     return rows;
   }, [all, scopeIds, subtree, nodeGroup, onlySilenced]);
-  const shown = useMemo(() => applyFilters(scoped, filterCols, filters, 0), [scoped, filterCols, filters]);
+  const shown = useMemo(() => applyFilters(scoped, filterCols, filters, Date.now()), [scoped, filterCols, filters]);
   const counts = useMemo(
     () =>
       Object.fromEntries(
         filterCols
           .filter((c) => c.filter.kind === 'enum')
-          .map((c) => [c.key, facetCounts(scoped, filterCols, filters, c.key, 0)]),
+          .map((c) => [c.key, facetCounts(scoped, filterCols, filters, c.key, Date.now())]),
       ),
     [scoped, filterCols, filters],
   );
@@ -195,19 +202,12 @@ export function ActiveAlertsPage() {
         key: 'notes',
         header: t('active.cols.notes'),
         width: '1.3fr',
-        render: (a) => (
-          <AlertNotes
-            stacked
-            nodeName={nodeName}
-            notes={alertNotes(a, held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a)))}
-          />
-        ),
+        render: (a) => <AlertNotes stacked nodeName={nodeName} notes={notesOf(a)} />,
       },
       {
-        key: 'when',
+        key: 'range',
         header: t('history.cols.when'),
         width: '180px',
-        sortValue: (a) => a.at_unix_ms,
         render: (a) => {
           const when = formatTimestamp(a.at_unix_ms);
           return (
@@ -248,7 +248,7 @@ export function ActiveAlertsPage() {
     }
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, nodeName, held, canExplain, specs]);
+  }, [t, nodeName, notesOf, canExplain, specs]);
 
   const sorting = useClientSort(columns, shown);
 
