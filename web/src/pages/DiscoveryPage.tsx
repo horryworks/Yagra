@@ -67,6 +67,8 @@ import { PermissionHint } from '../components/ui/PermissionHint';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { Button } from '../components/ui/Button';
 import { TextInput, TextArea, Select, FieldError } from '../components/ui/Field';
+import { Segmented } from '../components/ui/Segmented';
+import { settingsForcedOpen, settingsSummary } from './discoveryScanSettings';
 import { InfoTip } from '../components/ui/InfoTip';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
@@ -437,6 +439,21 @@ export function DiscoveryPage() {
   const overLimit = exactCount === null && tickedTotal > sweepLimit;
   /** The free-text field's live line — its count, or its format error (ADR-200 Inc.11). */
   const typed = useMemo(() => typedTargets(targetSpec, sweepLimit), [targetSpec, sweepLimit]);
+
+  /** The last site chosen, so switching to IP range and back returns to it (ADR-244). */
+  const lastSite = useRef('');
+  /** The IP range | Site toggle (ADR-244 decision 1). Site reopens the last site, or the first. */
+  const chooseTarget = (site: boolean) => {
+    if (!site) {
+      if (siteId) lastSite.current = siteId;
+      pickSite('');
+      return;
+    }
+    const back = siteOptions.find((o) => o.id === lastSite.current) ?? siteOptions[0];
+    if (back) pickSite(back.id);
+  };
+  /** Whether the operator opened the folded settings (ADR-244 decision 3). */
+  const [howOpen, setHowOpen] = useState(false);
 
   /** Choose a site — or leave it, which brings the free-text field back. */
   const pickSite = (id: string) => {
@@ -892,17 +909,28 @@ export function DiscoveryPage() {
       <Card title={t('discovery.scanTitle')}>
         {canConfig ? (
           <>
-            {/* Three inputs, each named and each carrying its own hint directly underneath
-                (ADR-055 R1/R2). They were an unlabelled row with all three explanations stacked
-                below it, so nothing on screen said which sentence belonged to which control — and
-                the pool select in particular read as an unexplained dropdown. */}
-            {/* The site picker (ADR-100 decision 10). Drawn only when some folder actually
-                carries a prefix, which on a deployment with no NetBox is never — an empty
-                dropdown would be a control that explains nothing. */}
+            {/* ADR-244: what to scan, then Scan, on one row; everything about HOW it scans is one
+                folded line below that says what it will use. The toggle exists only when some
+                folder carries a range, since with none there is nothing to choose between. */}
             {siteOptions.length > 0 && (
-              <div className="disco-site">
-                <label className="form-label">
-                  {t('discovery.site.label')}
+              <Segmented
+                ariaLabel={t('discovery.target.label')}
+                options={[
+                  { value: 'range', label: t('discovery.target.range') },
+                  { value: 'site', label: t('discovery.target.site') },
+                ]}
+                value={siteId ? 'site' : 'range'}
+                onChange={(v) => chooseTarget(v === 'site')}
+              />
+            )}
+
+            {/* 🚨 **The site's ranges and the free-text field are one control, in two shapes.**
+                Whichever is drawn is what Scan reads (`effectiveSpec`); they are never both on
+                screen, because two inputs editing one target leaves nothing on the page saying
+                which one the button is about to use. */}
+            <div className="disco-target">
+              <div className="disco-target-field">
+                {siteId ? (
                   <GroupPicker
                     options={siteOptions.map((o) => ({
                       id: o.id,
@@ -911,203 +939,189 @@ export function DiscoveryPage() {
                       path: o.label,
                     }))}
                     value={siteId}
-                    onChange={pickSite}
-                    emptyOption={t('discovery.site.none')}
+                    onChange={(id) => {
+                      if (id) pickSite(id);
+                    }}
                     disabled={inFlight}
                   />
-                </label>
-              </div>
-            )}
-
-            <div className="disco-form form-row">
-              {/* 🚨 **The site's ranges and the free-text field are one control, in two shapes.**
-                  Whichever is drawn is what Scan reads (`effectiveSpec`); they are never both on
-                  screen, because two inputs editing one target leaves nothing on the page saying
-                  which one the button is about to use — the coexistence `ui-conventions.md`
-                  removes wherever it finds it.
-
-                  Ticks rather than a comma-separated string, because the limit is reached by
-                  ordinary use: a site's /20 alone comes to 4094 addresses against 4096, so
-                  "take that one out" is a routine operation and it should not be a text edit. */}
-              {siteId ? (
-                <div className="form-label disco-f-targets">
-                  {t('discovery.site.rangesLabel')}
-                  <div className="disco-prefixes">
-                    {siteRows.map((r) =>
-                      r.unsweepable ? (
-                        // No checkbox, and the reason in the row rather than on hover. A disabled
-                        // box explains itself only to a mouse (ADR-055 R4/R6), and these two are
-                        // different problems: IPv6 will never be sweepable, while a range that is
-                        // merely too large is one someone could narrow in NetBox.
-                        <div className="disco-prefix is-off" key={r.prefix}>
-                          <span className="disco-prefix-cidr mono">{r.prefix}</span>
-                          {r.description && (
-                            <span className="disco-prefix-desc">{r.description}</span>
-                          )}
-                          <span className="disco-prefix-why">
-                            {t(`discovery.site.cannot.${r.unsweepable}`, { max: sweepLimit })}
-                          </span>
-                        </div>
-                      ) : (
-                        <label className="disco-prefix" key={r.prefix}>
-                          <input
-                            type="checkbox"
-                            checked={checkedPrefixes.has(r.prefix)}
-                            disabled={inFlight}
-                            onChange={() => togglePrefix(r.prefix)}
-                          />
-                          <span className="disco-prefix-cidr mono">{r.prefix}</span>
-                          {r.description && (
-                            <span className="disco-prefix-desc">{r.description}</span>
-                          )}
-                          <span className="disco-prefix-hosts">
-                            {t('discovery.site.hosts', { count: r.hosts })}
-                          </span>
-                        </label>
-                      ),
+                ) : (
+                  <>
+                    {/* Multi-line underneath so a pasted list keeps working; `expandTargets`
+                        splits on commas and any whitespace, newlines included. */}
+                    <TextArea
+                      className="mono disco-range"
+                      rows={1}
+                      aria-label={t('discovery.targetsLabel')}
+                      placeholder={t('discovery.targetPlaceholder')}
+                      value={targetSpec}
+                      onChange={(e) => setTargetSpec(e.target.value)}
+                    />
+                    {typed.kind === 'count' && (
+                      <span className="form-status">
+                        {t('discovery.site.addresses', { count: typed.count, max: sweepLimit })}
+                      </span>
                     )}
-                  </div>
-                  {/* The total, always — including when it is too big. `exactCount` de-duplicates
-                      but answers `null` past the limit, so the ticked sum stands in there: a
-                      number that simply disappeared would make an over-large selection look like
-                      an empty one. */}
-                  <span className={overLimit ? 'field-error' : 'form-status'}>
-                    {shownCount === null
-                      ? t('discovery.site.noneTicked')
-                      : overLimit
-                        ? t('discovery.site.overLimit', { count: shownCount, max: sweepLimit })
-                        : t('discovery.site.addresses', { count: shownCount, max: sweepLimit })}
-                  </span>
-                </div>
-              ) : (
-                <label className="form-label disco-f-targets">
-                  {t('discovery.targetsLabel')}
-                  {/* Multi-line so a list can be pasted one entry per line; `expandTargets` splits
-                      on commas and any whitespace, newlines included. */}
-                  <TextArea
-                    className="mono"
-                    rows={3}
-                    placeholder={t('discovery.targetPlaceholder')}
-                    value={targetSpec}
-                    onChange={(e) => setTargetSpec(e.target.value)}
-                  />
-                  {/* The field explains its format through the placeholder and this one live line
-                      (ADR-200 Inc.11): the count while the text parses, the format error the
-                      moment it does not, nothing while it is empty. The error is the one Scan
-                      would have shown, so it is not repeated there (`startScan`). */}
-                  {typed.kind === 'count' && (
-                    <span className="form-status">
-                      {t('discovery.site.addresses', { count: typed.count, max: sweepLimit })}
-                    </span>
-                  )}
-                  {typed.kind === 'invalid' && (
-                    <FieldError>{t('discovery.err.badTargets', { max: sweepLimit })}</FieldError>
-                  )}
-                </label>
-              )}
-
-              {/* Not a <label>: the picker holds controls of its own (a checkbox per row and the
-                  order's up / down, ADR-205 Inc.3), and a click on a label is forwarded to its
-                  first control, so pressing beside a row would tick the first credential. */}
-              <div className="form-label disco-f-creds">
-                {t('discovery.credsLabel')}
-                <CredentialPicker
-                  options={snmpCreds}
-                  selected={selectedCredIds}
-                  onChange={setSelectedCredIds}
-                  disabled={inFlight}
-                />
-                <Link className="field-link" to="/nodes/credentials">
-                  {t('discovery.manageCreds')}
-                </Link>
-              </div>
-
-              {/* Which site the sweep runs from (ADR-068). Before this, the job went to a subject
-                  every poller competes for, so a remote-site poller could sweep head office —
-                  reaching nothing and reporting a successful, empty scan. */}
-              <label className="form-label disco-f-pool">
-                {t('discovery.pool.label')}
-                <Select
-                  value={pool ?? ''}
-                  disabled={inFlight}
-                  onChange={(e) => setPool(e.target.value || null)}
-                >
-                  <option value="">{t('discovery.pool.any')}</option>
-                  {pools.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name}
-                    </option>
-                  ))}
-                </Select>
-                {/* Says what the choice risks rather than removing the option: a pool that is
-                    briefly down is still the pool the operator means, and hiding it would take
-                    away the reason to come back to it. A live pool says nothing — it does what
-                    the label says. */}
-                {unroutedPool && (
-                  <FieldError>
-                    {!pool ? t('discovery.pool.anyHint') : t('discovery.pool.deadHint')}
-                  </FieldError>
+                    {typed.kind === 'invalid' && (
+                      <FieldError>{t('discovery.err.badTargets', { max: sweepLimit })}</FieldError>
+                    )}
+                  </>
                 )}
-              </label>
-
-            </div>
-
-            {/* The ICMP gate (ADR-068 Inc.3). Below the row rather than inside it: it modifies how
-                the whole sweep runs rather than describing one of the three inputs, and it is the
-                only control here whose cost the operator should read before pressing Scan.
-                The input stays enabled mid-sweep (the value is worth reading) — only the button
-                that acts on it goes away (ui-conventions). */}
-            <div className="disco-opt">
-              {/* The label carries the cost itself (ADR-200 Inc.11) — "slower on large ranges" is
-                  the one thing the operator needs before ticking it, so there is no hint below. */}
-              <label className="form-label form-check">
-                <input
-                  type="checkbox"
-                  checked={snmpWhenUnreachable}
-                  disabled={inFlight}
-                  onChange={(e) => setSnmpWhenUnreachable(e.target.checked)}
-                />
-                {t('discovery.icmpGate.label')}
-              </label>
-            </div>
-
-            {/* File each device into the folder whose IP range contains it (ADR-131).
-                Drawn only when some folder actually carries a range — the same expression the site
-                picker uses above, deliberately not a second predicate. It is not weaker than the
-                server's `any_prefixes`: `visible_groups` clears `prefixes` on exactly the rows
-                `allows_group` rejects, so a range this list cannot see is one the matcher will not
-                use either. It has to be answerable before any candidate exists, which is why the
-                server's answer cannot be waited for here — only the per-row wording uses that. */}
-            {siteOptions.length > 0 && (
-              <div className="disco-opt">
-                {/* No hint: each result row says where it will go and why (`dest.why.*`). */}
-                <label className="form-label form-check">
-                  <input
-                    type="checkbox"
-                    checked={fileByPrefix}
-                    onChange={(e) => setFileByPrefix(e.target.checked)}
-                  />
-                  {t('discovery.fileByPrefix.label')}
-                </label>
               </div>
-            )}
-
-            {/* Below the row rather than in it. Each field is now three bands tall (label, input,
-                hint), and a hint that wraps makes its column taller than the others — so a button
-                sharing the row would drift away from the control it acts on, by an amount that
-                depends on the text. */}
-            <div className="disco-actions">
               <Button variant="primary" onClick={startScan} disabled={inFlight}>
                 {inFlight ? t('discovery.scanning') : t('discovery.scan')}
               </Button>
-              {/* Drawn only while there is something to stop, never disabled: a disabled button
-                  explains itself on hover alone, which is nothing on a touch device
-                  (ui-conventions R4 / ADR-056). Once asked, the button goes and the sentence below
-                  takes over. */}
+              {/* Drawn only while there is something to stop, never disabled (ADR-056). */}
               {canRequestStop(shown?.state) && (
                 <Button onClick={requestStop}>{t('discovery.scans.stop')}</Button>
               )}
             </div>
+
+            {/* Ticks rather than a comma-separated string, because the limit is reached by
+                ordinary use: a site's /20 alone comes to 4094 addresses against 4096, so "take
+                that one out" is a routine operation and it should not be a text edit. */}
+            {siteId && (
+              <div className="disco-site-ranges">
+                <div
+                  className="disco-prefixes"
+                  role="group"
+                  aria-label={t('discovery.site.rangesLabel')}
+                >
+                  {siteRows.map((r) =>
+                    r.unsweepable ? (
+                      // No checkbox, and the reason in the row rather than on hover: IPv6 will
+                      // never be sweepable, while a range that is merely too large is one someone
+                      // could narrow in NetBox.
+                      <div className="disco-prefix is-off" key={r.prefix}>
+                        <span className="disco-prefix-cidr mono">{r.prefix}</span>
+                        {r.description && (
+                          <span className="disco-prefix-desc">{r.description}</span>
+                        )}
+                        <span className="disco-prefix-why">
+                          {t(`discovery.site.cannot.${r.unsweepable}`, { max: sweepLimit })}
+                        </span>
+                      </div>
+                    ) : (
+                      <label className="disco-prefix" key={r.prefix}>
+                        <input
+                          type="checkbox"
+                          checked={checkedPrefixes.has(r.prefix)}
+                          disabled={inFlight}
+                          onChange={() => togglePrefix(r.prefix)}
+                        />
+                        <span className="disco-prefix-cidr mono">{r.prefix}</span>
+                        {r.description && (
+                          <span className="disco-prefix-desc">{r.description}</span>
+                        )}
+                        <span className="disco-prefix-hosts">
+                          {t('discovery.site.hosts', { count: r.hosts })}
+                        </span>
+                      </label>
+                    ),
+                  )}
+                </div>
+                {/* The total, always, including when it is too big, so an over-large selection
+                    does not read as an empty one. */}
+                <span className={overLimit ? 'field-error' : 'form-status'}>
+                  {shownCount === null
+                    ? t('discovery.site.noneTicked')
+                    : overLimit
+                      ? t('discovery.site.overLimit', { count: shownCount, max: sweepLimit })
+                      : t('discovery.site.addresses', { count: shownCount, max: sweepLimit })}
+                </span>
+              </div>
+            )}
+
+            {/* The folded settings (ADR-244 decisions 3 and 4). The values are the last sweep's
+                (ADR-134), so after the first sweep this rarely needs opening. A pool with no live
+                poller forces it open, because the line saying so is inside. */}
+            <details
+              className="disco-how"
+              open={howOpen || settingsForcedOpen(unroutedPool)}
+              onToggle={(e) => setHowOpen(e.currentTarget.open)}
+            >
+              <summary>
+                <span className="disco-how-t">{t('discovery.how.title')}</span>
+                <span className="disco-how-sum">
+                  {settingsSummary({
+                    credentials: selectedCredIds.length,
+                    pool,
+                    fileByPrefixOffered: siteOptions.length > 0,
+                    fileByPrefix,
+                    snmpWhenUnreachable,
+                  })
+                    .map((p) => t(`discovery.how.${p.key}`, p.values))
+                    .join(' · ')}
+                </span>
+              </summary>
+              <div className="disco-how-body">
+                {/* Not a <label>: the picker holds controls of its own (a checkbox per row and the
+                    order's up / down, ADR-205 Inc.3), and a click on a label is forwarded to its
+                    first control. */}
+                <div className="form-label disco-f-creds">
+                  {t('discovery.credsLabel')}
+                  <CredentialPicker
+                    options={snmpCreds}
+                    selected={selectedCredIds}
+                    onChange={setSelectedCredIds}
+                    disabled={inFlight}
+                  />
+                  <Link className="field-link" to="/nodes/credentials">
+                    {t('discovery.manageCreds')}
+                  </Link>
+                </div>
+
+                <div className="disco-how-side">
+                  {/* Which site the sweep runs from (ADR-068): before this, a remote-site poller
+                      could sweep head office, reach nothing and report an empty success. */}
+                  <label className="form-label disco-f-pool">
+                    {t('discovery.pool.label')}
+                    <Select
+                      value={pool ?? ''}
+                      disabled={inFlight}
+                      onChange={(e) => setPool(e.target.value || null)}
+                    >
+                      <option value="">{t('discovery.pool.any')}</option>
+                      {pools.map((p) => (
+                        <option key={p.name} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </Select>
+                    {unroutedPool && (
+                      <FieldError>
+                        {!pool ? t('discovery.pool.anyHint') : t('discovery.pool.deadHint')}
+                      </FieldError>
+                    )}
+                  </label>
+
+                  {/* File each device into the folder whose IP range contains it (ADR-131). Drawn
+                      only when some folder carries a range, the same expression the toggle above
+                      uses. Each result row says where it will go and why. */}
+                  {siteOptions.length > 0 && (
+                    <label className="form-label form-check">
+                      <input
+                        type="checkbox"
+                        checked={fileByPrefix}
+                        onChange={(e) => setFileByPrefix(e.target.checked)}
+                      />
+                      {t('discovery.fileByPrefix.label')}
+                    </label>
+                  )}
+
+                  {/* The ICMP gate (ADR-068 Inc.3). The label carries its cost. The input stays
+                      enabled mid-sweep; only the button that acts on it goes away. */}
+                  <label className="form-label form-check">
+                    <input
+                      type="checkbox"
+                      checked={snmpWhenUnreachable}
+                      disabled={inFlight}
+                      onChange={(e) => setSnmpWhenUnreachable(e.target.checked)}
+                    />
+                    {t('discovery.icmpGate.label')}
+                  </label>
+                </div>
+              </div>
+            </details>
           </>
         ) : (
           <PermissionHint permission="manage_config" />

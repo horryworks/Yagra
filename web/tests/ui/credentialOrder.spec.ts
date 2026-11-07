@@ -115,13 +115,15 @@ test('a scan sends the credentials in the order the picker shows them', async ({
   errors,
 }) => {
   await page.goto('/nodes/discovery');
+  // The credentials live in the folded settings (ADR-244).
+  await page.locator('.disco-how > summary').click();
   // A fresh browser remembers no scan, so every SNMP credential is ticked, in the server's order.
   const used = page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name');
   await expect(used).toHaveText(['ymock-first', 'ymock-second']);
   await page.getByRole('button', { name: 'Move ymock-second up' }).click();
   await expect(used).toHaveText(['ymock-second', 'ymock-first']);
 
-  await page.locator('.disco-f-targets textarea').fill('192.0.2.1');
+  await page.locator('textarea.disco-range').fill('192.0.2.1');
   const post = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/discovery/scan',
   );
@@ -137,6 +139,8 @@ test('unticking moves a credential down, and ticking it puts it last in the orde
   errors,
 }) => {
   await page.goto('/nodes/discovery');
+  // The credentials live in the folded settings (ADR-244).
+  await page.locator('.disco-how > summary').click();
   const used = page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name');
   const unused = page.locator('.cred-picker-row.unused .cred-picker-row-name');
   await expect(used).toHaveText(['ymock-first', 'ymock-second']);
@@ -150,7 +154,7 @@ test('unticking moves a credential down, and ticking it puts it last in the orde
   await expect(used).toHaveText(['ymock-second', 'ymock-first']);
   await expect(unused).toHaveCount(0);
 
-  await page.locator('.disco-f-targets textarea').fill('192.0.2.1');
+  await page.locator('textarea.disco-range').fill('192.0.2.1');
   const post = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/discovery/scan',
   );
@@ -187,6 +191,8 @@ test('a remembered selection opens in the stored order, not the remembered one',
     [S2, S1],
   );
   await page.goto('/nodes/discovery');
+  // The credentials live in the folded settings (ADR-244).
+  await page.locator('.disco-how > summary').click();
   await expect(page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name')).toHaveText([
     'ymock-first',
     'ymock-second',

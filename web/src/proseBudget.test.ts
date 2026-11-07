@@ -71,7 +71,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   dashboard: [6280, 3469],
   format: [0, 0],
   metrics: [127, 65],
-  monitoring: [11358, 6793], // "alert rule" renamed to "threshold rule" in the profile gap lines (ADR-230 decision 6, 2026-11-03)
+  monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
   nav: [2634, 1206], // - the mute list menu item and its description (ADR-234, 2026-11-03)
   nodes: [15789, 9020], // + the Config tab's status card and history labels; the three table headings went (ADR-240, 2026-11-06)
   rca: [1022, 528],

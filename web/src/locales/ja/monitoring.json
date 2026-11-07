@@ -546,8 +546,6 @@
       "stopErr": "停止の要求に失敗しました"
     },
     "site": {
-      "label": "サイトをスキャンする",
-      "none": "使わない（アドレスを直接入力）",
       "rangesLabel": "このサイトの IP レンジ",
       "hosts_other": "{{count}} アドレス",
       "addresses_other": "{{count}} アドレス（1 回のスキャンで最大 {{max}}）",
@@ -646,13 +644,28 @@
       "empty": "まだ監視していないノードは見つかっていません。"
     },
     "scanTitle": "サブネットをスキャン",
+    "target": {
+      "label": "探す対象",
+      "range": "IP 範囲",
+      "site": "サイト"
+    },
+    "how": {
+      "title": "探し方",
+      "creds_one": "SNMP 認証情報 {{count}} 個",
+      "creds_other": "SNMP 認証情報 {{count}} 個",
+      "noCreds": "SNMP 認証情報なし（ping だけ）",
+      "pool": "実行: {{pool}}",
+      "anyPoller": "実行: どのポーラーでも",
+      "fileByPrefix": "IP 範囲でフォルダ分け",
+      "snmpBlocked": "ping が通らなくても SNMP"
+    },
     "targetsLabel": "対象アドレス",
     "credsLabel": "試す認証情報",
     "icmpGate": {
       "label": "ping が通らない相手にも SNMP を試す（広い範囲では遅くなる）"
     },
     "resultsTitle": "検出されたノード",
-    "targetPlaceholder": "192.0.2.0/24\n198.51.100.5\n192.0.2.10-20",
+    "targetPlaceholder": "192.0.2.0/24, 198.51.100.5, 192.0.2.10-20",
     "scan": "スキャン",
     "scanning": "スキャン中…",
     "none": "（なし）",

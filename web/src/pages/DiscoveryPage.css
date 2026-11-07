@@ -1,72 +1,108 @@
 /* Discovery: scan form + a results table with per-row import controls. */
 
-/* The scan form: three named fields side by side, each with its own hint underneath.
+/* The scan form (ADR-244): the IP range | Site toggle, then one row holding what to scan and the
+ * Scan button, then the folded settings.
  *
- * ⚠️ **`flex-start` is required here, and the reason is the hints.** `.form-row`'s own `flex-end`
- * aligns the columns by their *bottoms*, which is right for a row of bare inputs — but each column
- * here is three bands tall (label, input, hint) and the hints are different heights: the address
- * examples wrap to two lines, the other two do not. Bottom-alignment therefore pushed the
- * "Addresses" label a whole line above its two neighbours, so the row read as broken.
- * Top-alignment anchors what the eye actually reads across — the three labels, and the tops of the
- * three inputs under them — and lets the hints hang to whatever length they need.
- * (An earlier comment here said not to override this. That was wrong; it was written before the
- * fields had labels and hints, when the columns really were the same height.)
- *
- * 🚨 **The compound selector is the fix, not decoration.** `.disco-form` alone is the same
- * specificity as `.form-row`, so which one wins is decided by source order -- and Vite emits the
- * page's CSS *before* `index.css`, so `.form-row`'s `flex-end` came later and won. The override was
- * in the shipped stylesheet, verifiably, and did nothing. Naming both classes (0,2,0 beats 0,1,0)
- * settles it without depending on bundler ordering, which no test watches and which a chunking
- * change could flip back. Same trap for any page rule that overrides a shared one by name only. */
-.disco-form.form-row {
+ * 🚨 Every rule that overrides a shared one names two classes. Vite emits the page's CSS before
+ * `index.css`, so a bare class of equal specificity loses to the shared rule by source order. */
+.disco-target {
+  display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 12px 16px;
-}
-
-/* Wide enough for the longest expression the hint advertises
-   (`192.168.1.10-192.168.1.20`) without wrapping it. */
-.disco-form .disco-f-targets {
-  flex: 1 1 260px;
-}
-
-/* The one that absorbs slack: its chips are the only variable-width content in the row. */
-.disco-form .disco-f-creds {
-  flex: 2 1 280px;
-}
-
-/* ⚠️ Deliberately not sharing the others' `flex: 1`. A pool name is one short word, and giving
-   this an equal share stretched a select holding "default" across a third of the row — the shape
-   that made the form look padded out rather than laid out. */
-.disco-form .disco-f-pool {
-  flex: 0 1 200px;
-}
-
-/* Inputs fill their labelled column; the label is what carries the width. */
-.disco-form .form-label > .field,
-.disco-form .form-label > .cred-picker {
-  width: 100%;
-}
-
-/* The ICMP gate's checkbox (ADR-068 Inc.3): the shared `.form-label.form-check` for the control
-   itself, with the hint as a sibling underneath rather than inside the label. */
-.disco-opt {
-  margin-top: 12px;
-}
-
-.disco-actions {
-  display: flex;
   gap: 8px;
   margin-top: 12px;
 }
 
-/* Touch targets and a single column: three fields side by side at phone width would each be too
-   narrow to read their own hint (ui-conventions). */
-html[data-viewport='mobile'] .disco-form .form-label {
-  flex: 1 1 100%;
+/* The field takes the slack; the buttons keep their own width beside it. Wide enough for
+   `192.0.2.0/24, 198.51.100.5, 192.0.2.10-20` without wrapping. */
+.disco-target .disco-target-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 320px;
+  min-width: 0;
+  max-width: 560px;
 }
 
-html[data-viewport='mobile'] .disco-actions .btn {
+.disco-target .disco-target-field > .field {
+  width: 100%;
+}
+
+/* One line, like a text box, but a pasted list still lands in it whole. */
+.disco-target textarea.disco-range {
+  min-height: var(--control-h);
+  resize: vertical;
+}
+
+.disco-site-ranges {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 640px;
+  margin-top: 8px;
+}
+
+/* The folded settings (ADR-244 decision 3): closed, it is one line that says what will be used. */
+.disco-how {
+  margin-top: 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 8px;
+}
+
+.disco-how > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.disco-how-t {
+  font-weight: var(--weight-medium);
+}
+
+.disco-how-sum {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  min-width: 0;
+}
+
+.disco-how-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 24px;
+  padding: 12px;
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.disco-how-body .disco-f-creds {
+  flex: 2 1 280px;
+  min-width: 0;
+}
+
+.disco-how-body .disco-f-creds > .cred-picker {
+  width: 100%;
+}
+
+.disco-how-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.disco-how-side .disco-f-pool {
+  max-width: 240px;
+}
+
+.disco-how-side .disco-f-pool > .field {
+  width: 100%;
+}
+
+html[data-viewport='mobile'] .disco-target .btn {
   min-height: var(--touch-target);
 }
 
@@ -459,28 +495,9 @@ html[data-viewport='mobile'] .disco-scan {
   flex-wrap: wrap;
 }
 
-/* ── The Site picker (ADR-100 decision 10) ───────────────────────────────────────────────────
-   Its own band above the three-field row rather than a fourth field in it, because it does not
-   describe the sweep — it *fills in* the field below. Sitting inside the row it would have read as
-   a fourth independent choice, and the operator would have no way to tell that picking one rewrites
-   another. Above it, the reading order is the causal order: choose a site, see the ranges appear.
-
-   🚨 Compound selector, as with `.disco-form.form-row` — the page's CSS is emitted before
-   `index.css`, so a bare class name loses to any shared rule of equal specificity regardless of
-   what this file says. */
-.disco-site {
-  margin-bottom: 12px;
-  max-width: 420px;
-}
-
-.disco-site .form-label > .field {
-  width: 100%;
-}
-
 /* ── The chosen site's ranges, one tickable row each (ADR-100 decision 10) ───────────────────
-   It occupies the same column the free-text Addresses field does — they are one control in two
-   shapes and are never drawn together — so it inherits `.disco-f-targets`'s flex basis and only
-   needs its own internal rhythm. */
+   Drawn under the Site row instead of the free-text field; the two are one control in two shapes
+   and are never on screen together. */
 .disco-prefixes {
   display: flex;
   flex-direction: column;

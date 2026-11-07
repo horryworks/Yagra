@@ -557,8 +557,6 @@
       "stopErr": "Failed to request the stop"
     },
     "site": {
-      "label": "Sweep a site",
-      "none": "None — type a range instead",
       "rangesLabel": "Ranges at this site",
       "hosts_one": "{{count}} address",
       "hosts_other": "{{count}} addresses",
@@ -659,13 +657,28 @@
       "empty": "Nothing has been seen yet that Yagra does not already monitor."
     },
     "scanTitle": "Scan a subnet",
+    "target": {
+      "label": "What to scan",
+      "range": "IP range",
+      "site": "Site"
+    },
+    "how": {
+      "title": "Scan settings",
+      "creds_one": "{{count}} SNMP credential",
+      "creds_other": "{{count}} SNMP credentials",
+      "noCreds": "no SNMP credential (ping only)",
+      "pool": "from {{pool}}",
+      "anyPoller": "from any poller",
+      "fileByPrefix": "file by IP range",
+      "snmpBlocked": "SNMP where ping is blocked"
+    },
     "targetsLabel": "Addresses",
     "credsLabel": "Credentials to try",
     "icmpGate": {
       "label": "Also try SNMP where ping is blocked (slower on large ranges)"
     },
     "resultsTitle": "Discovered devices",
-    "targetPlaceholder": "192.0.2.0/24\n198.51.100.5\n192.0.2.10-20",
+    "targetPlaceholder": "192.0.2.0/24, 198.51.100.5, 192.0.2.10-20",
     "scan": "Scan",
     "scanning": "Scanning…",
     "none": "(none)",
