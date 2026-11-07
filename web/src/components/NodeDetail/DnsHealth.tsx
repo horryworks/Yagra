@@ -18,6 +18,8 @@ import { api } from '../../services/api';
 import { formatTimestamp, pointsToSeries } from '../../lib/format';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { Badge } from '../ui/Badge';
+import { Stack } from '../ui/Page';
+import { SectionHead } from '../ui/Section';
 import { ClippedText } from '../ui/ClippedText';
 import { Column, DataTable } from '../ui/DataTable';
 import { RangeControl, resolveRange } from './RangeControl';
@@ -125,126 +127,137 @@ export function DnsHealth({
   ];
 
   return (
-    <section>
-      <div className="nd-section-head">
-        <div className="nd-section-t">{t('overview.dnsMonitor')}</div>
-        <RangeControl value={range} onChange={setRange} />
-        {actions}
-      </div>
+    <Stack as="section" gap={8}>
+      <SectionHead
+        title={t('overview.dnsMonitor')}
+        actions={
+          <>
+            <RangeControl value={range} onChange={setRange} />
+            {actions}
+          </>
+        }
+      />
 
-      <div className="dns-target">
-        <span className="nd-fact-v mono">{check.name}</span>
-        <span className="dns-target-meta">
-          {check.record_type} · {check.resolver ?? t('overview.systemResolver')}
-        </span>
-      </div>
-
-      <div className="nd-health-metrics">
-        <div className="nd-health-metric">
-          <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">{t('overview.resolution')}</span>
-            <span
-              className="nd-health-metric-value"
-              style={{ color: availabilityColorVar(up) }}
-            >
-              {up == null ? '—' : resolves ? t('overview.resolves') : t('overview.doesNotResolve')}
+      <Stack gap={24}>
+        <Stack gap={12}>
+          <div className="dns-target">
+            <span className="nd-fact-v mono">{check.name}</span>
+            <span className="dns-target-meta">
+              {check.record_type} · {check.resolver ?? t('overview.systemResolver')}
             </span>
           </div>
-          {series.timestamps.length > 0 && (
-            <MetricChart
-              title={t('overview.resolveTime')}
-              timestamps={series.timestamps}
-              values={series.values}
-              yFormat={(v) => `${Math.round(v)} ms`}
-              legendFormat={(v) => `${Math.round(v)} ms`}
-              xRange={win ?? undefined}
-            />
-          )}
-        </div>
-        {resolveMs != null && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.resolveTime')}</span>
-              <span className="nd-health-metric-value">{Math.round(resolveMs)} ms</span>
-            </div>
-          </div>
-        )}
-      </div>
 
-      {/* The resolution chain, dig-style. */}
-      {current == null ? (
-        <div className="dns-chain-empty">{t('overview.noChainYet')}</div>
-      ) : (
-        <>
-          <div className="dns-chain">
-            {rows.map((row, i) => (
-              <div className="dns-chain-step" key={`${row.name}-${i}`}>
-                <div className="dns-hop">
-                  <span>{row.name}</span>
-                </div>
-                {row.values.length > 0 && (
-                  <>
-                    <span className="dns-edge">
-                      <span>{row.edge}</span>
-                      <span className="dns-edge-arrow" aria-hidden="true">
-                        →
-                      </span>
-                    </span>
-                    <div
-                      className={`dns-hop${row.terminal ? ' terminal' : ''}`}
-                      title={row.ttl == null ? undefined : `TTL ${row.ttl}s`}
-                    >
-                      {row.values.map((v) => (
-                        <span className="dns-hop-value" key={v}>
-                          {v}
-                        </span>
-                      ))}
-                      {row.ttl != null && <span className="dns-ttl">TTL {row.ttl}s</span>}
-                    </div>
-                  </>
-                )}
+          <div className="nd-health-metrics">
+            <div className="nd-health-metric">
+              <div className="nd-health-metric-head">
+                <span className="nd-health-metric-label">{t('overview.resolution')}</span>
+                <span
+                  className="nd-health-metric-value"
+                  style={{ color: availabilityColorVar(up) }}
+                >
+                  {up == null ? '—' : resolves ? t('overview.resolves') : t('overview.doesNotResolve')}
+                </span>
               </div>
-            ))}
-            {failure && (
-              <div className="dns-chain-step">
-                {rows.length > 0 && (
-                  <span className="dns-edge">
-                    <span className="dns-edge-arrow" aria-hidden="true">
-                      →
-                    </span>
-                  </span>
-                )}
-                <div className="dns-hop failed">
-                  <span>{t(failure.key, failure.values)}</span>
+              {series.timestamps.length > 0 && (
+                <MetricChart
+                  title={t('overview.resolveTime')}
+                  timestamps={series.timestamps}
+                  values={series.values}
+                  yFormat={(v) => `${Math.round(v)} ms`}
+                  legendFormat={(v) => `${Math.round(v)} ms`}
+                  xRange={win ?? undefined}
+                />
+              )}
+            </div>
+            {resolveMs != null && (
+              <div className="nd-health-metric">
+                <div className="nd-health-metric-head">
+                  <span className="nd-health-metric-label">{t('overview.resolveTime')}</span>
+                  <span className="nd-health-metric-value">{Math.round(resolveMs)} ms</span>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Colour is paired with text, never carrying the meaning alone (a11y). */}
-          <div className="dns-outcome nd-muted">
-            {t('overview.firstObserved')} {formatTimestamp(Date.parse(current.first_seen))} ·{' '}
-            {t('overview.lastConfirmed')} {formatTimestamp(Date.parse(current.last_seen))}
-          </div>
-        </>
-      )}
+          {/* The resolution chain, dig-style. */}
+          {current == null ? (
+            <div className="dns-chain-empty">{t('overview.noChainYet')}</div>
+          ) : (
+            <>
+              <div className="dns-chain">
+                {rows.map((row, i) => (
+                  <div className="dns-chain-step" key={`${row.name}-${i}`}>
+                    <div className="dns-hop">
+                      <span>{row.name}</span>
+                    </div>
+                    {row.values.length > 0 && (
+                      <>
+                        <span className="dns-edge">
+                          <span>{row.edge}</span>
+                          <span className="dns-edge-arrow" aria-hidden="true">
+                            →
+                          </span>
+                        </span>
+                        <div
+                          className={`dns-hop${row.terminal ? ' terminal' : ''}`}
+                          title={row.ttl == null ? undefined : `TTL ${row.ttl}s`}
+                        >
+                          {row.values.map((v) => (
+                            <span className="dns-hop-value" key={v}>
+                              {v}
+                            </span>
+                          ))}
+                          {row.ttl != null && <span className="dns-ttl">TTL {row.ttl}s</span>}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+                {failure && (
+                  <div className="dns-chain-step">
+                    {rows.length > 0 && (
+                      <span className="dns-edge">
+                        <span className="dns-edge-arrow" aria-hidden="true">
+                          →
+                        </span>
+                      </span>
+                    )}
+                    <div className="dns-hop failed">
+                      <span>{t(failure.key, failure.values)}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
 
-      <div className="dns-history">
-        <div className="dns-history-head">{t('overview.resolutionHistory')}</div>
-        <DataTable
-          tableId="node.dnsHealth"
-          rows={history}
-          columns={historyColumns}
-          rowKey={(row) => String(row.id)}
-          empty={t('overview.historyEmpty')}
-          renderCard={(row) => (
-            <div>
-              <div className="nd-muted">{formatTimestamp(Date.parse(row.at))}</div>
-              <div className="dns-history-summary">{chainSummary(row.chain)}</div>
-            </div>
+              {/* Colour is paired with text, never carrying the meaning alone (a11y). */}
+              <div className="dns-outcome nd-muted">
+                {t('overview.firstObserved')} {formatTimestamp(Date.parse(current.first_seen))} ·{' '}
+                {t('overview.lastConfirmed')} {formatTimestamp(Date.parse(current.last_seen))}
+              </div>
+            </>
           )}
-        />
-      </div>
-    </section>
+        </Stack>
+
+        <Stack gap={8} className="dns-history">
+          <SectionHead title={t('overview.resolutionHistory')} />
+          {/* A block box: inside the flex column the table's `flex: 1` would size it. */}
+          <div>
+            <DataTable
+              tableId="node.dnsHealth"
+              rows={history}
+              columns={historyColumns}
+              rowKey={(row) => String(row.id)}
+              empty={t('overview.historyEmpty')}
+              renderCard={(row) => (
+                <div>
+                  <div className="nd-muted">{formatTimestamp(Date.parse(row.at))}</div>
+                  <div className="dns-history-summary">{chainSummary(row.chain)}</div>
+                </div>
+              )}
+            />
+          </div>
+        </Stack>
+      </Stack>
+    </Stack>
   );
 }

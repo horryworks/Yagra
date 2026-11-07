@@ -3,7 +3,7 @@
 //
 // WHY THIS FILE EXISTS. This table is not a `DataTable` — its rows are `<button>`s that drive the
 // detail dock below it, which is not a shape `DataTable` has (`tabFilters.ts`) — so its template
-// lived only in `NodeDetail.css`, as one declaration shared by `.nd-if-head`, `.nd-if-filters` and
+// lived only in `InterfacesTab.css`, as one declaration shared by `.nd-if-head`, `.nd-if-filters` and
 // `.nd-if-row`. A width the operator chooses has to come from TypeScript, so the tracks have to be
 // nameable here.
 //
@@ -32,7 +32,7 @@ export interface InterfaceColumn {
  * numbers in `InterfacesTab.tsx` move.
  *
  * The numbers themselves are ADR-126's — measured, not estimated — plus ADR-145's NEIGHBORS and
- * ADR-157's ADDRESSES. The note above the declaration in `NodeDetail.css` explains where each came
+ * ADR-157's ADDRESSES. The note above the declaration in `InterfacesTab.css` explains where each came
  * from; do not change one here without reading it.
  */
 export const INTERFACE_COLUMNS: readonly InterfaceColumn[] = [

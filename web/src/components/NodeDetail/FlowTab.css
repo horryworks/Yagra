@@ -1,10 +1,9 @@
 /* NodeDetail ▸ Flow tab (ADR-031). Trend chart on top, a responsive Top-N card grid, then a
-   fixed-height conversations table (its own virtual scroll). All colors/fonts via theme vars. */
+   fixed-height conversations table (its own virtual scroll). All colors/fonts via theme vars.
+   The column is a `Stack`; the cards are `Card`s and the section headings `SectionHead`s
+   (ADR-246), so only the screen's own layout lives here. */
 
 .nd-flow {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
   padding: var(--space-4);
 }
 
@@ -18,7 +17,7 @@
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: var(--space-2);
 }
 .nd-flow-toolbar-actions {
   display: flex;
@@ -36,7 +35,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 1px;
+  gap: var(--space-0-5);
   min-width: 0;
   max-width: 100%;
   padding: 0;
@@ -82,43 +81,9 @@
   gap: var(--space-4);
 }
 
-/* Card header row: title + optional inline control (the AS src/dst toggle). */
-.nd-flow-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-/* Sankey (src→dst ribbons) — shown alongside the exact conversations table. */
-.nd-flow-sankey {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
+/* A grid item shrinks below its content's width only when told to. */
 .nd-flow-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
   min-width: 0;
-}
-
-.nd-flow-h {
-  margin: 0;
-  font-size: var(--font-sm);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.nd-flow-convos {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 /* Bounded height so the virtualized DataTable scrolls internally within the scrolling tab body. */

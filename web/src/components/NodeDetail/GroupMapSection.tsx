@@ -25,6 +25,8 @@ import { usePrefsStore } from '../../prefs';
 import { topologyMapHref } from '../../lib/entityHref';
 import { writeIdParam } from '../../lib/filterParams';
 import { conditionIsActive, decodeCondition } from '../../lib/filterCondition';
+import { Stack } from '../ui/Page';
+import { SectionHead } from '../ui/Section';
 import { TopologyMap } from '../TopologyMap/TopologyMap';
 import { MapEdgeMembers } from '../TopologyMap/MapEdgeMembers';
 import { MapBundleMembers } from '../TopologyMap/MapBundleMembers';
@@ -69,25 +71,31 @@ export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
   const [findSlot, setFindSlot] = useState<HTMLDivElement | null>(null);
   const bodyId = `nd-grpmap-${groupId}`;
   return (
-    <section>
-      <div className="nd-section-head nd-grpmap-head">
-        <button
-          type="button"
-          className="nd-grpmap-toggle"
-          aria-expanded={!collapsed}
-          aria-controls={bodyId}
-          onClick={toggle}
-        >
-          <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
-          <span className="nd-section-t">{t('groupDetail.map.title')}</span>
-        </button>
-        <div className="nd-grpmap-find" ref={setFindSlot}>
-          {collapsed && <ActiveSearchChip mq={mq} writeMq={writeMq} />}
-        </div>
-        <Link className="nd-grpmap-open" to={withSearch(topologyMapHref({ group: groupId }), mq)}>
-          {t('groupDetail.map.open')}
-        </Link>
-      </div>
+    <Stack as="section" gap={8}>
+      <SectionHead
+        title={
+          <button
+            type="button"
+            className="nd-grpmap-toggle"
+            aria-expanded={!collapsed}
+            aria-controls={bodyId}
+            onClick={toggle}
+          >
+            <span aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
+            <span>{t('groupDetail.map.title')}</span>
+          </button>
+        }
+        tools={
+          <div className="nd-grpmap-find" ref={setFindSlot}>
+            {collapsed && <ActiveSearchChip mq={mq} writeMq={writeMq} />}
+          </div>
+        }
+        actions={
+          <Link className="nd-grpmap-open" to={withSearch(topologyMapHref({ group: groupId }), mq)}>
+            {t('groupDetail.map.open')}
+          </Link>
+        }
+      />
       {!collapsed && (
         <div id={bodyId}>
           <GroupMapOpen
@@ -100,7 +108,7 @@ export function GroupMapSection({ groupId, onOpenNode, onOpenGroup }: Props) {
           />
         </div>
       )}
-    </section>
+    </Stack>
   );
 }
 

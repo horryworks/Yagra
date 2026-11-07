@@ -6,14 +6,6 @@
     "components/HealthBar/HealthBar.css": 1,
     "components/MetricPicker/MetricPicker.css": 2,
     "components/MoveByPrefixModal/MoveByPrefixModal.css": 2,
-    "components/NodeDetail/ApTab.css": 1,
-    "components/NodeDetail/AvailabilitySection.css": 3,
-    "components/NodeDetail/ConfigBackupTab.css": 15,
-    "components/NodeDetail/DnsHealth.css": 3,
-    "components/NodeDetail/FlowTab.css": 6,
-    "components/NodeDetail/NeighborsTab.css": 5,
-    "components/NodeDetail/NodeDetail.css": 100,
-    "components/NodeDetail/RangeControl.css": 5,
     "components/NodePicker/NodePicker.css": 1,
     "components/NodeTree/NodeTree.css": 12,
     "components/Rca/RcaModal.css": 3,
@@ -64,16 +56,11 @@
   "fontSize": {},
   "inlineSpacing": {},
   "legacy": {
-    "pages/NodeDetailPage.tsx": 1,
     "pages/NodesPage.tsx": 2
   },
   "uppercase": {
     "components/CollectionEditor/CollectionEditor.css": 1,
     "components/InterfaceRules/InterfaceRulesModal.css": 1,
-    "components/NodeDetail/DnsHealth.css": 1,
-    "components/NodeDetail/NeighborsTab.css": 2,
-    "components/NodeDetail/NodeDetail.css": 10,
-    "components/NodeDetail/RangeControl.css": 1,
     "components/NodeTree/NodeTree.css": 2,
     "components/shell/SideBar.css": 2,
     "dashboard/CatalogModal.css": 1,
@@ -138,19 +125,23 @@
       "why": "before ADR-246"
     },
     "components/NodeDetail/ApTab.css": {
-      "lines": 137,
+      "lines": 133,
       "why": "before ADR-246"
     },
     "components/NodeDetail/AvailabilitySection.css": {
-      "lines": 112,
+      "lines": 109,
       "why": "before ADR-246"
     },
+    "components/NodeDetail/CollectionTab.css": {
+      "lines": 266,
+      "why": "the collection status and the expandable metric rows (split from NodeDetail.css, ADR-246 Inc.6)"
+    },
     "components/NodeDetail/ConfigBackupTab.css": {
-      "lines": 410,
+      "lines": 347,
       "why": "before ADR-246"
     },
     "components/NodeDetail/DnsHealth.css": {
-      "lines": 154,
+      "lines": 137,
       "why": "before ADR-246"
     },
     "components/NodeDetail/FlowSankey.css": {
@@ -158,23 +149,35 @@
       "why": "before ADR-246"
     },
     "components/NodeDetail/FlowTab.css": {
-      "lines": 137,
+      "lines": 102,
       "why": "before ADR-246"
     },
+    "components/NodeDetail/GroupDetail.css": {
+      "lines": 347,
+      "why": "the folder rollup: health bar, members, prefixes, missing subnets, the folder map (split from NodeDetail.css, ADR-246 Inc.6)"
+    },
+    "components/NodeDetail/InterfacesTab.css": {
+      "lines": 942,
+      "why": "the interface list grid with in-row sparklines and the resizable chart dock (split from NodeDetail.css, ADR-246 Inc.6)"
+    },
     "components/NodeDetail/NeighborsTab.css": {
-      "lines": 462,
+      "lines": 407,
       "why": "before ADR-246"
     },
     "components/NodeDetail/NodeDetail.css": {
-      "lines": 2517,
+      "lines": 447,
       "why": "before ADR-246"
+    },
+    "components/NodeDetail/OverviewTab.css": {
+      "lines": 288,
+      "why": "the node overview: device-health gauges, the Meraki and URL cards, alerts (split from NodeDetail.css, ADR-246 Inc.6)"
     },
     "components/NodeDetail/PinButton.css": {
       "lines": 17,
       "why": "before ADR-246"
     },
     "components/NodeDetail/RangeControl.css": {
-      "lines": 228,
+      "lines": 226,
       "why": "before ADR-246"
     },
     "components/NodePicker/NodePicker.css": {

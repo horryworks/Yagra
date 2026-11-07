@@ -37,6 +37,10 @@ import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { collectionState, type CollectionState } from './collectionState';
 import { FilterHeaderCell } from '../ui/HeaderFilter';
 import { agoSec } from '../../lib/format';
+import { Stack } from '../ui/Page';
+import { SectionHead } from '../ui/Section';
+import { Facts } from '../ui/Facts';
+import './CollectionTab.css';
 
 
 interface Loaded {
@@ -248,7 +252,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   };
 
   return (
-    <div className="nd-coll">
+    <Stack gap={24} className="nd-tabpad">
       <div className={`nd-coll-status ${tone}`}>
         <span className={`nd-coll-icon ${tone}`} aria-hidden>
           {state === 'ok' ? '✓' : state === 'failing' ? '!' : '○'}
@@ -278,24 +282,20 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
           </div>
         </div>
         <div className="nd-coll-status-r">
-          <div>
-            <div className="nd-coll-stat-k">{t('collection.profile')}</div>
-            <div className="nd-coll-stat-v">{data?.profileName ?? '—'}</div>
-          </div>
-          <div>
-            <div className="nd-coll-stat-k">{t('collection.credential')}</div>
-            <div className="nd-coll-stat-v">{data?.credentialName ?? '—'}</div>
-          </div>
-          <div>
-            <div className="nd-coll-stat-k">{t('collection.metrics')}</div>
-            <div className="nd-coll-stat-v">{metricCount ?? '—'}</div>
-          </div>
+          <Facts
+            layout="inline"
+            items={[
+              { label: t('collection.profile'), value: data?.profileName ?? '—' },
+              { label: t('collection.credential'), value: data?.credentialName ?? '—' },
+              { label: t('collection.metrics'), value: metricCount ?? '—' },
+            ]}
+          />
         </div>
       </div>
 
       {data && data.sets.length > 0 && (
-        <section>
-          <div className="nd-section-t">{t('nav:nodes.metricSets')}</div>
+        <Stack as="section" gap={8}>
+          <SectionHead title={t('nav:nodes.metricSets')} />
           <div className="nd-coll-sets">
             {data.sets.map((s) => (
               <div className="nd-coll-set" key={s.id}>
@@ -309,19 +309,23 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               </div>
             ))}
           </div>
-        </section>
+        </Stack>
       )}
 
       {allMetrics.length > 0 && (
-        <section>
-          <div className="nd-section-head">
-            <div className="nd-section-t">{t('collection.allMetrics')}</div>
-            <FilterControls
-              list={serverToolbarFilters(columns, { filters, setFilters }, undefined, metricCounts)}
-              labels={metricLabels}
-            />
-            <RangeControl value={range} onChange={setRange} />
-          </div>
+        <Stack as="section" gap={8}>
+          <SectionHead
+            title={t('collection.allMetrics')}
+            actions={
+              <>
+                <FilterControls
+                  list={serverToolbarFilters(columns, { filters, setFilters }, undefined, metricCounts)}
+                  labels={metricLabels}
+                />
+                <RangeControl value={range} onChange={setRange} />
+              </>
+            }
+          />
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">
               <FilterHeaderCell bind={metricBind} colKey="metric" className="nd-coll-mh">
@@ -345,13 +349,13 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               <p className="nd-muted nd-tabpad">{t('common:filter.noMatch')}</p>
             )}
           </div>
-        </section>
+        </Stack>
       )}
 
-      <section>
-        <div className="nd-section-t">{t('collection.nodeMetrics')}</div>
+      <Stack as="section" gap={8}>
+        <SectionHead title={t('collection.nodeMetrics')} />
         <CollectionEditor scope="node" scopeId={node.id} canEdit={canEdit} />
-      </section>
-    </div>
+      </Stack>
+    </Stack>
   );
 }

@@ -171,7 +171,7 @@ test('the opened row lists the other nodes, linked, with their link state', asyn
   await expect(items.nth(1).locator('.nd-nb-port')).toHaveText('link down');
   await expect(also).toContainText('1 more not listed here');
   // Picked among the claimants by its name, said where it can be read without a mouse.
-  await expect(page.locator('.nd-nb-matched dd')).toHaveText('Name the neighbor sent');
+  await expect(page.locator('.nd-nb-matched')).toHaveText('Name the neighbor sent');
 });
 
 test('an address several nodes have and no name picks says nothing was matched', async ({ page }) => {

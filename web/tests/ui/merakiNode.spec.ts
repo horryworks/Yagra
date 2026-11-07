@@ -128,7 +128,9 @@ test.use({
 });
 
 const cardOf = (page: Page) =>
-  page.locator('section', { has: page.locator('.nd-section-t', { hasText: 'Cisco Meraki' }) });
+  page.locator('section', {
+    has: page.getByRole('heading', { name: 'Cisco Meraki', exact: true }),
+  });
 
 /**
  * Nothing on the card is laid out over something else, and nothing runs past its own box.
@@ -502,7 +504,7 @@ test.describe('a Meraki access point', () => {
       '2.4 GHz non-Wi-Fi',
       '5 GHz',
     ]);
-    await expect(card.locator('.nd-section-head')).toContainText(/1h|Last/i);
+    await expect(card.getByRole('group', { name: 'Time range' })).toContainText(/1h|Last/i);
     // Each radio's history was read back by its row key — without `row` both would be one line.
     const ranged = mock.requests
       .filter((r) => r.pathname.startsWith(`/api/v1/nodes/${NODE_ID}/metrics/wlan_radio_`) && r.pathname.endsWith('/range'))

@@ -28,6 +28,18 @@
   min-width: 0;
 }
 
+.ui-section-head.has-tools {
+  flex-wrap: wrap;
+  row-gap: var(--space-1-5);
+}
+
+.ui-section-tools {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
 .ui-section-actions {
   margin-left: auto;
   display: flex;

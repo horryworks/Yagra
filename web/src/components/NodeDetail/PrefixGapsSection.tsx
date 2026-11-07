@@ -8,6 +8,8 @@ import { api, ApiError, errMsg } from '../../services/api';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { EntityName } from '../ui/EntityName';
 import { useEntityNames } from '../ui/entityNames';
+import { SectionHead } from '../ui/Section';
+import { Stack } from '../ui/Page';
 import { gapReason, moreDevices, summarizeGaps, type PrefixGapReport } from './prefixGaps';
 
 export function PrefixGaps({ groupId }: { groupId: string }) {
@@ -49,12 +51,12 @@ export function PrefixGaps({ groupId }: { groupId: string }) {
   const current = report && report.group_id === groupId ? report : null;
 
   return (
-    <section>
-      <div className="nd-section-t">{t('prefixGaps.title')}</div>
+    <Stack as="section" gap={8}>
+      <SectionHead title={t('prefixGaps.title')} />
       {error && <div className="nd-muted">{error}</div>}
       {!error && !current && <div className="nd-muted">{t('prefixGaps.loading')}</div>}
       {current && <Body report={current} nodeName={nodeName} />}
-    </section>
+    </Stack>
   );
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// `interfaceColumns.ts` against the fallback still written in `NodeDetail.css` (ADR-129).
+// `interfaceColumns.ts` against the fallback still written in `InterfacesTab.css` (ADR-129).
 //
 // This is a mirror, and the repo's rule is that a mirror gets a test in the same commit or it is
 // not allowed to exist (`extensibility.md` §2). The mirror is deliberate: the resolved template is
@@ -20,7 +20,7 @@ import { MAX_STORED_COLUMNS } from '../../lib/columnWidths';
 import { INTERFACE_COLUMNS } from './interfaceColumns';
 import { interfaceColumns } from './tabFilters';
 
-const CSS = readFileSync(join(__dirname, 'NodeDetail.css'), 'utf8');
+const CSS = readFileSync(join(__dirname, 'InterfacesTab.css'), 'utf8');
 
 /** The keys that have a filter — read from the real specs, not restated. */
 const FILTER_KEYS = interfaceColumns(((k: string) => k) as unknown as TFunction).map((c) => c.key);
@@ -28,7 +28,7 @@ const FILTER_KEYS = interfaceColumns(((k: string) => k) as unknown as TFunction)
 /** The fallback track list out of `grid-template-columns: var(--nd-if-cols, …)`. */
 function cssFallback(): string {
   const m = /grid-template-columns:\s*var\(\s*--nd-if-cols\s*,([\s\S]*?)\)\s*;/.exec(CSS);
-  if (!m) throw new Error('the --nd-if-cols declaration is gone from NodeDetail.css');
+  if (!m) throw new Error('the --nd-if-cols declaration is gone from InterfacesTab.css');
   return m[1].trim().replace(/\s+/g, ' ');
 }
 
@@ -70,7 +70,7 @@ describe('the Interfaces column list', () => {
 
   it('declares no `auto` track', () => {
     // An `auto` track sizes to its own content, so the header, the filter row and the data rows
-    // would resolve one template to three different widths (ADR-054, and `NodeDetail.css` carries
+    // would resolve one template to three different widths (ADR-054, and `InterfacesTab.css` carries
     // the note about the time a <button>'s UA padding did exactly that here).
     for (const c of INTERFACE_COLUMNS) expect(c.width).not.toMatch(/\bauto\b/);
   });

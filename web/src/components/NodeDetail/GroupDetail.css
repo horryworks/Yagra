@@ -1,0 +1,347 @@
+/* The folder rollup pane (GroupDetail.tsx) and its sections: the IP prefixes, the missing
+   subnets (PrefixGapsSection.tsx) and the network map (GroupMapSection.tsx). Split out of
+   NodeDetail.css in ADR-246 Inc.6. */
+
+/* ---------------- group rollup pane ----------------
+   The body scrolls under a fixed header, as `.nd-body` does for a node. 🚨 It has to: the pane
+   around it clips (`.nodes-pane { overflow: hidden }`), so a folder with more members than the pane
+   is tall used to cut the list off with no scrollbar — unseen until an imported Meraki organization
+   put 131 networks in one folder. `groupMembersScroll.spec.ts` pins it. */
+.nd-grpbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.nd-grp-healthbar {
+  display: flex;
+  width: 100%;
+  height: 8px;
+}
+
+.nd-grp-legend {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.nd-grp-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.nd-members {
+  display: flex;
+  flex-direction: column;
+}
+
+.nd-member {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.nd-member:first-child {
+  border-top: none;
+}
+
+.nd-member-name {
+  font-weight: var(--weight-medium);
+}
+
+.nd-member-addr {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+/* A subfolder row's right-hand slot (ADR-142 Inc.2): the subtree's node count where a node row puts
+   its address. Same place and size, but the UI font — a count is not an address. */
+.nd-member-count {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+/* A member row that opens its node (ADR-142). A real <button>, so the browser's own button look is
+   taken off and the row keeps the divider rhythm above — `border` is reset first and the top rule put
+   back, and `.nd-member:first-child` still removes it on the first row. */
+.nd-member-link {
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  border-top: var(--border-width) solid var(--border-color);
+  font: inherit;
+  font-size: var(--font-sm);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+/* On a phone the row IS the control (ADR-142 keeps Members pressable on mobile), so it takes the
+   touch-target height rather than the desktop's 32px list rhythm. */
+html[data-viewport='mobile'] .nd-member-link {
+  min-height: var(--touch-target);
+}
+
+.nd-member-link:hover,
+.nd-member-link:focus-visible {
+  background: var(--bg-tertiary);
+  outline: none;
+}
+
+.nd-member-link:focus-visible .nd-member-name {
+  color: var(--accent-color);
+}
+
+/* ── A folder's IP prefixes (ADR-100 decision 10) ────────────────────────────────────────────
+   Same row rhythm as `.nd-member` above, deliberately: both are "one line per thing this folder
+   contains", and giving them different metrics would make one section look like a different kind
+   of list. The CIDR is monospace because it is an address (ui-conventions, "two font families"). */
+.nd-prefixes {
+  display: flex;
+  flex-direction: column;
+}
+
+.nd-prefix {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.nd-prefix:first-child {
+  border-top: none;
+}
+
+.nd-prefix-cidr {
+  font-weight: var(--weight-medium);
+}
+
+.nd-prefix-desc {
+  margin-left: auto;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+/* Who owns the range (ADR-131). After the description, so the line reads
+   "cidr — name — where it came from"; `margin-left: auto` stays on the description so a row with
+   no description still pushes this to the right edge. */
+.nd-prefix-src {
+  margin-left: var(--space-2);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.nd-prefix-desc + .nd-prefix-src {
+  margin-left: var(--space-2);
+}
+
+.nd-prefix-cidr + .nd-prefix-src {
+  margin-left: auto;
+}
+
+/* ── Subnets missing from a folder's IP prefixes (ADR-170) ───────────────────────────────────
+   Same row rhythm as `.nd-prefix`: this is the other half of the same question. Two lines per
+   subnet — the subnet and why, then where it was seen — because "where" is a list and would not
+   fit beside the reason on a narrow pane. Only `unregistered` is coloured: it is the one that
+   says "register this"; the others point at a range that exists and read as information. */
+.nd-gap-read {
+  font-size: var(--font-xs);
+}
+
+.nd-gap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) 0;
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+}
+
+.nd-gap:first-child {
+  border-top: none;
+}
+
+.nd-gap-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+
+.nd-gap-kind {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nd-gap-kind-unregistered {
+  color: var(--status-warning);
+}
+
+.nd-gap-seen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-0-5) var(--space-3);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  min-width: 0;
+}
+
+.nd-gap-where {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- The folder's network map (ADR-191 Inc.2) ---- */
+/* The section title doubles as the fold toggle, so it keeps the title's look. */
+.nd-grpmap-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  padding: 0;
+  font: inherit;
+  color: var(--text-tertiary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.nd-grpmap-toggle:hover,
+.nd-grpmap-toggle:focus-visible {
+  color: var(--text-secondary);
+}
+.nd-grpmap-toggle:focus-visible {
+  outline: none;
+  border-bottom: var(--border-width) solid var(--accent-color);
+}
+/* The open map's heading row carries its search (ADR-191 Inc.13) in the heading's `tools` slot. */
+.nd-grpmap-find {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+/* The search still in force while its box is not offered (see GroupMapSection.tsx). */
+.nd-grpmap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px var(--space-1) 1px var(--space-2); /* ui-allow: a hairline inset that keeps the chip as tall as the search box */
+  margin-bottom: var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+.nd-grpmap-chip-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nd-grpmap-chip-x {
+  background: none;
+  border: none;
+  padding: 0 var(--space-0-5);
+  color: inherit;
+  cursor: pointer;
+}
+.nd-grpmap-chip-x:hover {
+  color: var(--text-primary);
+}
+/* The only way to clear the search here, so a real tap target on touch (ui-conventions). */
+@media (hover: none) {
+  .nd-grpmap-chip-x {
+    min-width: var(--touch-target);
+    min-height: var(--touch-target);
+  }
+}
+html[data-viewport='mobile'] .nd-grpmap-chip-x {
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
+}
+.nd-grpmap-open {
+  font-size: var(--font-sm);
+  color: var(--accent-color);
+}
+.nd-grpmap-open:hover {
+  color: var(--accent-hover);
+}
+/* A fixed height: the map has none of its own, and the pane scrolls around it. */
+.nd-grpmap {
+  display: flex;
+  /* Set inline from the operator's dragged height (ADR-191 Inc.12, `groupMapHeight.ts`). */
+  height: var(--nd-grpmap-h, 300px);
+  min-height: 0;
+}
+/* The handle along the map's bottom edge: the same shape as the Geo map's (ADR-074). */
+.nd-grpmap-resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  cursor: ns-resize;
+  touch-action: none; /* the drag is ours; the browser must not scroll the pane instead */
+}
+.nd-grpmap-resize-grip {
+  width: 34px;
+  height: 3px;
+  background: var(--border-color);
+  border-radius: var(--radius-pill);
+  transition: background var(--transition);
+}
+.nd-grpmap-resize:hover .nd-grpmap-resize-grip,
+.nd-grpmap-resize:focus-visible .nd-grpmap-resize-grip {
+  background: var(--accent-color);
+}
+.nd-grpmap-resize:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+/* Touch: a 14px rail is not a target, so give it a taller one. */
+@media (hover: none) {
+  .nd-grpmap-resize {
+    height: 22px;
+  }
+}
+.nd-grpmap-summary {
+  margin: var(--space-1-5) 0 0;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+.nd-grpmap-edge {
+  margin-top: var(--space-2);
+}
+
+/* A folder row's device profile, after its address (ADR-231): muted, and the generic one marked. */
+.nd-member-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}

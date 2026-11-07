@@ -194,7 +194,7 @@ test('errors and discards share one chart, with a distinct key per line', async 
   await openDock(page);
   await expect(page.locator('.nd-if-chart')).toHaveCount(2);
 
-  const faults = page.locator('.nd-if-chart').nth(1).locator('.nd-if-chart-t');
+  const faults = page.locator('.nd-if-chart').nth(1).locator('.ui-section-head');
   await expect(faults).toContainText('Errors / discards');
   await expect(faults.locator('.nd-if-legend-k')).toHaveCount(4);
 
@@ -215,7 +215,7 @@ test('the bps/pps toggle swaps the unit and takes the bandwidth overlay with it'
   page,
 }) => {
   await openDock(page);
-  const head = page.locator('.nd-if-chart').first().locator('.nd-if-chart-t');
+  const head = page.locator('.nd-if-chart').first().locator('.ui-section-head');
 
   // Both units are on screen as one segmented choice (ADR-200 Inc.19), the current one pressed.
   const unit = head.getByRole('group', { name: 'Unit' });

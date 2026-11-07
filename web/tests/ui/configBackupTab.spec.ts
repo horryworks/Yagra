@@ -122,7 +122,7 @@ const isPost = (path: string) => (r: { method(): string; url(): string }) =>
   r.method() === 'POST' && new URL(r.url()).pathname.endsWith(path);
 
 /** The attention dot on the Config tab alone; the mock node's other tabs may wear their own. */
-const configTabDot = (page: Page) => page.getByRole('tab', { name: /^Config/ }).locator('.nd-tab-warn');
+const configTabDot = (page: Page) => page.getByRole('tab', { name: /^Config/ }).locator('.ui-tab-warn');
 
 test.describe('a node not backed up yet', () => {
   test.use({ mockConfig: { overrides: overrides(off) } });

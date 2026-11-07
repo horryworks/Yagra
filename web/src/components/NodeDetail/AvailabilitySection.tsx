@@ -14,6 +14,8 @@ import { api } from '../../services/api';
 import type { NodeAvailability } from '../../types/api';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { dateOnly, formatClockTime, formatDuration } from '../../lib/format';
+import { Stack } from '../ui/Page';
+import { SectionHead } from '../ui/Section';
 import { Segmented } from '../ui/Segmented';
 import {
   AVAILABILITY_PERIODS,
@@ -119,17 +121,19 @@ export function AvailabilitySection({ nodeId }: { nodeId: string }) {
   };
 
   return (
-    <section className="nd-av">
-      <div className="nd-section-head">
-        <div className="nd-section-t">{t('overview.availabilityGraph.title')}</div>
-        <Segmented
-          size="sm"
-          ariaLabel={t('overview.availabilityGraph.period')}
-          options={AVAILABILITY_PERIODS.map((p) => ({ value: p, label: p }))}
-          value={period}
-          onChange={(v) => setPeriod(v as AvailabilityPeriod)}
-        />
-      </div>
+    <Stack as="section" gap={8} className="nd-av">
+      <SectionHead
+        title={t('overview.availabilityGraph.title')}
+        actions={
+          <Segmented
+            size="sm"
+            ariaLabel={t('overview.availabilityGraph.period')}
+            options={AVAILABILITY_PERIODS.map((p) => ({ value: p, label: p }))}
+            value={period}
+            onChange={(v) => setPeriod(v as AvailabilityPeriod)}
+          />
+        }
+      />
       {failed && !data ? (
         <p className="form-error">{t('overview.availabilityGraph.loadFailed')}</p>
       ) : (
@@ -203,6 +207,6 @@ export function AvailabilitySection({ nodeId }: { nodeId: string }) {
           </div>
         </>
       )}
-    </section>
+    </Stack>
   );
 }

@@ -12,6 +12,8 @@ import { IconButton } from './IconButton';
 import { FieldError, TextArea } from './Field';
 import { FormError, FormFooter } from './FormFooter';
 import { EditIcon } from './icons';
+import { Stack } from './Page';
+import { SectionHead } from './Section';
 import {
   NOTES_MAX,
   isValidNotes,
@@ -96,15 +98,17 @@ export function InlineNotes({
   }
 
   return (
-    <section className="inline-notes">
-      <div className="nd-section-t inline-notes-head">
-        {t('field.notes')}
-        {canEdit && (
-          <IconButton title={t('notesEdit')} onClick={start} className="inline-notes-pen">
-            <EditIcon />
-          </IconButton>
-        )}
-      </div>
+    <Stack as="section" gap={8} className="inline-notes">
+      <SectionHead
+        title={t('field.notes')}
+        actions={
+          canEdit && (
+            <IconButton title={t('notesEdit')} onClick={start} className="inline-notes-pen">
+              <EditIcon />
+            </IconButton>
+          )
+        }
+      />
       {canEdit ? (
         <button type="button" className="nd-notes inline-notes-text" onClick={start}>
           {shown}
@@ -113,7 +117,7 @@ export function InlineNotes({
         // Plain text. Operator-supplied and rendered as written — never as markup.
         <p className="nd-notes">{shown}</p>
       )}
-    </section>
+    </Stack>
   );
 }
 
@@ -160,8 +164,8 @@ function NoteEditor({
   };
 
   return (
-    <section className="inline-notes">
-      <div className="nd-section-t">{t('field.notes')}</div>
+    <Stack as="section" gap={8} className="inline-notes">
+      <SectionHead title={t('field.notes')} />
       <TextArea
         inputRef={boxRef}
         rows={4}
@@ -199,6 +203,6 @@ function NoteEditor({
           }
         />
       </div>
-    </section>
+    </Stack>
   );
 }

@@ -8,7 +8,6 @@
   align-items: baseline;
   gap: var(--space-3);
   flex-wrap: wrap;
-  margin-top: var(--space-2);
 }
 
 .nd-av-pct {
@@ -28,7 +27,6 @@
   display: flex;
   gap: var(--space-0-5);
   height: 44px;
-  margin-top: var(--space-2);
   cursor: pointer;
   touch-action: none;
   border: 1px solid transparent;
@@ -45,7 +43,7 @@
   min-width: 1px;
   display: flex;
   flex-direction: column-reverse;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a bar is a few px wide; the smallest radius step rounds it to a pill */
   overflow: hidden;
   background: var(--bg-tertiary);
   border: 1px solid transparent;
@@ -89,7 +87,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
-  margin-top: var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -104,9 +101,9 @@
   display: inline-block;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: the key swatch is drawn like the bars it names */
 }
 
 html[data-viewport='mobile'] .nd-av-bars {
-  gap: 1px;
+  gap: 1px; /* ui-allow: ninety bars share a phone's width; a 2px gap would leave them no width */
 }

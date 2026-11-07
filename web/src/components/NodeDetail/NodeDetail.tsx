@@ -68,6 +68,7 @@ import { nodeSubLineParts } from './nodeIdentity';
 import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import type { MoveTarget } from '../MoveNodeModal/MoveNodeModal';
+import { Tabs } from '../ui/Tabs';
 import './NodeDetail.css';
 
 const RTT_WINDOW_SECS = 30 * 60;
@@ -586,38 +587,28 @@ export function NodeDetail({
         <p className={`nd-pollmsg${pollMsg.tone === 'error' ? ' err' : ''}`}>{pollMsg.text}</p>
       )}
 
-      <div className="nd-tabs" role="tablist">
-        {visibleNodeDetailTabs(subject).map((key) => {
+      <Tabs
+        flush
+        active={activeTab}
+        tabs={visibleNodeDetailTabs(subject).map((key) => {
           const meta = NODE_DETAIL_TAB_META[key];
-          const n = meta.badge?.(tabStats) ?? null;
-          return (
-            <button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === key}
-              className={`nd-tab${activeTab === key ? ' on' : ''}`}
-              // 🚨 A **click** is the only thing that writes the memory (ADR-134 decision 2). The
-              // correction effect above rewrites a tab the loaded node does not offer, and if that
-              // recorded too, walking a row of switches on Interfaces with one URL monitor among
-              // them would leave the memory on Overview — so the memory would mean "the last screen
-              // I was dropped onto" instead of "the last one I chose".
-              onClick={() => {
-                rememberTab(key);
-                onTabChange(key);
-              }}
-            >
-              {t(meta.labelKey)}
-              {n != null && <span className="nd-tab-n">{n}</span>}
-              {meta.warn?.(tabStats) && (
-                <span className="nd-tab-warn" aria-label={t('detail.needsAttention')}>
-                  ●
-                </span>
-              )}
-            </button>
-          );
+          return {
+            key,
+            label: t(meta.labelKey),
+            count: meta.badge?.(tabStats) ?? undefined,
+            warn: meta.warn?.(tabStats) ? t('detail.needsAttention') : undefined,
+          };
         })}
-      </div>
+        // 🚨 A **click** is the only thing that writes the memory (ADR-134 decision 2). The
+        // correction effect above rewrites a tab the loaded node does not offer, and if that
+        // recorded too, walking a row of switches on Interfaces with one URL monitor among
+        // them would leave the memory on Overview — so the memory would mean "the last screen
+        // I was dropped onto" instead of "the last one I chose".
+        onChange={(key) => {
+          rememberTab(key);
+          onTabChange(key);
+        }}
+      />
 
       <div className="nd-body">{tabBodies[activeTab]}</div>
 

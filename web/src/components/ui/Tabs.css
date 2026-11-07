@@ -5,6 +5,13 @@
   border-bottom: var(--border-width) solid var(--border-color);
   margin: var(--space-1) 0 var(--space-3);
 }
+/* A pane's bar (node detail): it runs between the header and the body with no space of its own. */
+.ui-tabs.is-flush {
+  flex: none;
+  margin: 0;
+  padding: 0 var(--space-4);
+}
+
 .ui-tab {
   display: inline-flex;
   align-items: center;
@@ -35,6 +42,11 @@
   padding: 0 var(--space-1-5);
 }
 
+.ui-tab-warn {
+  color: var(--status-warning);
+  font-size: var(--font-2xs);
+}
+
 /* On a phone the bar scrolls sideways rather than wrapping or crushing its labels. */
 html[data-viewport='mobile'] .ui-tabs {
   flex-wrap: nowrap;
@@ -53,4 +65,8 @@ html[data-viewport='mobile'] .ui-tab {
   .ui-tab {
     min-height: var(--touch-target);
   }
+}
+
+html[data-viewport='mobile'] .ui-tabs.is-flush {
+  padding: 0 var(--space-3);
 }

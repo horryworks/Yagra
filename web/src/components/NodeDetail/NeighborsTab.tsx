@@ -77,6 +77,9 @@ import {
 } from './neighbors';
 import { merakiOrgPath, nodeHref } from '../../lib/entityHref';
 import { ScreenLink } from '../ui/ScreenLink';
+import { Facts } from '../ui/Facts';
+import { SectionHead } from '../ui/Section';
+import { Stack } from '../ui/Page';
 import './NeighborsTab.css';
 
 /** How many history rows to load. Adjacency changes are rare, so one page is almost always all of
@@ -563,20 +566,26 @@ function Details({
     <div className="nd-nb-details">
       {setup}
       {also && <AlsoClaimedList also={also} />}
-      <dl className="nd-nb-dl">
-        {matched && (
-          <div className="nd-nb-dl-row nd-nb-matched">
-            <dt>{t('neighbors.detail.matchedOn')}</dt>
-            <dd>{t(`neighbors.matchedOn.${matched}`)}</dd>
-          </div>
-        )}
-        {neighborDetails(n, lookups).map((d) => (
-          <div key={d.labelKey} className="nd-nb-dl-row">
-            <dt>{t(`neighbors.detail.${d.labelKey}`)}</dt>
-            <dd className={d.mono ? 'mono' : undefined}>{d.value}</dd>
-          </div>
-        ))}
-      </dl>
+      <Facts
+        layout="rows"
+        className="nd-nb-dl"
+        items={[
+          ...(matched
+            ? [
+                {
+                  key: 'matchedOn',
+                  label: t('neighbors.detail.matchedOn'),
+                  value: <span className="nd-nb-matched">{t(`neighbors.matchedOn.${matched}`)}</span>,
+                },
+              ]
+            : []),
+          ...neighborDetails(n, lookups).map((d) => ({
+            key: d.labelKey,
+            label: t(`neighbors.detail.${d.labelKey}`),
+            value: d.mono ? <span className="mono">{d.value}</span> : d.value,
+          })),
+        ]}
+      />
     </div>
   );
 }
@@ -714,11 +723,7 @@ function SetupPanel({
   useEffect(() => {
     onShown();
   }, [onShown]);
-  const head = (
-    <div className="nd-nb-setup-head">
-      <span className="nd-nb-setup-title">{t('neighbors.setup.title')}</span>
-    </div>
-  );
+  const head = <SectionHead title={t('neighbors.setup.title')} />;
 
   if (added) {
     return (
@@ -873,8 +878,8 @@ function History({ changes, loaded }: { changes: NeighborChange[]; loaded: boole
   const { t } = useTranslation('nodes');
   if (!loaded) return null;
   return (
-    <div className="nd-nb-history nd-tabpad">
-      <h3 className="nd-nb-h3">{t('neighbors.historyTitle')}</h3>
+    <Stack as="section" gap={8} className="nd-nb-history nd-tabpad">
+      <SectionHead title={t('neighbors.historyTitle')} />
       {changes.length === 0 ? (
         <p className="nd-muted">{t('neighbors.historyEmpty')}</p>
       ) : (
@@ -920,7 +925,7 @@ function History({ changes, loaded }: { changes: NeighborChange[]; loaded: boole
           })}
         </ol>
       )}
-    </div>
+    </Stack>
   );
 }
 

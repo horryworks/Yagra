@@ -19,6 +19,7 @@ import type { NodeDetail } from '../../types/api';
 import { DataTable } from '../ui/DataTable';
 import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
+import { Inline } from '../ui/Page';
 import { ListToolbar } from '../../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../../lib/listToolbar';
 import { useEntityNames } from '../ui/entityNames';
@@ -99,11 +100,11 @@ export function EventsTab({ node }: { node: NodeDetail }) {
 
   return (
     <div className="nd-ev">
-      <div className="nd-ev-head">
+      <Inline>
         <Link className="nd-ev-open" to={`/events?node_id=${encodeURIComponent(node.id)}`}>
           {t('eventLog.openInEvents')} →
         </Link>
-      </div>
+      </Inline>
       <ListToolbar
         list={serverToolbarFilters(filterCols, { filters, setFilters }, undefined, facets.counts)}
         labels={eventColumnLabels(t)}

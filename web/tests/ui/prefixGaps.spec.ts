@@ -72,7 +72,9 @@ test("a folder's pane lists the subnets missing from its IP prefixes, with why",
   await page.goto(`/nodes?sel=group:${CHILD_ID}`);
   const section = page
     .locator('section')
-    .filter({ has: page.locator('.nd-section-t', { hasText: 'Subnets missing from the IP prefixes' }) });
+    .filter({
+      has: page.getByRole('heading', { name: 'Subnets missing from the IP prefixes', exact: true }),
+    });
   await expect(section).toHaveCount(1);
 
   await expect(section.locator('.nd-gap-read')).toHaveText('Addresses read from 4 of 5 devices.');

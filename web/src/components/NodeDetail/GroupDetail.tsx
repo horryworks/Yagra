@@ -42,8 +42,11 @@ import { canRunDiscovery } from '../NodeTree/nodeTreeMenu';
 import { PrefixGaps } from './PrefixGapsSection';
 import { GroupMapSection } from './GroupMapSection';
 import { InlineNotes } from '../ui/InlineNotes';
+import { SectionHead } from '../ui/Section';
+import { Stack } from '../ui/Page';
 import { membersTrailer, type MemberFetch } from './groupMembers';
 import './NodeDetail.css';
+import './GroupDetail.css';
 
 interface Props {
   group: NodeGroup;
@@ -262,8 +265,8 @@ export function GroupDetail({
           onSave={(notes) => api.setNodeGroupNotes(group.id, notes)}
           onSaved={onNotesSaved}
         />
-        <section>
-          <div className="nd-section-t">{t('groupDetail.health')}</div>
+        <Stack as="section" gap={8}>
+          <SectionHead title={t('groupDetail.health')} />
           <HealthBar tally={tally} className="nd-grp-healthbar" />
           <div className="nd-grp-legend">
             {STATE_ORDER.filter((s) => tally.counts[s] > 0).map((s) => (
@@ -274,7 +277,7 @@ export function GroupDetail({
             ))}
             {tally.total === 0 && <span className="nd-muted">{t('groupDetail.noNodes')}</span>}
           </div>
-        </section>
+        </Stack>
 
         {/* The folder's network map (ADR-191 Inc.2), right under Health: what the folder is next to
             how it is wired. Pressing a box selects it in the tree. */}
@@ -286,29 +289,38 @@ export function GroupDetail({
             inherited half is `effective_tags` minus `tags`, both resolved on the row by the
             server, so nothing here walks the folder tree. */}
         {group.effective_tags.length > 0 && (
-          <section>
-            <div className="nd-section-t">{t('groupDetail.tags')}</div>
-            {group.tags.length > 0 && (
-              <div className="nd-tag-chips">
-                {[...group.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
-                  <Badge tone="tag" key={label}>{label}</Badge>
-                ))}
-              </div>
-            )}
-            {group.effective_tags.some((l) => !group.tags.includes(l)) && (
-              <>
-                <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
+          <Stack as="section" gap={8}>
+            <SectionHead title={t('groupDetail.tags')} />
+            {/* One block, so the inherited heading keeps its own top margin and sits on its chips. */}
+            <div>
+              {group.tags.length > 0 && (
                 <div className="nd-tag-chips">
-                  {group.effective_tags
-                    .filter((l) => !group.tags.includes(l))
+                  {[...group.tags]
                     .sort((a, b) => a.localeCompare(b))
                     .map((label) => (
-                      <Badge tone="tag" key={label}>{label}</Badge>
+                      <Badge tone="tag" key={label}>
+                        {label}
+                      </Badge>
                     ))}
                 </div>
-              </>
-            )}
-          </section>
+              )}
+              {group.effective_tags.some((l) => !group.tags.includes(l)) && (
+                <>
+                  <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
+                  <div className="nd-tag-chips">
+                    {group.effective_tags
+                      .filter((l) => !group.tags.includes(l))
+                      .sort((a, b) => a.localeCompare(b))
+                      .map((label) => (
+                        <Badge tone="tag" key={label}>
+                          {label}
+                        </Badge>
+                      ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </Stack>
         )}
 
         {/* The site's IP prefixes (ADR-100 decision 10). Drawn only when the folder has some,
@@ -316,8 +328,8 @@ export function GroupDetail({
             An empty section here would read as "this site has no subnets", a claim nothing has
             made. */}
         {group.prefixes.length > 0 && (
-          <section>
-            <div className="nd-section-t">{t('groupDetail.prefixes')}</div>
+          <Stack as="section" gap={8}>
+            <SectionHead title={t('groupDetail.prefixes')} />
             <div className="nd-prefixes">
               {group.prefixes.map((p) => (
                 <div className="nd-prefix" key={p.prefix}>
@@ -330,7 +342,7 @@ export function GroupDetail({
                 </div>
               ))}
             </div>
-          </section>
+          </Stack>
         )}
 
         {/* The subnets this folder's devices carry that its prefixes do not cover (ADR-170).
@@ -338,105 +350,106 @@ export function GroupDetail({
             one whose every subnet is missing. */}
         <PrefixGaps groupId={group.id} />
 
-        <section>
-          <div className="nd-section-t">{t('groupDetail.members')}</div>
-          {memberRows > 0 && (
-            <div className="nd-members">
-              {/* Subfolders first, then nodes (ADR-142 Inc.2). The count is the subtree's, from
+        <Stack as="section" gap={8}>
+          <SectionHead title={t('groupDetail.members')} />
+          {/* One block: the trailing lines are paragraphs whose margins the list sets, as before. */}
+          <div>
+            {memberRows > 0 && (
+              <div className="nd-members">
+                {/* Subfolders first, then nodes (ADR-142 Inc.2). The count is the subtree's, from
                   the same server rollup as the header — never the members that happen to be loaded. */}
-              {subgroups.map((g) => {
-                const total = subtreeTally.get(g.id)?.total ?? 0;
-                const body = (
-                  <>
-                    <GroupIcon type={asGroupType(g.group_type)} />
-                    <span className="nd-member-name">{g.name}</span>
-                    <span className="nd-member-count">
-                      {total} {t('common:noun.node', { count: total })}
-                    </span>
-                  </>
-                );
-                return onOpenGroup ? (
-                  <button
-                    type="button"
-                    className="nd-member nd-member-link nd-member-group"
-                    key={`g:${g.id}`}
-                    onClick={() => onOpenGroup(g.id)}
-                  >
-                    {body}
-                  </button>
-                ) : (
-                  <div className="nd-member nd-member-group" key={`g:${g.id}`}>
-                    {body}
-                  </div>
-                );
-              })}
-              {directMembers.map((n) => {
-                const body = (
-                  <>
-                    <StatusDot state={n.state} withLabel={false} />
-                    <span className="nd-member-name">{n.name}</span>
-                    {nodeBadges({
-                      kind: n.kind,
-                      merakiProductType: n.meraki_product_type,
-                      merakiRepeater: n.meraki_repeater,
-                    }).map(
-                      (badge) => (
+                {subgroups.map((g) => {
+                  const total = subtreeTally.get(g.id)?.total ?? 0;
+                  const body = (
+                    <>
+                      <GroupIcon type={asGroupType(g.group_type)} />
+                      <span className="nd-member-name">{g.name}</span>
+                      <span className="nd-member-count">
+                        {total} {t('common:noun.node', { count: total })}
+                      </span>
+                    </>
+                  );
+                  return onOpenGroup ? (
+                    <button
+                      type="button"
+                      className="nd-member nd-member-link nd-member-group"
+                      key={`g:${g.id}`}
+                      onClick={() => onOpenGroup(g.id)}
+                    >
+                      {body}
+                    </button>
+                  ) : (
+                    <div className="nd-member nd-member-group" key={`g:${g.id}`}>
+                      {body}
+                    </div>
+                  );
+                })}
+                {directMembers.map((n) => {
+                  const body = (
+                    <>
+                      <StatusDot state={n.state} withLabel={false} />
+                      <span className="nd-member-name">{n.name}</span>
+                      {nodeBadges({
+                        kind: n.kind,
+                        merakiProductType: n.meraki_product_type,
+                        merakiRepeater: n.meraki_repeater,
+                      }).map((badge) => (
                         <NodeBadgeTag
                           key={badge.text}
                           badge={badge}
                           className="nd-kind"
                           label={t(badge.labelKey)}
                         />
-                      ),
-                    )}
-                    <span className="nd-member-addr mono">
-                      {addressText(n.address, t, { meshRepeater: n.meraki_repeater })}
-                    </span>
-                    {(() => {
-                      const prof = nodeProfileOf(profiles.data, n.profile_id);
-                      return prof ? (
-                        <span className="nd-member-profile">
-                          {prof.name}
-                          {prof.fallback && <Badge tone="warning">{t('profile.generic')}</Badge>}
-                        </span>
-                      ) : null;
-                    })()}
-                  </>
-                );
-                // A real button, so the row is reachable by keyboard like every other drill-in
-                // (ui-conventions.md "Accessibility / operability"), not a div with a click handler.
-                return onOpenNode ? (
-                  <button
-                    type="button"
-                    className="nd-member nd-member-link"
-                    key={n.id}
-                    onClick={() => onOpenNode(n.id)}
-                  >
-                    {body}
-                  </button>
-                ) : (
-                  <div className="nd-member" key={n.id}>
-                    {body}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {/* "Nothing here" only after the fetch has answered (`groupMembers.ts`). The subfolder
+                      ))}
+                      <span className="nd-member-addr mono">
+                        {addressText(n.address, t, { meshRepeater: n.meraki_repeater })}
+                      </span>
+                      {(() => {
+                        const prof = nodeProfileOf(profiles.data, n.profile_id);
+                        return prof ? (
+                          <span className="nd-member-profile">
+                            {prof.name}
+                            {prof.fallback && <Badge tone="warning">{t('profile.generic')}</Badge>}
+                          </span>
+                        ) : null;
+                      })()}
+                    </>
+                  );
+                  // A real button, so the row is reachable by keyboard like every other drill-in
+                  // (ui-conventions.md "Accessibility / operability"), not a div with a click handler.
+                  return onOpenNode ? (
+                    <button
+                      type="button"
+                      className="nd-member nd-member-link"
+                      key={n.id}
+                      onClick={() => onOpenNode(n.id)}
+                    >
+                      {body}
+                    </button>
+                  ) : (
+                    <div className="nd-member" key={n.id}>
+                      {body}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* "Nothing here" only after the fetch has answered (`groupMembers.ts`). The subfolder
               rows above never wait on it, so they stay drawn over a loading or failed line. */}
-          {trailer === 'empty' && <p className="nd-muted">{t('groupDetail.noMembers')}</p>}
-          {trailer === 'loading' && <p className="nd-muted">{t('tree.loadingNodes')}</p>}
-          {trailer === 'failed' && (
-            <p className="nd-muted">
-              {t('tree.loadFailed')}{' '}
-              {onRetryMembers && (
-                <Button variant="ghost" onClick={onRetryMembers}>
-                  {t('tree.retry')}
-                </Button>
-              )}
-            </p>
-          )}
-        </section>
+            {trailer === 'empty' && <p className="nd-muted">{t('groupDetail.noMembers')}</p>}
+            {trailer === 'loading' && <p className="nd-muted">{t('tree.loadingNodes')}</p>}
+            {trailer === 'failed' && (
+              <p className="nd-muted">
+                {t('tree.loadFailed')}{' '}
+                {onRetryMembers && (
+                  <Button variant="ghost" onClick={onRetryMembers}>
+                    {t('tree.retry')}
+                  </Button>
+                )}
+              </p>
+            )}
+          </div>
+        </Stack>
       </div>
     </div>
   );

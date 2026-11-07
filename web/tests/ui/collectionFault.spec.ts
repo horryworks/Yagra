@@ -102,7 +102,9 @@ test('a node whose organization is not being answered says its state is the last
   errors,
 }) => {
   await page.goto(`/nodes/${NODE_ID}?tab=overview`);
-  const notice = page.locator('.nd-fault');
+  const notice = page
+    .getByRole('status')
+    .filter({ hasText: 'The state shown here is the last one collected' });
   await expect(notice).toBeVisible({ timeout: 15_000 });
   await expect(notice).toContainText(
     `The Meraki API is not answering for ${ORG_NAME} (Meraki refused the API key).`,
@@ -173,7 +175,9 @@ test.describe('an access point its controller stopped reporting', () => {
     errors,
   }) => {
     await page.goto(`/nodes/${AP_ID}?tab=overview`);
-    const notice = page.locator('.nd-fault');
+    const notice = page
+      .getByRole('status')
+      .filter({ hasText: 'from its wireless controller since' });
     await expect(notice).toBeVisible({ timeout: 15_000 });
     await expect(notice).toContainText(
       'No report on this access point from its wireless controller since',

@@ -40,6 +40,9 @@ import { PALETTE } from '../MetricChart/palette';
 import { RankedBars } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
 import { ClippedText } from '../ui/ClippedText';
+import { Card } from '../ui/Card';
+import { SectionHead } from '../ui/Section';
+import { Stack } from '../ui/Page';
 import { RangeControl, resolveRange } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
 // The protocol-series grouping is shared with the fleet-wide throughput widget — one tested
@@ -224,9 +227,9 @@ export function FlowTab({ node }: { node: NodeDetail }) {
 
   if (disabled) {
     return (
-      <div className="nd-flow">
+      <Stack gap={16} className="nd-flow">
         <p className="nd-flow-empty">{t('flow.disabled')}</p>
-      </div>
+      </Stack>
     );
   }
 
@@ -243,7 +246,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const showChartHint = chartIgnoresFilters(filters);
 
   return (
-    <div className="nd-flow">
+    <Stack gap={16} className="nd-flow">
       {/* The drill-down governs the whole tab — the chart, all four Top-N cards, the Sankey and the
           conversations table — so it sits above all of them rather than under any one table's
           headers (ADR-053 decision N). The trigger of each cell is what the hand-rolled chip row used to
@@ -285,33 +288,31 @@ export function FlowTab({ node }: { node: NodeDetail }) {
           </section>
 
           <div className="nd-flow-grid">
-            <section className="nd-flow-card">
-              <h3 className="nd-flow-h">{t('flow.topTalkers')}</h3>
+            <Card className="nd-flow-card" title={t('flow.topTalkers')}>
               <RankedBars
                 rows={talkerRows}
                 empty={t('flow.none')}
                 onRowClick={(i) => applyPeer(talkers[i].addr)}
               />
-            </section>
-            <section className="nd-flow-card">
-              <h3 className="nd-flow-h">{t('flow.topProtocols')}</h3>
+            </Card>
+            <Card className="nd-flow-card" title={t('flow.topProtocols')}>
               <RankedBars
                 rows={protoRows}
                 empty={t('flow.none')}
                 onRowClick={(i) => applyProto(String(protos[i].proto))}
               />
-            </section>
-            <section className="nd-flow-card">
-              <h3 className="nd-flow-h">{t('flow.topPorts')}</h3>
+            </Card>
+            <Card className="nd-flow-card" title={t('flow.topPorts')}>
               <RankedBars
                 rows={portRows}
                 empty={t('flow.none')}
                 onRowClick={(i) => applyPort(String(ports[i].port))}
               />
-            </section>
-            <section className="nd-flow-card">
-              <div className="nd-flow-card-head">
-                <h3 className="nd-flow-h">{t('flow.topAs')}</h3>
+            </Card>
+            <Card
+              className="nd-flow-card"
+              title={t('flow.topAs')}
+              actions={
                 <div className="rc-seg" role="group" aria-label={t('flow.as.direction')}>
                   <button
                     type="button"
@@ -330,26 +331,27 @@ export function FlowTab({ node }: { node: NodeDetail }) {
                     {t('flow.as.srcDir')}
                   </button>
                 </div>
-              </div>
+              }
+            >
               <RankedBars
                 rows={asRows}
                 empty={t('flow.none')}
                 onRowClick={(i) => applyAsn(String(asAgg[i].asn))}
               />
-            </section>
+            </Card>
           </div>
 
-          <section className="nd-flow-sankey">
-            <h3 className="nd-flow-h">{t('flow.sankey')}</h3>
+          <Stack as="section" gap={8}>
+            <SectionHead title={t('flow.sankey')} />
             {convos.length > 0 ? (
               <FlowSankey conversations={convos} onNodeClick={applyPeer} />
             ) : (
               <p className="nd-flow-muted">{t('flow.none')}</p>
             )}
-          </section>
+          </Stack>
 
-          <section className="nd-flow-convos">
-            <h3 className="nd-flow-h">{t('flow.conversations')}</h3>
+          <Stack as="section" gap={8}>
+            <SectionHead title={t('flow.conversations')} />
             <div className="nd-flow-table">
               <DataTable
                 tableId="node.flows"
@@ -360,9 +362,9 @@ export function FlowTab({ node }: { node: NodeDetail }) {
                 loading={loading}
               />
             </div>
-          </section>
+          </Stack>
         </>
       )}
-    </div>
+    </Stack>
   );
 }

@@ -16,6 +16,7 @@ import { NodeDetail } from '../components/NodeDetail/NodeDetail';
 import { requestedNodeDetailTab } from '../components/NodeDetail/tabs';
 import { nodesPageHref } from '../lib/entityHref';
 import { REVEAL_ARRIVAL } from '../components/NodeTree/nodeTreeReveal';
+import { Page } from '../components/ui/Page';
 
 export function NodeDetailPage() {
   const { t } = useTranslation();
@@ -42,7 +43,7 @@ export function NodeDetailPage() {
   }, []);
 
   return (
-    <div className="page-fill">
+    <Page layout="canvas">
       <Breadcrumb
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.all'), to: '/nodes' }]}
       />
@@ -62,6 +63,6 @@ export function NodeDetailPage() {
         onOpenGroup={(id) => navigate(nodesPageHref({ kind: 'group', id }), { state: REVEAL_ARRIVAL })}
         onDeleted={() => navigate('/nodes')}
       />
-    </div>
+    </Page>
   );
 }

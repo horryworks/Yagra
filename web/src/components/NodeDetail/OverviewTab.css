@@ -1,0 +1,288 @@
+/* The node overview tab (OverviewTab.tsx) and the DNS health card it shows (DnsHealth.tsx).
+   Split out of NodeDetail.css in ADR-246 Inc.6. */
+
+/* ---------------- Overview ---------------- */
+/* The tab's column is a `Stack`; this is only the pane's inset. */
+.nd-overview {
+  padding: var(--space-4) var(--space-4) var(--space-5);
+}
+
+/* A fact's value (the overview's `Facts` grid, the URL/DNS/Meraki identity line). */
+.nd-fact-v {
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+}
+
+/* A fact that points at another node (an AP's wireless controller). */
+.nd-fact-v a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.nd-fact-v a:hover {
+  color: var(--accent-hover);
+}
+
+/* A fact whose value is an operational problem (e.g. a pool with no live poller). The value text
+   itself already spells out the condition, so colour is reinforcement, never the only signal. */
+.nd-fact-v.warn {
+  color: var(--status-warning);
+}
+
+.nd-alert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-sm);
+  /* Wraps rather than overflows. The row carries the breach text since the reason moved onto this
+     page, and an interface alert spells out a port too (`ifInErrors on port 12 above 0`), so the
+     one-line assumption this rule was written under no longer holds at every width. */
+  flex-wrap: wrap;
+  row-gap: var(--space-0-5);
+}
+
+/* min-width:0 lets the breach text be the part that gives when the row is tight, instead of a flex
+   item refusing to shrink below its content and pushing the timestamp out of the section. */
+.nd-alert-what {
+  min-width: 0;
+}
+
+.nd-alert-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.nd-alert-state {
+  font-weight: var(--weight-medium);
+}
+
+.nd-alert-cause {
+  font-size: var(--font-xs);
+}
+
+.nd-alert-flap {
+  font-size: var(--font-xs);
+  color: var(--status-warning);
+}
+
+.nd-alert-time {
+  margin-left: auto;
+  font-size: var(--font-xs);
+}
+
+.nd-health-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+
+.nd-health-metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.nd-health-metric-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.nd-health-metric-label {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+/* A generic card labels itself with the raw metric name, which would wrap in a 240px grid cell
+   (`huawei_usg_half_open_sessions`), and an identifier belongs in the mono face anyway
+   (`ui-conventions.md`). */
+.nd-health-metric-label.mono {
+  font-family: var(--font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Device health, one line per table row (ADR-143): a memory pool, a CPU, a sensor. The name truncates
+   and carries its whole text in `title`; the numbers never wrap. */
+.nd-row-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+
+.nd-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.nd-row-mem {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.nd-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-row-value {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.nd-health-metric-meaning {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  margin: calc(-1 * var(--space-1)) 0 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.nd-health-metric-value {
+  font-size: var(--font-5xl);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The Cisco Meraki card (ADR-164 decision 27). NOT the `.nd-health-metric` layout: that one puts the
+   label beside a 24px value that never wraps, which is right for one number and pushed a sentence
+   ("Standby · sent 14.1 kbps / received …") over the next tile. Here a tile stacks its label over a
+   value that may wrap, and the uplinks are a table whose numbers never wrap while the name shrinks. */
+.nd-mk-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-3) var(--space-5);
+}
+
+.nd-mk-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.nd-mk-tile-label {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.nd-mk-tile-value {
+  font-size: var(--font-3xl);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.nd-mk-tile-sub {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* One row per uplink. The container is the grid and each row is `display: contents`, so the four
+   columns line up across rows without a fixed width: the name takes what is left and truncates,
+   the state and the two rates keep their width. */
+.nd-mk-uplinks {
+  display: grid;
+  grid-template-columns: minmax(3em, 1fr) auto auto auto;
+  font-size: var(--font-sm);
+}
+
+.nd-mk-uplink {
+  display: contents;
+}
+
+/* Padding, not column-gap, spaces the columns: a gap would break each row's rule into four pieces. */
+.nd-mk-uplink > span {
+  padding: var(--space-1-5) var(--space-4) var(--space-1-5) 0;
+  border-bottom: var(--border-width) solid var(--border-color);
+  white-space: nowrap;
+}
+
+.nd-mk-uplink > span:last-child {
+  padding-right: 0;
+}
+
+.nd-mk-uplink-head > span {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.nd-mk-uplink > .nd-mk-uplink-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nd-mk-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.nd-mk-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Memory total shown next to the % (e.g. "62% / 32 GB") — secondary, so the % stays primary. */
+.nd-health-metric-sub {
+  font-size: var(--font-sm);
+  font-weight: var(--weight-normal);
+  color: var(--text-tertiary);
+}
+
+/* URL-monitor card: the monitored URL under the section head, and the status-code line. */
+.nd-url-target {
+  word-break: break-all;
+}
+
+.nd-url-status-line {
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The overview's profile row: the name, the generic mark, and the link to make one of its own. */
+.nd-profile {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+
+/* ---------------- mobile (ADR-027 M2) ---------------- */
+
+html[data-viewport='mobile'] .nd-overview {
+  padding: var(--space-3) var(--space-3) var(--space-5);
+}
+
+/* Active alerts: at ~390px the severity word, the breach text and the timestamp do not share a
+   line. Keep line 1 as the summary the operator scans (state … time) and give the breach its own
+   full-width line beneath, indented past the dot so it reads as belonging to that alert.
+   `order` rather than DOM order, because the desktop row wants the breach in the middle — where
+   Alerts ▸ Active puts it — and only the narrow layout wants it last. */
+html[data-viewport='mobile'] .nd-alert-what {
+  order: 1;
+  flex-basis: 100%;
+  padding-left: var(--space-4);
+}

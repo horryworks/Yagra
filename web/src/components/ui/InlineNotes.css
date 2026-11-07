@@ -1,11 +1,6 @@
 /* A note written in place (ADR-239). */
-.inline-notes-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
 
-/* The pencil sits in an uppercase section title, so it is drawn small and unpadded. */
+/* The pencil sits in a small section heading, so it is drawn small and unpadded. */
 .inline-notes-pen {
   padding: 0 var(--space-0-5);
 }
@@ -48,7 +43,6 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  margin-top: var(--space-2);
 }
 
 /* The count is pushed left so Cancel and Save keep their place as it appears. */

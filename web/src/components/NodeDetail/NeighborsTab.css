@@ -40,33 +40,12 @@
   padding: 0 var(--space-4);
 }
 
-.nd-nb-peer {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.nd-nb-peername {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The chassis id under the name is provenance, not the headline. */
-.nd-nb-peer .mono {
-  font-size: var(--font-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ADR-180: two-line cells — the headline, then a smaller provenance line. Every line ellipsizes and
    carries a `title`; the opened row below shows the same text in full. */
 .nd-nb-stack {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
@@ -96,7 +75,7 @@
 /* What the address is to this deployment. Colour is paired with the word, never alone. */
 .nd-nb-state {
   font-size: var(--font-xs);
-  padding: 0 5px;
+  padding: 0 var(--space-1);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
@@ -124,7 +103,7 @@
 .nd-nb-dup {
   flex-shrink: 0;
   font-size: var(--font-xs);
-  padding: 0 5px;
+  padding: 0 var(--space-1);
   border: var(--border-width) dashed var(--status-warning);
   border-radius: var(--radius-sm);
   color: var(--status-warning);
@@ -178,25 +157,13 @@
   background: var(--bg-secondary);
 }
 
+/* The record is a `Facts` list (ADR-246). It sits inside a table row, which is `nowrap`, so its
+   values are let wrap again; the row's text is the smaller size the rest of the record uses. */
 .nd-nb-dl {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: var(--space-0-5) var(--space-3);
-  margin: 0;
   font-size: var(--font-sm);
 }
 
-.nd-nb-dl-row {
-  display: contents;
-}
-
-.nd-nb-dl dt {
-  color: var(--text-secondary);
-}
-
 .nd-nb-dl dd {
-  margin: 0;
-  overflow-wrap: anywhere;
   white-space: normal;
 }
 
@@ -238,8 +205,6 @@
 
 .nd-nb-proto {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-secondary);
 }
 
@@ -251,7 +216,7 @@
 
 .nd-nb-cap {
   font-size: var(--font-xs);
-  padding: 1px var(--space-1-5);
+  padding: 0 var(--space-1-5);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
@@ -262,12 +227,6 @@
   border-top: var(--border-width) solid var(--border-color);
   margin-top: var(--space-3);
   padding-top: var(--space-3);
-}
-
-.nd-nb-h3 {
-  font-size: var(--font-sm);
-  font-weight: 600;
-  margin: 0 0 var(--space-2);
 }
 
 .nd-nb-timeline {
@@ -335,8 +294,6 @@
 /* Never colour alone (ui-conventions): the kind is spelled out in the label too. */
 .nd-nb-diffkind {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   min-width: 5.5em;
 }
 
@@ -420,18 +377,6 @@ html[data-viewport='mobile'] .nd-nb-table {
   margin: 0;
   font-size: var(--font-sm);
   white-space: normal;
-}
-
-.nd-nb-setup-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: var(--space-3);
-  font-size: var(--font-sm);
-}
-
-.nd-nb-setup-title {
-  font-weight: var(--weight-medium);
 }
 
 .nd-nb-setup-fields {

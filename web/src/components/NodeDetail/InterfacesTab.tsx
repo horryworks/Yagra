@@ -89,6 +89,8 @@ import { mediaTitle } from './linkMode';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
 import { FilterHeaderCell, SortHeaderButton } from '../ui/HeaderFilter';
 import { Segmented } from '../ui/Segmented';
+import { SectionHead } from '../ui/Section';
+import { Stack } from '../ui/Page';
 import { focusPopoverTrigger } from '../ui/focusPopoverTrigger';
 import { Capabilities } from './NeighborsTab';
 import {
@@ -112,6 +114,7 @@ import {
   type VlanModeKey,
   type VlanWords,
 } from './interfaceVlan';
+import './InterfacesTab.css';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 /** The headers drawn end-aligned, over the columns whose cells are numbers. */
@@ -327,7 +330,7 @@ export function InterfacesTab({
   const filterBind = { columns, filters, onChange: setFilters, counts, labels };
   // The operator's own column widths for this table (ADR-129). `interfaceCols` is the one string
   // the header and every data row resolve from — the TS twin of what
-  // `NodeDetail.css` used to declare alone.
+  // `InterfacesTab.css` used to declare alone.
   const colResize = useColumnWidths('node.interfaces');
   const interfaceCols = useMemo(
     () =>
@@ -468,7 +471,7 @@ export function InterfacesTab({
 
   // Bundled so the dock takes one prop rather than seven, and so `null` says "no resize here"
   // in one place. Null on mobile: the dock is content-sized there and its charts keep a fixed
-  // height — see the `data-viewport` block in NodeDetail.css for why.
+  // height — see the `data-viewport` block in InterfacesTab.css for why.
   const resize: DockResize | null = mobile
     ? null
     : {
@@ -524,7 +527,7 @@ export function InterfacesTab({
 
       {/* 🚨 The template goes in as a CUSTOM PROPERTY, never as an inline
           `grid-template-columns`: an inline declaration beats every media query and this table is
-          re-laid-out on a phone (`NodeDetail.css`'s `html[data-viewport='mobile'] .nd-if-row`).
+          re-laid-out on a phone (`InterfacesTab.css`'s `html[data-viewport='mobile'] .nd-if-row`).
           It is set here rather than on each grid so the header and every data row
           inherit one value — the same "one template, three grids" rule `DataTable` states in TS
           and this table has always stated in CSS. */}
@@ -883,14 +886,16 @@ function AddressCell({
           onDismiss={dismiss}
           className="nd-if-nbpop"
         >
-          <p className="nd-if-nbpop-title">{title}</p>
-          <ul className="nd-if-nbpop-list nd-if-addrpop-list">
-            {cell.all.map((a) => (
-              <li key={a} className="mono nd-if-addrpop-item">
-                {a}
-              </li>
-            ))}
-          </ul>
+          <Stack gap={8}>
+            <SectionHead title={title} />
+            <ul className="nd-if-nbpop-list nd-if-addrpop-list">
+              {cell.all.map((a) => (
+                <li key={a} className="mono nd-if-addrpop-item">
+                  {a}
+                </li>
+              ))}
+            </ul>
+          </Stack>
         </AnchoredPopover>
       )}
     </span>
@@ -944,31 +949,35 @@ function NeighborCell({ port, neighbors }: { port: string; neighbors: Neighbor[]
         onDismiss={dismiss}
         className="nd-if-nbpop"
       >
-        <p className="nd-if-nbpop-title">{title}</p>
-        <ul className="nd-if-nbpop-list">
-          {neighbors.map((n) => (
-            <li key={neighborKey(n)} className="nd-if-nbpop-item">
-              <span className="nd-if-nbpop-head">
-                <span className="nd-if-nbpop-peer">{peerLabel(n)}</span>
-                <span className="nd-nb-proto">{t(`neighbors.proto.${n.proto}`)}</span>
-              </span>
-              {!peerLabelIsChassis(n) && <span className="mono nd-muted">{n.remote_chassis}</span>}
-              {/* Device-supplied strings throughout, so they are text children and never markup. */}
-              <span>
-                <span className="nd-muted">{t('neighbors.colRemotePort')}</span>{' '}
-                <span className="mono">{n.remote_port || '—'}</span>
-                {n.remote_port_desc && <span className="nd-muted"> ({n.remote_port_desc})</span>}
-              </span>
-              {n.remote_mgmt_addr && (
-                <span>
-                  <span className="nd-muted">{t('interfaces.neighborsMgmt')}</span>{' '}
-                  <span className="mono">{n.remote_mgmt_addr}</span>
+        <Stack gap={8}>
+          <SectionHead title={title} />
+          <ul className="nd-if-nbpop-list">
+            {neighbors.map((n) => (
+              <li key={neighborKey(n)} className="nd-if-nbpop-item">
+                <span className="nd-if-nbpop-head">
+                  <span className="nd-if-nbpop-peer">{peerLabel(n)}</span>
+                  <span className="nd-nb-proto">{t(`neighbors.proto.${n.proto}`)}</span>
                 </span>
-              )}
-              <Capabilities neighbor={n} />
-            </li>
-          ))}
-        </ul>
+                {!peerLabelIsChassis(n) && (
+                  <span className="mono nd-muted">{n.remote_chassis}</span>
+                )}
+                {/* Device-supplied strings throughout, so they are text children and never markup. */}
+                <span>
+                  <span className="nd-muted">{t('neighbors.colRemotePort')}</span>{' '}
+                  <span className="mono">{n.remote_port || '—'}</span>
+                  {n.remote_port_desc && <span className="nd-muted"> ({n.remote_port_desc})</span>}
+                </span>
+                {n.remote_mgmt_addr && (
+                  <span>
+                    <span className="nd-muted">{t('interfaces.neighborsMgmt')}</span>{' '}
+                    <span className="mono">{n.remote_mgmt_addr}</span>
+                  </span>
+                )}
+                <Capabilities neighbor={n} />
+              </li>
+            ))}
+          </ul>
+        </Stack>
       </AnchoredPopover>
     </span>
   );
@@ -1089,7 +1098,7 @@ function InterfaceDock({
   onClose: () => void;
   /** Select another row — an aggregate's member, from its tile (ADR-201). */
   onSelect: (ifindex: number) => void;
-  /** Desktop only; `null` on mobile, where the dock is content-sized (see NodeDetail.css). */
+  /** Desktop only; `null` on mobile, where the dock is content-sized (see InterfacesTab.css). */
   resize: DockResize | null;
 }) {
   const { t } = useTranslation('nodes');
@@ -1471,41 +1480,43 @@ function InterfaceDock({
 
       <div className="nd-if-dock-charts">
         <div className="nd-if-chart">
-          <div className="nd-if-chart-t">
-            {/* No "(bps)" after the name: the pressed half of the unit choice beside it says it,
-                and the legend names In and Out (ADR-200 Inc.19). */}
-            <span>{t('interfaces.throughput')}</span>
-            <span className="nd-if-chart-ctl">
-              {/* Only this chart carries a unit toggle. Errors and discards below are packets/sec
-                  with no other form (IF-MIB counts errored and discarded frames, never their
-                  octets), so a dock-level control would promise more than it can do — ADR-060. */}
-              {/* Both choices on screen at once (ADR-200 Inc.19): a single toggle showed only the
-                  current state and needed a hover sentence to say what a press would do. */}
-              <Segmented
-                size="sm"
-                ariaLabel={t('interfaces.unitAria')}
-                value={rateUnit}
-                onChange={(v) => setRateUnit(v as RateUnit)}
-                options={[
-                  { value: 'bps', label: t('interfaces.rateUnitBps') },
-                  { value: 'pps', label: t('interfaces.rateUnitPps') },
-                ]}
-              />
-              {hasBandwidth && (
+          {/* No "(bps)" after the name: the pressed half of the unit choice beside it says it,
+              and the legend names In and Out (ADR-200 Inc.19). */}
+          <SectionHead
+            title={t('interfaces.throughput')}
+            actions={
+              <span className="nd-if-chart-ctl">
+                {/* Only this chart carries a unit toggle. Errors and discards below are packets/sec
+                    with no other form (IF-MIB counts errored and discarded frames, never their
+                    octets), so a dock-level control would promise more than it can do — ADR-060. */}
+                {/* Both choices on screen at once (ADR-200 Inc.19): a single toggle showed only the
+                    current state and needed a hover sentence to say what a press would do. */}
                 <Segmented
                   size="sm"
-                  ariaLabel={t('interfaces.scaleAria')}
-                  value={throughputScale}
-                  onChange={(v) => setThroughputScale(v as ThroughputScale)}
+                  ariaLabel={t('interfaces.unitAria')}
+                  value={rateUnit}
+                  onChange={(v) => setRateUnit(v as RateUnit)}
                   options={[
-                    { value: 'capacity', label: t('interfaces.bandwidth') },
-                    { value: 'fit', label: t('interfaces.auto') },
+                    { value: 'bps', label: t('interfaces.rateUnitBps') },
+                    { value: 'pps', label: t('interfaces.rateUnitPps') },
                   ]}
                 />
-              )}
-              <ChartLegend bandwidth={hasBandwidth} />
-            </span>
-          </div>
+                {hasBandwidth && (
+                  <Segmented
+                    size="sm"
+                    ariaLabel={t('interfaces.scaleAria')}
+                    value={throughputScale}
+                    onChange={(v) => setThroughputScale(v as ThroughputScale)}
+                    options={[
+                      { value: 'capacity', label: t('interfaces.bandwidth') },
+                      { value: 'fit', label: t('interfaces.auto') },
+                    ]}
+                  />
+                )}
+                <ChartLegend bandwidth={hasBandwidth} />
+              </span>
+            }
+          />
           {hasData ? (
             <MetricChart
               title=""
@@ -1532,13 +1543,10 @@ function InterfaceDock({
             is auto-fit, so the remaining two just get wider. */}
         {showFaults && (
           <div className="nd-if-chart">
-            <div className="nd-if-chart-t">
-              <span>
-                {t('interfaces.faults')}{' '}
-                <span className="nd-unit">{t('interfaces.faultsUnit')}</span>
-              </span>
-              <ChartLegend entries={faultKeys} />
-            </div>
+            <SectionHead
+              title={`${t('interfaces.faults')} ${t('interfaces.faultsUnit')}`}
+              actions={<ChartLegend entries={faultKeys} />}
+            />
             {hasData ? (
               <MetricChart
                 title=""
@@ -1563,13 +1571,10 @@ function InterfaceDock({
             see `.nd-if-dock-charts`, whose minimum column width was raised for this. */}
         {isOptical && (
           <div className="nd-if-chart">
-            <div className="nd-if-chart-t">
-              <span>
-                {t('interfaces.optical')}{' '}
-                <span className="nd-unit">{t('interfaces.opticalUnit')}</span>
-              </span>
-              <ChartLegend entries={opticalKeys} />
-            </div>
+            <SectionHead
+              title={`${t('interfaces.optical')} ${t('interfaces.opticalUnit')}`}
+              actions={<ChartLegend entries={opticalKeys} />}
+            />
             {hasData ? (
               <MetricChart
                 title=""

@@ -35,6 +35,7 @@ import { ClippedText } from '../ui/ClippedText';
 import { ListToolbar } from '../../components/ui/ListToolbar';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
+import { Callout } from '../ui/Section';
 import { GroupPicker } from '../ui/GroupPicker';
 import { Field, TextInput } from '../ui/Field';
 import { CheckField, FieldRow, Fields } from '../ui/FormLayout';
@@ -233,12 +234,18 @@ export function ApTab({ node, groups, onChanged }: Props) {
       {error && <p className="form-error nd-tabpad">{error}</p>}
       {note && <p className="nd-ap-ok nd-tabpad">✓ {note}</p>}
       {overCap > 0 && (
-        <p className="form-error nd-tabpad">{t('ap.overCap', { count: overCap })}</p>
+        <div className="nd-tabpad">
+          <Callout tone="warning">{t('ap.overCap', { count: overCap })}</Callout>
+        </div>
       )}
       {/* The cap is the page size, so this cannot happen by design — which is exactly why it is
           printed rather than dropped. A silent first page presented as the whole inventory is the
           failure this list could not otherwise show. */}
-      {page?.next && <p className="form-error nd-tabpad">{t('ap.morePages')}</p>}
+      {page?.next && (
+        <div className="nd-tabpad">
+          <Callout tone="warning">{t('ap.morePages')}</Callout>
+        </div>
+      )}
 
       <ListToolbar
         list={filtering}
@@ -344,7 +351,17 @@ function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps
   };
 
   return (
-    <Card className="nd-ap-settings" title={t('ap.settings.title')}>
+    <Card
+      className="nd-ap-settings"
+      title={t('ap.settings.title')}
+      footer={
+        canConfig && (
+          <Button variant="primary" disabled={busy || !edited || !maxValid} onClick={save}>
+            {t('ap.settings.save')}
+          </Button>
+        )
+      }
+    >
       <p className="nd-muted nd-ap-stats">
         <span>{t('ap.stats.reported', { count: summary?.aps_reported ?? 0 })}</span>
         <span>
@@ -355,57 +372,52 @@ function ApSettings({ node, groups, summary, canConfig, onSaved }: SettingsProps
       </p>
 
       {canConfig ? (
-        <>
-          <Fields>
-            <CheckField
-              checked={importAps}
-              disabled={busy}
-              onChange={(next) => {
-                setEdited(true);
-                setImportAps(next);
-              }}
-              label={t('ap.settings.importAps')}
-            />
-            <FieldRow>
-              <Field label={t('ap.settings.maxAps')}>
-                <TextInput
-                  id="ap-max"
-                  type="number"
-                  min={MAX_APS_MIN}
-                  max={MAX_APS_HARD}
-                  value={maxAps}
-                  disabled={busy}
-                  onChange={(e) => {
-                    setEdited(true);
-                    setMaxAps(e.target.value);
-                  }}
-                />
-              </Field>
-              <Field label={t('ap.settings.group')}>
-                <GroupPicker
-                  id="ap-group"
-                  options={groupOptions(groups)}
-                  value={group}
-                  onChange={(id) => {
-                    setEdited(true);
-                    setGroup(id);
-                  }}
-                  emptyOption={t('ap.settings.groupDefault')}
-                  disabled={busy}
-                />
-              </Field>
-            </FieldRow>
-            {!maxValid && (
-              <p className="form-error">{t('ap.err.maxAps', { min: MAX_APS_MIN, max: MAX_APS_HARD })}</p>
-            )}
-            {error && <p className="form-error">{error}</p>}
-          </Fields>
-          <div className="nd-ap-save">
-            <Button variant="primary" disabled={busy || !edited || !maxValid} onClick={save}>
-              {t('ap.settings.save')}
-            </Button>
-          </div>
-        </>
+        <Fields>
+          <CheckField
+            checked={importAps}
+            disabled={busy}
+            onChange={(next) => {
+              setEdited(true);
+              setImportAps(next);
+            }}
+            label={t('ap.settings.importAps')}
+          />
+          <FieldRow>
+            <Field label={t('ap.settings.maxAps')}>
+              <TextInput
+                id="ap-max"
+                type="number"
+                min={MAX_APS_MIN}
+                max={MAX_APS_HARD}
+                value={maxAps}
+                disabled={busy}
+                onChange={(e) => {
+                  setEdited(true);
+                  setMaxAps(e.target.value);
+                }}
+              />
+            </Field>
+            <Field label={t('ap.settings.group')}>
+              <GroupPicker
+                id="ap-group"
+                options={groupOptions(groups)}
+                value={group}
+                onChange={(id) => {
+                  setEdited(true);
+                  setGroup(id);
+                }}
+                emptyOption={t('ap.settings.groupDefault')}
+                disabled={busy}
+              />
+            </Field>
+          </FieldRow>
+          {!maxValid && (
+            <p className="form-error">
+              {t('ap.err.maxAps', { min: MAX_APS_MIN, max: MAX_APS_HARD })}
+            </p>
+          )}
+          {error && <p className="form-error">{error}</p>}
+        </Fields>
       ) : (
         <PermissionHint permission="manage_config" />
       )}

@@ -13,10 +13,14 @@ import './Section.css';
 /** A heading inside a section (or above a table in one), with actions on the right. */
 export function SectionHead({
   title,
+  tools,
   actions,
   level = 3,
 }: {
   title: ReactNode;
+  /** Between the title and the actions, taking the room left (a folder map's search box). A
+   *  heading that carries one wraps when the section is narrow. */
+  tools?: ReactNode;
   actions?: ReactNode;
   /** 2 when the heading sits directly on the page rather than inside a Card: a section of a page
    *  of several lists (Routing, Pollers). It is drawn larger, as nothing frames it but itself. */
@@ -24,8 +28,9 @@ export function SectionHead({
 }) {
   const H = level === 2 ? 'h2' : 'h3';
   return (
-    <div className="ui-section-head">
+    <div className={cx('ui-section-head', isShown(tools) && 'has-tools')}>
       <H className={cx('ui-section-title', level === 2 && 'is-page')}>{title}</H>
+      {isShown(tools) && <div className="ui-section-tools">{tools}</div>}
       {isShown(actions) && <div className="ui-section-actions">{actions}</div>}
     </div>
   );

@@ -1,0 +1,266 @@
+/* The node collection tab (CollectionTab.tsx). Split out of NodeDetail.css in ADR-246 Inc.6. */
+
+/* ---------------- Collection ---------------- */
+.nd-coll-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.nd-coll-status.ok {
+  box-shadow: inset 3px 0 0 var(--status-up);
+}
+
+.nd-coll-status.failing {
+  box-shadow: inset 3px 0 0 var(--status-warning);
+}
+
+.nd-coll-status.none {
+  box-shadow: inset 3px 0 0 var(--text-tertiary);
+}
+
+.nd-coll-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--on-brand);
+  font-weight: var(--weight-medium);
+}
+
+.nd-coll-icon.ok {
+  background: var(--status-up);
+}
+
+.nd-coll-icon.failing {
+  background: var(--status-warning);
+}
+
+.nd-coll-icon.none {
+  background: var(--text-tertiary);
+}
+
+.nd-coll-status-t {
+  font-weight: var(--weight-medium);
+  font-size: var(--font-md);
+}
+
+.nd-coll-status-s {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  margin-top: var(--space-0-5);
+}
+
+/* The profile / credential / metric count facts, pushed to the card's right edge. */
+.nd-coll-status-r {
+  margin-left: auto;
+  font-size: var(--font-sm);
+}
+
+.nd-coll-sets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.nd-coll-set {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.nd-coll-set-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-up);
+  flex: none;
+}
+
+.nd-coll-set-dot.failing {
+  background: var(--status-warning);
+}
+
+.nd-coll-set-dot.none {
+  background: var(--text-tertiary);
+}
+
+.nd-coll-set-name {
+  font-size: var(--font-sm);
+  font-weight: var(--weight-medium);
+}
+
+.nd-coll-set-meta {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.nd-coll-metrics {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* ⚠️ ONE declaration for the header and every data row. See the note on `.nd-if-head` above: a
+   template computed anywhere else puts cells under the wrong columns and nothing catches it. */
+.nd-coll-mhead,
+.nd-coll-mrow {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr 120px;
+  align-items: center;
+}
+
+.nd-coll-mhead {
+  min-height: 32px;
+  background: var(--bg-tertiary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.nd-coll-mh {
+  padding: 0 var(--space-3);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.nd-coll-mh.right {
+  text-align: right;
+}
+
+.nd-coll-mrow {
+  min-height: 36px;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.nd-coll-mrow:last-child {
+  border-bottom: none;
+}
+
+.nd-coll-mrow:hover {
+  background: var(--bg-secondary);
+}
+
+.nd-coll-mcell {
+  padding: 0 var(--space-3);
+  font-size: var(--font-sm);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nd-coll-mcell.right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.nd-coll-mname {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--text-primary);
+}
+
+.nd-coll-mval {
+  font-weight: var(--weight-medium);
+}
+
+.nd-coll-mage {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+/* A metric row plus the chart it expands into — the border lives on the group so an open row and
+   its chart read as one block rather than two. */
+.nd-coll-mgroup {
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.nd-coll-mgroup:last-child {
+  border-bottom: none;
+}
+
+.nd-coll-mgroup .nd-coll-mrow {
+  border-bottom: none;
+}
+
+.nd-coll-mrow.expandable {
+  cursor: pointer;
+}
+
+.nd-coll-mrow.expandable:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+}
+
+/* Reserve the caret's width on every row so the metric names line up whether or not a row can be
+   opened — a ragged left edge reads as two different kinds of thing. */
+.nd-coll-caret {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-tertiary);
+  border-bottom: 1.5px solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.nd-coll-caret.open {
+  transform: rotate(45deg);
+}
+
+.nd-coll-mshape {
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+
+.nd-coll-mfanout {
+  margin-left: var(--space-1-5);
+  color: var(--text-tertiary);
+}
+
+.nd-coll-mstatus {
+  font-size: var(--font-xs);
+}
+
+.nd-coll-mstatus.ok {
+  color: var(--status-ok);
+}
+
+.nd-coll-mstatus.no_data {
+  color: var(--status-warning);
+}
+
+.nd-coll-mstatus.unconfigured {
+  color: var(--text-tertiary);
+}
+
+.nd-coll-mchart {
+  padding: var(--space-1) var(--space-3) var(--space-3);
+  background: var(--bg-secondary);
+}
+
+/* ---------------- mobile (ADR-027 M2) ---------------- */
+
+/* Collection tab: the status card's right-aligned facts (profile / credential / metric count)
+   would overflow ~390px — let the card wrap and drop the facts to a full-width row. */
+html[data-viewport='mobile'] .nd-coll-status {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .nd-coll-status-r {
+  margin-left: 0;
+  width: 100%;
+}

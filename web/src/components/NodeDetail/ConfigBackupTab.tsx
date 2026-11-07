@@ -26,6 +26,8 @@ import { Switch } from '../ui/Switch';
 import { Field, Select } from '../ui/Field';
 import { FieldGroup } from '../ui/FormLayout';
 import { EmptyState } from '../ui/EmptyState';
+import { Inline, Stack } from '../ui/Page';
+import { Callout, Disclosure, SectionHead } from '../ui/Section';
 import { ScreenLink } from '../ui/ScreenLink';
 import { CredentialPicker } from '../ui/CredentialPicker';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
@@ -332,7 +334,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
         </p>
       )}
       {v && form && card && (
-        <div className="cfgb">
+        <Stack gap={12} className="nd-tabpad">
           {!v.available && <p className="form-status">{t('config.unavailable')}</p>}
           {v.available && (
             <section className={`cfgb-card cfgb-card-${card.kind}`} aria-label={t('config.switch.label')}>
@@ -402,24 +404,26 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             </section>
           )}
           {v.enabled && v.unsaved && (
-            <div className="cfgb-unsaved">
-              <span className="cfgb-unsaved-t">
-                {t('config.unsaved.since', { time: formatExactTime(v.unsaved.since) })}
-              </span>
-              {canConfig && v.unsaved.has_output && (
-                <Button
-                  aria-expanded={diffOpenFor === v.unsaved.since}
-                  onClick={() => setDiffOpenFor((o) => (o === v.unsaved?.since ? null : (v.unsaved?.since ?? null)))}
-                >
-                  {diffOpenFor === v.unsaved.since ? t('config.unsaved.hide') : t('config.unsaved.view')}
-                </Button>
-              )}
-              {canSave && canOfferSave(v) && (
-                <Button variant="primary" onClick={() => setConfirmSave(true)} disabled={busy}>
-                  {t('config.saves.button')}
-                </Button>
-              )}
-            </div>
+            <Callout tone="warning">
+              <Inline gap={12} className="cfgb-unsaved">
+                <span className="cfgb-unsaved-t">
+                  {t('config.unsaved.since', { time: formatExactTime(v.unsaved.since) })}
+                </span>
+                {canConfig && v.unsaved.has_output && (
+                  <Button
+                    aria-expanded={diffOpenFor === v.unsaved.since}
+                    onClick={() => setDiffOpenFor((o) => (o === v.unsaved?.since ? null : (v.unsaved?.since ?? null)))}
+                  >
+                    {diffOpenFor === v.unsaved.since ? t('config.unsaved.hide') : t('config.unsaved.view')}
+                  </Button>
+                )}
+                {canSave && canOfferSave(v) && (
+                  <Button variant="primary" onClick={() => setConfirmSave(true)} disabled={busy}>
+                    {t('config.saves.button')}
+                  </Button>
+                )}
+              </Inline>
+            </Callout>
           )}
           {v.enabled && v.unsaved && canConfig && v.unsaved.has_output && diffOpenFor === v.unsaved.since && (
             <UnsavedDiff nodeId={node.id} checkedAt={v.unsaved.checked_at} />
@@ -431,115 +435,117 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
           )}
 
           {v.available && v.enabled && (
-            <details
+            <Disclosure
               className="cfgb-settings"
               open={settingsOpen}
-              onToggle={(e) => setSettingsOpen(e.currentTarget.open)}
+              onToggle={setSettingsOpen}
+              summary={
+                <>
+                  <span className="cfgb-settings-t">{t('config.settings.title')}</span>
+                  <span className="cfgb-settings-sum">
+                    {[
+                      t(`config.input.${form.input}`),
+                      v.model_override ?? v.profile_model ?? t('config.settings.noModel'),
+                      v.login_confirmed && v.credential_id ? loginText(v.credential_id) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </>
+              }
             >
-              <summary>
-                <span className="cfgb-settings-t">{t('config.settings.title')}</span>
-                <span className="cfgb-settings-sum">
-                  {[
-                    t(`config.input.${form.input}`),
-                    v.model_override ?? v.profile_model ?? t('config.settings.noModel'),
-                    v.login_confirmed && v.credential_id ? loginText(v.credential_id) : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
-              </summary>
-              <div className="cfgb-settings-body">
-                <div className="cfgb-settings-grid">
-                  <Field label={t('config.model')}>
-                    <Select
-                      id="cfgb-model"
-                      value={form.model}
-                      disabled={!canStart}
-                      onChange={(e) => setForm({ ...form, model: e.target.value })}
-                    >
-                      <option value="">
-                        {v.profile_model
-                          ? t('config.modelFromProfile', { model: v.profile_model })
-                          : t('config.modelPick')}
-                      </option>
-                      {v.models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                  <Field label={t('config.scanMode')}>
-                    <Select
-                      id="cfgb-speed"
-                      value={form.scanMode}
-                      disabled={!canStart}
-                      onChange={(e) => setForm({ ...form, scanMode: e.target.value as ScanMode })}
-                    >
-                      {SCAN_MODES.map((m) => (
-                        <option key={m} value={m}>
-                          {t(`config.scanModes.${m}`)}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                </div>
-                <label className="nd-check-toggle">
-                  <input
-                    type="checkbox"
-                    checked={sshOnly(form)}
+              <div className="cfgb-settings-grid">
+                <Field label={t('config.model')}>
+                  <Select
+                    id="cfgb-model"
+                    value={form.model}
                     disabled={!canStart}
-                    onChange={(e) => setForm(withSshOnly(form, e.target.checked))}
-                  />
-                  <span>{t('config.input.ssh')}</span>
-                </label>
-                {canStart && (
-                  <div className="cfgb-logins">
-                    <FieldGroup
-                      label={t('config.logins')}
-                      action={
-                        form.order !== null && (
-                          <Button onClick={() => setForm({ ...form, order: null })}>{t('config.defaultOrder')}</Button>
-                        )
-                      }
-                    >
-                      <CredentialPicker
-                        options={logins}
-                        selected={pickedLogins(form, v)}
-                        onChange={(ids) => setForm({ ...form, order: ids })}
-                        disabled={busy}
-                      />
-                      <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
-                        {t('config.addLogin')}
-                      </Link>
-                    </FieldGroup>
-                  </div>
-                )}
-                {canStart && (
-                  <div className="cfgb-buttons">
-                    <Button onClick={rescan} disabled={busy}>
-                      {t('config.rescan')}
-                    </Button>
-                    <Button variant="primary" onClick={save} disabled={busy || !isDirty(form, v)}>
-                      {t('common:actions.save')}
-                    </Button>
-                  </div>
-                )}
+                    onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  >
+                    <option value="">
+                      {v.profile_model
+                        ? t('config.modelFromProfile', { model: v.profile_model })
+                        : t('config.modelPick')}
+                    </option>
+                    {v.models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label={t('config.scanMode')}>
+                  <Select
+                    id="cfgb-speed"
+                    value={form.scanMode}
+                    disabled={!canStart}
+                    onChange={(e) => setForm({ ...form, scanMode: e.target.value as ScanMode })}
+                  >
+                    {SCAN_MODES.map((m) => (
+                      <option key={m} value={m}>
+                        {t(`config.scanModes.${m}`)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
               </div>
-            </details>
+              <label className="nd-check-toggle">
+                <input
+                  type="checkbox"
+                  checked={sshOnly(form)}
+                  disabled={!canStart}
+                  onChange={(e) => setForm(withSshOnly(form, e.target.checked))}
+                />
+                <span>{t('config.input.ssh')}</span>
+              </label>
+              {canStart && (
+                <div className="cfgb-logins">
+                  <FieldGroup
+                    label={t('config.logins')}
+                    action={
+                      form.order !== null && (
+                        <Button onClick={() => setForm({ ...form, order: null })}>{t('config.defaultOrder')}</Button>
+                      )
+                    }
+                  >
+                    <CredentialPicker
+                      options={logins}
+                      selected={pickedLogins(form, v)}
+                      onChange={(ids) => setForm({ ...form, order: ids })}
+                      disabled={busy}
+                    />
+                    <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
+                      {t('config.addLogin')}
+                    </Link>
+                  </FieldGroup>
+                </div>
+              )}
+              {canStart && (
+                <Inline gap={8} justify="end">
+                  <Button onClick={rescan} disabled={busy}>
+                    {t('config.rescan')}
+                  </Button>
+                  <Button variant="primary" onClick={save} disabled={busy || !isDirty(form, v)}>
+                    {t('common:actions.save')}
+                  </Button>
+                </Inline>
+              )}
+            </Disclosure>
           )}
 
           {v.available && (v.enabled || vers.length > 0) && (
-            <section className="cfgb-history">
-              <div className="cfgb-history-head">
-                <div className="nd-section-t">{t('config.history.title')}</div>
-                <Segmented
-                  ariaLabel={t('config.history.title')}
-                  options={HISTORY_FILTERS.map((f) => ({ value: f, label: t(`config.history.filter.${f}`) }))}
-                  value={filter}
-                  onChange={(f) => setFilter(f as HistoryFilter)}
-                />
-              </div>
+            <Stack as="section" gap={8}>
+              <SectionHead
+                title={t('config.history.title')}
+                actions={
+                  <Segmented
+                    ariaLabel={t('config.history.title')}
+                    options={HISTORY_FILTERS.map((f) => ({ value: f, label: t(`config.history.filter.${f}`) }))}
+                    value={filter}
+                    onChange={(f) => setFilter(f as HistoryFilter)}
+                  />
+                }
+              />
               {versions.error && (
                 <p className="form-error" role="alert">
                   {versions.error}
@@ -559,7 +565,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                   ])}
                 </ol>
               )}
-            </section>
+            </Stack>
           )}
           {confirmSave && (
             <ConfirmDeleteModal
@@ -576,7 +582,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               {t('config.saves.confirm', { node: node.name })}
             </ConfirmDeleteModal>
           )}
-        </div>
+        </Stack>
       )}
     </LoadGate>
   );

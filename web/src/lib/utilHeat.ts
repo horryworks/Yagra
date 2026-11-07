@@ -33,7 +33,7 @@ const WASH_MIN_PCT = 8;
 const WASH_MAX_PCT = 30;
 
 /** The two inline custom properties a heat-washed cell carries. `InterfacesTab` spreads these onto
- *  the cell's `style`; `NodeDetail.css` does the final `color-mix` against `transparent`. */
+ *  the cell's `style`; `InterfacesTab.css` does the final `color-mix` against `transparent`. */
 export interface UtilHeat {
   /** A CSS colour: the ramp position, as a `color-mix` of two `--util-*` tokens. */
   hue: string;

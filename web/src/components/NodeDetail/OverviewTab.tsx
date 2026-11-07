@@ -17,6 +17,9 @@ import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
 import { InfoPress } from '../ui/InfoTip';
 import { InlineNotes } from '../ui/InlineNotes';
+import { Facts } from '../ui/Facts';
+import { Stack } from '../ui/Page';
+import { Callout, SectionHead } from '../ui/Section';
 import { isEntityResolved, useEntityNames } from '../ui/entityNames';
 import { nodesPageHref } from '../../lib/entityHref';
 import { api } from '../../services/api';
@@ -110,6 +113,7 @@ import { CheckConfigActions } from './CheckConfigActions';
 import { useCan, useRangeStore } from '../../store';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { addressText, hasAddress } from '../../lib/nodeAddress';
+import './OverviewTab.css';
 
 interface Props {
   node: NodeDetail;
@@ -135,7 +139,7 @@ export function OverviewTab({
   const facts = useFacts(node, groups, unreachable);
   const fault = collectionFaultNotice(status);
   return (
-    <div className="nd-overview">
+    <Stack gap={16} className="nd-overview">
       {/* First, because "has this node been up" is the question the page is opened with (ADR-223).
           Every kind has a liveness alert, so every kind gets the graph. */}
       <AvailabilitySection nodeId={node.id} />
@@ -164,65 +168,72 @@ export function OverviewTab({
           folder the operator has to go to in order to change it. The inherited group says which
           folder in words rather than only in a tooltip (ui-conventions R4). */}
       {((node.tags ?? []).length > 0 || (node.inherited_tags ?? []).length > 0) && (
-        <section>
-          <div className="nd-section-t">{t('field.tags')}</div>
-          {(node.tags ?? []).length > 0 && (
-            <div className="nd-tag-chips">
-              {[...node.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
-                <Badge tone="tag" key={label}>{label}</Badge>
-              ))}
-            </div>
-          )}
-          {(node.inherited_tags ?? []).length > 0 && (
-            <>
-              <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
+        <Stack as="section" gap={8}>
+          <SectionHead title={t('field.tags')} />
+          {/* One box under the heading, so the inherited group keeps its own tighter spacing. */}
+          <div>
+            {(node.tags ?? []).length > 0 && (
               <div className="nd-tag-chips">
-                {[...node.inherited_tags].sort((a, b) => a.localeCompare(b)).map((label) => (
+                {[...node.tags].sort((a, b) => a.localeCompare(b)).map((label) => (
                   <Badge tone="tag" key={label}>{label}</Badge>
                 ))}
               </div>
-            </>
-          )}
-        </section>
+            )}
+            {(node.inherited_tags ?? []).length > 0 && (
+              <>
+                <div className="nd-tag-inherited-t">{t('field.tagsInheritedFrom')}</div>
+                <div className="nd-tag-chips">
+                  {[...node.inherited_tags].sort((a, b) => a.localeCompare(b)).map((label) => (
+                    <Badge tone="tag" key={label}>{label}</Badge>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </Stack>
       )}
 
-      <div className="nd-facts">
-        {visibleFactRows(node.kind, node.snmp_configured).map((row) => {
+      <Facts
+        layout="grid"
+        items={visibleFactRows(node.kind, node.snmp_configured).map((row) => {
           const f = facts[row];
-          return (
-            <div key={row}>
-              <div className="nd-fact-k">{f.label}</div>
-              <div className={`nd-fact-v${f.mono ? ' mono' : ''}${f.warn ? ' warn' : ''}`}>
+          return {
+            key: row,
+            label: f.label,
+            value: (
+              <span className={`nd-fact-v${f.mono ? ' mono' : ''}${f.warn ? ' warn' : ''}`}>
                 {f.value}
-              </div>
-            </div>
-          );
+              </span>
+            ),
+          };
         })}
-      </div>
+      />
 
       {/* The state above is the last one collected, not a current one (ADR-164 decision 18): the
           Meraki API is not answering this node's organization. There is one alert for that, and
           it is about the organization — so this node has none of its own, and without this line
           an `ok` from an hour ago reads exactly like an `ok` from a minute ago. */}
       {fault?.kind === 'meraki_api' && (
-        <p className="nd-fault" role="status">
-          {fault.reasonKey
-            ? t('overview.collectionFault', {
-                org: fault.org,
-                reason: t(fault.reasonKey, { ns: 'system' }),
-                since: formatTimestamp(fault.sinceUnixMs),
-              })
-            : t('overview.collectionFaultNoReason', {
-                org: fault.org,
-                since: formatTimestamp(fault.sinceUnixMs),
-              })}
-          {fault.orgPath && (
-            <>
-              {' '}
-              <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
-            </>
-          )}
-        </p>
+        <div role="status">
+          <Callout tone="warning">
+            {fault.reasonKey
+              ? t('overview.collectionFault', {
+                  org: fault.org,
+                  reason: t(fault.reasonKey, { ns: 'system' }),
+                  since: formatTimestamp(fault.sinceUnixMs),
+                })
+              : t('overview.collectionFaultNoReason', {
+                  org: fault.org,
+                  since: formatTimestamp(fault.sinceUnixMs),
+                })}
+            {fault.orgPath && (
+              <>
+                {' '}
+                <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
+              </>
+            )}
+          </Callout>
+        </div>
       )}
 
       {/* No wireless controller has reported this access point lately (ADR-064 Inc.G), so the
@@ -230,16 +241,18 @@ export function OverviewTab({
           raised about the AP itself; this is what says why, and since when. No link: the "Wireless
           controller" row in the facts above already is one, narrowed to what this caller may see. */}
       {fault?.kind === 'wireless_controller' && (
-        <p className="nd-fault" role="status">
-          {t('overview.collectionFaultWireless', { since: formatTimestamp(fault.sinceUnixMs) })}
-        </p>
+        <div role="status">
+          <Callout tone="warning">
+            {t('overview.collectionFaultWireless', { since: formatTimestamp(fault.sinceUnixMs) })}
+          </Callout>
+        </div>
       )}
 
       {status && status.alerts.length > 0 && (
-        <section>
-          <div className="nd-section-t">{t('nav:alerts.active')}</div>
+        <Stack as="section" gap={8}>
+          <SectionHead title={t('nav:alerts.active')} />
           <ActiveAlertList alerts={status.alerts} />
-        </section>
+        </Stack>
       )}
 
       {/* Gated on `node.kind` — the kind the backend actually polls — not on which config happens
@@ -273,7 +286,7 @@ export function OverviewTab({
       )}
       <DeviceHealth nodeId={node.id} />
       <OverviewSections node={node} />
-    </div>
+    </Stack>
   );
 }
 
@@ -336,11 +349,11 @@ function IcmpHealth({
     chart: { kind: 'range' },
   };
   return (
-    <section>
-      <div className="nd-section-head">
-        <div className="nd-section-t">{t('overview.family.icmp')}</div>
-        <RangeControl value={range} onChange={setRange} />
-      </div>
+    <Stack as="section" gap={8}>
+      <SectionHead
+        title={t('overview.family.icmp')}
+        actions={<RangeControl value={range} onChange={setRange} />}
+      />
       <div className="nd-health-metrics">
         <MetricCard
           nodeId={nodeId}
@@ -362,7 +375,7 @@ function IcmpHealth({
           />
         )}
       </div>
-    </section>
+    </Stack>
   );
 }
 
@@ -467,120 +480,126 @@ function UrlHealth({
   const code = statusCode == null ? null : Math.round(statusCode);
 
   return (
-    <section>
-      <div className="nd-section-head">
-        <div className="nd-section-t">{t('overview.urlMonitor')}</div>
-        <RangeControl value={range} onChange={setRange} />
-        {actions}
-      </div>
-      <div className="nd-fact-v mono nd-url-target">{url}</div>
-      <div className="nd-health-metrics">
-        <div className="nd-health-metric">
-          <div className="nd-health-metric-head">
-            <span className="nd-health-metric-label">{t('overview.availability')}</span>
-            <span
-              className="nd-health-metric-value"
-              style={{ color: availabilityColorVar(up) }}
-            >
-              {up == null ? '—' : up === 1 ? t('overview.up') : t('overview.down')}
-            </span>
-          </div>
-          <div className="nd-url-status-line">
-            {code == null ? (
-              <span className="nd-muted">{t('overview.noResponse')}</span>
-            ) : (
-              <span style={{ color: httpToneVar(httpStatusTone(code)) }}>
-                HTTP {code} · {httpStatusLabel(code)}
-              </span>
-            )}
-          </div>
-          {series.timestamps.length > 0 && (
-            <MetricChart
-              title=""
-              timestamps={series.timestamps}
-              values={series.values}
-              yFormat={(v) => `${Math.round(v)}`}
-              legendFormat={(v) => `HTTP ${Math.round(v)}`}
-              xRange={win ?? undefined}
-            />
-          )}
-        </div>
-        {/* Absent while the endpoint is unreachable — the poller writes no response time when
-            there was no response, so the card disappears rather than showing the timeout. */}
-        {responseMs != null && (
+    <Stack as="section" gap={8}>
+      <SectionHead
+        title={t('overview.urlMonitor')}
+        actions={
+          <>
+            <RangeControl value={range} onChange={setRange} />
+            {actions}
+          </>
+        }
+      />
+      <Stack gap={12}>
+        <div className="nd-fact-v mono nd-url-target">{url}</div>
+        <div className="nd-health-metrics">
           <div className="nd-health-metric">
             <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.responseTime')}</span>
-              <span className="nd-health-metric-value">{Math.round(responseMs)} ms</span>
+              <span className="nd-health-metric-label">{t('overview.availability')}</span>
+              <span
+                className="nd-health-metric-value"
+                style={{ color: availabilityColorVar(up) }}
+              >
+                {up == null ? '—' : up === 1 ? t('overview.up') : t('overview.down')}
+              </span>
             </div>
-            {responseSeries.timestamps.length > 0 && (
+            <div className="nd-url-status-line">
+              {code == null ? (
+                <span className="nd-muted">{t('overview.noResponse')}</span>
+              ) : (
+                <span style={{ color: httpToneVar(httpStatusTone(code)) }}>
+                  HTTP {code} · {httpStatusLabel(code)}
+                </span>
+              )}
+            </div>
+            {series.timestamps.length > 0 && (
               <MetricChart
                 title=""
-                timestamps={responseSeries.timestamps}
-                values={responseSeries.values}
-                yFormat={(v) => `${Math.round(v)} ms`}
-                legendFormat={(v) => `${Math.round(v)} ms`}
+                timestamps={series.timestamps}
+                values={series.values}
+                yFormat={(v) => `${Math.round(v)}`}
+                legendFormat={(v) => `HTTP ${Math.round(v)}`}
                 xRange={win ?? undefined}
               />
             )}
           </div>
-        )}
-        {/* Only for a monitor that carries a content rule — the poller emits nothing otherwise.
-            A 0 has two causes and the operator needs to know which: the keyword really was
-            wrong, or the page outgrew its read budget so the rule could not be decided. The
-            truncation line is the only thing that tells them apart. */}
-        {bodyMatch != null && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.bodyMatch')}</span>
-              <span
-                className="nd-health-metric-value"
-                style={{ color: httpToneVar(bodyMatch === 1 ? 'up' : 'critical') }}
-              >
-                {bodyMatch === 1 ? t('overview.bodyMatchOk') : t('overview.bodyMatchFailed')}
-              </span>
-            </div>
-            {bodyTruncated === 1 && (
-              <div className="nd-url-status-line">
-                <span className="nd-muted">{t('overview.bodyTruncated')}</span>
-              </div>
-            )}
-          </div>
-        )}
-        {/* Operator-named values lifted out of the JSON body. The label is the metric name the
-            operator chose — there is nothing to translate, and inventing a prettier one would
-            hide the string they have to type into a threshold. A rule with no reading yet is
-            simply absent (the poller records nothing rather than a zero). */}
-        {extracts.map((e) =>
-          extracted[e.metric] == null ? null : (
-            <div className="nd-health-metric" key={e.metric}>
+          {/* Absent while the endpoint is unreachable — the poller writes no response time when
+              there was no response, so the card disappears rather than showing the timeout. */}
+          {responseMs != null && (
+            <div className="nd-health-metric">
               <div className="nd-health-metric-head">
-                <span className="nd-health-metric-label mono">{e.metric}</span>
-                <span className="nd-health-metric-value">
-                  {formatExtractedValue(extracted[e.metric])}
+                <span className="nd-health-metric-label">{t('overview.responseTime')}</span>
+                <span className="nd-health-metric-value">{Math.round(responseMs)} ms</span>
+              </div>
+              {responseSeries.timestamps.length > 0 && (
+                <MetricChart
+                  title=""
+                  timestamps={responseSeries.timestamps}
+                  values={responseSeries.values}
+                  yFormat={(v) => `${Math.round(v)} ms`}
+                  legendFormat={(v) => `${Math.round(v)} ms`}
+                  xRange={win ?? undefined}
+                />
+              )}
+            </div>
+          )}
+          {/* Only for a monitor that carries a content rule — the poller emits nothing otherwise.
+              A 0 has two causes and the operator needs to know which: the keyword really was
+              wrong, or the page outgrew its read budget so the rule could not be decided. The
+              truncation line is the only thing that tells them apart. */}
+          {bodyMatch != null && (
+            <div className="nd-health-metric">
+              <div className="nd-health-metric-head">
+                <span className="nd-health-metric-label">{t('overview.bodyMatch')}</span>
+                <span
+                  className="nd-health-metric-value"
+                  style={{ color: httpToneVar(bodyMatch === 1 ? 'up' : 'critical') }}
+                >
+                  {bodyMatch === 1 ? t('overview.bodyMatchOk') : t('overview.bodyMatchFailed')}
                 </span>
               </div>
-              <div className="nd-url-status-line">
-                <span className="nd-muted mono">{e.path}</span>
+              {bodyTruncated === 1 && (
+                <div className="nd-url-status-line">
+                  <span className="nd-muted">{t('overview.bodyTruncated')}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {/* Operator-named values lifted out of the JSON body. The label is the metric name the
+              operator chose — there is nothing to translate, and inventing a prettier one would
+              hide the string they have to type into a threshold. A rule with no reading yet is
+              simply absent (the poller records nothing rather than a zero). */}
+          {extracts.map((e) =>
+            extracted[e.metric] == null ? null : (
+              <div className="nd-health-metric" key={e.metric}>
+                <div className="nd-health-metric-head">
+                  <span className="nd-health-metric-label mono">{e.metric}</span>
+                  <span className="nd-health-metric-value">
+                    {formatExtractedValue(extracted[e.metric])}
+                  </span>
+                </div>
+                <div className="nd-url-status-line">
+                  <span className="nd-muted mono">{e.path}</span>
+                </div>
+              </div>
+            ),
+          )}
+          {certDays != null && (
+            <div className="nd-health-metric">
+              <div className="nd-health-metric-head">
+                <span className="nd-health-metric-label">{t('overview.tlsCertificate')}</span>
+                <span
+                  className="nd-health-metric-value"
+                  style={{ color: httpToneVar(certTone(certDays)) }}
+                >
+                  {formatDaysToExpiry(certDays)}
+                </span>
               </div>
             </div>
-          ),
-        )}
-        {certDays != null && (
-          <div className="nd-health-metric">
-            <div className="nd-health-metric-head">
-              <span className="nd-health-metric-label">{t('overview.tlsCertificate')}</span>
-              <span
-                className="nd-health-metric-value"
-                style={{ color: httpToneVar(certTone(certDays)) }}
-              >
-                {formatDaysToExpiry(certDays)}
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-    </section>
+          )}
+        </div>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -764,200 +783,204 @@ function MerakiHealth({
   );
 
   return (
-    <section>
-      <div className="nd-section-head">
-        <div className="nd-section-t">Cisco Meraki</div>
-        {(appliance || accessPoint) && <RangeControl value={range} onChange={setRange} />}
-      </div>
-      <div className="nd-fact-v mono nd-url-target">
-        {t('overview.merakiIdentity', { productType: device.product_type, serial: device.serial })}
-      </div>
-      <div className="nd-mk-tiles">
-        <div className="nd-mk-tile">
-          <div className="nd-mk-tile-label">{t('overview.availability')}</div>
-          <div className="nd-mk-tile-value" style={{ color: availabilityColorVar(up) }}>
-            {up == null ? '—' : up === 1 ? t('overview.online') : t('overview.offline')}
-          </div>
+    <Stack as="section" gap={8}>
+      <SectionHead
+        title="Cisco Meraki"
+        actions={(appliance || accessPoint) && <RangeControl value={range} onChange={setRange} />}
+      />
+      <Stack gap={12}>
+        <div className="nd-fact-v mono nd-url-target">
+          {t('overview.merakiIdentity', { productType: device.product_type, serial: device.serial })}
         </div>
-        {vpn && !pairLine?.vpnNotRead && (
-          <div className="nd-mk-tile">
-            <div className="nd-mk-tile-label">{t('overview.vpn')}</div>
-            <div
-              className="nd-mk-tile-value"
-              style={vpn.tone === 'ok' ? undefined : { color: severityColorVar(vpn.tone) }}
-            >
-              {vpn.total > 0 && t('overview.vpnHubs', { reached: vpn.reached, total: vpn.total })}
-              {vpn.total > 0 && vpn.spokesDown != null ? ' · ' : ''}
-              {vpn.spokesDown != null ? t('overview.vpnSpokesDown', { count: vpn.spokesDown }) : ''}
-            </div>
-          </div>
-        )}
-        {pairLine?.vpnNotRead && (
-          <div className="nd-mk-tile">
-            <div className="nd-mk-tile-label">{t('overview.vpn')}</div>
-            <div className="nd-mk-tile-value">—</div>
-            <div className="nd-mk-tile-sub">{t('overview.vpnNotRead')}</div>
-          </div>
-        )}
-        {pairLine && (
-          <div className="nd-mk-tile">
-            <div className="nd-mk-tile-label">{t('overview.warmSpare')}</div>
-            <div
-              className="nd-mk-tile-value"
-              style={
-                pairLine.tone && pairLine.tone !== 'ok'
-                  ? { color: severityColorVar(pairLine.tone) }
-                  : undefined
-              }
-            >
-              {t(`overview.pairState.${pairLine.state}`)}
-            </div>
-            {/* Two lines, each naming whose role it is: "Primary · partner X (Spare)" left the
-                reader to work out that the first word was this MX's. "(configured)" because it
-                is the role set in the Dashboard, not which MX is carrying traffic — that is the
-                state above. The partner's name is device-supplied, so the line is assembled
-                from parts rather than passed through `Trans`, which would parse a name that
-                looks like a tag. */}
-            <div className="nd-mk-tile-sub">
-              {t('overview.pairSelf', { role: t(`overview.haRole.${pairLine.role}`) })}
-            </div>
-            <div className="nd-mk-tile-sub">
-              {pairLine.partner ? (
-                <>
-                  {t('overview.pairPartnerLabel')}{' '}
-                  {pairLine.partner.nodeId ? (
-                    <Link
-                      to={nodesPageHref({ kind: 'node', id: pairLine.partner.nodeId })}
-                      title={pairLine.partner.name}
-                    >
-                      {pairLine.partner.name}
-                    </Link>
-                  ) : (
-                    pairLine.partner.name
-                  )}
-                  {pairLine.partner.role &&
-                    t('overview.pairPartnerRole', {
-                      role: t(`overview.haRole.${pairLine.partner.role}`),
-                    })}
-                </>
-              ) : (
-                t('overview.pairPartnerNone')
-              )}
-            </div>
-          </div>
-        )}
-        {accessPoint && (
-          <>
+        <Stack gap={16}>
+          <div className="nd-mk-tiles">
             <div className="nd-mk-tile">
-              <div className="nd-mk-tile-label">{t('overview.merakiClients')}</div>
-              <div className="nd-mk-tile-value">{clients == null ? '—' : formatCount(clients)}</div>
-            </div>
-            <div className="nd-mk-tile">
-              <div className="nd-mk-tile-label">{t('overview.merakiSsids')}</div>
-              <div className="nd-mk-tile-value">
-                {ssids == null || !radioReadings ? '—' : formatCount(ssids)}
+              <div className="nd-mk-tile-label">{t('overview.availability')}</div>
+              <div className="nd-mk-tile-value" style={{ color: availabilityColorVar(up) }}>
+                {up == null ? '—' : up === 1 ? t('overview.online') : t('overview.offline')}
               </div>
             </div>
-            {(radioReadings ? radios : []).map((r) => (
-              <div className="nd-mk-tile" key={r.row}>
-                <div className="nd-mk-tile-label">
-                  {t('overview.merakiChannelUtil', { band: r.band })}
+            {vpn && !pairLine?.vpnNotRead && (
+              <div className="nd-mk-tile">
+                <div className="nd-mk-tile-label">{t('overview.vpn')}</div>
+                <div
+                  className="nd-mk-tile-value"
+                  style={vpn.tone === 'ok' ? undefined : { color: severityColorVar(vpn.tone) }}
+                >
+                  {vpn.total > 0 && t('overview.vpnHubs', { reached: vpn.reached, total: vpn.total })}
+                  {vpn.total > 0 && vpn.spokesDown != null ? ' · ' : ''}
+                  {vpn.spokesDown != null ? t('overview.vpnSpokesDown', { count: vpn.spokesDown }) : ''}
                 </div>
-                <div className="nd-mk-tile-value">{formatUtil(r.utilPct)}</div>
-                {r.nonWifiPct != null && (
-                  <div className="nd-mk-tile-sub">
-                    {t('overview.merakiNonWifi', { pct: formatUtil(r.nonWifiPct) })}
-                  </div>
-                )}
               </div>
-            ))}
-          </>
-        )}
-        {uplinks.length === 0 && appliance && (
-          <div className="nd-mk-tile">
-            <div className="nd-mk-tile-label">{t('overview.wanTraffic')}</div>
-            <div className="nd-mk-tile-value">—</div>
+            )}
+            {pairLine?.vpnNotRead && (
+              <div className="nd-mk-tile">
+                <div className="nd-mk-tile-label">{t('overview.vpn')}</div>
+                <div className="nd-mk-tile-value">—</div>
+                <div className="nd-mk-tile-sub">{t('overview.vpnNotRead')}</div>
+              </div>
+            )}
+            {pairLine && (
+              <div className="nd-mk-tile">
+                <div className="nd-mk-tile-label">{t('overview.warmSpare')}</div>
+                <div
+                  className="nd-mk-tile-value"
+                  style={
+                    pairLine.tone && pairLine.tone !== 'ok'
+                      ? { color: severityColorVar(pairLine.tone) }
+                      : undefined
+                  }
+                >
+                  {t(`overview.pairState.${pairLine.state}`)}
+                </div>
+                {/* Two lines, each naming whose role it is: "Primary · partner X (Spare)" left the
+                    reader to work out that the first word was this MX's. "(configured)" because it
+                    is the role set in the Dashboard, not which MX is carrying traffic — that is the
+                    state above. The partner's name is device-supplied, so the line is assembled
+                    from parts rather than passed through `Trans`, which would parse a name that
+                    looks like a tag. */}
+                <div className="nd-mk-tile-sub">
+                  {t('overview.pairSelf', { role: t(`overview.haRole.${pairLine.role}`) })}
+                </div>
+                <div className="nd-mk-tile-sub">
+                  {pairLine.partner ? (
+                    <>
+                      {t('overview.pairPartnerLabel')}{' '}
+                      {pairLine.partner.nodeId ? (
+                        <Link
+                          to={nodesPageHref({ kind: 'node', id: pairLine.partner.nodeId })}
+                          title={pairLine.partner.name}
+                        >
+                          {pairLine.partner.name}
+                        </Link>
+                      ) : (
+                        pairLine.partner.name
+                      )}
+                      {pairLine.partner.role &&
+                        t('overview.pairPartnerRole', {
+                          role: t(`overview.haRole.${pairLine.partner.role}`),
+                        })}
+                    </>
+                  ) : (
+                    t('overview.pairPartnerNone')
+                  )}
+                </div>
+              </div>
+            )}
+            {accessPoint && (
+              <>
+                <div className="nd-mk-tile">
+                  <div className="nd-mk-tile-label">{t('overview.merakiClients')}</div>
+                  <div className="nd-mk-tile-value">{clients == null ? '—' : formatCount(clients)}</div>
+                </div>
+                <div className="nd-mk-tile">
+                  <div className="nd-mk-tile-label">{t('overview.merakiSsids')}</div>
+                  <div className="nd-mk-tile-value">
+                    {ssids == null || !radioReadings ? '—' : formatCount(ssids)}
+                  </div>
+                </div>
+                {(radioReadings ? radios : []).map((r) => (
+                  <div className="nd-mk-tile" key={r.row}>
+                    <div className="nd-mk-tile-label">
+                      {t('overview.merakiChannelUtil', { band: r.band })}
+                    </div>
+                    <div className="nd-mk-tile-value">{formatUtil(r.utilPct)}</div>
+                    {r.nonWifiPct != null && (
+                      <div className="nd-mk-tile-sub">
+                        {t('overview.merakiNonWifi', { pct: formatUtil(r.nonWifiPct) })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
+            {uplinks.length === 0 && appliance && (
+              <div className="nd-mk-tile">
+                <div className="nd-mk-tile-label">{t('overview.wanTraffic')}</div>
+                <div className="nd-mk-tile-value">—</div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      {uplinks.length > 0 && (
-        <div className="nd-mk-uplinks" role="table" aria-label={t('overview.wanTraffic')}>
-          <div className="nd-mk-uplink nd-mk-uplink-head" role="row">
-            <span role="columnheader">{t('overview.uplinkCols.uplink')}</span>
-            <span role="columnheader">{t('overview.uplinkCols.state')}</span>
-            <span role="columnheader" className="nd-mk-num">
-              {t('overview.uplinkCols.sent')}
-            </span>
-            <span role="columnheader" className="nd-mk-num">
-              {t('overview.uplinkCols.received')}
-            </span>
-          </div>
-          {uplinks.map((l) => (
-            <div className="nd-mk-uplink" role="row" key={l.row}>
-              <span role="cell" className="nd-mk-uplink-name" title={l.name}>
-                {l.name}
-              </span>
-              <span
-                role="cell"
-                style={l.state === 'failed' ? { color: severityColorVar('critical') } : undefined}
-              >
-                {l.state ? t(`overview.uplinkState.${l.state}`) : '—'}
-              </span>
-              <span role="cell" className="nd-mk-num">
-                {l.sentBps == null ? '—' : formatBps(l.sentBps)}
-              </span>
-              <span role="cell" className="nd-mk-num">
-                {l.recvBps == null ? '—' : formatBps(l.recvBps)}
-              </span>
+          {uplinks.length > 0 && (
+            <div className="nd-mk-uplinks" role="table" aria-label={t('overview.wanTraffic')}>
+              <div className="nd-mk-uplink nd-mk-uplink-head" role="row">
+                <span role="columnheader">{t('overview.uplinkCols.uplink')}</span>
+                <span role="columnheader">{t('overview.uplinkCols.state')}</span>
+                <span role="columnheader" className="nd-mk-num">
+                  {t('overview.uplinkCols.sent')}
+                </span>
+                <span role="columnheader" className="nd-mk-num">
+                  {t('overview.uplinkCols.received')}
+                </span>
+              </div>
+              {uplinks.map((l) => (
+                <div className="nd-mk-uplink" role="row" key={l.row}>
+                  <span role="cell" className="nd-mk-uplink-name" title={l.name}>
+                    {l.name}
+                  </span>
+                  <span
+                    role="cell"
+                    style={l.state === 'failed' ? { color: severityColorVar('critical') } : undefined}
+                  >
+                    {l.state ? t(`overview.uplinkState.${l.state}`) : '—'}
+                  </span>
+                  <span role="cell" className="nd-mk-num">
+                    {l.sentBps == null ? '—' : formatBps(l.sentBps)}
+                  </span>
+                  <span role="cell" className="nd-mk-num">
+                    {l.recvBps == null ? '—' : formatBps(l.recvBps)}
+                  </span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
-      {accessPoint && apCharts.counts.timestamps.length > 0 && (
-        <div className="nd-mk-chart">
-          <div className="nd-mk-tile-label">{t('overview.apCountsChart')}</div>
-          <MetricChart
-            title=""
-            timestamps={apCharts.counts.timestamps}
-            series={apCharts.counts.series}
-            xRange={apWin ?? undefined}
-            yFormat={(v) => countAxisLabel(v, formatCount)}
-            legendFormat={(v) => formatCount(v)}
-          />
-        </div>
-      )}
-      {accessPoint && apCharts.util.timestamps.length > 0 && (
-        <div className="nd-mk-chart">
-          <div className="nd-mk-tile-label">{t('overview.apUtilChart')}</div>
-          <MetricChart
-            title=""
-            timestamps={apCharts.util.timestamps}
-            series={apCharts.util.series}
-            xRange={apWin ?? undefined}
-            yRange={PCT_Y_RANGE}
-            yFormat={(v) => formatUtil(v)}
-            legendFormat={(v) => formatUtil(v)}
-          />
-        </div>
-      )}
-      {traffic.timestamps.length > 0 && (
-        <div className="nd-mk-chart">
-          <div className="nd-mk-tile-label">{t('overview.wanTraffic')}</div>
-          <MetricChart
-            title=""
-            timestamps={traffic.timestamps}
-            series={traffic.series}
-            xRange={win ?? undefined}
-            yFormat={(v) => formatSi(Math.abs(v))}
-            legendFormat={(v) => formatBps(Math.abs(v))}
-            mirrored={mirrorAxisLabels({
-              in: t('overview.trafficAxis.received'),
-              out: t('overview.trafficAxis.sent'),
-            })}
-          />
-        </div>
-      )}
-    </section>
+          )}
+          {accessPoint && apCharts.counts.timestamps.length > 0 && (
+            <div className="nd-mk-chart">
+              <div className="nd-mk-tile-label">{t('overview.apCountsChart')}</div>
+              <MetricChart
+                title=""
+                timestamps={apCharts.counts.timestamps}
+                series={apCharts.counts.series}
+                xRange={apWin ?? undefined}
+                yFormat={(v) => countAxisLabel(v, formatCount)}
+                legendFormat={(v) => formatCount(v)}
+              />
+            </div>
+          )}
+          {accessPoint && apCharts.util.timestamps.length > 0 && (
+            <div className="nd-mk-chart">
+              <div className="nd-mk-tile-label">{t('overview.apUtilChart')}</div>
+              <MetricChart
+                title=""
+                timestamps={apCharts.util.timestamps}
+                series={apCharts.util.series}
+                xRange={apWin ?? undefined}
+                yRange={PCT_Y_RANGE}
+                yFormat={(v) => formatUtil(v)}
+                legendFormat={(v) => formatUtil(v)}
+              />
+            </div>
+          )}
+          {traffic.timestamps.length > 0 && (
+            <div className="nd-mk-chart">
+              <div className="nd-mk-tile-label">{t('overview.wanTraffic')}</div>
+              <MetricChart
+                title=""
+                timestamps={traffic.timestamps}
+                series={traffic.series}
+                xRange={win ?? undefined}
+                yFormat={(v) => formatSi(Math.abs(v))}
+                legendFormat={(v) => formatBps(Math.abs(v))}
+                mirrored={mirrorAxisLabels({
+                  in: t('overview.trafficAxis.received'),
+                  out: t('overview.trafficAxis.sent'),
+                })}
+              />
+            </div>
+          )}
+        </Stack>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -1182,22 +1205,20 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   // 🚨 Said, not hidden. A missing section reads as "this device reports nothing".
   if (health === 'failed') {
     return (
-      <section>
-        <div className="nd-section-head">
-          <div className="nd-section-t">{t('overview.deviceHealth')}</div>
-        </div>
+      <Stack as="section" gap={8}>
+        <SectionHead title={t('overview.deviceHealth')} />
         <p className="form-error">{t('overview.healthLoadFailed')}</p>
-      </section>
+      </Stack>
     );
   }
   if (!hasAnyHealth(health)) return null; // nothing to show
 
   return (
-    <section>
-      <div className="nd-section-head">
-        <div className="nd-section-t">{t('overview.deviceHealth')}</div>
-        <RangeControl value={range} onChange={setRange} />
-      </div>
+    <Stack as="section" gap={8}>
+      <SectionHead
+        title={t('overview.deviceHealth')}
+        actions={<RangeControl value={range} onChange={setRange} />}
+      />
       <div className="nd-health-metrics">
         {METRIC_CARDS.map((spec) => {
           const resolved = health.cards[spec.id];
@@ -1219,7 +1240,7 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
         })}
         {health.mem && <MemHealth nodeId={nodeId} mem={health.mem} range={range} />}
       </div>
-    </section>
+    </Stack>
   );
 }
 
@@ -1618,31 +1639,33 @@ function OverviewSections({ node }: { node: NodeDetail }) {
             data-overview-section={kindAttr}
             data-set={key.kind === 'set' ? key.name : undefined}
           >
-            <div className="nd-section-t">{heading}</div>
-            <div className="nd-health-metrics">
-              {s.cards.map((c) => {
-                const { label, known } = scalarLabel(c.metric);
-                const meaning = metricMeaningKey(c.metric);
-                return (
-                  <MetricCard
-                    key={c.metric}
-                    nodeId={node.id}
-                    label={label}
-                    labelMono={!known}
-                    meaning={meaning ? t(meaning) : null}
-                    // Both come from the generated unit table rather than from this component
-                    // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what
-                    // a curated card would have drawn for the same metric; `unit` is ignored on
-                    // the percent branch and by `format`, so none of the three can double up.
-                    scale={uncuratedCardScale(c.metric)}
-                    unit={metricUnitSuffix(c.metric) ?? undefined}
-                    format={scalarValueFormat(c.metric)}
-                    resolved={c}
-                    range={range}
-                  />
-                );
-              })}
-            </div>
+            <Stack gap={8}>
+              <SectionHead title={heading} />
+              <div className="nd-health-metrics">
+                {s.cards.map((c) => {
+                  const { label, known } = scalarLabel(c.metric);
+                  const meaning = metricMeaningKey(c.metric);
+                  return (
+                    <MetricCard
+                      key={c.metric}
+                      nodeId={node.id}
+                      label={label}
+                      labelMono={!known}
+                      meaning={meaning ? t(meaning) : null}
+                      // Both come from the generated unit table rather than from this component
+                      // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what
+                      // a curated card would have drawn for the same metric; `unit` is ignored on
+                      // the percent branch and by `format`, so none of the three can double up.
+                      scale={uncuratedCardScale(c.metric)}
+                      unit={metricUnitSuffix(c.metric) ?? undefined}
+                      format={scalarValueFormat(c.metric)}
+                      resolved={c}
+                      range={range}
+                    />
+                  );
+                })}
+              </div>
+            </Stack>
           </section>
         );
       })}

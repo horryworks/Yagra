@@ -9,6 +9,7 @@ import { alertWhatOf, formatTimestamp, severityColorVar, stateLabel } from '../.
 import type { NodeStatus } from '../../types/api';
 import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { EntityName } from '../ui/EntityName';
+import { Stack } from '../ui/Page';
 import { useEntityNames } from '../ui/entityNames';
 
 export type NodeAlert = NodeStatus['alerts'][number];
@@ -23,7 +24,7 @@ export function ActiveAlertList({
 }) {
   const { t } = useTranslation('nodes');
   return (
-    <div className="nd-alerts">
+    <Stack gap={8}>
       {alerts.map((a) => (
         <div className="nd-alert" key={`${a.check}|${a.severity}`}>
           <span className="nd-alert-dot" style={{ background: severityColorVar(a.severity) }} />
@@ -44,7 +45,7 @@ export function ActiveAlertList({
           <span className="nd-muted nd-alert-time">{formatTimestamp(a.at_unix_ms)}</span>
         </div>
       ))}
-    </div>
+    </Stack>
   );
 }
 

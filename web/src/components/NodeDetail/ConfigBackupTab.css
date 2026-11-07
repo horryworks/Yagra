@@ -1,14 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* NodeDetail ▸ Config (ADR-210 stages 2 and 3, ADR-240). Colours and fonts come from theme variables. */
 
-.cfgb {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  /* The side gutter every other node-detail tab keeps (`NeighborsTab.css`). */
-  padding: var(--space-3) var(--space-4);
-}
-
 /* The one line that says where the backup stands. Its tone is the colour; the words say it too. */
 .cfgb-state {
   margin: 0;
@@ -31,32 +23,14 @@
   color: var(--text-secondary);
 }
 
-/* Running and startup differ (ADR-222 Inc.9): the line, the button that shows how, and the save. */
-.cfgb-unsaved {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius);
-  border: var(--border-width) solid color-mix(in srgb, var(--status-warning) 45%, transparent);
-  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
-}
-
+/* Running and startup differ (ADR-222 Inc.9): the line takes the room, its two buttons follow. */
 .cfgb-unsaved-t {
   flex: 1 1 220px;
-  font-weight: 500;
-  color: var(--text-primary);
+  font-weight: var(--weight-medium);
 }
 
 .cfgb-logins {
   max-width: 520px;
-}
-
-.cfgb-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 /* Running beside the saved file, opened under the line that says the node is unsaved (ADR-222
@@ -91,7 +65,7 @@
 
 .cfgb-udiff-head > span,
 .cfgb-udiff-row > span {
-  padding: var(--space-0-5) 10px;
+  padding: var(--space-0-5) var(--space-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   min-width: 0;
@@ -121,7 +95,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
   border-bottom: var(--border-width) solid var(--border-color);
   color: var(--text-secondary);
 }
@@ -129,7 +103,7 @@
 /* The text keeps the device's own line breaks and scrolls inside its box. */
 .cfgb-text {
   margin: 0;
-  padding: 10px;
+  padding: var(--space-2);
   max-height: 60vh;
   overflow: auto;
   color: var(--text-primary);
@@ -156,9 +130,9 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-3) 14px;
-  padding: 14px var(--space-4);
-  border-radius: 8px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
   border: var(--border-width) solid var(--border-color);
   background: var(--bg-primary);
 }
@@ -182,7 +156,7 @@
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   font-size: var(--font-lg);
   color: var(--text-secondary);
   background: var(--bg-tertiary);
@@ -209,14 +183,14 @@
 
 .cfgb-card .cfgb-state {
   font-size: var(--font-md);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .cfgb-facts {
   margin: var(--space-0-5) 0 0;
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-0-5) 14px;
+  gap: var(--space-0-5) var(--space-3);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -260,37 +234,13 @@
   }
 }
 
-/* The settings, folded into the line that summarises them (decision 3). */
-.cfgb-settings {
-  border: var(--border-width) solid var(--border-color);
-  border-radius: 8px;
-}
-
-.cfgb-settings > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-3);
-  padding: 10px 14px;
-  cursor: pointer;
-}
-
+/* The settings, folded into the line that summarises them (decision 3): the name, then the summary. */
 .cfgb-settings-t {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .cfgb-settings-sum {
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
   min-width: 0;
-}
-
-.cfgb-settings-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3) 14px 14px;
-  border-top: var(--border-width) solid var(--border-color);
 }
 
 /* Short choices side by side at a width that fits their values; the tops line up so the labels
@@ -302,26 +252,13 @@
   align-items: start;
 }
 
-.cfgb-settings-body .cfgb-buttons {
-  justify-content: flex-end;
-}
-
 /* The history (decision 4): one list, newest first. */
-.cfgb-history-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-}
-
 .cfgb-h {
   list-style: none;
   margin: 0;
   padding: 0;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
@@ -333,8 +270,8 @@
   display: grid;
   grid-template-columns: 170px 10px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 7px var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-3);
   min-height: 40px;
 }
 
