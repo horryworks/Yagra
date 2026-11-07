@@ -128,22 +128,30 @@ test('the scroller does not move when a half-clipped row is clicked', async ({ p
   // exactly like the defect. `page.mouse.click` at a point dispatches the events and scrolls
   // nothing, so what this test measures is the application.
   await page.goto('/nodes');
-  await parkAt(page, 137);
-  expect(await scrollTopOf(page)).toBe(137);
-
-  // The bottom-most row that is only partly on screen: the one the browser wants to pull up.
-  const point = await page.locator('.ntree-body').evaluate((el) => {
-    const box = el.getBoundingClientRect();
-    const cut = [...el.querySelectorAll<HTMLElement>('.ntree-node')].find((r) => {
-      const b = r.getBoundingClientRect();
-      return b.top < box.bottom && b.bottom > box.bottom;
+  // Where a row's name button is cut by the pane's bottom edge depends on the pane's height, which
+  // moves whenever the shell's spacing does (ADR-246 Inc.8 moved it 4px and 137 stopped cutting a
+  // button). So the offset is searched for, from 137 up through one row: the first one that cuts a
+  // name button with at least 4px of it on screen. It is still never a multiple of the row height.
+  let parked = -1;
+  let point: { x: number; y: number } | null = null;
+  for (let top = 137; top < 137 + 30 && !point; top += 1) {
+    if (top % 30 === 0) continue;
+    await parkAt(page, top);
+    point = await page.locator('.ntree-body').evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      for (const name of el.querySelectorAll<HTMLElement>('.ntree-node .ntree-node-name')) {
+        const nb = name.getBoundingClientRect();
+        // Inside the button AND inside the visible strip of it.
+        if (nb.top < box.bottom - 4 && nb.bottom > box.bottom) {
+          return { x: nb.left + 8, y: (Math.max(nb.top, box.top) + box.bottom) / 2 };
+        }
+      }
+      return null;
     });
-    const name = cut?.querySelector<HTMLElement>('.ntree-node-name');
-    if (!name) return null;
-    const nb = name.getBoundingClientRect();
-    // Inside the button AND inside the visible strip of the clipped row.
-    return { x: nb.left + 8, y: (Math.max(nb.top, box.top) + Math.min(nb.bottom, box.bottom)) / 2 };
-  });
+    if (point) parked = top;
+  }
+  expect(await scrollTopOf(page)).toBe(parked);
+
   expect(point, 'no row is clipped at the bottom edge — nothing here could scroll').not.toBeNull();
 
   await page.keyboard.down('Control');
@@ -151,7 +159,7 @@ test('the scroller does not move when a half-clipped row is clicked', async ({ p
   await page.keyboard.up('Control');
 
   await expect(page.locator('.nodes-selbar')).toBeVisible();
-  expect(await scrollTopOf(page), 'focusing a clipped row scrolled the tree').toBe(137);
+  expect(await scrollTopOf(page), 'focusing a clipped row scrolled the tree').toBe(parked);
 });
 
 test('a Shift range does not move the tree', async ({ page }) => {

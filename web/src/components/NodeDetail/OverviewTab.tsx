@@ -214,26 +214,24 @@ export function OverviewTab({
           it is about the organization — so this node has none of its own, and without this line
           an `ok` from an hour ago reads exactly like an `ok` from a minute ago. */}
       {fault?.kind === 'meraki_api' && (
-        <div role="status">
-          <Callout tone="warning">
-            {fault.reasonKey
-              ? t('overview.collectionFault', {
-                  org: fault.org,
-                  reason: t(fault.reasonKey, { ns: 'system' }),
-                  since: formatTimestamp(fault.sinceUnixMs),
-                })
-              : t('overview.collectionFaultNoReason', {
-                  org: fault.org,
-                  since: formatTimestamp(fault.sinceUnixMs),
-                })}
-            {fault.orgPath && (
-              <>
-                {' '}
-                <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
-              </>
-            )}
-          </Callout>
-        </div>
+        <Callout tone="warning" status>
+          {fault.reasonKey
+            ? t('overview.collectionFault', {
+                org: fault.org,
+                reason: t(fault.reasonKey, { ns: 'system' }),
+                since: formatTimestamp(fault.sinceUnixMs),
+              })
+            : t('overview.collectionFaultNoReason', {
+                org: fault.org,
+                since: formatTimestamp(fault.sinceUnixMs),
+              })}
+          {fault.orgPath && (
+            <>
+              {' '}
+              <Link to={fault.orgPath}>{t('overview.collectionFaultLink')}</Link>
+            </>
+          )}
+        </Callout>
       )}
 
       {/* No wireless controller has reported this access point lately (ADR-064 Inc.G), so the
@@ -241,11 +239,9 @@ export function OverviewTab({
           raised about the AP itself; this is what says why, and since when. No link: the "Wireless
           controller" row in the facts above already is one, narrowed to what this caller may see. */}
       {fault?.kind === 'wireless_controller' && (
-        <div role="status">
-          <Callout tone="warning">
-            {t('overview.collectionFaultWireless', { since: formatTimestamp(fault.sinceUnixMs) })}
-          </Callout>
-        </div>
+        <Callout tone="warning" status>
+          {t('overview.collectionFaultWireless', { since: formatTimestamp(fault.sinceUnixMs) })}
+        </Callout>
       )}
 
       {status && status.alerts.length > 0 && (
@@ -1634,39 +1630,39 @@ function OverviewSections({ node }: { node: NodeDetail }) {
         const kindAttr = key.kind === 'family' ? key.family : key.kind;
         const reactKey = key.kind === 'set' ? `set:${key.name}` : kindAttr;
         return (
-          <section
+          <Stack
+            as="section"
+            gap={8}
             key={reactKey}
             data-overview-section={kindAttr}
             data-set={key.kind === 'set' ? key.name : undefined}
           >
-            <Stack gap={8}>
-              <SectionHead title={heading} />
-              <div className="nd-health-metrics">
-                {s.cards.map((c) => {
-                  const { label, known } = scalarLabel(c.metric);
-                  const meaning = metricMeaningKey(c.metric);
-                  return (
-                    <MetricCard
-                      key={c.metric}
-                      nodeId={node.id}
-                      label={label}
-                      labelMono={!known}
-                      meaning={meaning ? t(meaning) : null}
-                      // Both come from the generated unit table rather than from this component
-                      // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what
-                      // a curated card would have drawn for the same metric; `unit` is ignored on
-                      // the percent branch and by `format`, so none of the three can double up.
-                      scale={uncuratedCardScale(c.metric)}
-                      unit={metricUnitSuffix(c.metric) ?? undefined}
-                      format={scalarValueFormat(c.metric)}
-                      resolved={c}
-                      range={range}
-                    />
-                  );
-                })}
-              </div>
-            </Stack>
-          </section>
+            <SectionHead title={heading} />
+            <div className="nd-health-metrics">
+              {s.cards.map((c) => {
+                const { label, known } = scalarLabel(c.metric);
+                const meaning = metricMeaningKey(c.metric);
+                return (
+                  <MetricCard
+                    key={c.metric}
+                    nodeId={node.id}
+                    label={label}
+                    labelMono={!known}
+                    meaning={meaning ? t(meaning) : null}
+                    // Both come from the generated unit table rather than from this component
+                    // (ADR-046 Inc.7). `scale` decides the Y range and so has to agree with what
+                    // a curated card would have drawn for the same metric; `unit` is ignored on
+                    // the percent branch and by `format`, so none of the three can double up.
+                    scale={uncuratedCardScale(c.metric)}
+                    unit={metricUnitSuffix(c.metric) ?? undefined}
+                    format={scalarValueFormat(c.metric)}
+                    resolved={c}
+                    range={range}
+                  />
+                );
+              })}
+            </div>
+          </Stack>
         );
       })}
     </>

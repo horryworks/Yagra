@@ -1,31 +1,11 @@
 {
   "_doc": "ADR-246. Per-file ceilings that only go down: a count over its ceiling fails src/uiBudget.test.ts, and so does one 10 or more below it (30 for lines) - lower the ceiling in the same change. A file with no entry has a ceiling of 0; a page-local stylesheet must be listed in pageCss with the reason it exists. `node scripts/ui-rules.mjs --lower` lowers every ceiling to today's count and never raises one.",
-  "spacing": {
-    "components/shell/AppShell.css": 1,
-    "components/shell/GlobalSearch.css": 4,
-    "components/shell/MobileNavDrawer.css": 3,
-    "components/shell/MobileTopBar.css": 7,
-    "components/shell/SideBar.css": 6,
-    "components/shell/TopBar.css": 5,
-    "components/shell/ZoneClock.css": 1,
-    "components/ui/ColumnResizeHandles.css": 2,
-    "components/ui/DataTable.css": 6,
-    "components/ui/FilterChips.css": 3,
-    "components/ui/HeaderFilter.css": 1,
-    "components/ui/MobileFilterSheet.css": 3,
-    "components/ui/SearchField.css": 4,
-    "components/ui/TextConditionEditor.css": 2,
-    "pages/LoginPage.css": 4,
-    "styles/table.css": 21
-  },
+  "spacing": {},
   "color": {},
   "fontSize": {},
   "inlineSpacing": {},
   "legacy": {},
-  "uppercase": {
-    "components/shell/SideBar.css": 2,
-    "styles/table.css": 1
-  },
+  "uppercase": {},
   "pageCss": {
     "components/CollectionEditor/CollectionEditor.css": {
       "lines": 95,
@@ -180,7 +160,7 @@
       "why": "before ADR-246"
     },
     "components/shell/SideBar.css": {
-      "lines": 154,
+      "lines": 150,
       "why": "before ADR-246"
     },
     "components/shell/TopBar.css": {
@@ -244,7 +224,7 @@
       "why": "before ADR-246"
     },
     "dashboard/SharedDashboardPage.css": {
-      "lines": 38,
+      "lines": 28,
       "why": "before ADR-246"
     },
     "dashboard/WidgetFrame.css": {
@@ -304,7 +284,7 @@
       "why": "before ADR-246"
     },
     "pages/DiscoveryPage.css": {
-      "lines": 492,
+      "lines": 487,
       "why": "before ADR-246"
     },
     "pages/DuplicateNodesPage.css": {

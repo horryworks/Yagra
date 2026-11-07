@@ -4,9 +4,9 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   height: calc(var(--topbar-h) + var(--safe-top));
-  padding: var(--safe-top) max(10px, var(--safe-right)) 0 max(10px, var(--safe-left));
+  padding: var(--safe-top) max(var(--space-2), var(--safe-right)) 0 max(var(--space-2), var(--safe-left));
   border-bottom: var(--border-width) solid var(--border-color);
   background: var(--bg-secondary);
   flex: none;
@@ -84,14 +84,14 @@
   right: 4px;
   min-width: 16px;
   height: 16px;
-  padding: 0 3px;
+  padding: 0 var(--space-0-5);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: var(--font-2xs);
   color: var(--on-status);
   background: var(--status-critical);
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
 }
 
 /* The search row. It hangs below the bar rather than sitting inside it: at 44px touch targets the
@@ -102,7 +102,7 @@
   left: 0;
   right: 0;
   display: flex;
-  padding: var(--space-2) max(10px, var(--safe-right)) var(--space-2) max(10px, var(--safe-left));
+  padding: var(--space-2) max(var(--space-2), var(--safe-right)) var(--space-2) max(var(--space-2), var(--safe-left));
   background: var(--bg-secondary);
   border-bottom: var(--border-width) solid var(--border-color);
   z-index: 30;

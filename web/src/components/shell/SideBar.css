@@ -16,15 +16,13 @@
   display: flex;
   align-items: center;
   height: 40px;
-  padding: 0 var(--space-2) 0 14px;
+  padding: 0 var(--space-2) 0 var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
 .sidebar-title {
   flex: 1;
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
 }
 
@@ -53,21 +51,19 @@
 .sidebar-group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 1px; /* ui-allow: a hairline between neighbouring rows so their hover backgrounds do not merge */
 }
 
 /* Space groups apart; the working groups read as distinct clusters. */
 .sidebar-group + .sidebar-group {
-  margin-top: 10px;
+  margin-top: var(--space-3);
 }
 
-/* Group header — same eyebrow treatment as the pane titles (INVENTORY etc.). Accent stays
+/* Group header — small tertiary text in sentence case, like the pane titles. Accent stays
    active-only, so headers use the tertiary text color, never brand orange. */
 .sidebar-group-head {
-  padding: var(--space-1-5) 14px var(--space-1);
+  padding: var(--space-1-5) var(--space-3) var(--space-1);
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
 }
 
@@ -88,7 +84,7 @@
   align-items: center;
   gap: var(--space-2);
   height: var(--row-h);
-  padding: 0 14px;
+  padding: 0 var(--space-3);
   color: var(--text-secondary);
   font-size: var(--font-md);
   border-left: 2px solid transparent;
@@ -137,7 +133,7 @@
 .sidebar.collapsed .sidebar-item {
   height: auto;
   min-height: var(--row-h);
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
   align-items: center;
 }
 

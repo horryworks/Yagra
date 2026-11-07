@@ -203,17 +203,6 @@
   width: 100%;
 }
 
-/* Multi-field row: side-by-side fields sharing one line (e.g. match kind + severity). */
-.modal-field-row {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.modal-field-row .modal-field {
-  flex: 1;
-  min-width: 0;
-}
-
 /* A field with one button beside it that fills the field — the device's own name beside a node's
    Name (ADR-208 Inc.2). The input takes the room; the button keeps its label on one line. */
 .input-with-action {
@@ -233,35 +222,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Stack the pair on mobile — side-by-side fields do not fit ~390px. `.form-row` (index.css) has
-   always had this; this one did not, so every paired row in a modal (DNS resolver + port, the URL
-   status bounds, a credential's kind + name) was squeezed to about half a screen each.
-   Stacked, the pair is spaced by the fields' own margin rather than the row gap, so the second one
-   gets its margin back — `.modal-field:last-child` zeroes it for the horizontal case, where only
-   the first child's margin sets the row's spacing. */
-html[data-viewport='mobile'] .modal-field-row {
-  flex-direction: column;
-  gap: 0;
-}
-
-html[data-viewport='mobile'] .modal-field-row .modal-field {
-  margin-bottom: var(--space-3);
-}
-
-/* A field whose value cannot be changed here, where a control would otherwise sit — an
-   integration's credential kind, say. It takes the control's height and horizontal padding but
-   none of its chrome: a bare `<span>` sat a control's height shorter than every field around it,
-   and a disabled `<input>` would offer a control that is not one. The label and any hint stay
-   exactly where they are for an editable field, so a modal holding both still reads as one form. */
-.modal-field-value {
-  display: flex;
-  align-items: center;
-  height: var(--control-h);
-  padding: 0 var(--space-2);
-  color: var(--text-primary);
-  font-size: var(--font-md);
 }
 
 .modal-confirm-text {

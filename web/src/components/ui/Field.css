@@ -88,11 +88,6 @@ select.field {
   margin-left: auto;
 }
 
-/* `.form-stack` spaces its children with a gap; a `Field` there must not add its own margin. */
-.form-stack > .modal-field {
-  margin-bottom: 0;
-}
-
 /* Multi-line variant: the fixed input height would clip it, and pasted blocks (PEM, scripts) are
    monospace by nature. Resizing is vertical-only so it can't break a modal's column layout. */
 .field.field-area {

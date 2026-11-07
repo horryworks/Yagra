@@ -581,11 +581,11 @@
     "empty": "No event rules",
     "emptyMatch": "No rules match",
     "any": "any",
-    "clear": "clear",
+    "clear": "Clear",
     "matchKind": {
-      "substring": "substring",
-      "regex": "regex",
-      "unknown": "unknown"
+      "substring": "Substring",
+      "regex": "Regex",
+      "unknown": "Unknown"
     },
     "enable": "Enable rule",
     "disable": "Disable rule",

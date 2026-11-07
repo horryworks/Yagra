@@ -485,8 +485,3 @@ html[data-viewport='mobile'] .disco-scan {
   font-size: var(--font-xs);
 }
 
-/* "Load more" under the unregistered list (ADR-179 Inc.6), centred: `Inline` has no centre. */
-.disco-seen-more {
-  display: flex;
-  justify-content: center;
-}

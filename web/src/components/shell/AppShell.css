@@ -15,7 +15,7 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px var(--space-5);
+  padding: var(--space-5);
 }
 
 /* Mobile content pane (ADR-027): tighter padding + safe-area insets on the physical edges. Keeps

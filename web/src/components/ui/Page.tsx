@@ -29,6 +29,9 @@ export function Page({
   return <div className={cx('ui-page', `is-${layout}`, className)}>{children}</div>;
 }
 
+/** `data-*` attributes a test or a stylesheet reads off the box (`data-overview-section`). */
+type DataAttributes = { [key: `data-${string}`]: string | number | boolean | undefined };
+
 interface BoxProps {
   /** The step between children, by its size in px. */
   gap?: Space;
@@ -47,9 +50,14 @@ export function Stack({
   fill,
   className,
   children,
-}: BoxProps & { fill?: boolean }) {
+  ...data
+}: BoxProps & DataAttributes & { fill?: boolean }) {
   return (
-    <Tag className={cx('ui-stack', fill && 'is-fill', className)} style={{ gap: spaceVar(gap) }}>
+    <Tag
+      {...data}
+      className={cx('ui-stack', fill && 'is-fill', className)}
+      style={{ gap: spaceVar(gap) }}
+    >
       {children}
     </Tag>
   );
@@ -67,7 +75,7 @@ export function Inline({
   className,
   children,
 }: BoxProps & {
-  justify?: 'start' | 'end' | 'between';
+  justify?: 'start' | 'center' | 'end' | 'between';
   align?: 'center' | 'start' | 'baseline' | 'end';
   stackOnPhone?: boolean;
 }) {

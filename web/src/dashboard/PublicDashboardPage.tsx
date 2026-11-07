@@ -216,13 +216,13 @@ export function PublicDashboardPage({ viewerOnly = false }: PublicDashboardPageP
             an unpublished board gets one quiet line instead (ADR-200). `public-dash-state` marks
             whichever of the three is up; nothing is drawn until the switch has answered. */}
         {preview ? (
-          <div className="shared-dash-warning public-dash-state is-preview" role="status">
+          <Callout tone="warning" status className="public-dash-state">
             {t('public.previewBanner')}
-          </div>
+          </Callout>
         ) : switchState?.enabled ? (
-          <div className="shared-dash-warning public-dash-state" role="status">
+          <Callout tone="warning" status className="public-dash-state">
             {t('public.bannerLive', { count: switchState.routes })}
-          </div>
+          </Callout>
         ) : switchState ? (
           <p className="muted public-dash-state" role="status">
             <Trans

@@ -20,7 +20,7 @@
 .sfield-input {
   width: 100%;
   height: var(--control-h);
-  padding: 0 10px;
+  padding: 0 var(--space-2);
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
@@ -44,7 +44,7 @@
    bug. Specificity resolves per property, so the right side comes from here and the other three
    sides keep coming from the call site. */
 .sfield > .sfield-input {
-  padding-right: 26px;
+  padding-right: 26px; /* ui-allow: room for the clear button, right 4px + 20px + 2px */
 }
 
 /* 🚨 Blink and WebKit draw their own ✕ here and Gecko draws none. Suppressing it is half of what
@@ -73,7 +73,7 @@
 }
 
 .sfield-icon > .sfield-input {
-  padding-left: 28px;
+  padding-left: 28px; /* ui-allow: room for the magnifier, left 9px + 14px + 5px */
 }
 
 /* The ✕. Same 20px square, same two colours and the same inset focus ring as `.dt-f-clear`, which is
@@ -118,7 +118,7 @@
   }
 
   .sfield > .sfield-input {
-    padding-right: 44px;
+    padding-right: 44px; /* ui-allow: room for the 40px touch clear button + 4px */
   }
 }
 

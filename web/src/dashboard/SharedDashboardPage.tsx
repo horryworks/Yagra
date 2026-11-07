@@ -133,9 +133,9 @@ export function SharedDashboardPage() {
         />
 
         {editing && (
-          <div className="shared-dash-warning" role="status">
+          <Callout tone="warning" status>
             {t('shared.editingWarning')}
-          </div>
+          </Callout>
         )}
 
         {saveError && (

@@ -44,14 +44,24 @@ export function SectionHead({
 export function Callout({
   tone = 'info',
   live,
+  status,
+  className,
   children,
 }: {
   tone?: 'info' | 'warning' | 'critical';
   live?: boolean;
+  /** A band that reports a state the screen is in (the last state collected, not a current one),
+   *  announced politely when it changes (`role="status"`) rather than interrupting as `live` does. */
+  status?: boolean;
+  /** A name a test or a phone rule finds the band by - never a look of its own. */
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className={cx('ui-callout', `is-${tone}`)} role={live ? 'alert' : undefined}>
+    <div
+      className={cx('ui-callout', `is-${tone}`, className)}
+      role={live ? 'alert' : status ? 'status' : undefined}
+    >
       {children}
     </div>
   );

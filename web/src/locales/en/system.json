@@ -509,8 +509,8 @@
       "add": "+ Add organization",
       "empty": "No Meraki organizations yet.",
       "orgId": "org {{id}}",
-      "stateEnabled": "enabled",
-      "statePaused": "paused",
+      "stateEnabled": "Enabled",
+      "statePaused": "Paused",
       "key": "API key: {{name}}"
     },
     "org": {

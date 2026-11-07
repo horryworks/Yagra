@@ -67,72 +67,10 @@ code,
   overflow-y: auto;
 }
 
-/* A page whose primary content (a table) should fill the available height. */
-.page-fill {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.page-fill-card {
-  flex: 1;
-  min-height: 0;
-}
-
-/* Shared form scaffolding (modals, inline editors). */
-.form-stack {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.form-row {
-  display: flex;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  align-items: flex-end;
-}
-
-.form-label {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-/* A checkbox + label on one line (overrides the column layout of .form-label). */
-.form-label.form-check {
-  flex-direction: row;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .form-error {
   margin: 0;
   font-size: var(--font-sm);
   color: var(--status-critical);
-}
-
-/* Something the operator should read before going on, that is not a refusal — e.g. the add-node
-   dialog finding a device already monitored at the address (ADR-139 Inc.2). Marked by the bar, not
-   by the text colour, so the node names in it stay readable. */
-.form-warning {
-  margin: 0;
-  padding: var(--space-1-5) var(--space-3);
-  border-left: 3px solid var(--status-warning);
-  background: var(--bg-secondary);
-  font-size: var(--font-sm);
-  color: var(--text-primary);
-}
-
-.form-warning p,
-.form-warning ul {
-  margin: 0 0 var(--space-1);
-}
-
-.form-warning ul {
-  padding-left: var(--space-4);
 }
 
 /* Required-field marker (RequiredMark): red asterisk, no underline. */
@@ -195,13 +133,3 @@ html[data-viewport='mobile'] textarea {
   font-size: var(--font-touch-input);
 }
 
-/* Forms stack to a single full-width column on mobile (side-by-side field pairs don't fit ~390px).
-   `.form-check` (checkbox + inline label) keeps its own row direction. */
-html[data-viewport='mobile'] .form-row {
-  flex-direction: column;
-  align-items: stretch;
-}
-
-html[data-viewport='mobile'] .form-row > .form-label {
-  width: 100%;
-}

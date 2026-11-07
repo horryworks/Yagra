@@ -10,8 +10,9 @@
 const BUTTON_PX = 28;
 /** `.ytable-actions { gap }` in `styles/table.css`. A copy of a CSS value. */
 const GAP_PX = 4;
-/** `.dt-cell { padding: 0 14px }` in `DataTable.css`, both sides. A copy of a CSS value. */
-const CELL_PADDING_PX = 2 * 14;
+/** `.dt-cell { padding: 0 var(--space-3) }` (12px) in `DataTable.css`, both sides. A copy of a CSS
+ *  value. */
+const CELL_PADDING_PX = 2 * 12;
 
 /** The px a `DataTable` actions column needs for `count` buttons, as a column `width`. */
 export function rowActionsWidth(count: number): string {

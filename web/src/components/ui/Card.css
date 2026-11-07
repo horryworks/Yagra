@@ -32,15 +32,14 @@
   flex-direction: column;
 }
 
-/* Inside a migrated screen the body spaces what it holds (ADR-246 Inc.2). Scoped to `.ui-page`
-   so a screen not yet moved onto the parts, whose children carry their own margins, does not get
-   the gap on top of them; Inc.8 makes it every Card's. */
-.ui-page .card-body {
+/* The body spaces what it holds (ADR-246 Inc.2), in every Card since every screen moved onto the
+   parts (Inc.8). */
+.card-body {
   gap: var(--space-3);
 }
 
 /* A paragraph's own 1em margins would sit on top of that gap (a notice card, a status line). */
-.ui-page .card-body > p {
+.card-body > p {
   margin: 0;
 }
 

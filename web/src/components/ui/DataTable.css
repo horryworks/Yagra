@@ -33,7 +33,7 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 var(--space-3);
   font-size: var(--font-xs);
   letter-spacing: 0.01em;
   color: var(--text-tertiary);
@@ -77,17 +77,24 @@
    a one-line Metric beside a five-line Scope floats at the third line and the table can no longer
    be scanned across. Top-aligned, the first line of every column lines up.
 
-   The vertical padding lives here rather than on `.dt-cell` so it is stated once, and 7px is
-   measured rather than chosen: the tallest thing in an otherwise one-line row is the 29px row
-   action button, and 7 + 29 + 7 = 43 lands *under* the 44px floor. A single-line row is therefore
-   decided by the floor and not by this rule, which is what keeps it identical to a fixed row —
-   Tier1 measures the 44 here and on a table that never opts in. At 11px it came out 51px and the
-   whole screen drifted away from the other thirty. */
+   The vertical padding lives here rather than on `.dt-cell` so it is stated once. With 6px above
+   and below, the tallest thing in an otherwise one-line row (the 29px row action button) stays
+   under the 44px floor, so a single-line row is decided by the floor and is identical to a fixed
+   row - Tier1 measures the 44 here and on a table that never opts in.
+
+   Each cell is at least a control tall and centres what it holds (ADR-246 Inc.8). Without it a
+   one-line cell sat at the top of its row while the button beside it filled the control's height,
+   so its text read a few px higher than the button's. A stacked cell is taller than the floor and
+   is unaffected: its first line still lines up across the row. */
 .dt-row-auto {
   height: auto;
   min-height: 44px;
   align-items: start;
-  padding-block: 7px;
+  padding-block: var(--space-1-5);
+}
+
+.dt-row-auto > .dt-cell {
+  min-height: var(--control-h);
 }
 
 /* Disabled / inactive row (`rowClass`). Same value as `.ytable-row.is-muted`, and deliberately
@@ -124,7 +131,7 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  padding: 0 14px;
+  padding: 0 var(--space-3);
 }
 
 .dt-cell.right {
@@ -140,7 +147,7 @@
 }
 
 .dt-empty {
-  padding: 40px var(--space-4);
+  padding: var(--space-6) var(--space-4);
   text-align: center;
   color: var(--text-secondary);
   font-size: var(--font-sm);
@@ -154,7 +161,7 @@
   top: 0;
   left: 0;
   width: 100%;
-  padding: var(--space-3) 14px;
+  padding: var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -177,7 +184,7 @@
 .dt-card-pair {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: var(--space-2);
   min-width: 0;
 }
 

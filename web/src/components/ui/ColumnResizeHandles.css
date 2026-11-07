@@ -25,8 +25,8 @@
 
 .colresize-grip {
   width: 2px;
-  margin: 7px 0;
-  border-radius: 1px;
+  margin: var(--space-2) 0;
+  border-radius: var(--radius-pill);
   /* Visible at rest, and that is a decision. A grip that appears only on hover is a control the
      operator has to already know about in order to find — the first thing said about this feature
      on a real deployment was "I expected a slider on hover and nothing came out", and half of that

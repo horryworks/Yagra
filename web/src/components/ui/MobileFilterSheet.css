@@ -4,7 +4,7 @@
 .mfilt {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--space-4);
 }
 
 .mfilt-sec {
@@ -83,8 +83,8 @@ html[data-viewport='mobile'] .mfilt-clear {
 .mfilt-btn.icon {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 9px;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
 }
 
 .mfilt-n {

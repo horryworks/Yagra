@@ -1693,11 +1693,11 @@ function SeenOnNetworkCard({
       {setup.error && <p className="form-error">{setup.error}</p>}
       {note && <p className="disco-import-ok">✓ {note}</p>}
       {page?.next && (
-        <div className="disco-seen-more">
+        <Inline justify="center">
           <Button onClick={loadMore} disabled={loadingMore}>
             {t('discovery.seen.more.button', { n: ENDPOINT_PAGE_SIZE })}
           </Button>
-        </div>
+        </Inline>
       )}
     </Card>
   );

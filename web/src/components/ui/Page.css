@@ -55,6 +55,10 @@
   justify-content: flex-start;
 }
 
+.ui-inline.justify-center {
+  justify-content: center;
+}
+
 .ui-inline.justify-end {
   justify-content: flex-end;
 }
