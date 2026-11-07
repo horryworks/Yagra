@@ -30804,6 +30804,7 @@
           "pending",
           "exhausted",
           "attempts",
+          "stale",
           "input",
           "scan_mode",
           "readiness",
@@ -30850,6 +30851,14 @@
           "input": {
             "$ref": "#/components/schemas/BackupInput",
             "description": "How the device's command line is reached: `ssh_then_telnet` lets Yagra pick SSH or telnet\nfor each attempt (ADR-242); `ssh` or `telnet` fixes it."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a fetch last worked, from every attempt rather than the newest few; `null` when none\nhas or the backup is switched off."
           },
           "login_confirmed": {
             "type": "boolean",
@@ -30920,6 +30929,10 @@
           "scan_mode": {
             "$ref": "#/components/schemas/ScanMode",
             "description": "How fast it tries its logins: one set of lockout limits each (stage 3 decision 27)."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "The node has gone without a fetch that worked for longer than core allows, the same\njudgement that opens its \"config backup not fetched\" alert (ADR-240 decision 6), whether or\nnot a maintenance window holds that alert back. `false` while switched off."
           },
           "status": {
             "oneOf": [

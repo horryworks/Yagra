@@ -32,6 +32,7 @@ const off = {
   try_after: null,
   exhausted: false,
   attempts: [],
+  stale: false,
   input: 'ssh_then_telnet',
   protocol: 'ssh',
   scan_mode: 'normal',

@@ -9,7 +9,6 @@ import {
   historyRows,
   lastSuccessAt,
   needsAttention,
-  STALE_AFTER_MS,
   formOf,
   sshOnly,
   withSshOnly,
@@ -35,6 +34,7 @@ const view = (over: Partial<ConfigBackupView> = {}): ConfigBackupView => ({
   try_after: null,
   exhausted: false,
   attempts: [],
+  stale: false,
   input: 'ssh',
   scan_mode: 'normal',
   model_override: null,
@@ -266,38 +266,41 @@ describe('the status card (ADR-240)', () => {
   const working = view({ enabled: true, readiness: 'ready', login_confirmed: true, credential_id: 'b' });
 
   it('is off, then a problem with its one fix, before anything about fetching', () => {
-    expect(cardOf(view(), null, now).kind).toBe('off');
-    const noModel = cardOf(view({ enabled: true, readiness: 'no_model' }), null, now);
+    expect(cardOf(view()).kind).toBe('off');
+    const noModel = cardOf(view({ enabled: true, readiness: 'no_model' }));
     expect(noModel).toMatchObject({ kind: 'fix', fixes: ['pickModel'], line: { key: 'config.readiness.no_model' } });
-    expect(cardOf(view({ enabled: true, readiness: 'no_credential' }), null, now).fixes).toEqual(['addLogin']);
-    expect(cardOf(view({ enabled: true, readiness: 'address_changed' }), null, now).fixes).toEqual(['resave']);
-    expect(cardOf(view({ enabled: true, readiness: 'relay_refused' }), null, now).fixes).toEqual(['pollers']);
+    expect(cardOf(view({ enabled: true, readiness: 'no_credential' })).fixes).toEqual(['addLogin']);
+    expect(cardOf(view({ enabled: true, readiness: 'address_changed' })).fixes).toEqual(['resave']);
+    expect(cardOf(view({ enabled: true, readiness: 'relay_refused' })).fixes).toEqual(['pollers']);
   });
 
   it('is busy while a fetch is out or a login is still being looked for', () => {
-    expect(cardOf({ ...working, pending: true }, null, now)).toMatchObject({
+    expect(cardOf({ ...working, pending: true })).toMatchObject({
       kind: 'busy',
       line: { key: 'config.state.fetching' },
     });
-    expect(cardOf({ ...working, login_confirmed: false }, null, now).line.key).toBe('config.card.searching');
+    expect(cardOf({ ...working, login_confirmed: false }).line.key).toBe('config.card.searching');
   });
 
   it('offers a new login only when every login was refused, not when the device went quiet', () => {
     const refused = { ...working, login_confirmed: false, exhausted: true, attempts: [attempt({ outcome: 'auth_failed' })] };
-    expect(cardOf(refused, null, now).fixes).toEqual(['addLogin', 'rescan']);
+    expect(cardOf(refused).fixes).toEqual(['addLogin', 'rescan']);
     const quiet = { ...refused, attempts: [attempt({ outcome: 'unreachable' })] };
-    expect(cardOf(quiet, null, now)).toMatchObject({ kind: 'fix', fixes: ['rescan'], line: { key: 'config.state.gaveUp' } });
+    expect(cardOf(quiet)).toMatchObject({ kind: 'fix', fixes: ['rescan'], line: { key: 'config.state.gaveUp' } });
   });
 
-  it('turns from ok to stale exactly at 48 hours, and never on an unknown last success', () => {
-    expect(cardOf(working, hoursAgo(47.9), now).kind).toBe('ok');
-    expect(cardOf(working, hoursAgo(48), now)).toMatchObject({ kind: 'fix', fixes: ['fetch'] });
-    expect(cardOf(working, null, now).kind).toBe('ok');
-    expect(STALE_AFTER_MS).toBe(48 * 3600_000);
+  it("is stale on core's verdict, offering a fetch for a working login and a new search otherwise", () => {
+    expect(cardOf(working).kind).toBe('ok');
+    expect(cardOf({ ...working, stale: true })).toMatchObject({ kind: 'fix', fixes: ['fetch'], line: { key: 'config.card.stale' } });
+    // The alert is open for a node still looking for a login too, so the card says so rather than "searching".
+    expect(cardOf({ ...working, login_confirmed: false, stale: true })).toMatchObject({ kind: 'fix', fixes: ['rescan'] });
+    // A fetch out is said first.
+    expect(cardOf({ ...working, pending: true, stale: true }).kind).toBe('busy');
   });
 
-  it('reads the last success from the attempts first, then from the newest version', () => {
+  it('reads the last success from core first, then from the attempts, then from the newest version', () => {
     const v = [{ oid: 'x', stored_at: hoursAgo(5) }];
+    expect(lastSuccessAt(view({ last_success_at: hoursAgo(80), attempts: [attempt({ outcome: 'unreachable' })] }), v)).toBe(hoursAgo(80));
     expect(lastSuccessAt(view({ attempts: [attempt({ outcome: 'auth_failed' }), { ...attempt({ outcome: 'success' }), at: hoursAgo(1) }] }), v)).toBe(
       hoursAgo(1),
     );
@@ -306,13 +309,15 @@ describe('the status card (ADR-240)', () => {
   });
 
   it('puts the dot on the tab for a problem or an unsaved device, never on a switched-off one', () => {
-    expect(needsAttention(null, now)).toBe(false);
-    expect(needsAttention(working, now)).toBe(false);
-    expect(needsAttention({ ...working, readiness: 'no_poller' }, now)).toBe(true);
+    expect(needsAttention(null)).toBe(false);
+    expect(needsAttention(working)).toBe(false);
+    expect(needsAttention({ ...working, readiness: 'no_poller' })).toBe(true);
     const unsaved = { since: hoursAgo(3), checked_at: hoursAgo(1), has_output: true };
-    expect(needsAttention({ ...working, unsaved }, now)).toBe(true);
-    expect(needsAttention({ ...working, unsaved, enabled: false }, now)).toBe(false);
-    expect(needsAttention({ ...working, readiness: 'no_poller', available: false }, now)).toBe(false);
+    expect(needsAttention({ ...working, unsaved })).toBe(true);
+    expect(needsAttention({ ...working, unsaved, enabled: false })).toBe(false);
+    expect(needsAttention({ ...working, readiness: 'no_poller', available: false })).toBe(false);
+    // The dot follows the card: a node core calls stale wears it whatever its newest attempts say.
+    expect(needsAttention({ ...working, stale: true, attempts: [attempt({ outcome: 'unreachable' })] })).toBe(true);
   });
 });
 

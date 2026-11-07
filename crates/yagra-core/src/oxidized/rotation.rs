@@ -224,6 +224,17 @@ pub(crate) struct NodeSearch<'a> {
     pub attempts: &'a [Attempt],
 }
 
+/// Whether an attempt's outcome came from the device answering over the protocol it went over.
+const fn device_answered(outcome: AttemptOutcome) -> bool {
+    match outcome {
+        AttemptOutcome::Success | AttemptOutcome::AuthFailed | AttemptOutcome::Other => true,
+        AttemptOutcome::Unreachable
+        | AttemptOutcome::Cancelled
+        | AttemptOutcome::Lost
+        | AttemptOutcome::Unknown => false,
+    }
+}
+
 /// Which login a node tries next, over which protocol, and when.
 ///
 /// - `node`: its candidates (from [`candidates`]), its row, its own attempts, and its setting.
@@ -323,15 +334,14 @@ pub(crate) fn next_step(
             }
         }
     }
-    // Telnet has reached the device in this pass: the rest of the pass stays on it.
+    // Telnet has reached the device in this pass: the rest of the pass stays on it. Only an
+    // outcome the device itself gave counts; a fetch nobody heard back from (`Lost`), or one a
+    // newer core named (`Unknown`), says nothing about whether telnet answers.
     let protocol = if input.searches_protocols()
-        && in_round.iter().any(|a| {
-            over(a) == Protocol::Telnet
-                && !matches!(
-                    a.outcome,
-                    AttemptOutcome::Unreachable | AttemptOutcome::Cancelled
-                )
-        }) {
+        && in_round
+            .iter()
+            .any(|a| over(a) == Protocol::Telnet && device_answered(a.outcome))
+    {
         Protocol::Telnet
     } else {
         first
@@ -1047,6 +1057,23 @@ mod tests {
             ),
             Step::Fetch(A, Ssh),
             "a new pass starts on SSH again"
+        );
+    }
+
+    /// A telnet fetch nobody heard back from is no evidence that telnet answers: the pass does not
+    /// move to telnet on it.
+    #[test]
+    fn a_lost_telnet_fetch_does_not_keep_the_pass_on_telnet() {
+        use Protocol::{Ssh, Telnet};
+        let start = t0();
+        let rot = fresh(start);
+        let lost = newest_first(vec![
+            over(A, Ssh, AttemptOutcome::Unreachable, start),
+            over(A, Telnet, AttemptOutcome::Lost, start + minutes(1)),
+        ]);
+        assert_eq!(
+            auto(&[A, B], &rot, &lost, start + minutes(11)),
+            Step::Fetch(B, Ssh)
         );
     }
 

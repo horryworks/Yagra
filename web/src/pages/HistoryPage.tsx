@@ -4,7 +4,7 @@
 // external and not measured here). Empty in skeleton mode (no persistent store). Rendered with
 // the virtualized DataTable on the v2 table standard.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -35,7 +35,7 @@ import { historyFilters, queryFor } from './historyQuery';
 // filters on. It is mounted on the `troubleshoot` i18n namespace, so moving it to components/ means
 // moving its strings and its consumers too — worth doing, but not inside this change.
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
-import { allScope, nodeScopeLabel, type ScopeValue } from '../components/ScopePicker/scope';
+import { allScope, scopeFromUrl, scopeLabelOf, type ScopeValue } from '../components/ScopePicker/scope';
 import { readScope, scopeFilter, writeScope } from '../troubleshoot/findingsQuery';
 
 export function HistoryPage() {
@@ -43,7 +43,7 @@ export function HistoryPage() {
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
-  const { nodeName } = useEntityNames();
+  const { nodeName, groupName } = useEntityNames();
 
   // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
   // `useFilterParams` derives the filter state from whatever list it is given and the fetch effect
@@ -136,23 +136,15 @@ export function HistoryPage() {
   const scopeIds = useMemo(() => readScope(params), [params]);
   const filtered = isAnyFiltered(filterCols, filters) || !!scopeIds.nodeId || !!scopeIds.groupId;
 
-  const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
+  // The URL decides the scope (it is what filters the list); the picked value only keeps its label
+  // while it is still the one the URL names, so a deep link and Back move the picker too.
+  const [picked, setScope] = useState<ScopeValue>(() => allScope(t));
+  const scope = scopeFromUrl(picked, scopeIds, t);
+  const scopeLabel = scopeLabelOf(scope, nodeName, groupName, t);
   const onScope = (v: ScopeValue) => {
     setScope(v);
     setFilters(filters, writeScope(scopeFilter(v)));
   };
-  // A deep link arrives with an id and no label; show the id until the inventory resolves a name.
-  useEffect(() => {
-    if (scopeIds.nodeId && scope.kind !== 'node') {
-      setScope({
-        kind: 'node',
-        id: scopeIds.nodeId,
-        label: nodeScopeLabel(nodeName(scopeIds.nodeId) ?? scopeIds.nodeId, t),
-      });
-    }
-    // Only on arrival: afterwards the picker owns its own label.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Refetch from the top whenever the filter changes — a cursor is only meaningful within one
   // filter, so carrying it across a change would page into the previous query's results.
@@ -238,7 +230,7 @@ export function HistoryPage() {
             noun: () =>
               cursor === null ? t('history.transitions') : t('history.transitionsLoaded'),
           }}
-          leading={<ScopePicker value={scope} onChange={onScope} className="table-filter" />}
+          leading={<ScopePicker value={{ ...scope, label: scopeLabel }} onChange={onScope} className="table-filter" />}
         />
         <DataTable
           tableId="alerts.history"

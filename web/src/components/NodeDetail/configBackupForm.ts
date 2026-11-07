@@ -226,11 +226,6 @@ export function isQuietFetchRefusal(status: number, code: string): boolean {
   return status === 409 && (code === 'config_backup_pending' || code === 'config_backup_not_ready');
 }
 
-/** How long a node switched on may go without a fetch that worked before the card says so and the
- *  core raises `config_backup_stale` (ADR-240 decision 6). Fetches run daily, so one failed day is
- *  not enough on its own. ⚠️ The core holds the same number (`config_stale::STALE_AFTER`). */
-export const STALE_AFTER_MS = 48 * 3600 * 1000;
-
 /** What the status card at the top of the tab is (ADR-240 decision 1). */
 export type CardKind = 'off' | 'busy' | 'ok' | 'fix';
 
@@ -259,16 +254,18 @@ const READINESS_FIX: Record<ConfigBackupView['readiness'], CardFix[]> = {
   relay_refused: ['pollers'],
 };
 
-/** When the node was last fetched: its newest successful attempt, or — the attempts list being only
- *  the newest few — the newest stored version. `null` when neither says. */
+/** When the node was last fetched: core's answer, read from every attempt. A core older than that
+ *  field leaves it out, and then the newest successful attempt, or the newest stored version, says.
+ *  `null` when none does. */
 export function lastSuccessAt(view: ConfigBackupView, versions: readonly ConfigVersion[]): string | null {
   const ok = view.attempts.find((a) => a.outcome === 'success');
-  return ok?.at ?? versions[0]?.stored_at ?? null;
+  return view.last_success_at ?? ok?.at ?? versions[0]?.stored_at ?? null;
 }
 
-/** The status card for a node. `lastSuccess` comes from [`lastSuccessAt`]; a node whose last
- *  success is unknown is not called stale — absence is not evidence. */
-export function cardOf(view: ConfigBackupView, lastSuccess: string | null, nowMs: number): Card {
+/** The status card for a node. Whether it is stale is core's verdict (`view.stale`), the one that
+ *  opens its "config backup not fetched" alert, so the card, the tab's dot and the alert agree —
+ *  a node still looking for a login included. */
+export function cardOf(view: ConfigBackupView): Card {
   if (!view.enabled) return { kind: 'off', line: { key: 'config.card.off', tone: 'none' }, fixes: [] };
   if (view.readiness !== 'ready') {
     return { kind: 'fix', line: stateLine(view), fixes: READINESS_FIX[view.readiness] };
@@ -279,20 +276,22 @@ export function cardOf(view: ConfigBackupView, lastSuccess: string | null, nowMs
     const fixes: CardFix[] = line.key === 'config.state.gaveUp' ? ['rescan'] : ['addLogin', 'rescan'];
     return { kind: 'fix', line, fixes };
   }
+  if (view.stale) {
+    // A working login is fetched again; a search that has gone on this long is started again.
+    const fixes: CardFix[] = view.login_confirmed ? ['fetch'] : ['rescan'];
+    return { kind: 'fix', line: { key: 'config.card.stale', tone: 'bad' }, fixes };
+  }
   if (!view.login_confirmed) {
     return { kind: 'busy', line: { key: 'config.card.searching', tone: 'busy' }, fixes: [] };
-  }
-  if (lastSuccess !== null && nowMs - Date.parse(lastSuccess) >= STALE_AFTER_MS) {
-    return { kind: 'fix', line: { key: 'config.card.stale', tone: 'bad' }, fixes: ['fetch'] };
   }
   return { kind: 'ok', line: { key: 'config.card.ok', tone: 'ok' }, fixes: [] };
 }
 
 /** Whether the Config tab wears the attention dot (decision 5): the card asks for a fix, or the
  *  running configuration is unsaved. */
-export function needsAttention(view: ConfigBackupView | null, nowMs: number): boolean {
+export function needsAttention(view: ConfigBackupView | null): boolean {
   if (!view?.available || !view.enabled) return false;
-  return cardOf(view, lastSuccessAt(view, []), nowMs).kind === 'fix' || !!view.unsaved;
+  return cardOf(view).kind === 'fix' || !!view.unsaved;
 }
 
 /** Which rows the history shows: what changed (failures included), or everything. */

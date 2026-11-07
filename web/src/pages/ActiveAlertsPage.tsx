@@ -51,8 +51,8 @@ import { addNodeHref } from '../lib/treeSelection';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import {
   allScope,
-  groupScopeLabel,
-  nodeScopeLabel,
+  scopeFromUrl,
+  scopeLabelOf,
   type ScopeValue,
 } from '../components/ScopePicker/scope';
 import { readScope, scopeFilter, writeScope } from '../troubleshoot/findingsQuery';
@@ -90,18 +90,11 @@ export function ActiveAlertsPage() {
   // it is ONE write to the query string, through `setFilters`' `also` callback.
   const [params, setParams] = useSearchParams();
   const scopeIds = useMemo(() => readScope(params), [params]);
-  const [scope, setScope] = useState<ScopeValue>(() => {
-    if (scopeIds.nodeId) return { kind: 'node', id: scopeIds.nodeId, label: scopeIds.nodeId };
-    if (scopeIds.groupId) return { kind: 'group', id: scopeIds.groupId, label: scopeIds.groupId };
-    return allScope(t);
-  });
-  // A deep link arrives with an id and no label; name it once the inventory has.
-  const scopeLabel =
-    scope.kind === 'node' && scope.id === scope.label
-      ? nodeScopeLabel(nodeName(scope.id), t)
-      : scope.kind === 'group' && scope.id === scope.label
-        ? groupScopeLabel(groupName(scope.id), t)
-        : scope.label;
+  // The URL decides the scope (it is what filters the rows); the picked value only keeps its label
+  // while it is still the one the URL names, so Back and a deep link move the picker too.
+  const [picked, setScope] = useState<ScopeValue>(() => allScope(t));
+  const scope = scopeFromUrl(picked, scopeIds, t);
+  const scopeLabel = scopeLabelOf(scope, nodeName, groupName, t);
   const onScope = (v: ScopeValue) => {
     setScope(v);
     setFilters(filters, writeScope(scopeFilter(v)));

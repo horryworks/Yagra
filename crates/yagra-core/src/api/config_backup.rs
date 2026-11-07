@@ -329,6 +329,13 @@ pub(crate) struct ConfigBackupView {
     exhausted: bool,
     /// The newest attempts, newest first.
     attempts: Vec<AttemptView>,
+    /// When a fetch last worked, from every attempt rather than the newest few; `null` when none
+    /// has or the backup is switched off.
+    last_success_at: Option<DateTime<Utc>>,
+    /// The node has gone without a fetch that worked for longer than core allows, the same
+    /// judgement that opens its "config backup not fetched" alert (ADR-240 decision 6), whether or
+    /// not a maintenance window holds that alert back. `false` while switched off.
+    stale: bool,
     /// How the device's command line is reached: `ssh_then_telnet` lets Yagra pick SSH or telnet
     /// for each attempt (ADR-242); `ssh` or `telnet` fixes it.
     input: BackupInput,
@@ -398,6 +405,10 @@ async fn get_config_backup(
         .attempts_of(node_id, VIEW_ATTEMPTS)
         .await
         .map_err(|e| read_failed(&e))?;
+    let watched = repo
+        .stale_watch_node(node_id)
+        .await
+        .map_err(|e| read_failed(&e))?;
     let logins = rotation::cli_logins(&admin.creds)
         .await
         .map_err(|e| read_failed(&e))?;
@@ -438,6 +449,8 @@ async fn get_config_backup(
         },
         exhausted: step == Some(Step::Exhausted),
         attempts: attempts.into_iter().map(AttemptView::from).collect(),
+        last_success_at: watched.and_then(|w| w.last_success_at),
+        stale: watched.is_some_and(|w| oxidized::stale::hours_unfetched(&w, now).is_some()),
         input: cfg.input,
         protocol: cfg.input.protocol(match step {
             Some(Step::Fetch(_, p) | Step::Wait { protocol: p, .. }) => Some(p),
@@ -1812,6 +1825,85 @@ mod tests {
         assert_eq!(body[0]["enabled"], true);
         // The last PUT dropped the picked model and the node has no profile, so none is known.
         assert!(body[0]["model"].is_null(), "{body}");
+    }
+
+    /// The node view says when a fetch last worked and whether the node is stale, by the reading
+    /// the stale alert takes (ADR-240): a node never fetched counts from its saved settings, the
+    /// newest success counts however old the newest attempts are, and a node switched off is never
+    /// stale.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_node_view_says_when_it_was_last_fetched_and_whether_it_is_stale(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        yagra_base::pgtest::credential(&pool, "ops", "cli_login").await;
+        let path = format!("/api/v1/nodes/{node}/config-backup");
+        let operator = token(&st, yagra_common::Role::Operator);
+        let on = serde_json::json!({"enabled": true, "input": "ssh", "model_override": "ios"});
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(on)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        async fn get(st: &crate::api::ApiState, path: &str, bearer: &str) -> serde_json::Value {
+            let (status, body) = send(st, "GET", path, bearer, None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body
+        }
+
+        let body = get(&st, &path, &operator).await;
+        assert_eq!(
+            (body["stale"].clone(), body["last_success_at"].clone()),
+            (serde_json::json!(false), serde_json::Value::Null),
+            "{body}"
+        );
+
+        sqlx::query(
+            "UPDATE node_config_backup SET updated_at = now() - interval '49 hours' \
+             WHERE node_id = $1",
+        )
+        .bind(node)
+        .execute(&pool)
+        .await
+        .expect("age the settings");
+        assert_eq!(
+            get(&st, &path, &operator).await["stale"],
+            true,
+            "never fetched for 49 hours"
+        );
+
+        let attempt = |outcome: &'static str, hours: i32| {
+            sqlx::query(
+                "INSERT INTO config_backup_attempts (node_id, outcome, at) \
+                 VALUES ($1, $2, now() - make_interval(hours => $3))",
+            )
+            .bind(node)
+            .bind(outcome)
+            .bind(hours)
+        };
+        attempt("success", 50).execute(&pool).await.expect("insert");
+        for h in 1..=12 {
+            attempt("unreachable", h)
+                .execute(&pool)
+                .await
+                .expect("insert");
+        }
+        let body = get(&st, &path, &operator).await;
+        assert_eq!(body["stale"], true, "{body}");
+        assert!(
+            body["last_success_at"].is_string(),
+            "older than the attempts the view carries: {body}"
+        );
+
+        attempt("success", 1).execute(&pool).await.expect("insert");
+        assert_eq!(get(&st, &path, &operator).await["stale"], false);
+
+        let off = serde_json::json!({"enabled": false, "input": "ssh"});
+        let (status, body) = send(&st, "PUT", &path, &operator, Some(off)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        let body = get(&st, &path, &operator).await;
+        assert_eq!(body["stale"], false, "{body}");
+        assert!(body["last_success_at"].is_null(), "{body}");
     }
 
     /// Many nodes are switched off and on at once and the list answers each state; a Viewer cannot

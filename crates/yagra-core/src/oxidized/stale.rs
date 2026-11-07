@@ -28,8 +28,8 @@ use yagra_common::NodeId;
 use crate::alerts::AlertManager;
 
 /// How long a node switched on may go without a fetch that worked. Fetches run daily, so one
-/// failed day does not page on its own. ⚠️ The Config tab holds the same number
-/// (`web/src/components/NodeDetail/configBackupForm.ts::STALE_AFTER_MS`); a test pins the two.
+/// failed day does not page on its own. The Config tab does not hold this number: the node view
+/// carries this module's verdict (`stale`), so the card and the alert cannot disagree.
 pub(crate) const STALE_AFTER: Duration = Duration::from_secs(48 * 3600);
 
 /// How often the leader looks.
@@ -202,25 +202,5 @@ mod tests {
         let in_window = |id: Uuid| id == Uuid::from_u128(1);
         assert!(steps(&[stale], &[], now(), in_window).is_empty());
         assert!(steps(&[stale], &[Uuid::from_u128(1)], now(), in_window).is_empty());
-    }
-
-    /// The Config tab says "not fetched for over 2 days" from the same moment this raises.
-    #[test]
-    fn the_config_tab_uses_the_same_limit() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../web/src/components/NodeDetail/configBackupForm.ts");
-        let ts = std::fs::read_to_string(&path).expect("read configBackupForm.ts");
-        let line = ts
-            .lines()
-            .find(|l| l.starts_with("export const STALE_AFTER_MS = "))
-            .expect("STALE_AFTER_MS is declared on one line");
-        let factors: Vec<u64> = line
-            .trim_start_matches("export const STALE_AFTER_MS = ")
-            .trim_end_matches(';')
-            .split('*')
-            .map(|f| f.trim().replace('_', "").parse().expect("a number"))
-            .collect();
-        let ms: u64 = factors.iter().product();
-        assert_eq!(u128::from(ms), STALE_AFTER.as_millis());
     }
 }

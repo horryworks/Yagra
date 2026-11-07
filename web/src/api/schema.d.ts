@@ -7370,6 +7370,12 @@ export interface components {
              *     for each attempt (ADR-242); `ssh` or `telnet` fixes it.
              */
             input: components["schemas"]["BackupInput"];
+            /**
+             * Format: date-time
+             * @description When a fetch last worked, from every attempt rather than the newest few; `null` when none
+             *     has or the backup is switched off.
+             */
+            last_success_at?: string | null;
             /** @description `credential_id` has fetched successfully. */
             login_confirmed: boolean;
             /** @description The node's own order of CLI logins; `null` means every CLI login in the try order. */
@@ -7394,6 +7400,12 @@ export interface components {
             saves: components["schemas"]["SaveRecord"][];
             /** @description How fast it tries its logins: one set of lockout limits each (stage 3 decision 27). */
             scan_mode: components["schemas"]["ScanMode"];
+            /**
+             * @description The node has gone without a fetch that worked for longer than core allows, the same
+             *     judgement that opens its "config backup not fetched" alert (ADR-240 decision 6), whether or
+             *     not a maintenance window holds that alert back. `false` while switched off.
+             */
+            stale: boolean;
             status?: null | components["schemas"]["BackupStatusView"];
             /**
              * Format: date-time

@@ -657,7 +657,13 @@ impl ConfigBackupRepo {
             row.try_get("credential_id")?
         };
         let previous: Option<String> = row.try_get("last_version_oid")?;
-        let input = protocol_of(row.try_get("try_input")?);
+        // The protocol the row holds is the one the fetch out went over; a result nobody is waiting
+        // for cannot be tied to it any more than to the login, so it is recorded with neither.
+        let input = if unrequested {
+            None
+        } else {
+            protocol_of(row.try_get("try_input")?)
+        };
         let new_version = match (outcome, oid) {
             (AttemptOutcome::Success, Some(oid)) => Some(previous.as_deref() != Some(oid)),
             _ => None,
@@ -1168,14 +1174,25 @@ impl ConfigBackupRepo {
     /// saved - what the stale watch reads (ADR-240 decision 6). A node never fetched counts from
     /// the second, which is also when it was switched on unless the settings were edited since.
     pub async fn stale_watch_nodes(&self) -> anyhow::Result<Vec<StaleWatchNode>> {
+        self.stale_watch_rows(None).await
+    }
+
+    /// One node's side of [`Self::stale_watch_nodes`], read the same way, so the Config tab and the
+    /// stale alert answer from one reading. `None` when it is not switched on.
+    pub async fn stale_watch_node(&self, node: Uuid) -> anyhow::Result<Option<StaleWatchNode>> {
+        Ok(self.stale_watch_rows(Some(node)).await?.pop())
+    }
+
+    async fn stale_watch_rows(&self, node: Option<Uuid>) -> anyhow::Result<Vec<StaleWatchNode>> {
         let rows = sqlx::query(
             "SELECT b.node_id, b.updated_at, s.at AS last_success_at \
              FROM node_config_backup b \
              LEFT JOIN LATERAL (SELECT at FROM config_backup_attempts \
                                 WHERE node_id = b.node_id AND outcome = 'success' \
                                 ORDER BY at DESC, id DESC LIMIT 1) s ON true \
-             WHERE b.enabled",
+             WHERE b.enabled AND ($1::uuid IS NULL OR b.node_id = $1)",
         )
+        .bind(node)
         .fetch_all(&self.pool)
         .await?;
         rows.iter()
@@ -1585,6 +1602,13 @@ mod tests {
         assert_eq!(got[1].node_id, never);
         assert_eq!(got[1].last_success_at, None);
         assert!(Utc::now() - got[1].settings_saved_at < chrono::Duration::minutes(5));
+
+        // One node reads the same row the watch does, and a node switched off reads as none.
+        assert_eq!(
+            repo.stale_watch_node(fetched).await.expect("read"),
+            Some(got[0])
+        );
+        assert_eq!(repo.stale_watch_node(off).await.expect("read"), None);
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
@@ -1813,6 +1837,13 @@ mod tests {
             .expect("record")
             .expect("configured");
         assert_eq!(silent.input, Some(Protocol::Ssh));
+        // A result nobody asked for cannot be tied to the protocol on the row either.
+        let late = repo
+            .record_result(node, AttemptOutcome::AuthFailed, None)
+            .await
+            .expect("record")
+            .expect("configured");
+        assert_eq!((late.credential_id, late.input), (None, None));
 
         assert!(repo
             .dispatch(node, login, Protocol::Telnet, Utc::now(), cutoff())
@@ -1836,7 +1867,7 @@ mod tests {
         let read = repo.attempts_of(node, 10).await.expect("attempts");
         assert_eq!(
             read.iter().map(|a| a.input).collect::<Vec<_>>(),
-            vec![Some(Protocol::Telnet), Some(Protocol::Ssh)]
+            vec![Some(Protocol::Telnet), None, Some(Protocol::Ssh)]
         );
 
         repo.restart_round(node).await.expect("restart");

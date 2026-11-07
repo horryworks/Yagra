@@ -40,3 +40,40 @@ export function groupScopeLabel(name: string, t: TFunction): string {
 export function nodeScopeLabel(name: string, t: TFunction): string {
   return t('common:scope.nodeLabel', { name });
 }
+
+/** The scope ids a page holds in its URL (`node_id` / `group_id`); an empty string is "not set". */
+export interface ScopeIds {
+  nodeId: string;
+  groupId: string;
+}
+
+/** The scope the picker shows: the one last picked while it is still what the URL names, else the
+ *  URL's own, labelled with its bare id until the caller names it ([`scopeLabelOf`]). The URL wins
+ *  because it is what filters the rows — after Back/Forward, or on a deep link, the picker would
+ *  otherwise name one scope while the list shows another. */
+export function scopeFromUrl(picked: ScopeValue, ids: ScopeIds, t: TFunction): ScopeValue {
+  if (ids.nodeId) {
+    return picked.kind === 'node' && picked.id === ids.nodeId
+      ? picked
+      : { kind: 'node', id: ids.nodeId, label: ids.nodeId };
+  }
+  if (ids.groupId) {
+    return picked.kind === 'group' && picked.id === ids.groupId
+      ? picked
+      : { kind: 'group', id: ids.groupId, label: ids.groupId };
+  }
+  return picked.kind === 'all' ? picked : allScope(t);
+}
+
+/** A scope's label, naming a node or folder that arrived as a bare id once the caller can. */
+export function scopeLabelOf(
+  scope: ScopeValue,
+  nodeName: (id: string) => string,
+  groupName: (id: string) => string,
+  t: TFunction,
+): string {
+  if (scope.id === null || scope.id !== scope.label) return scope.label;
+  return scope.kind === 'node'
+    ? nodeScopeLabel(nodeName(scope.id), t)
+    : groupScopeLabel(groupName(scope.id), t);
+}

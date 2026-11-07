@@ -333,7 +333,7 @@ export function NodeDetail({
     }
     api
       .getConfigBackup(nodeId)
-      .then((v) => !cancelled && setConfigAttention(needsAttention(v, Date.now())))
+      .then((v) => !cancelled && setConfigAttention(needsAttention(v)))
       .catch(() => undefined);
     return () => {
       cancelled = true;

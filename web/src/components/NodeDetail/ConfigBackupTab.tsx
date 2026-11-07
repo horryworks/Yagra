@@ -171,7 +171,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const v = view.data;
   const vers = versions.data;
   const lastOk = useMemo(() => (v ? lastSuccessAt(v, vers) : null), [v, vers]);
-  const card = useMemo(() => (v ? cardOf(v, lastOk, Date.now()) : null), [v, lastOk]);
+  const card = useMemo(() => (v ? cardOf(v) : null), [v]);
   const rows = useMemo(() => (v ? historyRows(vers, v.saves, v.attempts, filter) : []), [v, vers, filter]);
   const canStart = canConfig && canCreds;
 
@@ -210,8 +210,9 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             {t('config.addLogin')}
           </Link>
         ) : null;
+      // Rescanning hands the logins out again, so it takes what switching on takes.
       case 'rescan':
-        return canConfig ? (
+        return canStart ? (
           <Button key={fix} onClick={rescan} disabled={busy}>
             {t('config.card.tryAgain')}
           </Button>
