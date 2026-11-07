@@ -20,7 +20,7 @@ const groups = (() => {
       parent_id: null,
       origin: null,
       name: 'ymock-site',
-      prefixes: ['192.0.2.0/24'],
+      prefixes: [{ prefix: '192.0.2.0/24', description: 'ymock-lan', source: 'manual' }],
     },
   ] as unknown as Json;
 })();
