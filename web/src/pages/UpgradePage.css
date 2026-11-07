@@ -223,8 +223,6 @@
   background: var(--bg-tertiary);
   color: var(--text-tertiary);
   font-size: var(--font-2xs);
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
   font-weight: var(--weight-medium);
 }
 

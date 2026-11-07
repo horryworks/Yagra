@@ -24,7 +24,9 @@ import {
 } from '@dnd-kit/sortable';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { Page, Inline } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Callout } from '../components/ui/Section';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
 import { BoardTabs } from './BoardTabs';
 import { CatalogModal } from './CatalogModal';
@@ -133,7 +135,7 @@ export function MyDashboardPage() {
 
   return (
     <LayoutStoreProvider store={useLayoutStore}>
-      <div>
+      <Page layout="sections">
         <PageHeader
           title={t('nav:dashboard.my')}
           trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.my') }]}
@@ -141,21 +143,25 @@ export function MyDashboardPage() {
         />
 
         {saveError && (
-          <div className="mydash-save-error" role="alert">
-            <span>{saveError}</span>
-            <Button variant="ghost" onClick={dismissSaveError}>
-              {t('actions.dismiss')}
-            </Button>
-          </div>
+          <Callout tone="critical" live>
+            <Inline justify="between" gap={12}>
+              <span>{saveError}</span>
+              <Button variant="ghost" onClick={dismissSaveError}>
+                {t('actions.dismiss')}
+              </Button>
+            </Inline>
+          </Callout>
         )}
 
         {status === 'error' && loaded && (
-          <div className="mydash-save-error" role="alert">
-            <span>{t('my.refreshFailed')}</span>
-            <Button variant="ghost" onClick={() => void load()}>
-              {t('common:actions.retry')}
-            </Button>
-          </div>
+          <Callout tone="critical" live>
+            <Inline justify="between" gap={12}>
+              <span>{t('my.refreshFailed')}</span>
+              <Button variant="ghost" onClick={() => void load()}>
+                {t('common:actions.retry')}
+              </Button>
+            </Inline>
+          </Callout>
         )}
 
         {status !== 'loading' && loaded && <BoardTabs editing={editing} />}
@@ -263,7 +269,7 @@ export function MyDashboardPage() {
             <p className="modal-confirm-text">{t('my.cancelBody')}</p>
           </Modal>
         )}
-      </div>
+      </Page>
     </LayoutStoreProvider>
   );
 }

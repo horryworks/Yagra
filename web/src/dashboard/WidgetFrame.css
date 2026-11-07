@@ -128,7 +128,7 @@
    find it. 20px is the grip (18px) plus its 2px inset. The phone hides the grip and keeps the body
    whole (the 720px block below). */
 .mydash-cell.is-editing .card-body {
-  margin-bottom: 20px;
+  margin-bottom: 20px; /* ui-allow: the grip's 18px plus its 2px inset, so the body stops exactly at it */
 }
 
 .mydash-cell.is-dragging {
@@ -180,7 +180,7 @@
   right: 6px;
   bottom: 24px;
   z-index: 3;
-  padding: var(--space-0-5) 7px;
+  padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   border: var(--border-width) solid var(--border-color);
@@ -205,7 +205,7 @@
   width: 1px;
   height: 1px;
   padding: 0;
-  margin: -1px;
+  margin: -1px; /* ui-allow: the visually-hidden pattern cancels its own 1px box */
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
@@ -282,7 +282,7 @@
 .widgetframe-name {
   flex: 1;
   min-width: 0;
-  padding: 1px var(--space-1);
+  padding: 1px var(--space-1); /* ui-allow: a hairline keeps the rename box the height of the heading it replaces */
   font: inherit;
   color: var(--text-primary);
   text-transform: none;
@@ -323,7 +323,7 @@
    size so a one-field panel stays small, and it is clamped to the viewport because these open on a
    phone too, where the board is one full-width column. */
 .widgetframe-settings-pop {
-  padding: 10px;
+  padding: var(--space-2);
   width: max-content;
   max-width: min(340px, calc(100vw - 16px));
 }

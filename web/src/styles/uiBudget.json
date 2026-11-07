@@ -1,15 +1,6 @@
 {
   "_doc": "ADR-246. Per-file ceilings that only go down: a count over its ceiling fails src/uiBudget.test.ts, and so does one 10 or more below it (30 for lines) - lower the ceiling in the same change. A file with no entry has a ceiling of 0; a page-local stylesheet must be listed in pageCss with the reason it exists. `node scripts/ui-rules.mjs --lower` lowers every ceiling to today's count and never raises one.",
   "spacing": {
-    "components/discovery/EndpointSetupCell.css": 1,
-    "components/EventLog/eventColumns.css": 1,
-    "components/HealthBar/HealthBar.css": 1,
-    "components/MetricPicker/MetricPicker.css": 2,
-    "components/MoveByPrefixModal/MoveByPrefixModal.css": 2,
-    "components/NodePicker/NodePicker.css": 1,
-    "components/NodeTree/NodeTree.css": 12,
-    "components/Rca/RcaModal.css": 3,
-    "components/ScopePicker/ScopePicker.css": 1,
     "components/shell/AppShell.css": 1,
     "components/shell/GlobalSearch.css": 4,
     "components/shell/MobileNavDrawer.css": 3,
@@ -17,9 +8,6 @@
     "components/shell/SideBar.css": 6,
     "components/shell/TopBar.css": 5,
     "components/shell/ZoneClock.css": 1,
-    "components/TopologyMap/MapSearchBox.css": 2,
-    "components/TopologyMap/TopologyMap.css": 1,
-    "components/TopologyMap/TopologyMapSidePanel.css": 2,
     "components/ui/ColumnResizeHandles.css": 2,
     "components/ui/DataTable.css": 6,
     "components/ui/FilterChips.css": 3,
@@ -27,61 +15,20 @@
     "components/ui/MobileFilterSheet.css": 3,
     "components/ui/SearchField.css": 4,
     "components/ui/TextConditionEditor.css": 2,
-    "dashboard/CatalogModal.css": 5,
-    "dashboard/MyDashboardPage.css": 4,
-    "dashboard/primitives/DeltaBars.css": 2,
-    "dashboard/primitives/Donut.css": 2,
-    "dashboard/primitives/Heatmap.css": 1,
-    "dashboard/primitives/KpiTile.css": 1,
-    "dashboard/primitives/RankedBars.css": 2,
-    "dashboard/SharedDashboardPage.css": 3,
-    "dashboard/WidgetFrame.css": 5,
-    "dashboard/widgets/widgets.css": 12,
-    "pages/ChannelTemplateModal.css": 25,
-    "pages/DiscoveryPage.css": 2,
-    "pages/GeoMapPage.css": 12,
-    "pages/InventoryFilterMenu.css": 3,
     "pages/LoginPage.css": 4,
-    "pages/NodesPage.css": 6,
-    "reports/reports.css": 3,
-    "styles/table.css": 21,
-    "troubleshoot/report/report.css": 4,
-    "troubleshoot/troubleshoot.css": 44,
-    "widgets/AlertNotes.css": 2,
-    "widgets/AlertRows.css": 1,
-    "widgets/StatusSummary.css": 3,
-    "widgets/WatchChips.css": 1
+    "styles/table.css": 21
   },
   "color": {},
   "fontSize": {},
   "inlineSpacing": {},
-  "legacy": {
-    "pages/NodesPage.tsx": 2
-  },
+  "legacy": {},
   "uppercase": {
-    "components/CollectionEditor/CollectionEditor.css": 1,
-    "components/InterfaceRules/InterfaceRulesModal.css": 1,
-    "components/NodeTree/NodeTree.css": 2,
     "components/shell/SideBar.css": 2,
-    "dashboard/CatalogModal.css": 1,
-    "dashboard/primitives/Donut.css": 1,
-    "dashboard/primitives/Gauge.css": 1,
-    "dashboard/primitives/KpiTile.css": 1,
-    "dashboard/widgets/widgets.css": 1,
-    "pages/EventRulesPage.css": 1,
-    "pages/integrations/MerakiIntegrationPage.css": 1,
-    "pages/InventoryFilterMenu.css": 1,
-    "pages/NodesPage.css": 1,
-    "pages/RolesPage.css": 1,
-    "pages/UpgradePage.css": 1,
-    "reports/reports.css": 1,
-    "styles/table.css": 1,
-    "troubleshoot/troubleshoot.css": 6,
-    "widgets/StatusSummary.css": 1
+    "styles/table.css": 1
   },
   "pageCss": {
     "components/CollectionEditor/CollectionEditor.css": {
-      "lines": 97,
+      "lines": 95,
       "why": "before ADR-246"
     },
     "components/discovery/EndpointSetupCell.css": {
@@ -105,7 +52,7 @@
       "why": "before ADR-246"
     },
     "components/InterfaceRules/InterfaceRulesModal.css": {
-      "lines": 132,
+      "lines": 130,
       "why": "before ADR-246"
     },
     "components/MetricChart/MetricChart.css": {
@@ -189,7 +136,7 @@
       "why": "before ADR-246"
     },
     "components/NodeTree/NodeTree.css": {
-      "lines": 879,
+      "lines": 875,
       "why": "before ADR-246"
     },
     "components/NodeTree/RediscoverModal.css": {
@@ -197,7 +144,7 @@
       "why": "before ADR-246"
     },
     "components/Rca/RcaModal.css": {
-      "lines": 191,
+      "lines": 169,
       "why": "before ADR-246"
     },
     "components/ScopePicker/ScopePicker.css": {
@@ -253,23 +200,23 @@
       "why": "before ADR-246"
     },
     "components/TopologyMap/TopologyMap.css": {
-      "lines": 289,
+      "lines": 284,
       "why": "before ADR-246"
     },
     "components/TopologyMap/TopologyMapSidePanel.css": {
-      "lines": 191,
+      "lines": 180,
       "why": "before ADR-246"
     },
     "dashboard/BoardTabs.css": {
-      "lines": 86,
+      "lines": 85,
       "why": "before ADR-246"
     },
     "dashboard/CatalogModal.css": {
-      "lines": 82,
+      "lines": 73,
       "why": "before ADR-246"
     },
     "dashboard/MyDashboardPage.css": {
-      "lines": 102,
+      "lines": 88,
       "why": "before ADR-246"
     },
     "dashboard/primitives/DeltaBars.css": {
@@ -277,11 +224,11 @@
       "why": "before ADR-246"
     },
     "dashboard/primitives/Donut.css": {
-      "lines": 75,
+      "lines": 73,
       "why": "before ADR-246"
     },
     "dashboard/primitives/Gauge.css": {
-      "lines": 46,
+      "lines": 44,
       "why": "before ADR-246"
     },
     "dashboard/primitives/Heatmap.css": {
@@ -289,7 +236,7 @@
       "why": "before ADR-246"
     },
     "dashboard/primitives/KpiTile.css": {
-      "lines": 40,
+      "lines": 38,
       "why": "before ADR-246"
     },
     "dashboard/primitives/RankedBars.css": {
@@ -297,7 +244,7 @@
       "why": "before ADR-246"
     },
     "dashboard/SharedDashboardPage.css": {
-      "lines": 40,
+      "lines": 38,
       "why": "before ADR-246"
     },
     "dashboard/WidgetFrame.css": {
@@ -305,7 +252,7 @@
       "why": "before ADR-246"
     },
     "dashboard/widgets/widgets.css": {
-      "lines": 781,
+      "lines": 779,
       "why": "before ADR-246"
     },
     "pages/AboutPage.css": {
@@ -333,7 +280,7 @@
       "why": "before ADR-246"
     },
     "pages/ChannelTemplateModal.css": {
-      "lines": 780,
+      "lines": 779,
       "why": "before ADR-246"
     },
     "pages/ClassificationRulesPage.css": {
@@ -357,7 +304,7 @@
       "why": "before ADR-246"
     },
     "pages/DiscoveryPage.css": {
-      "lines": 581,
+      "lines": 492,
       "why": "before ADR-246"
     },
     "pages/DuplicateNodesPage.css": {
@@ -365,7 +312,7 @@
       "why": "before ADR-246"
     },
     "pages/EventRulesPage.css": {
-      "lines": 55,
+      "lines": 53,
       "why": "before ADR-246"
     },
     "pages/EventSourcesPage.css": {
@@ -377,7 +324,7 @@
       "why": "before ADR-246"
     },
     "pages/GeoMapPage.css": {
-      "lines": 518,
+      "lines": 503,
       "why": "before ADR-246"
     },
     "pages/integrations/GitRemotePage.css": {
@@ -389,7 +336,7 @@
       "why": "before ADR-246"
     },
     "pages/integrations/MerakiIntegrationPage.css": {
-      "lines": 95,
+      "lines": 93,
       "why": "before ADR-246"
     },
     "pages/integrations/MerakiOrgPage.css": {
@@ -405,7 +352,7 @@
       "why": "before ADR-246"
     },
     "pages/InventoryFilterMenu.css": {
-      "lines": 262,
+      "lines": 260,
       "why": "before ADR-246"
     },
     "pages/LoginPage.css": {
@@ -421,11 +368,11 @@
       "why": "before ADR-246"
     },
     "pages/MissingPrefixesPage.css": {
-      "lines": 226,
+      "lines": 224,
       "why": "before ADR-246"
     },
     "pages/NodesPage.css": {
-      "lines": 370,
+      "lines": 365,
       "why": "before ADR-246"
     },
     "pages/PollersPage.css": {
@@ -433,7 +380,7 @@
       "why": "before ADR-246"
     },
     "pages/ProfilesPage.css": {
-      "lines": 83,
+      "lines": 66,
       "why": "before ADR-246"
     },
     "pages/ReclassifyPage.css": {
@@ -445,7 +392,7 @@
       "why": "before ADR-246"
     },
     "pages/RolesPage.css": {
-      "lines": 104,
+      "lines": 102,
       "why": "before ADR-246"
     },
     "pages/RoutingPage.css": {
@@ -453,7 +400,7 @@
       "why": "before ADR-246"
     },
     "pages/SubnetOverlapsPage.css": {
-      "lines": 308,
+      "lines": 261,
       "why": "before ADR-246"
     },
     "pages/SupportBundlePage.css": {
@@ -469,7 +416,7 @@
       "why": "before ADR-246"
     },
     "pages/ThresholdsPage.css": {
-      "lines": 209,
+      "lines": 188,
       "why": "before ADR-246"
     },
     "pages/TlsSettingsPage.css": {
@@ -477,11 +424,11 @@
       "why": "before ADR-246"
     },
     "pages/TopologyMapPage.css": {
-      "lines": 51,
+      "lines": 26,
       "why": "before ADR-246"
     },
     "pages/UpgradePage.css": {
-      "lines": 315,
+      "lines": 313,
       "why": "before ADR-246"
     },
     "pages/UsersPage.css": {
@@ -489,15 +436,15 @@
       "why": "before ADR-246"
     },
     "reports/reports.css": {
-      "lines": 186,
+      "lines": 174,
       "why": "before ADR-246"
     },
     "troubleshoot/report/report.css": {
-      "lines": 601,
+      "lines": 558,
       "why": "before ADR-246"
     },
     "troubleshoot/troubleshoot.css": {
-      "lines": 997,
+      "lines": 864,
       "why": "before ADR-246"
     },
     "widgets/AlertNotes.css": {
@@ -513,7 +460,7 @@
       "why": "before ADR-246"
     },
     "widgets/StatusSummary.css": {
-      "lines": 53,
+      "lines": 51,
       "why": "before ADR-246"
     },
     "widgets/WatchChips.css": {

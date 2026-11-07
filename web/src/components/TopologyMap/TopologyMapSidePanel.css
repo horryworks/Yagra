@@ -19,28 +19,12 @@
   font-size: var(--font-md);
   overflow-wrap: anywhere;
 }
+/* The folder map's bundle heading (`GroupMapSection`) still uses this; the panel's own sections
+   are `SectionHead`s. */
 .topomap-panel-sub {
   margin: var(--space-2) 0 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
-}
-.topomap-panel-facts {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin: 0;
-}
-.topomap-panel-fact {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--gap);
-}
-.topomap-panel-facts dt {
-  color: var(--text-secondary);
-}
-.topomap-panel-facts dd {
-  margin: 0;
-  overflow-wrap: anywhere;
 }
 .topomap-panel-list {
   display: flex;
@@ -81,13 +65,6 @@
   border-bottom: var(--border-width) solid var(--border-color);
   overflow-wrap: anywhere;
 }
-.topomap-panel-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--gap);
-  margin-top: var(--space-2);
-}
 .topomap-panel-link {
   color: var(--accent-color);
 }
@@ -98,7 +75,7 @@
 /* The rows of a tiered level, top first: the role names in order, numbered by the list. */
 .topomap-panel-rows {
   margin: 0;
-  padding-left: 1.4em;
+  padding-left: var(--space-4);
   color: var(--text-secondary);
 }
 .topomap-panel-legend {
@@ -120,7 +97,7 @@
   width: 18px;
   height: 12px;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
 }
 .topomap-legend-kind.folder {
@@ -188,4 +165,16 @@
   align-items: center;
   gap: var(--space-2);
   text-decoration: none;
+}
+
+/* A node state in the legend, a bundle's chips and its rows. */
+.topomap-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+/* The dashed line the canvas draws to a node whose alerts are rolled up into an outage. */
+.topomap-legend-line {
+  width: 18px;
+  border-top: 2px dashed var(--status-unreachable);
 }

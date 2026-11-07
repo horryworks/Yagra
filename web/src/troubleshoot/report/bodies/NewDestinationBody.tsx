@@ -15,6 +15,8 @@ import { useMemo } from 'react';
 import { useEnumParam } from '../../../lib/useEnumParam';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
+import { Stack } from '../../../components/ui/Page';
+import { SectionHead } from '../../../components/ui/Section';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { formatAsn, formatBytes } from '../../../lib/format';
 import { portLabel } from '../../../lib/flowLabels';
@@ -97,12 +99,13 @@ export function NewDestinationBody({ findings }: ReportBodyProps) {
       </div>
 
       {show !== 'ports' && (
-        <section className="tsr-section">
-          <h3 className="ts-section-label">
-            {t('report.new_destination.asHeading', { count: as.length })}
-          </h3>
+        <Stack as="section" gap={8}>
+          <SectionHead
+            level={2}
+            title={t('report.new_destination.asHeading', { count: as.length })}
+          />
           {as.length ? (
-            <>
+            <Stack gap={12}>
               <Card title={t('report.new_destination.topAs')}>
                 <RankedBars rows={asBars} />
               </Card>
@@ -117,20 +120,21 @@ export function NewDestinationBody({ findings }: ReportBodyProps) {
                   />
                 ))}
               </div>
-            </>
+            </Stack>
           ) : (
             <div className="ts-empty-note">{t('report.new_destination.noAs')}</div>
           )}
-        </section>
+        </Stack>
       )}
 
       {show !== 'as' && (
-        <section className="tsr-section">
-          <h3 className="ts-section-label">
-            {t('report.new_destination.portHeading', { count: ports.length })}
-          </h3>
+        <Stack as="section" gap={8}>
+          <SectionHead
+            level={2}
+            title={t('report.new_destination.portHeading', { count: ports.length })}
+          />
           {ports.length ? (
-            <>
+            <Stack gap={12}>
               <Card title={t('report.new_destination.topPorts')}>
                 <RankedBars rows={portBars} />
               </Card>
@@ -145,11 +149,11 @@ export function NewDestinationBody({ findings }: ReportBodyProps) {
                   />
                 ))}
               </div>
-            </>
+            </Stack>
           ) : (
             <div className="ts-empty-note">{t('report.new_destination.noPorts')}</div>
           )}
-        </section>
+        </Stack>
       )}
     </>
   );

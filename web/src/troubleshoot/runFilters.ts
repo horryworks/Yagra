@@ -9,9 +9,10 @@
 // The whole set is already in the browser, which is the same reason Alerts ▸ Active filters here
 // (see `pages/activeAlertFilters.ts`).
 //
-// **ADR-053 Inc.6 moved the controls into a `FilterBar`** — the run list is a CSS grid of rows with
-// no header row, so there is nothing to hang a filter row under (decision E). Tool and state became
-// sets, and the free text gained NOT and regex.
+// **The list is a `DataTable` since ADR-246 Inc.7**, so each filter sits in the header of the column
+// it narrows (`state`, `tool`, and `q` on the scope column); the keys are the URL keys they were
+// when the controls lived in a bar above a header-less list (ADR-053 Inc.6). The column headers
+// are the labels, so there is no second list of names.
 //
 // In a `.ts` because Vitest never executes a `.tsx` (testing.md).
 
@@ -75,13 +76,4 @@ export function runFilters(t: TFunction): Record<string, ColumnFilterSpec<Analys
 
 export function runColumns(t: TFunction): FilterableColumn<AnalysisJob>[] {
   return specColumns(runFilters(t));
-}
-
-/** Plain-text names for the bar and the mobile sheet — there is no header above each control. */
-export function runFilterLabels(t: TFunction): Record<string, string> {
-  return {
-    tool: t('runs.cols.tool'),
-    state: t('runs.cols.state'),
-    q: t('runs.cols.scope'),
-  };
 }

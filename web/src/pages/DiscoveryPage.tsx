@@ -63,6 +63,8 @@ import {
 import { sweepLimitOf } from './neighborSettings';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
+import { Inline, Page } from '../components/ui/Page';
+import { Callout, Disclosure } from '../components/ui/Section';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { Button } from '../components/ui/Button';
@@ -887,7 +889,7 @@ export function DiscoveryPage() {
   };
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:nodes.discovery')}
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.discovery') }]}
@@ -1057,25 +1059,27 @@ export function DiscoveryPage() {
             {/* The folded settings (ADR-244 decisions 3 and 4). The values are the last sweep's
                 (ADR-134), so after the first sweep this rarely needs opening. A pool with no live
                 poller forces it open, because the line saying so is inside. */}
-            <details
+            <Disclosure
               className="disco-how"
               open={howOpen}
-              onToggle={(e) => setHowOpen(e.currentTarget.open)}
+              onToggle={setHowOpen}
+              summary={
+                <>
+                  <span className="disco-how-t">{t('discovery.how.title')}</span>
+                  <span className="disco-how-sum">
+                    {settingsSummary({
+                      credentials: selectedCredIds.length,
+                      pool,
+                      fileByPrefixOffered: siteOptions.length > 0,
+                      fileByPrefix,
+                      snmpWhenUnreachable,
+                    })
+                      .map((p) => t(`discovery.how.${p.key}`, p.values))
+                      .join(' · ')}
+                  </span>
+                </>
+              }
             >
-              <summary>
-                <span className="disco-how-t">{t('discovery.how.title')}</span>
-                <span className="disco-how-sum">
-                  {settingsSummary({
-                    credentials: selectedCredIds.length,
-                    pool,
-                    fileByPrefixOffered: siteOptions.length > 0,
-                    fileByPrefix,
-                    snmpWhenUnreachable,
-                  })
-                    .map((p) => t(`discovery.how.${p.key}`, p.values))
-                    .join(' · ')}
-                </span>
-              </summary>
               <div className="disco-how-body">
                 {/* A group, not a <label>: the picker holds controls of its own (a checkbox per row
                     and the order's up / down, ADR-205 Inc.3). */}
@@ -1141,7 +1145,7 @@ export function DiscoveryPage() {
                   />
                 </Fields>
               </div>
-            </details>
+            </Disclosure>
           </>
         ) : (
           <PermissionHint permission="manage_config" />
@@ -1150,9 +1154,9 @@ export function DiscoveryPage() {
         {/* The 404 case gets its own line, above the progress note. A core that restarted mid-sweep
             answers "no such scan" while a poller may well still be probing, so "nothing here" would
             be the one reading that is definitely wrong. */}
-        {unknownScan && <p className="disco-pool-warn">{t('discovery.scans.unknownScan')}</p>}
+        {unknownScan && <Callout tone="warning">{t('discovery.scans.unknownScan')}</Callout>}
         {failures >= MAX_POLL_FAILURES && !unknownScan && (
-          <p className="disco-pool-warn">{t('discovery.scans.pollFailed')}</p>
+          <Callout tone="warning">{t('discovery.scans.pollFailed')}</Callout>
         )}
         {reattached && !unknownScan && note && (
           <p className="muted">{inFlight ? t('discovery.scans.resumed') : t('discovery.scans.resumedDone')}</p>
@@ -1164,7 +1168,7 @@ export function DiscoveryPage() {
             truth — and `finishedAnyway` is the case where the answer turned out to be "it did not
             stop, it completed". */}
         {stopOutcome === 'unsupported' && shown?.state === 'cancelling' && (
-          <p className="disco-pool-warn">{t('discovery.scans.stopUnsupported')}</p>
+          <Callout tone="warning">{t('discovery.scans.stopUnsupported')}</Callout>
         )}
         {stopOutcome === 'requested' && shown?.state === 'cancelling' && (
           <p className="muted">{t('discovery.scans.stopRequested')}</p>
@@ -1225,7 +1229,7 @@ export function DiscoveryPage() {
       )}
 
       {candidates.length > 0 && (
-        <Card title={t('discovery.resultsTitle')} className="disco-results-card">
+        <Card title={t('discovery.resultsTitle')}>
           <ListToolbar
             list={serverToolbarFilters(candCols, { filters, setFilters }, undefined, candCounts)}
             labels={candLabels}
@@ -1388,7 +1392,7 @@ export function DiscoveryPage() {
             })}
           </div>
           {canConfig && (
-            <div className="disco-import">
+            <Inline gap={12} justify="end">
               {importNote && <span className="disco-import-ok">✓ {importNote}</span>}
               {importError && <span className="disco-import-err">{importError}</span>}
               <Button
@@ -1405,13 +1409,13 @@ export function DiscoveryPage() {
                     ? t('discovery.importSelectedCount', { count: selectedCount })
                     : t('discovery.importSelectedNone')}
               </Button>
-            </div>
+            </Inline>
           )}
         </Card>
       )}
       </>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -1503,6 +1507,21 @@ function SeenOnNetworkCard({
     labels: epLabels,
   };
 
+  // `off` names the switch as a link to the screen that holds it (ADR-200 Inc.11); the
+  // other two have no `<lnk/>` and ignore the component.
+  const coverageLine = (
+    <Trans
+      t={t}
+      i18nKey={`discovery.seen.coverage.${coverage}`}
+      values={{
+        observed: page?.summary?.observed_total ?? 0,
+        nodes: page?.summary?.nodes_reporting ?? 0,
+        truncated: page?.summary?.truncated_nodes ?? 0,
+      }}
+      components={{ lnk: <ScreenLink to="/settings/system" /> }}
+    />
+  );
+
   return (
     <Card title={t('discovery.seen.title')}>
       {/* What Detect tries, in order — the Scan tab's picker, over the same list. Drawn only with
@@ -1527,20 +1546,11 @@ function SeenOnNetworkCard({
           />
         </Fields>
       )}
-      <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>
-        {/* `off` names the switch as a link to the screen that holds it (ADR-200 Inc.11); the
-            other two have no `<lnk/>` and ignore the component. */}
-        <Trans
-          t={t}
-          i18nKey={`discovery.seen.coverage.${coverage}`}
-          values={{
-            observed: page?.summary?.observed_total ?? 0,
-            nodes: page?.summary?.nodes_reporting ?? 0,
-            truncated: page?.summary?.truncated_nodes ?? 0,
-          }}
-          components={{ lnk: <ScreenLink to="/settings/system" /> }}
-        />
-      </p>
+      {coverage === 'sampled' ? (
+        <Callout tone="warning">{coverageLine}</Callout>
+      ) : (
+        <p className="muted">{coverageLine}</p>
+      )}
       {/* One sentence for the empty list, which used to be a paragraph above it at all times. */}
       {page && all.length === 0 && <p className="muted">{t('discovery.seen.empty')}</p>}
       {all.length > 0 && (

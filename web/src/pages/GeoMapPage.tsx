@@ -21,6 +21,7 @@ import { useConfigChanges } from '../lib/configChanges';
 import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card } from '../components/ui/Card';
+import { Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { useGroupSummary } from '../dashboard/useGroupSummary';
@@ -636,12 +637,15 @@ export function GeoMapPage() {
   );
 
   return (
-    <div className="geopage">
+    <Page layout="canvas">
       <PageHeader title={t('geo.title')} />
+      {/* Wrapped, so when it is the canvas's last child the wrapper fills the height, not the card. */}
       {(error || groups.error) && (
-        <Card>
-          <p className="muted">{t('geo.error')}</p>
-        </Card>
+        <div>
+          <Card>
+            <p className="muted">{t('geo.error')}</p>
+          </Card>
+        </div>
       )}
       {busy && <p className="muted">{t('common:loading')}</p>}
       {mapShown && (
@@ -649,7 +653,7 @@ export function GeoMapPage() {
           {/* The empty state is a caption over a live map, not instead of one: an operator with no
               coordinates set needs to see what the page is for and be told where to set them. */}
           {placed.length === 0 && (
-            <p className="geopage-empty muted">
+            <p className="muted">
               <Trans t={t} i18nKey="geo.empty" components={{ lnk: <ScreenLink to="/nodes" /> }} />
             </p>
           )}
@@ -1002,7 +1006,7 @@ export function GeoMapPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }
 

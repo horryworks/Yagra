@@ -1,7 +1,7 @@
 .statussummary {
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: var(--space-5);
   flex-wrap: wrap;
 }
 
@@ -18,8 +18,6 @@
 
 .statussummary-cap {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
   margin-top: var(--space-1);
 }
@@ -27,13 +25,13 @@
 .statussummary-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 18px;
+  gap: var(--space-4);
 }
 
 .statussummary-item {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-1-5);
 }
 
 .statussummary-dot {

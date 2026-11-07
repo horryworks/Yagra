@@ -28,6 +28,7 @@ import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, Select } from '../components/ui/Field';
 import { CheckField, FieldRow, Fields } from '../components/ui/FormLayout';
 import { Stack } from '../components/ui/Page';
+import { Callout } from '../components/ui/Section';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -607,19 +608,19 @@ function ProfileTemplates({
       </Stack>
       {error && <p className="form-error">{error}</p>}
       {gap?.kind === 'gaps' && (
-        <div className="profile-gap warn">
+        <Callout tone="warning">
           <p className="profile-gap-head">
             {t('profiles.templates.gap', { count: gap.missing.length })}
           </p>
           <p className="profile-gap-metrics">{gap.missing.join(' · ')}</p>
-          <p className="profile-gap-hint">{t('profiles.templates.gapHint')}</p>
+          <p>{t('profiles.templates.gapHint')}</p>
           <Link
             className="profile-gap-link"
             to={thresholdRulesHref({ tab: 'profile', target: profileId })}
           >
             {t('profiles.templates.gapLink')}
           </Link>
-        </div>
+        </Callout>
       )}
       {/* Said out loud rather than left blank: silence would make "checked, nothing missing" look
           exactly like "never checked". */}

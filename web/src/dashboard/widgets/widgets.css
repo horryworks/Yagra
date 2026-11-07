@@ -6,7 +6,7 @@
 .vbars {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: var(--space-0-5);
   min-height: 120px;
   padding-top: var(--space-1);
 }
@@ -23,7 +23,7 @@
   width: 100%;
   min-height: 2px;
   background: var(--series-1);
-  border-radius: 2px 2px 0 0;
+  border-radius: 2px 2px 0 0; /* ui-allow: a bar a few px wide; the scale's smallest radius would round its top into a point */
   transition: height var(--transition);
 }
 
@@ -31,7 +31,7 @@
 .dwl {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: var(--space-1-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -72,7 +72,7 @@
 .matrix {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .matrix-tile {
@@ -81,7 +81,7 @@
   gap: var(--space-2);
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
-  padding: var(--space-2) 10px var(--space-2) 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) 0;
   overflow: hidden;
 }
 
@@ -140,8 +140,6 @@
 
 .statstrip-cap {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
 }
 
@@ -282,7 +280,7 @@ html[data-viewport='mobile'] .iftraffic-actions select {
   flex: none;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a 10px colour swatch; the scale's smallest radius would round it into a dot */
 }
 
 .iftraffic-name {
@@ -402,7 +400,7 @@ html[data-viewport='mobile'] .vpnsess-actions select {
   align-self: center;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a 10px colour swatch; the scale's smallest radius would round it into a dot */
 }
 
 .vpnsess-chip-node {
@@ -545,7 +543,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
-  padding: 5px 0;
+  padding: var(--space-1) 0;
   border-top: var(--border-width) solid var(--border-color);
 }
 
@@ -607,13 +605,13 @@ html[data-viewport='mobile'] .vpnsess-rm {
 }
 
 .wclock-sec {
-  margin-left: 1px;
+  margin-left: var(--space-0-5);
   color: var(--text-tertiary);
   font-size: 0.6em; /* ui-allow: sized against the clock digits it follows */
 }
 
 .wclock-ampm {
-  margin-left: 3px;
+  margin-left: var(--space-0-5);
   color: var(--text-tertiary);
   font-family: var(--ui-font-family);
   font-size: 0.5em; /* ui-allow: sized against the clock digits it follows */
@@ -656,7 +654,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
       'name ico'
       'time time';
     row-gap: var(--space-0-5);
-    padding: var(--space-2) 10px;
+    padding: var(--space-2);
     border: 0;
     border-radius: var(--radius-sm);
     background: var(--bg-tertiary);

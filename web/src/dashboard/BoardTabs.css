@@ -4,7 +4,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1-5);
-  margin-bottom: var(--space-4);
   border-bottom: var(--border-width) solid var(--border-color);
   padding-bottom: var(--space-2);
 }

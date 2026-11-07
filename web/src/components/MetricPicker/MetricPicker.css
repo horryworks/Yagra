@@ -13,7 +13,7 @@
   width: 100%;
   min-width: 0;
   text-align: left;
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -109,7 +109,7 @@
 
 .metricpick-badge {
   flex: none;
-  padding: 0 5px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-tertiary);

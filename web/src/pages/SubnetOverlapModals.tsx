@@ -20,6 +20,7 @@ import { Button } from '../components/ui/Button';
 import { Field, Select, TextInput } from '../components/ui/Field';
 import { Fields } from '../components/ui/FormLayout';
 import { Stack } from '../components/ui/Page';
+import { ItemList, ItemRow } from '../components/ui/Section';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { draftFrom, portMatches, ruleBody, toggled, type RuleDraft } from './subnetOverlaps';
@@ -75,37 +76,41 @@ export function OverlapRulesModal({
     >
       <Stack gap={12}>
         <p className="muted">{t('subnetOverlaps.rules.text')}</p>
-        <ul className="so-rules">
+        <ItemList>
           {rules.map((r) => (
-            <li className="so-rule" key={r.id}>
-              <div className="so-rule-what">
-                <span>{describe(r)}</span>
-                <span className="so-rule-meta">
+            <ItemRow
+              key={r.id}
+              title={describe(r)}
+              detail={
+                <>
                   {t(`subnetOverlaps.rules.reason.${r.reason}`)}
                   {r.note && ` · ${r.note}`}
                   {r.builtin && ` · ${t('subnetOverlaps.rules.builtin')}`}
-                </span>
-              </div>
+                </>
+              }
+              actions={
+                canConfig && (
+                  <>
+                    <Button variant="outline" onClick={() => flip(r)} disabled={busy === r.id}>
+                      {r.enabled ? t('subnetOverlaps.rules.disable') : t('subnetOverlaps.rules.enable')}
+                    </Button>
+                    {!r.builtin && (
+                      <Button variant="ghost" onClick={() => setDeleting(r)}>
+                        {t('subnetOverlaps.rules.delete')}
+                      </Button>
+                    )}
+                  </>
+                )
+              }
+            >
               <span className="so-rule-hits">
                 {r.enabled
                   ? t('subnetOverlaps.rules.hits', { count: r.excluded_count })
                   : t('subnetOverlaps.rules.off')}
               </span>
-              {canConfig && (
-                <span className="so-rule-actions">
-                  <Button variant="outline" onClick={() => flip(r)} disabled={busy === r.id}>
-                    {r.enabled ? t('subnetOverlaps.rules.disable') : t('subnetOverlaps.rules.enable')}
-                  </Button>
-                  {!r.builtin && (
-                    <Button variant="ghost" onClick={() => setDeleting(r)}>
-                      {t('subnetOverlaps.rules.delete')}
-                    </Button>
-                  )}
-                </span>
-              )}
-            </li>
+            </ItemRow>
           ))}
-        </ul>
+        </ItemList>
         {error && (
           <p className="form-error" role="alert">
             {error}

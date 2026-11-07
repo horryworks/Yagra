@@ -13,7 +13,8 @@ import { Trans, useTranslation } from 'react-i18next';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
-import { Select } from '../../components/ui/Field';
+import { Field, Select } from '../../components/ui/Field';
+import { Inline, Page, Stack } from '../../components/ui/Page';
 import { api, errMsg } from '../../services/api';
 import { ScopePicker } from '../../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../../components/ScopePicker/scope';
@@ -209,7 +210,7 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
   const running = runningCount(jobs);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={toolName}
         trail={[
@@ -229,75 +230,65 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
 
       {/* The bar only parameterizes a run, so it goes with the button (ADR-056). */}
       {canRun && (
-      <div className="ts-cfgbar">
-        {shows('scope') && (
-          <div className="ts-fgroup">
-            <label className="ts-flabel" htmlFor="tsr-scope">
-              {t('fields.scope')}
-            </label>
-            <ScopePicker id="tsr-scope" value={scope} onChange={setScope} />
-          </div>
-        )}
-        {shows('window') && (
-          <div className="ts-fgroup">
-            <label className="ts-flabel" htmlFor="tsr-window">
-              {t('fields.window')}
-            </label>
-            <Select
-              id="tsr-window"
-              value={String(windowSecs)}
-              onChange={(e) => setWindowSecs(Number(e.target.value))}
-            >
-              {controls.windows.map((w) => (
-                <option key={w.secs} value={w.secs}>
-                  {t(w.labelKey)}
-                </option>
-              ))}
-            </Select>
-          </div>
-        )}
-        {shows('baseline') && controls.baselines && (
-          <div className="ts-fgroup">
-            <label className="ts-flabel" htmlFor="tsr-baseline">
-              {t('fields.baseline')}
-            </label>
-            <Select
-              id="tsr-baseline"
-              value={String(baselineSecs)}
-              onChange={(e) => setBaselineSecs(Number(e.target.value))}
-            >
-              {controls.baselines.map((b) => (
-                <option key={b.secs} value={b.secs}>
-                  {t(b.labelKey)}
-                </option>
-              ))}
-            </Select>
-          </div>
-        )}
-        {shows('sensitivity') && (
-          <div className="ts-fgroup" style={{ minWidth: 170 }}>
-            <label className="ts-flabel" htmlFor="tsr-sens">
-              {t('fields.sensitivity')}
-            </label>
-            <div className="ts-slider-row">
-              <input
-                id="tsr-sens"
-                className="ts-slider"
-                type="range"
-                min={1}
-                max={5}
-                value={sensitivity}
-                onChange={(e) => setSensitivity(Number(e.target.value))}
-              />
-              <span className="ts-slider-val">σ {sigmaFor(sensitivity).toFixed(1)}</span>
-            </div>
-          </div>
-        )}
-        <div className="ts-cfgbar-spacer" />
-        <Button variant="primary" onClick={() => void run()}>
-          {t('actions.runAnalysis')}
-        </Button>
-      </div>
+        <Card>
+          <Inline gap={16} align="end" className="ts-cfgbar">
+            {shows('scope') && (
+              <Field label={t('fields.scope')} htmlFor="tsr-scope">
+                <ScopePicker id="tsr-scope" value={scope} onChange={setScope} />
+              </Field>
+            )}
+            {shows('window') && (
+              <Field label={t('fields.window')} htmlFor="tsr-window">
+                <Select
+                  id="tsr-window"
+                  value={String(windowSecs)}
+                  onChange={(e) => setWindowSecs(Number(e.target.value))}
+                >
+                  {controls.windows.map((w) => (
+                    <option key={w.secs} value={w.secs}>
+                      {t(w.labelKey)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {shows('baseline') && controls.baselines && (
+              <Field label={t('fields.baseline')} htmlFor="tsr-baseline">
+                <Select
+                  id="tsr-baseline"
+                  value={String(baselineSecs)}
+                  onChange={(e) => setBaselineSecs(Number(e.target.value))}
+                >
+                  {controls.baselines.map((b) => (
+                    <option key={b.secs} value={b.secs}>
+                      {t(b.labelKey)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {shows('sensitivity') && (
+              <Field label={t('fields.sensitivity')} htmlFor="tsr-sens">
+                <div className="ts-slider-row">
+                  <input
+                    id="tsr-sens"
+                    className="ts-slider"
+                    type="range"
+                    min={1}
+                    max={5}
+                    value={sensitivity}
+                    onChange={(e) => setSensitivity(Number(e.target.value))}
+                  />
+                  <span className="ts-slider-val">σ {sigmaFor(sensitivity).toFixed(1)}</span>
+                </div>
+              </Field>
+            )}
+            <div className="ts-cfgbar-spacer" />
+            <Button variant="primary" onClick={() => void run()}>
+              {t('actions.runAnalysis')}
+            </Button>
+          </Inline>
+        </Card>
       )}
 
       {!job && (
@@ -358,30 +349,34 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
 
       {job && job.state === 'done' && findingsReady && (
         <>
-          <div className="ts-res-summary">
-            {descriptor.summary.map((s) => (
-              <span key={s.labelKey} className="tsr-stat-wrap">
-                {s.separatorBefore && <span className="ts-res-sep" />}
-                <span className="ts-res-stat">
-                  <span className={s.tone ? `ts-res-num ${s.tone}` : 'ts-res-num'}>
-                    {s.value(findings)}
+          <Card>
+            <div className="ts-res-summary">
+              {descriptor.summary.map((s) => (
+                <span key={s.labelKey} className="tsr-stat-wrap">
+                  {s.separatorBefore && <span className="ts-res-sep" />}
+                  <span className="ts-res-stat">
+                    <span className={s.tone ? `ts-res-num ${s.tone}` : 'ts-res-num'}>
+                      {s.value(findings)}
+                    </span>
+                    <span className="ts-res-cap">{t(s.labelKey)}</span>
                   </span>
-                  <span className="ts-res-cap">{t(s.labelKey)}</span>
                 </span>
-              </span>
-            ))}
-            <div className="ts-res-meta">
-              {t('report.common.finished', { time: relativeTimeMs(job.finished_ms) })}
-              <br />
-              {job.summary ?? ''}
+              ))}
+              <div className="ts-res-meta">
+                {t('report.common.finished', { time: relativeTimeMs(job.finished_ms) })}
+                <br />
+                {job.summary ?? ''}
+              </div>
             </div>
-          </div>
+          </Card>
 
           <NoticeRow notices={notices} />
 
-          <descriptor.Body job={job} findings={findings} />
+          <Stack gap={12}>
+            <descriptor.Body job={job} findings={findings} />
+          </Stack>
         </>
       )}
-    </div>
+    </Page>
   );
 }

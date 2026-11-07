@@ -22,7 +22,7 @@
 .tpl-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-  gap: 18px;
+  gap: var(--space-5);
   align-items: start;
 }
 
@@ -66,7 +66,7 @@
 }
 
 .btn.tpl-small {
-  padding: 3px 10px;
+  padding: var(--space-0-5) var(--space-2);
   font-size: var(--font-xs);
 }
 
@@ -122,7 +122,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2);
   padding: var(--space-4);
   border: var(--border-width) dashed var(--border-color);
   border-radius: var(--radius);
@@ -160,7 +160,7 @@
 
 .tpl-field {
   min-height: 38px;
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -190,8 +190,8 @@
 .tpl-chip {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  margin: 0 1px;
+  gap: var(--space-0-5);
+  margin: 0 var(--space-0-5);
   padding: 0 var(--space-1-5);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -240,7 +240,7 @@
 
 .tpl-picker-search {
   width: 100%;
-  padding: var(--space-2) 28px var(--space-2) 10px;
+  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-2);
   border: 0;
   border-bottom: var(--border-width) solid var(--border-color);
   border-radius: 0;
@@ -261,10 +261,9 @@
 }
 
 .tpl-picker-group {
-  padding: var(--space-2) 10px var(--space-0-5);
+  padding: var(--space-2) var(--space-2) var(--space-0-5);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
-  letter-spacing: 0.04em;
 }
 
 .tpl-picker-item {
@@ -272,7 +271,7 @@
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
-  padding: 5px 10px;
+  padding: var(--space-1) var(--space-2);
   border: 0;
   background: none;
   color: var(--text-primary);
@@ -307,7 +306,7 @@
 }
 
 .tpl-picker-empty {
-  padding: 10px;
+  padding: var(--space-2);
   margin: 0;
 }
 
@@ -340,7 +339,7 @@
   flex-direction: column;
   gap: var(--space-1-5);
   margin: 0;
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
 }
@@ -395,7 +394,7 @@
 .tpl-var {
   font-family: var(--font-family);
   font-size: var(--font-xs);
-  padding: 3px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -419,7 +418,7 @@
 .tpl-preview {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
   min-width: 0;
   padding: var(--space-3);
   border: var(--border-width) solid var(--border-color);
@@ -447,7 +446,7 @@
 }
 
 .tpl-sample {
-  padding: var(--space-0-5) 10px;
+  padding: var(--space-0-5) var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-pill);
   background: var(--bg-primary);
@@ -472,7 +471,7 @@
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
@@ -488,7 +487,7 @@
 
 /* A rendered body can be long; scroll it inside the dialog rather than growing the dialog. */
 .tpl-card-body {
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   max-height: 220px;
   overflow: auto;
   font-size: var(--font-xs);
@@ -527,7 +526,7 @@
 
 .tpl-problems ul {
   margin: 0;
-  padding-left: 18px;
+  padding-left: var(--space-4);
   color: var(--text-tertiary);
   overflow-wrap: anywhere;
 }
@@ -546,7 +545,7 @@
 
 .tpl-saved pre {
   margin: var(--space-1) 0 var(--space-2);
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   font-family: var(--font-family);
@@ -578,7 +577,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-2) 10px;
+  padding: var(--space-2);
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
@@ -625,7 +624,7 @@
 /* The built-in text, read-only (decision 3): an inset, dashed box, labelled as such. */
 .tpl-field.tpl-builtin {
   position: relative;
-  padding-top: 20px;
+  padding-top: var(--space-5);
   border-style: dashed;
   background: var(--bg-tertiary);
   cursor: default;
@@ -635,7 +634,7 @@
   content: attr(data-readonly);
   position: absolute;
   top: 2px;
-  left: 10px;
+  left: var(--space-2);
   font-size: var(--font-xs);
   line-height: 1.5;
   color: var(--text-tertiary);
@@ -654,7 +653,7 @@
 .tpl-cond-num {
   display: inline-block;
   min-width: 1.2em;
-  margin: 0 1px 0 var(--space-0-5);
+  margin: 0 0 0 var(--space-0-5);
   color: var(--text-tertiary);
   font-family: var(--ui-font-family);
   font-size: var(--font-xs);
@@ -770,7 +769,7 @@
 }
 
 .tpl-insert .tpl-link {
-  margin-right: 10px;
+  margin-right: var(--space-2);
   font-size: var(--font-xs);
 }
 

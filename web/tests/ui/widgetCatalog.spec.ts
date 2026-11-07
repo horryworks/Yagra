@@ -238,7 +238,7 @@ for (const w of PRIOR_WIDGETS) {
     const item = card(page, w.title);
     await expect(item).toHaveCount(1);
     const section = item.locator('xpath=ancestor::div[contains(@class,"catalog-section")]');
-    await expect(section.locator('.catalog-section-title')).toHaveText(w.section);
+    await expect(section.getByRole('heading')).toHaveText(w.section);
 
     await item.click();
     await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
@@ -261,7 +261,7 @@ test('the interface-traffic widget is offered in the catalogue, with real copy',
   // It is filed under Capacity, beside the fleet-wide throughput chart it is the per-link
   // counterpart of — a widget in the wrong section is found by nobody and reported by nothing.
   const section = item.locator('xpath=ancestor::div[contains(@class,"catalog-section")]');
-  await expect(section.locator('.catalog-section-title')).toHaveText(/capacity/i);
+  await expect(section.getByRole('heading')).toHaveText(/capacity/i);
 
   // The card's own copy, not a raw i18n key. `registry.test.ts` proves the two keys resolve in both
   // locales; only this proves the resolved strings are what the card puts on screen.
@@ -990,7 +990,7 @@ test('the VPN-sessions widget is in the catalogue and mounts when placed', async
   // Filed with the other inventory-driven widgets rather than under Capacity — a widget in the
   // wrong section is found by nobody and reported by nothing.
   const section = item.locator('xpath=ancestor::div[contains(@class,"catalog-section")]');
-  await expect(section.locator('.catalog-section-title')).toHaveText(/performance/i);
+  await expect(section.getByRole('heading')).toHaveText(/performance/i);
 
   // The card's own copy, not a raw i18n key.
   const blurb = await item.locator('.catalog-item-blurb').innerText();

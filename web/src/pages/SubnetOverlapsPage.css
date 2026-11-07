@@ -1,11 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 /* Nodes ▸ Subnet overlaps (ADR-187). The table is DataTable's; these are the kind tiles above it,
-   the cells that carry a label, the row's expanded detail, and the rules dialog's list. */
+   the cells that carry a label, the row's expanded detail, and the rules dialog's hit count. */
 
 .so-coverage {
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  margin: 0 0 var(--space-3);
 }
 
 /* ── Kind tiles: a count per kind of open overlap, and a filter when pressed ── */
@@ -13,7 +12,6 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2);
-  margin-bottom: var(--space-3);
 }
 
 .so-tile {
@@ -250,43 +248,7 @@
   white-space: nowrap;
 }
 
-.so-actions {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-/* ── Rules dialog ── */
-.so-rules {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.so-rule {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: var(--space-3);
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-
-.so-rule-what {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.so-rule-meta {
-  color: var(--text-tertiary);
-  font-size: var(--font-xs);
-}
-
+/* ── Rules dialog: the hit count under a rule ── */
 .so-rule-hits {
   color: var(--text-secondary);
   font-size: var(--font-sm);
@@ -294,15 +256,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.so-rule-actions {
-  display: flex;
-  gap: var(--space-1);
-}
-
 html[data-viewport='mobile'] .so-tiles {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-html[data-viewport='mobile'] .so-rule {
   grid-template-columns: minmax(0, 1fr);
 }

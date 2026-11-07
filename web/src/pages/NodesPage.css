@@ -28,7 +28,6 @@
 }
 
 .nodes-truncated {
-  margin: 0 0 var(--space-2);
   font-size: var(--font-sm);
 }
 
@@ -60,7 +59,7 @@
   overflow: hidden;
 }
 
-/* Left-pane header: INVENTORY label + tools (Add group · search). */
+/* Left-pane header: the Inventory heading + tools (Add group · search). */
 .nodes-pane-head {
   display: flex;
   align-items: center;
@@ -71,13 +70,9 @@
   flex: none;
 }
 
-.nodes-pane-title {
+/* The heading keeps its width; the search box below is the part that gives. */
+.nodes-pane-head > .ui-section-head {
   flex: none;
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
 }
 
 /* ADR-177 put a fifth control in this 38px row, so the search box is the part that gives: it
@@ -112,7 +107,7 @@
 
 .nodes-pane-add {
   height: 28px;
-  padding: 0 9px;
+  padding: 0 var(--space-2);
 }
 
 /* The chip row under the pane head (ADR-177 — it held the filter controls themselves before). */
@@ -175,7 +170,7 @@
    gap comes back as a gap. */
 .nodes-split.inv-collapsed {
   grid-template-columns: 40px 1fr;
-  gap: 14px;
+  gap: var(--space-4);
 }
 
 /* The split handle. A vertical rail continuous with the two panes' borders, not a widget: it reads
@@ -192,7 +187,7 @@
   width: 3px;
   height: 34px;
   background: var(--border-color);
-  border-radius: 2px;
+  border-radius: var(--radius-pill);
   transition: background var(--transition);
 }
 
@@ -239,7 +234,7 @@
 /* Right-pane empty / loading state. */
 .nd-empty {
   margin: auto;
-  padding: 40px;
+  padding: var(--space-6);
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--font-sm);
@@ -254,7 +249,7 @@
     position: relative;
     z-index: 1;
     width: 24px;
-    margin: 0 -5px;
+    margin: 0 -5px; /* ui-allow: centres the 24px touch target on its 14px track */
   }
 
   .nodes-split-grip {
@@ -267,7 +262,7 @@
 @media (max-width: 860px) {
   .nodes-split {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: var(--space-4);
   }
 
   .nodes-split-handle {

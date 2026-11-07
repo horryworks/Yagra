@@ -66,7 +66,7 @@ test.describe('placed from the catalogue', () => {
     const item = page.locator('.catalog-item:has(.catalog-item-title:text-is("World clock"))');
     await expect(item).toHaveCount(1);
     const section = item.locator('xpath=ancestor::div[contains(@class,"catalog-section")]');
-    await expect(section.locator('.catalog-section-title')).toHaveText(/general/i);
+    await expect(section.getByRole('heading')).toHaveText(/general/i);
     await item.click();
     await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
 

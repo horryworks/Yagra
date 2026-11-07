@@ -7,6 +7,8 @@
 
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page, Stack } from '../components/ui/Page';
+import { SectionHead } from '../components/ui/Section';
 import { TOOLS, TOOL_GROUPS } from './data';
 import { runningCount, useTroubleshootStore } from './store';
 import { useCan } from '../store';
@@ -23,7 +25,7 @@ export function TroubleshootCatalogPage() {
   const running = runningCount(jobs);
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:sections.troubleshoot')}
         trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('nav:troubleshoot.all') }]}
@@ -51,29 +53,29 @@ export function TroubleshootCatalogPage() {
         </div>
       </div>
 
-      <div className="ts-section-label">
-        <h2>{t('catalog.toolsHeading')}</h2>
-      </div>
-      {/* Fifteen cards with no button would read as a broken page; this says which privilege. */}
-      {!canRun && <PermissionHint permission="ack_alerts" />}
-      {/* Grouped by what each tool reads, not flat (ADR-055 Inc.5 / R7). Fifteen cards in one grid
-          is a wall an operator has to read end to end to find the one for the question they have;
-          four clusters of two to five is a decision they can make from the headings. The design
-          system has described the catalog in exactly these four groups since ADR-022 — the screen
-          simply never showed them. Iterating TOOL_GROUPS rather than the tools means a new group
-          appears here the moment it exists. */}
-      {TOOL_GROUPS.map((group) => (
-        <div key={group}>
-          <h3 className="ts-group-head">{t(`catalog.group.${group}`)}</h3>
-          <div className="ts-tool-grid">
-            {TOOLS.filter((tool) => tool.group === group).map((tool) => (
-              <ToolCard key={tool.id} tool={tool} />
-            ))}
-          </div>
-        </div>
-      ))}
+      <Stack as="section" gap={16}>
+        <SectionHead level={2} title={t('catalog.toolsHeading')} />
+        {/* Fifteen cards with no button would read as a broken page; this says which privilege. */}
+        {!canRun && <PermissionHint permission="ack_alerts" />}
+        {/* Grouped by what each tool reads, not flat (ADR-055 Inc.5 / R7). Fifteen cards in one grid
+            is a wall an operator has to read end to end to find the one for the question they have;
+            four clusters of two to five is a decision they can make from the headings. The design
+            system has described the catalog in exactly these four groups since ADR-022 — the screen
+            simply never showed them. Iterating TOOL_GROUPS rather than the tools means a new group
+            appears here the moment it exists. */}
+        {TOOL_GROUPS.map((group) => (
+          <Stack as="section" gap={8} key={group}>
+            <SectionHead title={t(`catalog.group.${group}`)} />
+            <div className="ts-tool-grid">
+              {TOOLS.filter((tool) => tool.group === group).map((tool) => (
+                <ToolCard key={tool.id} tool={tool} />
+              ))}
+            </div>
+          </Stack>
+        ))}
+      </Stack>
 
       <LaunchDrawer />
-    </div>
+    </Page>
   );
 }

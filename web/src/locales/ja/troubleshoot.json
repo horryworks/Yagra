@@ -15,11 +15,9 @@
     }
   },
   "runs": {
-    "card": "分析ジョブ",
     "empty": "分析ジョブはまだありません。",
     "loadFailed": "分析ジョブの一覧を読み込めませんでした。",
     "running": "実行中…",
-    "done": "完了",
     "findingCount_other": "検出結果 {{count}} 件",
     "state": {
       "failed": "失敗",
@@ -37,7 +35,10 @@
     "cols": {
       "tool": "分析",
       "state": "状態",
-      "scope": "対象"
+      "scope": "対象",
+      "result": "結果",
+      "time": "日時",
+      "actions": "操作"
     },
     "filter": {
       "searchPlaceholder": "対象または要約を検索…",

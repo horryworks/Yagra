@@ -3,13 +3,14 @@
 // grid/chrome only, with every content slot passed in, so each body stays free to say something
 // different (the 1:1 requirement) without re-implementing the layout.
 //
-// Reuses the existing `.ts-anom*` / `.ts-chip*` / `.ts-res-*` CSS from troubleshoot.css unchanged;
-// only genuinely new classes live in report.css.
+// Reuses the `.ts-anom*` / `.ts-chip*` / `.ts-res-*` CSS from troubleshoot.css; only genuinely new
+// classes live in report.css.
 
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Select } from '../../components/ui/Field';
 import { EntityName } from '../../components/ui/EntityName';
+import { Callout } from '../../components/ui/Section';
 import type { AnalysisFinding } from '../../types/api';
 import { sevOf } from './format';
 
@@ -265,12 +266,9 @@ export function NoticeRow({ notices }: { notices: AnalysisFinding[] }) {
   if (!notices.length) return null;
   const note = (notices[0].detail as { note?: string } | null | undefined)?.note;
   return (
-    <div className="tsr-notice">
-      <span className="tsr-notice-mark" aria-hidden="true">
-        !
-      </span>
-      <span>{note ? t('report.common.notice', { reason: note }) : t('report.common.noticePlain')}</span>
-    </div>
+    <Callout>
+      {note ? t('report.common.notice', { reason: note }) : t('report.common.noticePlain')}
+    </Callout>
   );
 }
 

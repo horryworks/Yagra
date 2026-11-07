@@ -1,7 +1,7 @@
 .donut {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
 
@@ -35,8 +35,6 @@
   fill: var(--text-tertiary);
   font-family: var(--ui-font-family);
   font-size: 3px; /* ui-allow: SVG user units inside a viewBox; the chart scales them */
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .donut-legend {
@@ -59,7 +57,7 @@
 .donut-legend-dot {
   width: 9px;
   height: 9px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a 9px legend swatch; the smallest radius on the scale would round it into a dot */
   flex: none;
 }
 

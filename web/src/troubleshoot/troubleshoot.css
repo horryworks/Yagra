@@ -22,9 +22,8 @@
 .ts-intro {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: var(--space-4);
   flex-wrap: wrap;
-  margin-bottom: var(--space-4);
 }
 .ts-intro-stat {
   display: flex;
@@ -39,8 +38,6 @@
 }
 .ts-intro-cap {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
 }
 .ts-intro-sep {
@@ -50,29 +47,12 @@
 }
 
 /* ============================================================
-   Analysis runs panel
+   Analysis runs (RunsPage, a DataTable since ADR-246 Inc.7) - the cells' own marks
    ============================================================ */
-.ts-runs {
-  display: flex;
-  flex-direction: column;
-}
-.ts-run {
-  display: grid;
-  grid-template-columns: 14px minmax(220px, 1.4fr) minmax(160px, 1fr) 96px 86px 80px;
+.ts-run-state {
+  display: inline-flex;
   align-items: center;
-  gap: 14px;
-  min-height: 46px;
-  padding: var(--space-1) 0;
-  border-bottom: var(--border-width) solid var(--border-color);
-  font-size: var(--font-md);
-}
-.ts-run:last-child {
-  border-bottom: none;
-}
-.ts-run-status {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  gap: var(--space-2);
 }
 .ts-run-dot {
   width: 9px;
@@ -104,14 +84,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ts-run-scope {
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
-  font-family: var(--font-family);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .ts-run-prog {
   display: flex;
   flex-direction: column;
@@ -119,14 +91,15 @@
 }
 .ts-run-bar {
   height: 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   background: var(--bg-tertiary);
   overflow: hidden;
 }
 .ts-run-bar-fill {
+  display: block;
   height: 100%;
   background: var(--accent-color);
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   transition: width 0.3s ease;
 }
 .ts-run-phase {
@@ -136,22 +109,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ts-run-eta {
-  font-size: var(--font-xs);
-  font-family: var(--font-family);
-  color: var(--text-secondary);
-  text-align: right;
-  line-height: 1.4;
-}
-.ts-run-time {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-  text-align: right;
-  white-space: nowrap;
-}
-.ts-run-action {
-  text-align: right;
-}
 .ts-run-link {
   font-size: var(--font-sm);
   color: var(--accent-color);
@@ -159,60 +116,18 @@
 .ts-run-link:hover {
   text-decoration: underline;
 }
-.ts-run-findings {
-  font-size: var(--font-sm);
-}
-.ts-run-findings b {
-  font-weight: var(--weight-medium);
-}
 .ts-run-failed {
   font-size: var(--font-xs);
   color: var(--status-critical);
-}
-@media (max-width: 1080px) {
-  .ts-run {
-    grid-template-columns: 14px 1.4fr 1fr 80px;
-  }
-  .ts-run-eta,
-  .ts-run-action {
-    display: none;
-  }
 }
 
 /* ============================================================
    Tool catalog grid
    ============================================================ */
-.ts-section-label {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin: 26px 0 var(--space-3);
-}
-.ts-section-label h2 {
-  font-size: var(--font-lg);
-  font-weight: var(--weight-medium);
-}
-.ts-section-label span {
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-}
-
-/* Cluster heading inside the catalog (ADR-055 Inc.5). The same eyebrow treatment the sidebar gives
-   its groups — this is a divider between kinds of tool, not a second page title, so it must not
-   compete with the `ts-section-label` h2 above it. */
-.ts-group-head {
-  margin: 20px 0 10px;
-  font-size: var(--font-xs);
-  font-weight: var(--weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-}
-
 .ts-tool-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-  gap: 14px;
+  gap: var(--space-3);
   align-items: stretch;
 }
 .ts-tool {
@@ -236,7 +151,7 @@
 .ts-tool-top {
   display: flex;
   gap: var(--space-3);
-  padding: 14px var(--space-4) var(--space-3);
+  padding: var(--space-3) var(--space-4);
 }
 .ts-tool-mono {
   width: 34px;
@@ -272,7 +187,7 @@
 .ts-tool-method-dot {
   width: 7px;
   height: 7px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a 7px swatch; the smallest radius step would round it to a dot */
 }
 .ts-tool-desc {
   margin: 0;
@@ -284,7 +199,7 @@
   flex: 1;
 }
 .ts-tool-reveal {
-  padding: 10px var(--space-4) 0;
+  padding: var(--space-2) var(--space-4) 0;
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
@@ -295,7 +210,7 @@
 .ts-tool-meta {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   margin-top: var(--space-3);
   border-top: var(--border-width) solid var(--border-color);
@@ -318,14 +233,6 @@
   gap: var(--space-2);
   flex: none;
 }
-.ts-tool-latest {
-  font-size: var(--font-xs);
-  color: var(--accent-color);
-  white-space: nowrap;
-}
-.ts-tool-latest:hover {
-  text-decoration: underline;
-}
 
 /* Split Run button: a primary "Run" + an attached caret that opens a small run-mode menu. */
 .ts-run-split {
@@ -338,7 +245,7 @@
   border-bottom-right-radius: 0;
 }
 .ts-run-split .ts-run-caret {
-  padding: 0 7px;
+  padding: 0 var(--space-1-5);
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
   /* Hairline divider between the two halves, visible on the orange fill. */
@@ -382,7 +289,7 @@
 .ts-depth-pip {
   width: 4px;
   height: 10px;
-  border-radius: 1px;
+  border-radius: 1px; /* ui-allow: a 4px-wide pip; the smallest radius step would make it a pill */
   background: var(--bg-tertiary);
 }
 .ts-depth-pip.on {
@@ -428,7 +335,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: 18px 18px 14px;
+  padding: var(--space-4) var(--space-4) var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 .ts-drawer-mono {
@@ -471,16 +378,13 @@
 .ts-drawer-body {
   flex: 1;
   overflow-y: auto;
-  padding: var(--space-4) 18px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
+  padding: var(--space-4);
 }
 .ts-drawer-foot {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 18px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-top: var(--border-width) solid var(--border-color);
 }
 .ts-drawer-foot .ts-est {
@@ -491,23 +395,8 @@
 }
 
 /* ============================================================
-   Form groups / segmented / slider (drawer + config bar)
+   Slider (drawer + config bar + schedule dialog)
    ============================================================ */
-.ts-fgroup {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1-5);
-}
-.ts-flabel {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-}
-.ts-fhint {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
-}
 .ts-field-full {
   width: 100%;
 }
@@ -538,13 +427,13 @@
   z-index: 70;
   background: var(--text-primary);
   color: var(--bg-primary);
-  padding: 10px var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius);
   font-size: var(--font-sm);
   box-shadow: 0 8px 24px var(--overlay);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   opacity: 0;
   transform: translateX(-50%) translateY(12px);
   transition: opacity 0.2s ease, transform 0.2s ease;
@@ -566,22 +455,12 @@
 /* ============================================================
    Anomaly report — config bar
    ============================================================ */
-.ts-cfgbar {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  padding: 14px var(--space-4);
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  margin-bottom: var(--space-4);
-}
-.ts-cfgbar .ts-fgroup {
-  gap: 5px;
-}
+/* The bar is an `Inline` in a `Card`; only the widths of its controls are its own. */
 .ts-cfgbar .field {
   min-width: 150px;
+}
+.ts-cfgbar .ts-slider-row {
+  min-width: 170px;
 }
 .ts-cfgbar-spacer {
   flex: 1;
@@ -593,8 +472,8 @@
 .ts-processing {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 36px var(--space-5);
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
   align-items: center;
   text-align: center;
 }
@@ -626,7 +505,7 @@
 .ts-pstep {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   font-size: var(--font-sm);
   color: var(--text-tertiary);
 }
@@ -644,35 +523,31 @@
   width: 320px;
   max-width: 100%;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   background: var(--bg-tertiary);
   overflow: hidden;
 }
 .ts-pbar-fill {
   height: 100%;
   background: var(--accent-color);
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   transition: width 0.3s linear;
 }
 
 /* ============================================================
    Anomaly report — results summary + toolbar
    ============================================================ */
+/* The strip sits in a `Card`; the row of counts is its own. */
 .ts-res-summary {
   display: flex;
   align-items: center;
-  gap: 26px;
+  gap: var(--space-5);
   flex-wrap: wrap;
-  padding: var(--space-4);
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-  margin-bottom: var(--space-4);
 }
 .ts-res-stat {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--space-0-5);
 }
 .ts-res-num {
   font-size: var(--font-6xl);
@@ -688,8 +563,6 @@
 }
 .ts-res-cap {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
 }
 .ts-res-sep {
@@ -709,8 +582,7 @@
 .ts-res-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: var(--space-3);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 .ts-chip-row {
@@ -723,8 +595,8 @@
   align-items: center;
   gap: var(--space-1-5);
   height: 26px;
-  padding: 0 10px;
-  border-radius: 13px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
   border: var(--border-width) solid var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-secondary);
@@ -743,12 +615,10 @@
 .ts-chip-dot {
   width: 7px;
   height: 7px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a 7px swatch; the smallest radius step would round it to a dot */
 }
 .ts-sort-label {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   color: var(--text-tertiary);
 }
 
@@ -758,7 +628,7 @@
 .ts-anoms {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .ts-anom {
   display: grid;
@@ -793,14 +663,12 @@
 }
 .ts-anom-score-cap {
   font-size: var(--font-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
 }
 .ts-anom-id {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 .ts-anom-node {
@@ -822,10 +690,9 @@
 .ts-anom-kind {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
-  margin-top: 1px;
 }
 .ts-anom-kind-dot {
   width: 6px;
@@ -844,7 +711,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 5px;
+  gap: var(--space-1);
   white-space: nowrap;
 }
 .ts-anom-when {
@@ -907,7 +774,7 @@
 }
 
 .ts-empty-note {
-  padding: 40px;
+  padding: var(--space-6);
   text-align: center;
   color: var(--text-secondary);
   font-size: var(--font-sm);
@@ -916,7 +783,7 @@
 /* ============================================================
    mobile (ADR-027 M2) — the two fluid breakpoints (1080/980) already collapse the run/anomaly rows
    at ~390px, so this is touch/drawer polish only. Scoped to data-viewport='mobile' → desktop
-   unchanged. The `.ts-run` rows and `.ts-anom` cards need no extra rules here.
+   unchanged. The `.ts-anom` cards need no extra rules here.
    ============================================================ */
 html[data-viewport='mobile'] .ts-drawer {
   width: 100%;
@@ -948,7 +815,7 @@ html[data-viewport='mobile'] .ts-cfgbar .field {
 
 .ts-sf-sev {
   display: inline-flex;
-  gap: 7px;
+  gap: var(--space-1-5);
   align-items: center;
 }
 

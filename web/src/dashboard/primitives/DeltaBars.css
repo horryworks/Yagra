@@ -1,7 +1,7 @@
 .deltabars {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -11,7 +11,7 @@
   display: grid;
   grid-template-columns: minmax(0, 9rem) 1fr auto;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .deltabar-label {

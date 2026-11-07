@@ -35,7 +35,7 @@
   color: var(--status-warning);
   border: var(--border-width) solid var(--status-warning);
   border-radius: var(--radius-sm);
-  padding: 0 5px;
+  padding: 0 var(--space-1);
 }
 
 /* "Held until …" (ADR-226 decision 11): a small outlined mark, as a link to the delivery hours.
@@ -45,7 +45,7 @@
   color: var(--text-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 0 5px;
+  padding: 0 var(--space-1);
   white-space: nowrap;
   text-decoration: none;
 }

@@ -14,7 +14,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: 10px;
+  margin-bottom: var(--space-3);
 }
 
 .ntree-hint {
@@ -264,7 +264,7 @@
   color: var(--text-tertiary);
   background: var(--bg-tertiary);
   border-radius: var(--radius-pill);
-  padding: 0 7px;
+  padding: 0 var(--space-1-5);
   min-width: 18px;
   text-align: center;
 }
@@ -306,7 +306,7 @@
   cursor: pointer;
   font-size: var(--font-sm);
   color: var(--text-tertiary);
-  padding: var(--space-0-5) 5px;
+  padding: var(--space-0-5) var(--space-1);
   border-radius: var(--radius);
   line-height: 1;
 }
@@ -404,7 +404,7 @@
 }
 
 .ntree-empty {
-  padding: 14px var(--space-1-5);
+  padding: var(--space-3) var(--space-1-5);
 }
 
 /* Placeholder row while a group's members are lazily fetched (A-3). */
@@ -471,7 +471,7 @@
   border: none;
   background: none;
   text-align: left;
-  padding: var(--space-1-5) 14px;
+  padding: var(--space-1-5) var(--space-3);
   font-size: var(--font-sm);
   color: var(--text-primary);
   cursor: pointer;
@@ -494,14 +494,12 @@
 /* Maintenance quick-duration section in the context menu: a label over a row of preset
    buttons (1h / 4h / 24h / Custom…). */
 .ntree-menu-section {
-  padding: var(--space-1) 14px var(--space-1-5);
+  padding: var(--space-1) var(--space-3) var(--space-1-5);
 }
 
 .ntree-menu-label {
   font-size: var(--font-xs);
   color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   margin-bottom: var(--space-1);
 }
 
@@ -515,7 +513,7 @@
 
 /* Override the generic `.ntree-menu button` block padding for the compact duration chips. */
 .ntree-menu .ntree-dur {
-  padding: 3px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   font-size: var(--font-xs);
@@ -549,7 +547,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
 }
 
 .ntree-supp-icon {
@@ -619,7 +617,7 @@ button.ntree-supp-icon:hover {
 }
 
 .ntree-supp-cause {
-  padding: var(--space-1-5) 14px;
+  padding: var(--space-1-5) var(--space-3);
 }
 
 .ntree-supp-cause + .ntree-supp-cause {
@@ -629,8 +627,6 @@ button.ntree-supp-icon:hover {
 .ntree-supp-head {
   font-size: var(--font-xs);
   color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   margin-bottom: var(--space-0-5);
 }
 
@@ -662,7 +658,7 @@ button.ntree-supp-icon:hover {
 }
 
 .ntree-menu .ntree-supp-act button {
-  padding: 3px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   font-size: var(--font-xs);
@@ -683,7 +679,7 @@ button.ntree-supp-icon:hover {
 .ntree-badge {
   flex: 0 0 auto;
   height: 17px;
-  padding: 0 5px;
+  padding: 0 var(--space-1);
   display: inline-grid;
   place-items: center;
   border-radius: var(--radius-sm);
@@ -729,7 +725,7 @@ button.ntree-supp-icon:hover {
 /* A badge drawn as a glyph (`BADGE_ICONS` in lib/nodeKind.ts): an access point's Wi-Fi mark, bare
    and grey — it says what the device is, which is less urgent than whether it is up. */
 .ntree-badge.is-wifi {
-  padding: 0 1px;
+  padding: 0;
   color: var(--text-tertiary);
   background: none;
 }

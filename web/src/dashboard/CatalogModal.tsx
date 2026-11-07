@@ -8,6 +8,8 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { Stack } from '../components/ui/Page';
+import { SectionHead } from '../components/ui/Section';
 import { useLayoutStoreContext } from './layoutStoreHook';
 import { SearchField } from '../components/ui/SearchField';
 import { catalogBySection } from './registry';
@@ -63,8 +65,8 @@ export function CatalogModal({
       <div className="catalog">
         {sections.length === 0 && <p className="muted">{t('common:filter.noMatch')}</p>}
         {sections.map(({ section, widgets }) => (
-          <div className="catalog-section" key={section}>
-            <h3 className="catalog-section-title">{t(section)}</h3>
+          <Stack gap={8} className="catalog-section" key={section}>
+            <SectionHead title={t(section)} />
             <div className="catalog-grid">
               {widgets.map((def) => (
                 <button
@@ -85,7 +87,7 @@ export function CatalogModal({
                 </button>
               ))}
             </div>
-          </div>
+          </Stack>
         ))}
       </div>
     </Modal>

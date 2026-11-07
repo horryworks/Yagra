@@ -27,7 +27,7 @@
 
 .heatmap-cell {
   height: 14px;
-  border-radius: 2px;
+  border-radius: 2px; /* ui-allow: a 14px heatmap cell; the smallest radius on the scale would turn the grid into pills */
   min-width: 8px;
 }
 

@@ -35,8 +35,6 @@
   fill: var(--text-tertiary);
   font-family: var(--ui-font-family);
   font-size: 3px; /* ui-allow: SVG user units inside a viewBox; the chart scales them */
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .gauge-sub {

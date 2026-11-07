@@ -10,6 +10,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { Segmented } from '../components/ui/Segmented';
+import { Field } from '../components/ui/Field';
+import { FieldGroup, Fields } from '../components/ui/FormLayout';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
 import { METHODS, toolById, type Tool, reportPathFor } from './data';
@@ -158,63 +160,53 @@ export function LaunchDrawer() {
             </div>
 
             <div className="ts-drawer-body">
-              <div className="ts-fgroup">
-                <label className="ts-flabel" htmlFor="ts-drawer-scope">
-                  {t('fields.scope')}
-                </label>
-                <ScopePicker
-                  id="ts-drawer-scope"
-                  className="ts-field-full"
-                  value={scope}
-                  onChange={setScope}
-                />
-                <span className="ts-fhint">{t(tool.scope)}</span>
-              </div>
+              <Fields>
+                <Field label={t('fields.scope')} htmlFor="ts-drawer-scope" status={t(tool.scope)}>
+                  <ScopePicker
+                    id="ts-drawer-scope"
+                    className="ts-field-full"
+                    value={scope}
+                    onChange={setScope}
+                  />
+                </Field>
 
-              <div className="ts-fgroup">
-                <span className="ts-flabel">{t('fields.timeWindow')}</span>
-                <Segmented
-                  options={WINDOWS}
-                  value={windowVal}
-                  onChange={setWindowVal}
-                  ariaLabel={t('fields.timeWindow')}
-                />
-              </div>
+                <FieldGroup label={t('fields.timeWindow')}>
+                  <Segmented
+                    options={WINDOWS}
+                    value={windowVal}
+                    onChange={setWindowVal}
+                  />
+                </FieldGroup>
 
-              <div className="ts-fgroup">
-                <span className="ts-flabel">{t('fields.depth')}</span>
-                <Segmented options={DEPTHS} value={depth} onChange={setDepth} ariaLabel={t('fields.depth')} />
-              </div>
+                <FieldGroup label={t('fields.depth')}>
+                  <Segmented options={DEPTHS} value={depth} onChange={setDepth} />
+                </FieldGroup>
 
-              {showSensitivity && (
-                <div className="ts-fgroup">
-                  <label className="ts-flabel" htmlFor="ts-drawer-sens">
-                    {t('fields.sensitivity')}
-                  </label>
-                  <div className="ts-slider-row">
-                    <input
-                      id="ts-drawer-sens"
-                      className="ts-slider"
-                      type="range"
-                      min={1}
-                      max={5}
-                      value={sensitivity}
-                      onChange={(e) => setSensitivity(Number(e.target.value))}
-                    />
-                    <span className="ts-slider-val">{SENS_LABELS[sensitivity - 1]}</span>
-                  </div>
-                </div>
-              )}
+                {showSensitivity && (
+                  <Field label={t('fields.sensitivity')} htmlFor="ts-drawer-sens">
+                    <div className="ts-slider-row">
+                      <input
+                        id="ts-drawer-sens"
+                        className="ts-slider"
+                        type="range"
+                        min={1}
+                        max={5}
+                        value={sensitivity}
+                        onChange={(e) => setSensitivity(Number(e.target.value))}
+                      />
+                      <span className="ts-slider-val">{SENS_LABELS[sensitivity - 1]}</span>
+                    </div>
+                  </Field>
+                )}
 
-              <div className="ts-fgroup">
-                <span className="ts-flabel">{t('fields.whenDone')}</span>
-                <Segmented
-                  options={NOTIFY}
-                  value={notify}
-                  onChange={setNotify}
-                  ariaLabel={t('fields.whenDone')}
-                />
-              </div>
+                <FieldGroup label={t('fields.whenDone')}>
+                  <Segmented
+                    options={NOTIFY}
+                    value={notify}
+                    onChange={setNotify}
+                  />
+                </FieldGroup>
+              </Fields>
             </div>
 
             <div className="ts-drawer-foot">

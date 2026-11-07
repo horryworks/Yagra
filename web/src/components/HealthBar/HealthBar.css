@@ -2,7 +2,7 @@
 .healthbar {
   display: inline-flex;
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-pill);
   overflow: hidden;
   background: var(--bg-tertiary);
   vertical-align: middle;

@@ -10,16 +10,6 @@
 }
 
 /* ── Builder: the section list and its catalog (the fields are the shared form parts) ── */
-.rb-sections-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-  border-top: var(--border-width) solid var(--border-color);
-  padding-top: var(--space-3);
-}
-
 .rb-catalog {
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
@@ -33,8 +23,6 @@
 }
 .rb-cat-group-title {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
   color: var(--text-tertiary);
   margin: var(--space-1) var(--space-1) var(--space-1-5);
 }
@@ -42,7 +30,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--space-2);
   padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-sm);
 }
@@ -72,7 +60,7 @@
 .rb-section {
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--bg-primary);
 }
 .rb-section-top {
@@ -138,7 +126,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   padding: var(--space-5);
 }
 /* A viewer the operator made taller (ADR-198) gives the frame all of it rather than 62% of the

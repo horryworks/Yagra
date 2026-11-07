@@ -42,7 +42,7 @@
 
 .events-msg-full {
   margin: 0;
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: var(--font-sm);

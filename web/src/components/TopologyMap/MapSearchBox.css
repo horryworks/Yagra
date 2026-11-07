@@ -19,7 +19,7 @@
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1) 10px;
+  gap: var(--space-1) var(--space-2);
   width: auto;
   min-width: 0;
 }
@@ -27,7 +27,7 @@
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1) 10px;
+  gap: var(--space-1) var(--space-2);
   min-width: 0;
   max-width: none;
   padding: 0;

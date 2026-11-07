@@ -32,7 +32,7 @@
   bottom: var(--gap);
   transform: translateX(-50%);
   max-width: calc(100% - 2 * var(--gap));
-  padding: var(--space-1) 10px;
+  padding: var(--space-1) var(--space-2);
   font-family: var(--ui-font-family);
   font-size: var(--font-sm);
   color: var(--text-primary);
@@ -124,11 +124,6 @@
 .topomap-legend-edge.l3_subnet {
   border-top-style: dashed;
   border-top-color: var(--text-tertiary);
-}
-
-.topomap-hint {
-  margin: 0 0 var(--space-2);
-  font-size: var(--font-sm);
 }
 
 /* ---- nodes ---- */

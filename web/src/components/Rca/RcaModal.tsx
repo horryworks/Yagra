@@ -25,6 +25,8 @@ import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { InfoPress } from '../ui/InfoTip';
 import { ScreenLink } from '../ui/ScreenLink';
+import { Stack } from '../ui/Page';
+import { Callout, SectionHead } from '../ui/Section';
 import './RcaModal.css';
 
 interface Props {
@@ -187,91 +189,95 @@ export function RcaModal({ node, check, onClose }: Props) {
         </>
       }
     >
-      {/* Shown before, during and after generation — the caveat is not a footnote to a result. */}
-      <p className="rca-disclaimer">{t('disclaimer')}</p>
+      <Stack gap={16}>
+        {/* Shown before, during and after generation — the caveat is not a footnote to a result. */}
+        <Callout tone="warning">{t('disclaimer')}</Callout>
 
-      {loading && <p className="rca-loading muted">{t('loading')}</p>}
-      {error && (
-        <p className="form-error">
-          {error.setup ? (
-            <Trans
-              t={t}
-              i18nKey="err.notConfigured"
-              components={{ lnk: <ScreenLink to="/settings/ai" /> }}
-            />
-          ) : (
-            error.text
-          )}
-        </p>
-      )}
-
-      {!loading && report && answer && (
-        <>
-          <p className="rca-summary">{answer.summary}</p>
-          <div className="rca-meta">
-            <span className={`rca-conf ${confidence}`}>{t(`confidence.${confidence}`)}</span>
-            {report.cached && (
-              <InfoPress infoKey="rca:meta.cachedWhy.info" className="rca-cached">
-                {t('meta.cached')}
-              </InfoPress>
-            )}
-            <span className="muted">
-              {t('meta.model', { provider: report.provider, model: report.model })}
-            </span>
-            <span className="muted">
-              {t('meta.generated', {
-                at: formatExactTime(report.generated_at),
-                by: report.created_by,
-              })}
-            </span>
-          </div>
-
-          {answer.raw ? (
-            // The model did not answer in the contracted shape. Showing its text as written beats
-            // rendering four empty sections and pretending it did.
-            <section className="rca-section">
-              <h3 className="rca-h">{t('section.raw')}</h3>
-              <p className="rca-note muted">{t('rawNote')}</p>
-              <pre className="rca-raw">{answer.raw}</pre>
-            </section>
-          ) : (
-            <>
-              {answer.root_cause && (
-                <section className="rca-section">
-                  <h3 className="rca-h">{t('section.rootCause')}</h3>
-                  <p className="rca-text">{answer.root_cause}</p>
-                </section>
-              )}
-              {answer.dependents && (
-                <section className="rca-section">
-                  <h3 className="rca-h">{t('section.dependents')}</h3>
-                  <p className="rca-text">{answer.dependents}</p>
-                </section>
-              )}
-              {/* Optional on the wire (serde default), so an older stored report may omit it. */}
-              {(answer.next_steps?.length ?? 0) > 0 && (
-                <section className="rca-section">
-                  <h3 className="rca-h">{t('section.nextSteps')}</h3>
-                  <ol className="rca-steps">
-                    {(answer.next_steps ?? []).map((s, i) => (
-                      <li key={i}>{s}</li>
-                    ))}
-                  </ol>
-                </section>
-              )}
-            </>
-          )}
-
-          <section className="rca-section">
-            <h3 className="rca-h">{t('section.evidence')}</h3>
-            {evidence ? (
-              <Evidence ev={evidence} />
+        {loading && <p className="rca-loading muted">{t('loading')}</p>}
+        {error && (
+          <p className="form-error">
+            {error.setup ? (
+              <Trans
+                t={t}
+                i18nKey="err.notConfigured"
+                components={{ lnk: <ScreenLink to="/settings/ai" /> }}
+              />
             ) : (
-              <p className="rca-note muted">{t('evidence.noneRecorded')}</p>
+              error.text
             )}
-          </section>
-        </>
-      )}
+          </p>
+        )}
+
+        {!loading && report && answer && (
+          <>
+            <Stack gap={8}>
+              <p className="rca-summary">{answer.summary}</p>
+              <div className="rca-meta">
+                <span className={`rca-conf ${confidence}`}>{t(`confidence.${confidence}`)}</span>
+                {report.cached && (
+                  <InfoPress infoKey="rca:meta.cachedWhy.info" className="rca-cached">
+                    {t('meta.cached')}
+                  </InfoPress>
+                )}
+                <span className="muted">
+                  {t('meta.model', { provider: report.provider, model: report.model })}
+                </span>
+                <span className="muted">
+                  {t('meta.generated', {
+                    at: formatExactTime(report.generated_at),
+                    by: report.created_by,
+                  })}
+                </span>
+              </div>
+            </Stack>
+
+            {answer.raw ? (
+              // The model did not answer in the contracted shape. Showing its text as written beats
+              // rendering four empty sections and pretending it did.
+              <Stack as="section" gap={8}>
+                <SectionHead title={t('section.raw')} />
+                <p className="rca-note muted">{t('rawNote')}</p>
+                <pre className="rca-raw">{answer.raw}</pre>
+              </Stack>
+            ) : (
+              <>
+                {answer.root_cause && (
+                  <Stack as="section" gap={8}>
+                    <SectionHead title={t('section.rootCause')} />
+                    <p className="rca-text">{answer.root_cause}</p>
+                  </Stack>
+                )}
+                {answer.dependents && (
+                  <Stack as="section" gap={8}>
+                    <SectionHead title={t('section.dependents')} />
+                    <p className="rca-text">{answer.dependents}</p>
+                  </Stack>
+                )}
+                {/* Optional on the wire (serde default), so an older stored report may omit it. */}
+                {(answer.next_steps?.length ?? 0) > 0 && (
+                  <Stack as="section" gap={8}>
+                    <SectionHead title={t('section.nextSteps')} />
+                    <ol className="rca-steps">
+                      {(answer.next_steps ?? []).map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ol>
+                  </Stack>
+                )}
+              </>
+            )}
+
+            <Stack as="section" gap={8}>
+              <SectionHead title={t('section.evidence')} />
+              {evidence ? (
+                <Evidence ev={evidence} />
+              ) : (
+                <p className="rca-note muted">{t('evidence.noneRecorded')}</p>
+              )}
+            </Stack>
+          </>
+        )}
+      </Stack>
     </Modal>
   );
 }

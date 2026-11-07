@@ -1,25 +1,16 @@
 .catalog {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--space-5);
   /* Keep the picker scrollable inside the modal for a long catalog. */
   max-height: 60vh;
   overflow-y: auto;
 }
 
-.catalog-section-title {
-  margin: 0 0 var(--space-2);
-  font-size: var(--font-xs);
-  font-weight: var(--weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-}
-
 .catalog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 .catalog-item {
@@ -27,7 +18,7 @@
   flex-direction: column;
   gap: var(--space-1);
   text-align: left;
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-primary);
@@ -71,8 +62,8 @@
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-bottom: 10px;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
   background: var(--bg-secondary);
 }
 

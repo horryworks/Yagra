@@ -96,6 +96,8 @@ import {
   widthFromKey,
 } from './nodesPaneWidth';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
+import { SectionHead } from '../components/ui/Section';
 import { Button } from '../components/ui/Button';
 import { ActionMenu } from '../components/ui/ActionMenu';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -1144,7 +1146,7 @@ export function NodesPage() {
     : null;
 
   return (
-    <div className={selected ? 'page-fill nodes-detail-active' : 'page-fill'}>
+    <Page layout="canvas" className={selected ? 'nodes-detail-active' : undefined}>
       <PageHeader
         title={t('nav:nodes.all')}
         writePermission="manage_config"
@@ -1238,7 +1240,7 @@ export function NodesPage() {
         ) : (
           <div className="nodes-pane">
           <div className="nodes-pane-head">
-            <span className="nodes-pane-title">{t('nav:groups.inventory')}</span>
+            <SectionHead title={t('nav:groups.inventory')} />
             <div className="nodes-pane-tools">
               {!isMobileView && (
                 <button
@@ -1836,7 +1838,7 @@ export function NodesPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }
 

@@ -36,7 +36,7 @@ import { splitInterfaceScopeId } from '../lib/interfaceScope';
 import { overriddenRows } from './thresholdOverrides';
 import { EmptyState } from '../components/ui/EmptyState';
 import { InfoPress } from '../components/ui/InfoTip';
-import { Card } from '../components/ui/Card';
+import { Callout } from '../components/ui/Section';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
@@ -423,14 +423,16 @@ export function ThresholdsPage() {
           making that one row undeletable, which would make it a different kind of row. The way
           back is the add button, beside the sentence rather than in it (ADR-200). */}
       {hasLiveness === false && (
-        <Card className="thresholds-warn-card">
-          <p className="thresholds-note">{t('thresholds.noLiveness')}</p>
-          {canConfig && (
-            <Button type="button" variant="outline" onClick={() => setAdding(true)}>
-              {t('thresholds.add')}
-            </Button>
-          )}
-        </Card>
+        <Callout tone="warning">
+          <Inline gap={8}>
+            <span>{t('thresholds.noLiveness')}</span>
+            {canConfig && (
+              <Button type="button" variant="outline" onClick={() => setAdding(true)}>
+                {t('thresholds.add')}
+              </Button>
+            )}
+          </Inline>
+        </Callout>
       )}
 
       {/* Its own box: the two tables below have fixed heights, and as the page's own children the

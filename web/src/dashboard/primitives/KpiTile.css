@@ -14,8 +14,6 @@
 
 .kpitile-caption {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-tertiary);
   margin-top: var(--space-1);
 }
@@ -23,7 +21,7 @@
 .kpitile-delta {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
   margin-top: var(--space-2);
   font-size: var(--font-sm);
   /* Delta is categorical (a change, not a node state) — keep it off the status channel. */

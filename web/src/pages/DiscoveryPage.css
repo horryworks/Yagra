@@ -21,7 +21,6 @@
   flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--space-2);
-  margin-top: var(--space-3);
 }
 
 /* The field takes the slack; the buttons keep their own width beside it. Wide enough for
@@ -50,32 +49,15 @@
   flex-direction: column;
   gap: var(--space-1);
   max-width: 640px;
-  margin-top: var(--space-2);
 }
 
-/* The folded settings (ADR-244 decision 3): closed, it is one line that says what will be used. */
-.disco-how {
-  margin-top: var(--space-3);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: 8px;
-}
-
-.disco-how > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-}
-
+/* The folded settings (ADR-244 decision 3) are a `Disclosure`: closed, its one line says what
+   will be used. Open, the credentials and the rest sit side by side. */
 .disco-how-t {
   font-weight: var(--weight-medium);
 }
 
 .disco-how-sum {
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
   min-width: 0;
 }
 
@@ -84,8 +66,6 @@
   flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--space-3) var(--space-5);
-  padding: var(--space-3);
-  border-top: var(--border-width) solid var(--border-color);
 }
 
 /* The two columns of the folded settings: the credentials, then the pool and the two switches. */
@@ -99,10 +79,6 @@
 
 html[data-viewport='mobile'] .disco-target .btn {
   min-height: var(--touch-target);
-}
-
-.disco-results-card {
-  margin-top: var(--space-4);
 }
 
 .disco-table {
@@ -199,41 +175,6 @@ html[data-viewport='mobile'] .disco-target .btn {
   white-space: nowrap;
 }
 
-/* Accepted target formats, shown under the scan row. */
-.disco-target-hint {
-  margin-top: var(--space-2);
-  font-size: var(--font-sm);
-  color: var(--text-tertiary);
-}
-
-.disco-target-hint .mono {
-  color: var(--text-secondary);
-}
-
-/* Page-level pointer to Credentials & secrets (add a credential without leaving discovery). */
-.disco-creds-link {
-  margin-top: var(--space-1-5);
-  font-size: var(--font-sm);
-  color: var(--text-tertiary);
-}
-
-.disco-creds-link a {
-  color: var(--accent-color);
-  text-decoration: none;
-}
-
-.disco-creds-link a:hover {
-  color: var(--accent-hover);
-}
-
-.disco-import {
-  margin-top: 14px;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: var(--space-3);
-}
-
 /* Explicit import outcome next to the button (status color + icon/text, not color alone). */
 .disco-import-ok {
   color: var(--status-ok);
@@ -289,7 +230,6 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
 .disco-seen-table {
   display: flex;
   flex-direction: column;
-  margin-top: var(--space-2);
 }
 
 /* ⚠️ ONE declaration for the header and every row — see the note on `.disco-head` above. */
@@ -359,13 +299,6 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   white-space: nowrap;
 }
 
-/* The coverage line when at least one router's ARP cache was truncated: the list is a floor, not a
-   total, and that has to read as a caveat rather than as ordinary help text. */
-.disco-seen-warn {
-  color: var(--status-warning);
-  font-size: var(--font-sm);
-}
-
 /* Same horizontal-scroll opt-out the candidates table takes (ui-conventions): this is a matrix-like
    screen with per-row selects, which do not survive being stacked into cards. */
 html[data-viewport='mobile'] .disco-seen-table {
@@ -422,28 +355,7 @@ html[data-viewport='mobile'] .disco-seen-row > :nth-child(6) {
   grid-column: 4;
 }
 
-/* Toolbar checkbox filter ("Answered only" / "Not yet monitored"). Sized like the toolbar's other
-   controls so the row reads as one band rather than a select beside a stray checkbox. */
-.disco-filter-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-/* ── Sweep routing + the scan list (ADR-068 Increment 1) ───────────────────────────────────────
-   Same tone as `.disco-seen-warn` and for the same kind of reason: the sentence is a caveat about
-   what the screen is about to do, not ordinary help text. It marks the two cases where the site a
-   sweep runs from is undecided — no pool chosen, or a pool with no live poller — because the server
-   resolves both to "whichever poller answers first". */
-.disco-pool-warn {
-  color: var(--status-warning);
-  font-size: var(--font-sm);
-}
-
+/* ── The scan list (ADR-068 Increment 1) ──────────────────────────────────────────────────── */
 .disco-scans {
   list-style: none;
   margin: 0;
@@ -573,9 +485,8 @@ html[data-viewport='mobile'] .disco-scan {
   font-size: var(--font-xs);
 }
 
-/* "Load more" under the unregistered list (ADR-179 Inc.6). */
+/* "Load more" under the unregistered list (ADR-179 Inc.6), centred: `Inline` has no centre. */
 .disco-seen-more {
   display: flex;
   justify-content: center;
-  margin-top: var(--space-3);
 }

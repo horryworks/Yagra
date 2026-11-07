@@ -4,7 +4,7 @@
    exact, gap-aligned height; `grid-auto-flow: dense` back-fills the holes a taller neighbour would
    otherwise leave → gap-free tiling. Cells stretch to fill their row area (no `align-items:start`). */
 .mydash-grid {
-  --mydash-gap: 18px;
+  --mydash-gap: 18px; /* ui-allow: the board's track geometry - a widget's height is rows x 240 plus the gaps, and the specs measure it */
   --mydash-row: 240px;
   display: grid;
   grid-template-columns: repeat(12, 1fr);
@@ -84,19 +84,5 @@
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: 40px 0;
-}
-
-/* Banner shown when persisting the layout to the server failed (B-F1). */
-.mydash-save-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  padding: 10px 14px;
-  background: var(--bg-tertiary);
-  border-left: 3px solid var(--status-critical);
-  border-radius: var(--radius);
-  color: var(--text-primary);
+  padding: var(--space-6) 0;
 }

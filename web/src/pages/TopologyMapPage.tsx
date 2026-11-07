@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
+import { Page } from '../components/ui/Page';
 import { TopologyMap } from '../components/TopologyMap/TopologyMap';
 import { TopologyMapSidePanel } from '../components/TopologyMap/TopologyMapSidePanel';
 import { isBundleId, type PlacedNode } from '../components/TopologyMap/graphLayout';
@@ -155,18 +156,19 @@ export function TopologyMapPage() {
   const levelName = level?.group?.name ?? t('map.root');
 
   function body() {
-    if (error && !level) return <Card><p className="muted">{error}</p></Card>;
-    if (!level) return <Card><p className="muted">{t('map.loading')}</p></Card>;
+    // A state card is wrapped, so the canvas's last child (which fills the height) is the wrapper
+    // and the card keeps its own height.
+    if (error && !level) return <div><Card><p className="muted">{error}</p></Card></div>;
+    if (!level) return <div><Card><p className="muted">{t('map.loading')}</p></Card></div>;
     const nothing =
       level.folders.length === 0 && level.nodes.length === 0 && level.direct_node_count === 0;
     if (nothing && !level.group) {
-      return <Card><p className="muted">{t('map.emptyInventory')}</p></Card>;
+      return <div><Card><p className="muted">{t('map.emptyInventory')}</p></Card></div>;
     }
     return (
       <>
         {level.overflow && (
-          <Card>
-            <p className="topomap-overflow-title">{t('map.overflow.title')}</p>
+          <Card title={t('map.overflow.title')}>
             <p className="muted">
               {t('map.overflow.body', { count: level.linked_node_count, max: level.node_limit })}
             </p>
@@ -215,7 +217,7 @@ export function TopologyMapPage() {
   ];
 
   return (
-    <div className="topomap-page">
+    <Page layout="canvas">
       <PageHeader
         title={t('nav:topology.map')}
         trail={trail}
@@ -223,6 +225,6 @@ export function TopologyMapPage() {
         actions={level ? <MapSearchBox state={mapSearch} /> : undefined}
       />
       {body()}
-    </div>
+    </Page>
   );
 }

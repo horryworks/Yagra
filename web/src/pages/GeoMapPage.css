@@ -1,18 +1,6 @@
 /* Topology ▸ Geo map. The map fills the pane; the outline and ocean are drawn in surface tokens so
    the whole thing themes with the rest of the product rather than looking like an embedded image. */
 
-.geopage {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.geopage-empty {
-  margin: 0 0 var(--space-2);
-}
-
 /* The map, its resize rail and its legend, no wider than the world is at the pane's height
    (ADR-188 Inc.2). The pane is border-box, so its inner height is the stored height less two
    borders; the outer width that puts exactly the world's width inside is that times the aspect,
@@ -29,10 +17,7 @@
 }
 
 /* The pane's height comes from the component (an inline style), because it is an operator
-   preference that persists — see `mapPaneHeight.ts`. `flex: 1` was tried first and collapsed the
-   pane to a ~150px strip: the app shell's content area is not a height-constrained flex column, so
-   there is no free space for a flex child to claim. The topology map uses an explicit height for
-   exactly the same reason. */
+   preference that persists and the rail below resizes it — see `mapPaneHeight.ts`. */
 .geopage-map {
   position: relative;
   overflow: hidden;
@@ -60,7 +45,7 @@
   width: 34px;
   height: 3px;
   background: var(--border-color);
-  border-radius: 2px;
+  border-radius: var(--radius-pill);
   transition: background var(--transition);
 }
 
@@ -311,7 +296,7 @@
 .geopage-ctl-relief {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
 }
 
 .geopage-ctl-daynight svg,
@@ -334,7 +319,7 @@
 .geopage-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: var(--space-3);
   margin: var(--space-2) 0 0;
   padding: 0;
   color: var(--text-tertiary);
@@ -345,7 +330,7 @@
 .geopage-legend li {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--space-1);
 }
 
 .geopage-swatch {
@@ -372,7 +357,7 @@
   width: 14px;
   height: 9px;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .geopage-sky-swatch {
@@ -382,7 +367,7 @@
   overflow: hidden;
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .geopage-sky-shade {
@@ -413,7 +398,7 @@
   font-size: var(--font-sm);
 }
 .geopage-pin-menu button {
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
   font-family: var(--ui-font-family);
   font-size: var(--font-sm);
   color: var(--text-primary);
@@ -432,7 +417,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-1) 0 10px;
+  padding: var(--space-1) var(--space-1) 0 var(--space-2);
 }
 .geopage-bubble-name {
   flex: 1;
@@ -450,8 +435,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1) 10px;
-  padding: var(--space-0-5) 10px var(--space-2);
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-0-5) var(--space-2) var(--space-2);
   font-size: var(--font-xs);
   color: var(--text-secondary);
 }
@@ -463,7 +448,7 @@
 .geopage-bubble-note,
 .geopage-bubble-more {
   margin: 0;
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
 }
 .geopage-bubble-list,
 .geopage-bubble-note {
@@ -499,7 +484,7 @@
 }
 .geopage-bubble-more {
   padding-top: 0;
-  padding-left: 28px;
+  padding-left: var(--space-5);
   font-size: var(--font-xs);
 }
 .geopage-bubble-actions {

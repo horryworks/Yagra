@@ -10,7 +10,7 @@ import type { TFunction } from 'i18next';
 import type { AnalysisJob } from '../types/api';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
-import { runColumns, runFilterLabels, RUN_STATES } from './runFilters';
+import { runColumns, RUN_STATES } from './runFilters';
 
 const job = (over: Partial<AnalysisJob> = {}): AnalysisJob => ({
   id: 'j1',
@@ -49,13 +49,6 @@ describe('the run-state vocabulary', () => {
     expect(state?.kind).toBe('enum');
     if (state?.kind !== 'enum') return;
     expect(state.options.map((o) => o.value)).toEqual([...RUN_STATES]);
-  });
-});
-
-describe('the column set', () => {
-  it('labels every column, so the bar never shows a raw key', () => {
-    const labels = runFilterLabels(t);
-    for (const c of COLS) expect(labels[c.key]).toBeTruthy();
   });
 });
 

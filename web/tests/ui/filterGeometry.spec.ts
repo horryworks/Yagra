@@ -53,9 +53,10 @@ test.describe('the toolbar the filter funnel sits in', () => {
   // the toolbar control height on a desktop and the touch target on a phone, from two files, and
   // both are individually valid — so nothing but a browser sees them disagree.
   test('the funnel is the same height as the clear button beside it', async ({ page }) => {
-    // Troubleshoot ▸ Runs is a header-less list; Settings ▸ Users was the subject here until it
-    // became a table with header funnels (ADR-246 Inc.5).
-    await page.goto('/troubleshoot/runs?state=failed');
+    // Device profiles opens its category filter from the toolbar, since the category is a group
+    // heading rather than a column. Settings ▸ Users (ADR-246 Inc.5) and Troubleshoot ▸ Runs
+    // (Inc.7) were the subject here until each became a table with header funnels.
+    await page.goto('/nodes/collection?category=__other');
     const funnel = page.locator('.mfilt-menu > .mfilt-btn');
     const clear = page.getByRole('button', { name: /Clear all filters/ });
     await expect(funnel).toBeVisible();

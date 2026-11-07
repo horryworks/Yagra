@@ -1,14 +1,7 @@
 /* Threshold rules — data-table standard v2. The chrome (toolbar, sticky header, hover
    actions, empty state) comes from styles/table.css; only the page-local bits live here: the
-   "no reachability rule" warning, the compact number inputs in the add modal, and the W/C
-   badge pairing used by both the modal and the Bounds cell. */
-
-.thresholds-note {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--font-sm);
-  line-height: 1.6;
-}
+   compact number inputs in the add modal, and the W/C badge pairing used by both the modal and
+   the Bounds cell. */
 
 /* The row under the level tabs that names the target, and the head of "Check a node" (ADR-230).
    Both are an `Inline`; the page spaces them. */
@@ -72,20 +65,6 @@ html[data-viewport='mobile'] .thresholds-bound-row {
 
 html[data-viewport='mobile'] .thresholds-bound-side {
   width: 100%;
-}
-
-/* The "no reachability rule" warning, in the warning colour: it is not an error (the operator may
-   have meant it) but it must not read as prose. */
-.thresholds-warn-card {
-  border-left: 2px solid var(--status-warning);
-}
-
-/* The sentence and the way back (the add button) on one line, wrapping on a narrow window. */
-.thresholds-warn-card .card-body {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 /* The "what it measures" cell. Rows are a fixed 44px (DataTable's virtualizer), so the sentence is

@@ -25,6 +25,7 @@ import {
   type SubnetOverlap,
   type SubnetOverlapsView,
 } from '../types/api';
+import { Inline, Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
@@ -331,18 +332,18 @@ export function SubnetOverlapsPage() {
           </p>
         )}
         {canConfig && o.status === 'open' && suggestion && (
-          <div className="so-actions">
+          <Inline gap={8}>
             <Button variant="outline" onClick={() => setNewRule(suggestion)}>
               {t('subnetOverlaps.actions.suggest', { word: suggestion.port_text })}
             </Button>
-          </div>
+          </Inline>
         )}
       </div>
     );
   };
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:nodes.subnetOverlaps')}
         writePermission="manage_config"
@@ -474,6 +475,6 @@ export function SubnetOverlapsPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }

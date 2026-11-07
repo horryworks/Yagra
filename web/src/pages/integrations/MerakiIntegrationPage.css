@@ -23,8 +23,6 @@
 
 .meraki-org-state {
   font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 /* Words, never a status colour: a green "enabled" on this row read as a node that is up, and the

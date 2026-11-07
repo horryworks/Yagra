@@ -1,7 +1,6 @@
 /* Persistent warning shown while editing the shared dashboard — changes apply to every user. */
 .shared-dash-warning {
-  margin-bottom: var(--space-4);
-  padding: 10px 14px;
+  padding: var(--space-2) var(--space-3);
   background: var(--bg-tertiary);
   border-left: 3px solid var(--status-warning);
   border-radius: var(--radius);
@@ -12,7 +11,6 @@
 /* The public board's "not published" line (ADR-200): the same place as the banner, without the
    warning's weight, because nothing is exposed while it shows. */
 p.public-dash-state {
-  margin: 0 0 var(--space-4);
   font-size: var(--font-sm);
 }
 
@@ -30,7 +28,7 @@ p.public-dash-state {
   color: var(--text-secondary);
   font-size: var(--font-sm);
   text-decoration: none;
-  padding: var(--space-1-5) 10px;
+  padding: var(--space-1-5) var(--space-2);
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
 }

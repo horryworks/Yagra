@@ -11,6 +11,7 @@ import { Button } from '../components/ui/Button';
 import { Field, TextInput, Select } from '../components/ui/Field';
 import { FieldRow, Fields } from '../components/ui/FormLayout';
 import { Stack } from '../components/ui/Page';
+import { SectionHead } from '../components/ui/Section';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
@@ -160,12 +161,14 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
           </Select>
         </Field>
 
-        <div className="rb-sections-head">
-          <span>{t('builder.sectionsCount', { count: sections.length })}</span>
-          <Button variant="ghost" onClick={() => setShowCatalog((v) => !v)}>
-            {showCatalog ? t('builder.hideCatalog') : t('builder.addSection')}
-          </Button>
-        </div>
+        <SectionHead
+          title={t('builder.sectionsCount', { count: sections.length })}
+          actions={
+            <Button variant="ghost" onClick={() => setShowCatalog((v) => !v)}>
+              {showCatalog ? t('builder.hideCatalog') : t('builder.addSection')}
+            </Button>
+          }
+        />
 
         {showCatalog && (
           <div className="rb-catalog">

@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { useCan, useScope } from '../store';
 import type { PrefixGap, PrefixGapSitesView, SiteGapStatus, SitePrefixGaps } from '../types/api';
+import { Page } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { Tabs } from '../components/ui/Tabs';
@@ -471,7 +472,7 @@ export function MissingPrefixesPage() {
   );
 
   return (
-    <div>
+    <Page layout="list">
       <PageHeader
         title={t('nav:nodes.missingPrefixes')}
         writePermission="manage_config"
@@ -583,6 +584,6 @@ export function MissingPrefixesPage() {
           }}
         />
       )}
-    </div>
+    </Page>
   );
 }

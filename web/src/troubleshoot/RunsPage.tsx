@@ -5,7 +5,6 @@
 
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Page } from '../components/ui/Page';
 import { AnalysisRuns } from './AnalysisRuns';
 import './troubleshoot.css';
@@ -13,16 +12,12 @@ import './troubleshoot.css';
 export function RunsPage() {
   const { t } = useTranslation('troubleshoot');
   return (
-    // A sections page, not a list one: the runs are a hand-drawn list (`AnalysisRuns`), not a
-    // `DataTable`, so the Card is its frame and the page scrolls (ADR-246 Inc.7 decides the list).
-    <Page layout="sections">
+    <Page layout="list">
       <PageHeader
         title={t('nav:troubleshoot.runs')}
         trail={[{ label: t('nav:sections.troubleshoot'), to: '/troubleshoot' }, { label: t('nav:troubleshoot.runs') }]}
       />
-      <Card title={t('runs.card')}>
-        <AnalysisRuns filterable />
-      </Card>
+      <AnalysisRuns />
     </Page>
   );
 }

@@ -13,8 +13,6 @@
   margin: 0 0 var(--space-2);
   font-size: var(--font-xs);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--text-tertiary);
 }
 
