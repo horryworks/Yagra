@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.72 — config 回収が SSH か telnet かを自分で探し、2 日取れないと知らせる。Active alerts が History と同じ表になる
+
 ### 破壊的変更
 
 - **登録した機器の認証情報の秘密を表示できるのは、管理者だけになりました。** 権限 Reveal credentials をオペレーターから外しました。オペレーターには Nodes ▸ Credentials & secrets の「秘密を表示」が出なくなり、`POST /api/v1/credentials/{id}/reveal` は 403 を返します。認証情報の作成・編集・入れ替えと、config 回収をオンにする操作は、今までどおりオペレーターもできます。API クライアント向け: config 回収をオンにする操作（`enabled: true` の `PUT /api/v1/nodes/{node_id}/config-backup` と `POST /api/v1/config-backups/switch`）と `POST /api/v1/nodes/{node_id}/config-backup/rescan` は、Reveal credentials の代わりに Manage credentials とサインインした人を求めます。API トークンは今までどおり断ります。rescan がトークンに返すコードは `token_not_permitted` から `login_not_permitted` に変わりました。
