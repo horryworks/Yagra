@@ -22,6 +22,9 @@
 //!   * [`vertex`] — Gemini inside the operator's GCP project. The recommended, in-region choice.
 //!   * [`gemini`] — the public Gemini API. Also owns the `generateContent` codec Vertex reuses.
 //!   * [`claude`] — the Anthropic Messages API.
+//!   * [`openai`] — an operator's own server speaking the OpenAI chat-completions shape (Ollama,
+//!     llama.cpp, vLLM, LM Studio). The one adapter whose endpoint is typed, not a constant
+//!     (ADR-247).
 //! * [`answer`] — reading the reply back, degrading to raw text rather than failing.
 //! * [`store`] — the provider config (sealed credential) and the generated reports.
 //! * [`orchestrator`] — the click-to-report path, and the caps that bound what a click can cost.
@@ -31,6 +34,7 @@ pub(crate) mod answer;
 pub(crate) mod claude;
 pub(crate) mod context;
 pub(crate) mod gemini;
+pub(crate) mod openai;
 pub(crate) mod orchestrator;
 pub(crate) mod prompt;
 pub(crate) mod provider;
@@ -59,6 +63,9 @@ pub enum ProviderKind {
     Gemini,
     /// The Anthropic Messages API. Leaves the operator's boundary.
     Claude,
+    /// An operator's own server speaking the OpenAI chat-completions shape, at a URL they type
+    /// (ADR-247). Whether it leaves the boundary depends on that URL.
+    Local,
 }
 
 // Strict: an unknown provider is a config error at the API edge, never a silent fallback to a
@@ -67,15 +74,25 @@ yagra_base::stored_enum::token_enum!(ProviderKind, [
     Vertex => "vertex",
     Gemini => "gemini",
     Claude => "claude",
+    Local => "local",
 ]);
 
 impl ProviderKind {
     /// Whether choosing this provider sends incident context outside the operator's own cloud.
     /// Drives the warning the Settings page shows: the operator should be picking their egress
     /// boundary deliberately, not discovering it later.
+    ///
+    /// `base_url` is read only for [`Self::Local`], whose answer is the address's: inside only when
+    /// it is a literal private, loopback or unique-local address ([`openai::url_leaves_boundary`]).
+    /// Pass `""` when there is no address yet, which answers "leaves" — the honest default for "we
+    /// do not know where this goes".
     #[must_use]
-    pub fn leaves_operator_boundary(self) -> bool {
-        !matches!(self, Self::Vertex)
+    pub fn leaves_operator_boundary(self, base_url: &str) -> bool {
+        match self {
+            Self::Vertex => false,
+            Self::Gemini | Self::Claude => true,
+            Self::Local => openai::url_leaves_boundary(base_url),
+        }
     }
 
     /// Placeholder model id for the Settings form. A hint, not an allowlist — model ids turn over
@@ -86,6 +103,7 @@ impl ProviderKind {
             Self::Vertex => vertex::SUGGESTED_MODEL,
             Self::Gemini => gemini::SUGGESTED_MODEL,
             Self::Claude => claude::SUGGESTED_MODEL,
+            Self::Local => openai::SUGGESTED_MODEL,
         }
     }
 
@@ -95,7 +113,7 @@ impl ProviderKind {
     pub fn suggested_location(self) -> Option<&'static str> {
         match self {
             Self::Vertex => Some(vertex::SUGGESTED_LOCATION),
-            Self::Gemini | Self::Claude => None,
+            Self::Gemini | Self::Claude | Self::Local => None,
         }
     }
 }
@@ -111,32 +129,34 @@ pub struct ProviderChoice {
     pub suggested_model: &'static str,
     pub suggested_location: Option<&'static str>,
     /// True when picking this sends hostnames, addresses, topology and syslog outside the
-    /// operator's own cloud.
+    /// operator's own cloud. For a provider that `needs_base_url` this is the answer for an address
+    /// not yet typed (true); the form judges the typed one with the rule both sides share.
     pub leaves_operator_boundary: bool,
     /// Whether this provider needs a GCP project + region (Vertex) rather than just an API key.
     pub needs_project: bool,
-    /// Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead).
+    /// Whether the operator types the server's address (ADR-247). Only the operator's own server.
+    pub needs_base_url: bool,
+    /// Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead; an
+    /// operator's own server may ask for no key at all).
     pub credential_optional: bool,
 }
 
-/// Every provider the operator may choose, in recommended-first order.
+/// Every provider the operator may choose, in recommended-first order (the order ALL lists them).
 #[must_use]
 pub fn provider_choices() -> Vec<ProviderChoice> {
-    [
-        ProviderKind::Vertex,
-        ProviderKind::Gemini,
-        ProviderKind::Claude,
-    ]
-    .into_iter()
-    .map(|kind| ProviderChoice {
-        key: kind.as_str(),
-        suggested_model: kind.suggested_model(),
-        suggested_location: kind.suggested_location(),
-        leaves_operator_boundary: kind.leaves_operator_boundary(),
-        needs_project: matches!(kind, ProviderKind::Vertex),
-        credential_optional: matches!(kind, ProviderKind::Vertex),
-    })
-    .collect()
+    ProviderKind::ALL
+        .iter()
+        .copied()
+        .map(|kind| ProviderChoice {
+            key: kind.as_str(),
+            suggested_model: kind.suggested_model(),
+            suggested_location: kind.suggested_location(),
+            leaves_operator_boundary: kind.leaves_operator_boundary(""),
+            needs_project: matches!(kind, ProviderKind::Vertex),
+            needs_base_url: matches!(kind, ProviderKind::Local),
+            credential_optional: matches!(kind, ProviderKind::Vertex | ProviderKind::Local),
+        })
+        .collect()
 }
 
 /// Everything needed to build a client, as the operator entered it.
@@ -147,9 +167,12 @@ pub struct ProviderConfig {
     pub project: String,
     /// Vertex only: the region. `global` is accepted; naming a region is the point of Vertex.
     pub location: String,
+    /// Local only: the server's OpenAI-compatible base URL, ending before `/chat/completions`
+    /// (ADR-247). Empty for every other provider, whose endpoint is a constant.
+    pub base_url: String,
     /// The decrypted secret: an API key for Gemini/Claude, or a service-account JSON for Vertex.
-    /// Empty on Vertex means Workload Identity via the metadata server. Never logged, never
-    /// returned by the API (ADR-018).
+    /// Empty on Vertex means Workload Identity via the metadata server, and on Local a server that
+    /// asks for no key. Never logged, never returned by the API (ADR-018).
     pub secret: Option<String>,
 }
 
@@ -170,6 +193,11 @@ pub fn build(kind: ProviderKind, cfg: &ProviderConfig) -> Result<Arc<dyn LlmProv
         )?),
         ProviderKind::Gemini => Arc::new(gemini::GeminiProvider::new(secret, &cfg.model)?),
         ProviderKind::Claude => Arc::new(claude::ClaudeProvider::new(secret, &cfg.model)?),
+        ProviderKind::Local => Arc::new(openai::OpenAiProvider::new(
+            &cfg.base_url,
+            &cfg.model,
+            Some(secret).filter(|s| !s.trim().is_empty()),
+        )?),
     })
 }
 
@@ -179,11 +207,7 @@ mod tests {
 
     #[test]
     fn provider_kinds_round_trip_their_stored_spelling() {
-        for kind in [
-            ProviderKind::Vertex,
-            ProviderKind::Gemini,
-            ProviderKind::Claude,
-        ] {
+        for kind in ProviderKind::ALL.iter().copied() {
             assert_eq!(ProviderKind::from_token(kind.as_str()), Some(kind));
         }
         // An unknown value is a config error, never a silent switch to another vendor.
@@ -193,10 +217,49 @@ mod tests {
     }
 
     #[test]
-    fn only_vertex_keeps_the_data_inside_the_operators_boundary() {
-        assert!(!ProviderKind::Vertex.leaves_operator_boundary());
-        assert!(ProviderKind::Gemini.leaves_operator_boundary());
-        assert!(ProviderKind::Claude.leaves_operator_boundary());
+    fn only_vertex_and_a_private_local_address_keep_the_data_inside() {
+        assert!(!ProviderKind::Vertex.leaves_operator_boundary(""));
+        assert!(ProviderKind::Gemini.leaves_operator_boundary(""));
+        assert!(ProviderKind::Claude.leaves_operator_boundary(""));
+        // The hosted three ignore an address; only Local reads it.
+        assert!(ProviderKind::Claude.leaves_operator_boundary("http://10.0.0.1/v1"));
+        assert!(!ProviderKind::Local.leaves_operator_boundary("http://10.0.0.1:8080/v1"));
+        assert!(ProviderKind::Local.leaves_operator_boundary("https://llm.example.com/v1"));
+        assert!(
+            ProviderKind::Local.leaves_operator_boundary(""),
+            "no address yet is answered as leaving"
+        );
+    }
+
+    #[test]
+    fn the_form_offers_every_provider_and_only_local_asks_for_an_address() {
+        let choices = provider_choices();
+        let keys: Vec<&str> = choices.iter().map(|c| c.key).collect();
+        assert_eq!(keys, ["vertex", "gemini", "claude", "local"]);
+        for c in &choices {
+            assert_eq!(c.needs_base_url, c.key == "local", "{}", c.key);
+        }
+        let local = choices.iter().find(|c| c.key == "local").unwrap();
+        assert!(local.credential_optional, "a server may ask for no key");
+        assert!(
+            local.leaves_operator_boundary,
+            "unknown until an address is typed"
+        );
+    }
+
+    #[test]
+    fn local_builds_without_a_key_but_not_without_an_address() {
+        let mut cfg = ProviderConfig {
+            model: "local".to_owned(),
+            ..Default::default()
+        };
+        assert!(
+            build(ProviderKind::Local, &cfg).is_err(),
+            "the URL is required"
+        );
+        cfg.base_url = "http://10.0.0.1:8080/v1".to_owned();
+        let p = build(ProviderKind::Local, &cfg).unwrap();
+        assert_eq!(p.name(), "local");
     }
 
     #[test]
@@ -217,6 +280,7 @@ mod tests {
             location: "us-central1".to_owned(),
             // Whitespace is treated as absent, not as an unusable key.
             secret: Some("   ".to_owned()),
+            ..Default::default()
         };
         let p = build(ProviderKind::Vertex, &cfg).unwrap();
         assert_eq!(p.name(), "vertex");
@@ -237,11 +301,7 @@ mod tests {
 
     #[test]
     fn each_kind_offers_a_placeholder_model() {
-        for kind in [
-            ProviderKind::Vertex,
-            ProviderKind::Gemini,
-            ProviderKind::Claude,
-        ] {
+        for kind in ProviderKind::ALL.iter().copied() {
             assert!(!kind.suggested_model().is_empty());
         }
     }

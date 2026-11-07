@@ -1,0 +1,11 @@
+-- 0175_llm_base_url - the address of an operator's own LLM server, for the `local` provider
+-- (ADR-247).
+--
+-- reversible: one column with a default. An older core reads `llm_config` through explicit column
+-- lists, so it never selects `base_url`; a row whose provider is `local` reads there as an
+-- unrecognised provider, which that core already reports as an error on the explain path and as a
+-- boundary warning on the settings page - neither stops it starting. No `schema_compat` floor, for
+-- the reason 0108 records.
+--
+-- Empty for the three hosted providers, whose endpoints stay constants in the code (ADR-029).
+ALTER TABLE llm_config ADD COLUMN base_url TEXT NOT NULL DEFAULT '';

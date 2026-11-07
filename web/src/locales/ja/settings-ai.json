@@ -10,12 +10,15 @@
     "label": "プロバイダ",
     "vertex": "Vertex AI — 自社 GCP プロジェクト内の Gemini",
     "gemini": "Gemini API",
-    "claude": "Claude API"
+    "claude": "Claude API",
+    "local": "自前のサーバー（OpenAI 互換）"
   },
 
   "egress": {
     "leaves": "ノード名・IP アドレス・トポロジ・syslog 本文が自社境界の外のベンダーへ送られます。ノードの認証情報は決して含まれません。",
     "confirmTitle": "障害データをベンダーへ送りますか？",
+    "confirmTitleHost": "障害データを {{host}} へ送りますか？",
+    "leavesHost": "ノード名・IP アドレス・トポロジ・syslog 本文が、私設アドレスではない {{host}} へ送られます。ノードの認証情報は決して含まれません。",
     "confirm": "保存して有効にする"
   },
 
@@ -23,7 +26,10 @@
     "model": "モデル",
     "project": "GCP プロジェクト",
     "location": "リージョン",
+    "baseUrl": "サーバーの URL",
     "apiKey": "API キー",
+    "apiKeyOptionalPlaceholder": "空欄: 鍵を求めないサーバー",
+    "removeKey": "保存済みの鍵を削除する",
     "serviceAccount": "サービスアカウント JSON",
     "serviceAccountPlaceholder": "空欄: GKE/GCE の Workload Identity",
     "useWorkloadIdentity": "保存済みの鍵を削除し、Workload Identity を使う",
@@ -55,6 +61,7 @@
     "test": "テストを実行できませんでした。",
     "modelRequired": "モデル ID は必須です。",
     "projectRequired": "Vertex AI には GCP プロジェクトとリージョンが必要です。",
+    "urlRequired": "サーバーの URL を http:// か https:// から入力してください。",
     "keyRequired": "このプロバイダには API キーが必要です。",
     "tokensRange": "出力上限は {{min}}〜{{max}} の範囲で指定してください。"
   }

@@ -629,9 +629,11 @@ const NEVER_FOLLOWS: &[&str] = &[
     "alerts/notify.rs",
     "yagra-netbox/lib.rs",
     "yagra-auth/oidc.rs",
+    // The one LLM adapter whose endpoint an operator types (ADR-247).
+    "rca/openai.rs",
 ];
 
-/// ADR-184: the three callers that must not follow a redirect still say so.
+/// ADR-184: the callers that must not follow a redirect still say so.
 ///
 /// Since the policy became an argument, relaxing it is a one-word edit that compiles, runs and
 /// passes every behavioural test that does not happen to redirect.

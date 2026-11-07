@@ -10,12 +10,15 @@
     "label": "Provider",
     "vertex": "Vertex AI — Gemini in your own GCP project",
     "gemini": "Gemini API",
-    "claude": "Claude API"
+    "claude": "Claude API",
+    "local": "Your own server (OpenAI-compatible)"
   },
 
   "egress": {
     "leaves": "Node names, IP addresses, topology and syslog lines are sent to the vendor, outside your boundary. Device credentials are never included.",
     "confirmTitle": "Send incident data to the vendor?",
+    "confirmTitleHost": "Send incident data to {{host}}?",
+    "leavesHost": "Node names, IP addresses, topology and syslog lines are sent to {{host}}, which is not a private address. Device credentials are never included.",
     "confirm": "Save and enable"
   },
 
@@ -23,7 +26,10 @@
     "model": "Model",
     "project": "GCP project",
     "location": "Region",
+    "baseUrl": "Server URL",
     "apiKey": "API key",
+    "apiKeyOptionalPlaceholder": "Empty: the server asks for no key",
+    "removeKey": "Remove the stored key",
     "serviceAccount": "Service account JSON",
     "serviceAccountPlaceholder": "Empty: Workload Identity on GKE/GCE",
     "useWorkloadIdentity": "Remove the stored key and use Workload Identity",
@@ -55,6 +61,7 @@
     "test": "The test could not be run.",
     "modelRequired": "A model id is required.",
     "projectRequired": "Vertex AI needs a GCP project and a region.",
+    "urlRequired": "Enter the server URL, starting with http:// or https://.",
     "keyRequired": "This provider needs an API key.",
     "tokensRange": "The output limit must be between {{min}} and {{max}}."
   }

@@ -77,7 +77,9 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],
-  'settings-ai': [736, 411], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  // ADR-247 (2026-11-08): the operator's own server - its label, the address field and its error,
+  // and the egress confirm that names the host it sends to. Before that: the JA term sweep (ADR-209).
+  'settings-ai': [1000, 565],
   'settings-auth': [3540, 2095],
   'settings-forwarding': [1695, 900],
   'settings-relocation': [3661, 1820], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)

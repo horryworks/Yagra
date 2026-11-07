@@ -10298,6 +10298,8 @@ export interface components {
              *     * `Some(key)` — replace it.
              */
             api_key?: string | null;
+            /** @description The server's base URL, for local only (ADR-247). Ignored and stored empty otherwise. */
+            base_url?: string;
             enabled?: boolean;
             location?: string;
             /** Format: int32 */
@@ -10314,6 +10316,8 @@ export interface components {
         };
         /** @description What `GET /api/v1/llm/config` returns. No secret, by construction. */
         LlmConfigView: {
+            /** @description The operator's own server (local, ADR-247); empty for every other provider. */
+            base_url: string;
             enabled: boolean;
             /** @description True once a credential has been stored, so the form can show "set" without revealing it. */
             has_api_key: boolean;
@@ -13298,14 +13302,20 @@ export interface components {
          *     definition, and the checkbox that warns about it reads the same value the adapter obeys.
          */
         ProviderChoice: {
-            /** @description Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead). */
+            /**
+             * @description Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead; an
+             *     operator's own server may ask for no key at all).
+             */
             credential_optional: boolean;
             key: string;
             /**
              * @description True when picking this sends hostnames, addresses, topology and syslog outside the
-             *     operator's own cloud.
+             *     operator's own cloud. For a provider that `needs_base_url` this is the answer for an address
+             *     not yet typed (true); the form judges the typed one with the rule both sides share.
              */
             leaves_operator_boundary: boolean;
+            /** @description Whether the operator types the server's address (ADR-247). Only the operator's own server. */
+            needs_base_url: boolean;
             /** @description Whether this provider needs a GCP project + region (Vertex) rather than just an API key. */
             needs_project: boolean;
             suggested_location?: string | null;

@@ -585,7 +585,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'llm provider',
       { en: enSettingsAi, ja: jaSettingsAi },
       'provider.',
-      ['vertex', 'gemini', 'claude'],
+      ['vertex', 'gemini', 'claude', 'local'],
     );
   });
 

@@ -45,6 +45,8 @@ pub struct LlmConfigView {
     pub model: String,
     pub project: String,
     pub location: String,
+    /// The operator's own server (local, ADR-247); empty for every other provider.
+    pub base_url: String,
     pub enabled: bool,
     pub max_output_tokens: u32,
     /// True once a credential has been stored, so the form can show "set" without revealing it.
@@ -64,6 +66,9 @@ pub struct LlmConfigInput {
     pub project: String,
     #[serde(default)]
     pub location: String,
+    /// The server's base URL, for local only (ADR-247). Ignored and stored empty otherwise.
+    #[serde(default)]
+    pub base_url: String,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -181,7 +186,7 @@ impl RcaRepo {
     /// the default state of every installation.
     pub async fn view(&self) -> anyhow::Result<Option<LlmConfigView>> {
         let row = sqlx::query(
-            "SELECT provider, model, project, location, enabled, max_output_tokens, \
+            "SELECT provider, model, project, location, base_url, enabled, max_output_tokens, \
              ciphertext IS NOT NULL AS has_key, updated_at FROM llm_config WHERE id = 1",
         )
         .fetch_optional(&self.pool)
@@ -192,15 +197,17 @@ impl RcaRepo {
         let provider: String = row.try_get("provider")?;
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
         let tokens: i32 = row.try_get("max_output_tokens")?;
+        let base_url: String = row.try_get("base_url")?;
         Ok(Some(LlmConfigView {
             leaves_operator_boundary: ProviderKind::from_token(&provider)
                 // An unrecognised stored value is treated as leaving the boundary: the honest
                 // default for "we are not sure where this goes" is to warn.
-                .is_none_or(ProviderKind::leaves_operator_boundary),
+                .is_none_or(|k| k.leaves_operator_boundary(&base_url)),
             provider,
             model: row.try_get("model")?,
             project: row.try_get("project")?,
             location: row.try_get("location")?,
+            base_url,
             enabled: row.try_get("enabled")?,
             max_output_tokens: u32::try_from(tokens).unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
             has_api_key: row.try_get("has_key")?,
@@ -225,7 +232,7 @@ impl RcaRepo {
 
     async fn load(&self, require_enabled: bool) -> anyhow::Result<Option<ActiveConfig>> {
         let row = sqlx::query(
-            "SELECT provider, model, project, location, enabled, max_output_tokens, \
+            "SELECT provider, model, project, location, base_url, enabled, max_output_tokens, \
              key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce FROM llm_config WHERE id = 1",
         )
         .fetch_optional(&self.pool)
@@ -262,6 +269,7 @@ impl RcaRepo {
                 model: row.try_get("model")?,
                 project: row.try_get("project")?,
                 location: row.try_get("location")?,
+                base_url: row.try_get("base_url")?,
                 secret,
             },
             max_output_tokens: u32::try_from(tokens).unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
@@ -274,6 +282,14 @@ impl RcaRepo {
     /// Returns operator-facing text for a malformed input (surfaced as 400), or the database error.
     pub async fn save(&self, input: &LlmConfigInput) -> anyhow::Result<()> {
         let kind = validate(input).map_err(|e| anyhow::anyhow!(e))?;
+        // Only the operator's own server has an address to store; the hosted three keep theirs in
+        // the code, and a stray value sent with them is dropped rather than kept for later.
+        let base_url = match kind {
+            ProviderKind::Local => {
+                super::openai::validate_base_url(&input.base_url).map_err(|e| anyhow::anyhow!(e))?
+            }
+            ProviderKind::Vertex | ProviderKind::Gemini | ProviderKind::Claude => String::new(),
+        };
         let tokens = i32::try_from(
             input
                 .max_output_tokens
@@ -307,6 +323,11 @@ impl RcaRepo {
         // key; carrying a Gemini key over to Claude is a different thing entirely, and it would
         // fail as an authentication error at the next incident rather than at save time. Switching
         // vendor without supplying a credential therefore clears it, and the form asks for one.
+        //
+        // **And to the same address** (`AND llm_config.base_url = EXCLUDED.base_url`, ADR-247). The
+        // URL of an operator's own server is typed, so without this a session that can save the
+        // page could point it somewhere else and have the stored key sent there with the next
+        // prompt. A changed URL therefore clears the key too, and the form asks for it again.
         let keep = matches!(sealed, Keep::AsIs);
 
         sqlx::query(SAVE_SQL)
@@ -318,6 +339,7 @@ impl RcaRepo {
             .bind(tokens)
             .bind_sealed_opt(replacement)
             .bind(keep)
+            .bind(base_url)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -399,25 +421,32 @@ impl RcaRepo {
 ///
 /// A named constant so the vendor-scoping in the `CASE` arms is assertable without a database —
 /// an in-memory fake cannot catch a mistake in SQL semantics, and this particular clause is what
-/// stops one vendor's credential from surviving a switch to another.
+/// stops one vendor's credential from surviving a switch to another, or one server's key from
+/// following its URL somewhere else (ADR-247).
 const SAVE_SQL: &str = "INSERT INTO llm_config \
      (id, provider, model, project, location, enabled, max_output_tokens, \
-      key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, updated_at) \
-     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now()) \
+      key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, base_url, updated_at) \
+     VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$13, now()) \
      ON CONFLICT (id) DO UPDATE SET \
        provider = EXCLUDED.provider, model = EXCLUDED.model, \
        project = EXCLUDED.project, location = EXCLUDED.location, \
        enabled = EXCLUDED.enabled, max_output_tokens = EXCLUDED.max_output_tokens, \
        key_id      = CASE WHEN $12 AND llm_config.provider = EXCLUDED.provider \
+                          AND llm_config.base_url = EXCLUDED.base_url \
                           THEN llm_config.key_id      ELSE EXCLUDED.key_id      END, \
        wrapped_dek = CASE WHEN $12 AND llm_config.provider = EXCLUDED.provider \
+                          AND llm_config.base_url = EXCLUDED.base_url \
                           THEN llm_config.wrapped_dek ELSE EXCLUDED.wrapped_dek END, \
        dek_nonce   = CASE WHEN $12 AND llm_config.provider = EXCLUDED.provider \
+                          AND llm_config.base_url = EXCLUDED.base_url \
                           THEN llm_config.dek_nonce   ELSE EXCLUDED.dek_nonce   END, \
        ciphertext  = CASE WHEN $12 AND llm_config.provider = EXCLUDED.provider \
+                          AND llm_config.base_url = EXCLUDED.base_url \
                           THEN llm_config.ciphertext  ELSE EXCLUDED.ciphertext  END, \
        ct_nonce    = CASE WHEN $12 AND llm_config.provider = EXCLUDED.provider \
+                          AND llm_config.base_url = EXCLUDED.base_url \
                           THEN llm_config.ct_nonce    ELSE EXCLUDED.ct_nonce    END, \
+       base_url    = EXCLUDED.base_url, \
        updated_at  = now()";
 
 /// Which of the three `api_key` intents a save carries.
@@ -497,6 +526,11 @@ pub fn validate(input: &LlmConfigInput) -> Result<ProviderKind, String> {
                 return Err("project/location are implausibly long".to_owned());
             }
         }
+        ProviderKind::Local => {
+            // The address is the whole configuration here, so a bad one is refused where the
+            // operator typed it. A key is optional: some servers ask for none.
+            super::openai::validate_base_url(&input.base_url)?;
+        }
     }
     Ok(kind)
 }
@@ -511,9 +545,34 @@ mod tests {
             model: "a-model".to_owned(),
             project: String::new(),
             location: String::new(),
+            base_url: String::new(),
             enabled: true,
             max_output_tokens: None,
             api_key: Some("k".to_owned()),
+        }
+    }
+
+    fn local(url: &str) -> LlmConfigInput {
+        LlmConfigInput {
+            base_url: url.to_owned(),
+            api_key: None,
+            ..input("local")
+        }
+    }
+
+    #[test]
+    fn local_needs_a_usable_address_and_nothing_else() {
+        assert_eq!(
+            validate(&local("http://10.0.0.1:8080/v1")).unwrap(),
+            ProviderKind::Local
+        );
+        for bad in [
+            "",
+            "llm.example.com",
+            "ftp://llm.example.com/v1",
+            "http://u:p@llm.example.com/v1",
+        ] {
+            assert!(validate(&local(bad)).is_err(), "{bad} must be refused");
         }
     }
 
@@ -600,7 +659,8 @@ mod tests {
         // Switching provider with no `api_key` must not carry the old vendor's key across: it
         // cannot work there, and the operator would meet it as a 502 mid-incident instead of as an
         // empty field on the form. Asserted against the SQL text because the guard lives in the
-        // statement — there is no fake that would notice it going missing.
+        // statement — there is no fake that would notice it going missing. The same arm keeps a
+        // key only at the same URL (ADR-247), so a typed address cannot take a stored key with it.
         for col in [
             "key_id",
             "wrapped_dek",
@@ -610,6 +670,7 @@ mod tests {
         ] {
             let arm = format!(
                 "{col:<11} = CASE WHEN $12 AND llm_config.provider = EXCLUDED.provider \
+                 AND llm_config.base_url = EXCLUDED.base_url \
                  THEN llm_config.{col}"
             );
             let normalized = SAVE_SQL.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -629,6 +690,7 @@ mod tests {
             model: "m".to_owned(),
             project: String::new(),
             location: String::new(),
+            base_url: String::new(),
             enabled: true,
             max_output_tokens: 8192,
             has_api_key: true,
@@ -685,6 +747,63 @@ mod tests {
             secret(repo.configured().await.unwrap()),
             None,
             "a Gemini key is not carried over to Claude"
+        );
+    }
+
+    /// ADR-247: a stored key stays with the server it was entered for. An edit at the same address
+    /// keeps it; pointing the page at another address drops it, so the key cannot be sent there.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_local_servers_key_does_not_follow_a_changed_url(pool: sqlx::PgPool) {
+        let repo = RcaRepo::new(pool, yagra_base::pgtest::kek());
+
+        let mut first = local("http://10.0.0.1:8080/v1/");
+        first.api_key = Some("local-key".to_owned());
+        repo.save(&first).await.unwrap();
+        let stored = repo.configured().await.unwrap().unwrap();
+        assert_eq!(stored.kind, ProviderKind::Local);
+        assert_eq!(
+            stored.provider.base_url, "http://10.0.0.1:8080/v1",
+            "stored normalized"
+        );
+        assert_eq!(stored.provider.secret.as_deref(), Some("local-key"));
+        let view = repo.view().await.unwrap().unwrap();
+        assert!(
+            !view.leaves_operator_boundary,
+            "a private literal is inside"
+        );
+
+        let mut edit = local("http://10.0.0.1:8080/v1");
+        edit.model = "another-model".to_owned();
+        repo.save(&edit).await.unwrap();
+        assert_eq!(
+            repo.configured()
+                .await
+                .unwrap()
+                .unwrap()
+                .provider
+                .secret
+                .as_deref(),
+            Some("local-key"),
+            "an edit at the same address keeps the key"
+        );
+
+        repo.save(&local("https://llm.example.com/v1"))
+            .await
+            .unwrap();
+        let moved = repo.configured().await.unwrap().unwrap();
+        assert_eq!(moved.provider.base_url, "https://llm.example.com/v1");
+        assert_eq!(
+            moved.provider.secret, None,
+            "the key does not follow the URL"
+        );
+        assert!(repo.view().await.unwrap().unwrap().leaves_operator_boundary);
+
+        // Moving to a hosted provider stores no address at all.
+        repo.save(&input("claude")).await.unwrap();
+        assert_eq!(
+            repo.configured().await.unwrap().unwrap().provider.base_url,
+            ""
         );
     }
 }

@@ -505,4 +505,57 @@ mod tests {
             "the configuration read handed the key back"
         );
     }
+
+    /// An operator's own server is stored with its address, which the read gives back with the
+    /// boundary judged from it (ADR-247); a bad address is a 400 naming it.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_local_server_is_stored_with_its_address(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/llm/config",
+            &tok,
+            Some(serde_json::json!({
+                "provider": "local",
+                "model": "qwen3",
+                "base_url": "http://10.0.0.1:8080/v1/",
+                "enabled": true,
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+
+        let (status, read) = send(&st, "GET", "/api/v1/llm/config", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{read}");
+        assert_eq!(read["config"]["provider"], "local");
+        assert_eq!(read["config"]["base_url"], "http://10.0.0.1:8080/v1");
+        assert_eq!(read["config"]["has_api_key"], false);
+        assert_eq!(read["config"]["leaves_operator_boundary"], false);
+        let local = read["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["key"] == "local")
+            .expect("local is offered");
+        assert_eq!(local["needs_base_url"], true);
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/llm/config",
+            &tok,
+            Some(serde_json::json!({
+                "provider": "local",
+                "model": "qwen3",
+                "base_url": "ftp://10.0.0.1/v1",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_llm_config");
+    }
 }

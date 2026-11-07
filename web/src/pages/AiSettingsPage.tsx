@@ -22,10 +22,12 @@ import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import type { LlmConfigResponse, LlmConfigView, LlmProviderChoice } from '../types/api';
 import { formatExactTime } from '../lib/format';
 import {
+  BASE_URL_EXAMPLE,
   DEFAULT_TOKENS,
   MAX_TOKENS,
   MIN_TOKENS,
   canTestAi,
+  egressHost,
   hasUsableStoredKey,
   keyIsRequired,
   needsEgressConfirm,
@@ -57,6 +59,7 @@ export function AiSettingsPage() {
   const [model, setModel] = useState('');
   const [project, setProject] = useState('');
   const [location, setLocation] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
   const [maxTokens, setMaxTokens] = useState(String(DEFAULT_TOKENS));
   const [enabled, setEnabled] = useState(false);
   const [apiKey, setApiKey] = useState('');
@@ -91,6 +94,7 @@ export function AiSettingsPage() {
       setModel(res.config.model);
       setProject(res.config.project);
       setLocation(res.config.location);
+      setBaseUrl(res.config.base_url);
       setMaxTokens(String(res.config.max_output_tokens));
       setEnabled(res.config.enabled);
     } else if (res.providers.length > 0) {
@@ -114,12 +118,14 @@ export function AiSettingsPage() {
     model,
     project,
     location,
+    baseUrl,
     maxTokens,
     enabled,
     apiKey,
     clearKey,
   };
-  const keyStored = hasUsableStoredKey(stored, provider);
+  const keyStored = hasUsableStoredKey(stored, provider, baseUrl);
+  const confirmHost = egressHost(choice, form);
   const keyRequired = keyIsRequired(stored, choice, provider);
 
   const dirty = () => {
@@ -229,6 +235,22 @@ export function AiSettingsPage() {
             />
           </Field>
 
+          {choice?.needs_base_url && (
+            <Field label={t('field.baseUrl')}>
+              <TextInput
+                id="ai-base-url"
+                className="mono"
+                value={baseUrl}
+                placeholder={BASE_URL_EXAMPLE}
+                disabled={!canSystem || loading || busy}
+                onChange={(e) => {
+                  setBaseUrl(e.target.value);
+                  dirty();
+                }}
+              />
+            </Field>
+          )}
+
           {choice?.needs_project && (
             <>
               <Field label={t('field.project')}>
@@ -267,7 +289,7 @@ export function AiSettingsPage() {
             {!clearKey && (
               <SecretInput
                 // A new provider, or a fresh read after a save, starts from the stored mark again.
-                key={`${provider}:${stored?.updated_at ?? ''}`}
+                key={`${provider}:${keyStored}:${stored?.updated_at ?? ''}`}
                 id="ai-key"
                 stored={keyStored}
                 value={apiKey}
@@ -276,7 +298,11 @@ export function AiSettingsPage() {
                 // Vertex runs on the instance's own identity.
                 placeholder={
                   choice?.credential_optional && !keyStored
-                    ? t('field.serviceAccountPlaceholder')
+                    ? t(
+                        choice.needs_base_url
+                          ? 'field.apiKeyOptionalPlaceholder'
+                          : 'field.serviceAccountPlaceholder',
+                      )
                     : undefined
                 }
                 disabled={!canSystem || loading || busy}
@@ -295,7 +321,7 @@ export function AiSettingsPage() {
                   setApiKey('');
                   dirty();
                 }}
-                label={t('field.useWorkloadIdentity')}
+                label={t(choice.needs_base_url ? 'field.removeKey' : 'field.useWorkloadIdentity')}
               />
             )}
           </Field>
@@ -367,7 +393,11 @@ export function AiSettingsPage() {
 
       {confirming && (
         <ConfirmDeleteModal
-          title={t('egress.confirmTitle')}
+          title={
+            confirmHost
+              ? t('egress.confirmTitleHost', { host: confirmHost })
+              : t('egress.confirmTitle')
+          }
           confirmLabel={t('egress.confirm')}
           onConfirm={() => api.saveLlmConfig(toConfigInput(stored, form))}
           errorFallback={t('err.save')}
@@ -379,7 +409,7 @@ export function AiSettingsPage() {
             load();
           }}
         >
-          {t('egress.leaves')}
+          {confirmHost ? t('egress.leavesHost', { host: confirmHost }) : t('egress.leaves')}
         </ConfirmDeleteModal>
       )}
     </Page>

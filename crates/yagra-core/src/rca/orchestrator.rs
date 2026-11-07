@@ -892,6 +892,7 @@ mod tests {
                 model: model.to_owned(),
                 project: "p".to_owned(),
                 location: "global".to_owned(),
+                base_url: String::new(),
                 secret: Some("key-1".to_owned()),
             },
             max_output_tokens: 8192,

@@ -10,14 +10,18 @@ import {
   aiFormChanged,
   canTestAi,
   DEFAULT_TOKENS,
+  egressHost,
   formFromStored,
   hasUsableStoredKey,
+  isUsableBaseUrl,
+  localUrlLeavesBoundary,
   keyIsRequired,
   needsEgressConfirm,
   toConfigInput,
   validateAiForm,
   type AiFormState,
 } from './aiConfigForm';
+import llmBaseUrlCases from './fixtures/llmBaseUrl.cases.json';
 
 const VERTEX: LlmProviderChoice = {
   key: 'vertex',
@@ -25,6 +29,7 @@ const VERTEX: LlmProviderChoice = {
   suggested_location: 'asia-northeast1',
   leaves_operator_boundary: false,
   needs_project: true,
+  needs_base_url: false,
   credential_optional: true,
 };
 
@@ -34,6 +39,7 @@ const CLAUDE: LlmProviderChoice = {
   suggested_location: null,
   leaves_operator_boundary: true,
   needs_project: false,
+  needs_base_url: false,
   credential_optional: false,
 };
 
@@ -43,6 +49,7 @@ function form(over: Partial<AiFormState> = {}): AiFormState {
     model: 'a-model',
     project: '',
     location: '',
+    baseUrl: '',
     maxTokens: String(DEFAULT_TOKENS),
     enabled: true,
     apiKey: '',
@@ -57,6 +64,7 @@ function storedConfig(over: Partial<LlmConfigView> = {}): LlmConfigView {
     model: 'a-model',
     project: '',
     location: '',
+    base_url: '',
     enabled: true,
     max_output_tokens: DEFAULT_TOKENS,
     has_api_key: true,
@@ -237,5 +245,63 @@ describe('confirming that incident data leaves the boundary', () => {
     expect(needsEgressConfirm(null, CLAUDE, form({ enabled: false }))).toBe(false);
     expect(needsEgressConfirm(null, VERTEX, form({ provider: 'vertex' }))).toBe(false);
     expect(needsEgressConfirm(null, undefined, form())).toBe(false);
+  });
+});
+
+const LOCAL: LlmProviderChoice = {
+  key: 'local',
+  suggested_model: 'qwen3',
+  suggested_location: null,
+  leaves_operator_boundary: true,
+  needs_project: false,
+  needs_base_url: true,
+  credential_optional: true,
+};
+
+describe("an operator's own server (ADR-247)", () => {
+  it('answers the boundary case table core shares (rca/openai.rs)', () => {
+    expect(llmBaseUrlCases.length).toBeGreaterThanOrEqual(20);
+    for (const c of llmBaseUrlCases) {
+      expect([c.url, localUrlLeavesBoundary(c.url)]).toEqual([c.url, c.leaves]);
+    }
+  });
+
+  it('requires a usable address and no key', () => {
+    const f = (baseUrl: string) => form({ provider: 'local', baseUrl });
+    expect(validateAiForm(null, LOCAL, f(''))).toBe('urlRequired');
+    expect(validateAiForm(null, LOCAL, f('llm.example.com/v1'))).toBe('urlRequired');
+    expect(validateAiForm(null, LOCAL, f('http://u:p@llm.example.com/v1'))).toBe('urlRequired');
+    expect(validateAiForm(null, LOCAL, f('http://llm.example.com/v1?k=1'))).toBe('urlRequired');
+    expect(validateAiForm(null, LOCAL, f('http://10.0.0.1:8080/v1'))).toBeNull();
+    expect(isUsableBaseUrl('https://llm.example.com/v1/')).toBe(true);
+  });
+
+  it('sends the address as core stores it, and none for a hosted provider', () => {
+    const local = toConfigInput(null, form({ provider: 'local', baseUrl: ' http://10.0.0.1/v1/ ' }));
+    expect(local.base_url).toBe('http://10.0.0.1/v1');
+    expect(toConfigInput(null, form()).base_url).toBe('');
+  });
+
+  it('stops claiming a stored key once the address changes', () => {
+    const stored = storedConfig({ provider: 'local', base_url: 'http://10.0.0.1/v1' });
+    expect(hasUsableStoredKey(stored, 'local', 'http://10.0.0.1/v1/')).toBe(true);
+    expect(hasUsableStoredKey(stored, 'local', 'http://10.0.0.2/v1')).toBe(false);
+    // So the save sends the empty box, which is what makes core drop the old key.
+    const input = toConfigInput(stored, form({ provider: 'local', baseUrl: 'http://10.0.0.2/v1' }));
+    expect(input.api_key).toBe('');
+  });
+
+  it('asks before sending to an address outside, and again for a new one', () => {
+    const outside = form({ provider: 'local', baseUrl: 'https://llm.example.com/v1' });
+    expect(needsEgressConfirm(null, LOCAL, outside)).toBe(true);
+    expect(egressHost(LOCAL, outside)).toBe('llm.example.com');
+    const inside = form({ provider: 'local', baseUrl: 'http://10.0.0.1:8080/v1' });
+    expect(needsEgressConfirm(null, LOCAL, inside)).toBe(false);
+
+    const stored = storedConfig({ provider: 'local', base_url: 'https://llm.example.com/v1' });
+    expect(needsEgressConfirm(stored, LOCAL, outside)).toBe(false);
+    const moved = form({ provider: 'local', baseUrl: 'https://other.example.com/v1' });
+    expect(needsEgressConfirm(stored, LOCAL, moved)).toBe(true);
+    expect(egressHost(CLAUDE, form())).toBeNull();
   });
 });

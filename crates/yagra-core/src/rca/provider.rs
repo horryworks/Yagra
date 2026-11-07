@@ -10,9 +10,16 @@
 //! would. Chaining providers would quietly move hostnames, addresses, topology and syslog across a
 //! trust boundary the operator picked on purpose — a privacy decision, not a reliability one.
 //!
-//! **Every adapter's host is a constant.** No config field selects an endpoint (`bigquery.rs`
-//! applies the same rule for the same reason): a settable base URL turns a settings page into an
-//! exfiltration channel for a prompt that carries the operator's network inventory.
+//! **Every hosted adapter's host is a constant.** No config field selects the endpoint of Vertex,
+//! Gemini or Claude (`bigquery.rs` applies the same rule for the same reason): a settable base URL
+//! turns a settings page into an exfiltration channel for a prompt that carries the operator's
+//! network inventory.
+//!
+//! **The one exception is [`crate::rca::openai`]** (ADR-247): an operator's own LLM server has no
+//! address Yagra could know, so its URL is typed on the settings page. What stands in for the
+//! constant there is narrower: only `ManageSystem` may set it, the client follows no redirect, a
+//! stored key is not carried to a changed URL (`store.rs`'s upsert), and the page warns whenever the
+//! address is not a literal private one.
 
 use std::time::Duration;
 
@@ -174,8 +181,9 @@ pub enum LlmError {
     /// The provider asked us to slow down.
     #[error("the provider is rate limiting us")]
     RateLimited,
-    /// No answer inside [`REQUEST_TIMEOUT`].
-    #[error("the provider did not answer within {}s", REQUEST_TIMEOUT.as_secs())]
+    /// No answer inside the adapter's per-call timeout ([`REQUEST_TIMEOUT`], or the longer one an
+    /// operator's own server gets).
+    #[error("the provider did not answer in time")]
     Timeout,
     /// Reached, but unhappy — 5xx, or a 4xx that is not auth or rate limiting.
     #[error("{0}")]
@@ -236,7 +244,19 @@ pub trait LlmProvider: Send + Sync {
 /// # Errors
 /// Returns operator-facing text when the client cannot be constructed.
 pub(crate) fn http_client() -> Result<reqwest::Client, String> {
-    yagra_base::http::builder(REQUEST_TIMEOUT, yagra_base::http::Redirects::Follow)
+    http_client_with(REQUEST_TIMEOUT, yagra_base::http::Redirects::Follow)
+}
+
+/// The same client with a timeout and redirect policy of the caller's choosing — for the adapter
+/// whose endpoint is not a constant (ADR-247), which needs a longer wait and must not be redirected.
+///
+/// # Errors
+/// Returns operator-facing text when the client cannot be constructed.
+pub(crate) fn http_client_with(
+    timeout: Duration,
+    redirects: yagra_base::http::Redirects,
+) -> Result<reqwest::Client, String> {
+    yagra_base::http::builder(timeout, redirects)
         .build()
         .map_err(|e| format!("HTTP client: {e}"))
 }

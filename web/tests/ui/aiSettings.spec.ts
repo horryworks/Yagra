@@ -13,8 +13,8 @@ import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 
-/** A stored Claude configuration with a key, sending switched off; two providers, one of which
- *  keeps the data inside the operator's cloud. Patched onto the generated body so the fixture
+/** A stored Claude configuration with a key, sending switched off; three providers, one of which
+ *  keeps the data inside the operator's cloud and one whose address is typed (ADR-247). Patched onto the generated body so the fixture
  *  follows `LlmConfigResponse` rather than transcribing it (ADR-052 decision 2). */
 function llmConfig(): Json {
   const body = defaultBodyFor('/api/v1/llm/config') as {
@@ -30,6 +30,7 @@ function llmConfig(): Json {
       suggested_location: 'asia-northeast1',
       leaves_operator_boundary: false,
       needs_project: true,
+      needs_base_url: false,
       credential_optional: true,
     },
     {
@@ -39,7 +40,18 @@ function llmConfig(): Json {
       suggested_location: null,
       leaves_operator_boundary: true,
       needs_project: false,
+      needs_base_url: false,
       credential_optional: false,
+    },
+    {
+      ...choice,
+      key: 'local',
+      suggested_model: 'qwen3',
+      suggested_location: null,
+      leaves_operator_boundary: true,
+      needs_project: false,
+      needs_base_url: true,
+      credential_optional: true,
     },
   ];
   body.config = {
@@ -48,6 +60,7 @@ function llmConfig(): Json {
     model: 'claude-sonnet-4-5',
     project: '',
     location: '',
+    base_url: '',
     enabled: false,
     max_output_tokens: 8192,
     has_api_key: true,
@@ -115,4 +128,33 @@ test('Test waits for a save, and the stored key is kept unless replaced', async 
   await expect(page.locator('.ui-setting').filter({ has: page.locator('#ai-tokens') })).toContainText(
     '(256–65536)',
   );
+});
+
+test("an operator's own server asks for its address, and the confirm names the host", async ({
+  page,
+  mock,
+}) => {
+  await page.goto('/settings/ai');
+  await page.locator('#ai-provider').selectOption('local');
+  await page.locator('#ai-model').fill('qwen3');
+  await page.getByRole('checkbox', { name: 'Enable AI-assisted analysis' }).check();
+
+  // No address: refused where it was typed, nothing sent.
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByText('Enter the server URL')).toBeVisible();
+  expect(puts(mock)).toHaveLength(0);
+
+  // An address outside: the confirm says where the data goes.
+  await page.locator('#ai-base-url').fill('https://llm.example.com/v1');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  const dialog = page.locator('[aria-modal="true"]');
+  await expect(dialog).toContainText('llm.example.com');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  expect(puts(mock)).toHaveLength(0);
+
+  // A private literal: saved without asking.
+  await page.locator('#ai-base-url').fill('http://10.0.0.1:8080/v1');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect.poll(() => puts(mock).length).toBe(1);
+  await expect(dialog).toHaveCount(0);
 });

@@ -37187,6 +37187,10 @@
             ],
             "description": "Write-only credential. Three-valued on purpose:\n* `None` — keep whatever is stored (so editing the model does not require re-entering a key);\n* `Some(\"\")` — clear it, which is how an operator moves Vertex onto Workload Identity;\n* `Some(key)` — replace it."
           },
+          "base_url": {
+            "type": "string",
+            "description": "The server's base URL, for local only (ADR-247). Ignored and stored empty otherwise."
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -37247,6 +37251,7 @@
           "model",
           "project",
           "location",
+          "base_url",
           "enabled",
           "max_output_tokens",
           "has_api_key",
@@ -37254,6 +37259,10 @@
           "updated_at"
         ],
         "properties": {
+          "base_url": {
+            "type": "string",
+            "description": "The operator's own server (local, ADR-247); empty for every other provider."
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -42921,19 +42930,24 @@
           "suggested_model",
           "leaves_operator_boundary",
           "needs_project",
+          "needs_base_url",
           "credential_optional"
         ],
         "properties": {
           "credential_optional": {
             "type": "boolean",
-            "description": "Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead)."
+            "description": "Whether the credential may be omitted (Vertex on GKE/GCE uses Workload Identity instead; an\noperator's own server may ask for no key at all)."
           },
           "key": {
             "type": "string"
           },
           "leaves_operator_boundary": {
             "type": "boolean",
-            "description": "True when picking this sends hostnames, addresses, topology and syslog outside the\noperator's own cloud."
+            "description": "True when picking this sends hostnames, addresses, topology and syslog outside the\noperator's own cloud. For a provider that `needs_base_url` this is the answer for an address\nnot yet typed (true); the form judges the typed one with the rule both sides share."
+          },
+          "needs_base_url": {
+            "type": "boolean",
+            "description": "Whether the operator types the server's address (ADR-247). Only the operator's own server."
           },
           "needs_project": {
             "type": "boolean",
