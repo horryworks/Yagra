@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **NodeDetail ▸ Config offers SSH only before you switch the backup on.** The box sits beside the switch while the backup is off, so a device that must never be reached over telnet is protected from its first fetch. Before, the box appeared only after switching on, and SSH that did not connect on the first fetch was followed by telnet straight away.
+
 ## v0.3.72 — Config backup finds SSH or telnet by itself and warns after 2 days without a fetch, and Active alerts reads like History
 
 ### Breaking changes

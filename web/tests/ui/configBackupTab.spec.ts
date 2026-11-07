@@ -130,7 +130,7 @@ test.describe('a node not backed up yet', () => {
   test('the switch turns it on as it is and asks for the first fetch', async ({ page, errors }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
     await expect(page.locator('.cfgb-card-off .cfgb-state')).toHaveText('Not backed up');
-    // Nothing to set before switching on: the settings wait for it.
+    // The settings wait for it to be on; only SSH only is offered before (the next test).
     await expect(page.locator('.cfgb-settings')).toHaveCount(0);
     const put = page.waitForRequest(isPut('/config-backup'));
     const fetched = page.waitForRequest(isPost('/config-backup/fetch'));
@@ -146,6 +146,17 @@ test.describe('a node not backed up yet', () => {
     });
     await fetched;
     expect(errors.uncaught).toEqual([]);
+  });
+
+  test('SSH only can be ticked before switching on, and the switch-on carries it', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    // The first fetch runs as soon as it is on, so the choice has to be offered before it (ADR-242).
+    const sshOnly = page.locator('.cfgb-card').getByRole('checkbox', { name: 'SSH only' });
+    await expect(sshOnly).not.toBeChecked();
+    await sshOnly.check();
+    const put = page.waitForRequest(isPut('/config-backup'));
+    await page.getByRole('switch', { name: 'Backup' }).click();
+    expect((await put).postDataJSON()).toMatchObject({ enabled: true, input: 'ssh' });
   });
 });
 

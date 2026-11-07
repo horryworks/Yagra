@@ -239,6 +239,11 @@
   gap: 8px;
 }
 
+/* SSH only, beside the switch while the backup is off: one row with it, so no margin of its own. */
+.cfgb-card-right .cfgb-card-ssh {
+  margin: 0;
+}
+
 /* The fix sits under the sentence that names the problem, not under the mark. */
 .cfgb-card-fixes {
   grid-column: 2 / -1;

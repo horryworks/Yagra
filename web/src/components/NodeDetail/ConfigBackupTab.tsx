@@ -371,6 +371,20 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                     {t('config.fetchNow')}
                   </Button>
                 )}
+                {/* While off, the one connection choice that must hold from the first fetch: the
+                    settings appear only once it is on, and SSH that does not connect on that fetch
+                    is followed by telnet straight away (ADR-242 decision 8). */}
+                {canStart && !v.enabled && (
+                  <label className="nd-check-toggle cfgb-card-ssh">
+                    <input
+                      type="checkbox"
+                      checked={sshOnly(form)}
+                      disabled={busy}
+                      onChange={(e) => setForm(withSshOnly(form, e.target.checked))}
+                    />
+                    <span>{t('config.input.ssh')}</span>
+                  </label>
+                )}
                 {canStart && (
                   <Switch
                     label={t('config.switch.label')}
