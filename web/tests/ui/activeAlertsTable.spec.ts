@@ -121,6 +121,15 @@ test('the Notes column stacks its notes and the row grows to hold them', async (
   expect(bottom).toBeLessThanOrEqual(box.y + box.height);
   const plain = page.locator('.dt-row', { hasText: `${MOCK_PREFIX}sw-3` }).first();
   expect(Math.round((await plain.boundingBox())!.height)).toBe(44);
+  // Its cells sit in the middle of the row, not at the top (`.dt-row-auto` would place them there).
+  const plainBox = (await plain.boundingBox())!;
+  const cell = (await plain.locator('.dt-cell').nth(1).boundingBox())!;
+  const off = cell.y + cell.height / 2 - (plainBox.y + plainBox.height / 2);
+  expect(Math.abs(off)).toBeLessThanOrEqual(1);
+  // And in the tall row, a one-line cell is centred against the stacked notes.
+  const tallCell = (await row.locator('.dt-cell').nth(1).boundingBox())!;
+  const tallOff = tallCell.y + tallCell.height / 2 - (box.y + box.height / 2);
+  expect(Math.abs(tallOff)).toBeLessThanOrEqual(1);
 });
 
 test('a folder scope keeps the alerts filed in it or beneath it', async ({ page }) => {

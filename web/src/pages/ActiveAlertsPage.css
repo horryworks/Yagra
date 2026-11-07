@@ -8,3 +8,11 @@
 .dt-row .btn.active-alerts-explain {
   height: 28px;
 }
+
+/* Cells sit in the middle of the row, like every fixed-height table, rather than at the top as
+   `.dt-row-auto` places them. That top alignment is for tables whose stacked cell is the subject
+   (a threshold's scope); here only the Notes column grows, and a one-line alert read 5px high in a
+   44px row. Two classes deep for the same load-order reason as above. */
+.active-alerts-page .dt-row-auto {
+  align-items: center;
+}

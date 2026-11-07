@@ -259,7 +259,7 @@ export function ActiveAlertsPage() {
   const filtered = isAnyFiltered(filterCols, filters) || scopeActive || onlySilenced;
 
   return (
-    <div className="page-fill">
+    <div className="page-fill active-alerts-page">
       <PageHeader
         title={t('nav:alerts.active')}
         writePermission="ack_alerts"
