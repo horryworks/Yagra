@@ -26,13 +26,13 @@
 
 .nd-av-bars {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   height: 44px;
   margin-top: var(--space-2);
   cursor: pointer;
   touch-action: none;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .nd-av-bars:focus-visible {
@@ -97,7 +97,7 @@
 .nd-av-legend span {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .nd-av-legend i {

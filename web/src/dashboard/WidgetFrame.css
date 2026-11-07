@@ -55,7 +55,7 @@
 .widgetframe-edit {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* Wrapper the settings popover measures from (it looks for the [aria-haspopup] inside this). */
@@ -180,7 +180,7 @@
   right: 6px;
   bottom: 24px;
   z-index: 3;
-  padding: 2px 7px;
+  padding: var(--space-0-5) 7px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   border: var(--border-width) solid var(--border-color);
@@ -227,7 +227,7 @@
     opacity: 1; /* always visible — nothing to reveal on hover */
   }
   .mydash-cell.is-editing .card-body {
-    margin-bottom: calc(var(--touch-target) + 2px);
+    margin-bottom: calc(var(--touch-target) + var(--space-0-5));
   }
 }
 
@@ -251,7 +251,7 @@
 .widgetframe-title {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -282,7 +282,7 @@
 .widgetframe-name {
   flex: 1;
   min-width: 0;
-  padding: 1px 4px;
+  padding: 1px var(--space-1);
   font: inherit;
   color: var(--text-primary);
   text-transform: none;

@@ -39,6 +39,17 @@ const E2E_BASE_URL = process.env.E2E_BASE_URL;
 
 const projects: Project[] = [
   { name: 'ui', testDir: './tests/ui', use: { ...devices['Desktop Chrome'] } },
+  // ADR-246: a picture of every screen against the last one taken (`tests/shots/shots.spec.ts`).
+  // Opt-in (`npm run test:shots`) and never committed: the baseline lives in `web/.shots/`, which
+  // is git-ignored, because a picture is a fact about one machine's fonts and is only worth
+  // comparing with another picture from the same machine.
+  {
+    name: 'shots',
+    testDir: './tests/shots',
+    snapshotPathTemplate: '{testDir}/../../.shots/{arg}{ext}',
+    use: { ...devices['Desktop Chrome'] },
+    timeout: 40_000,
+  },
 ];
 if (E2E_BASE_URL) {
   projects.push({

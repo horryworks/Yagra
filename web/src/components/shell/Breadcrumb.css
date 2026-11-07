@@ -23,6 +23,6 @@ a.breadcrumb-link:hover {
 }
 
 .breadcrumb-sep {
-  margin: 0 8px;
+  margin: 0 var(--space-2);
   color: var(--text-tertiary);
 }

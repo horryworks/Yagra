@@ -108,13 +108,13 @@
 .ytable-cell {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   padding: 0 14px;
   min-width: 0;
 }
 
 .ytable-cell.right {
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .ytable-cell.mono {
@@ -145,7 +145,7 @@
 .ytable-actions {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   opacity: var(--row-action-rest-opacity);
   transition: opacity var(--transition);
 }
@@ -194,7 +194,7 @@ html[data-viewport='mobile'] .ytable-row {
   gap: 3px;
   height: auto;
   min-height: var(--touch-target);
-  padding: 9px 12px;
+  padding: 9px var(--space-3);
 }
 
 html[data-viewport='mobile'] .ytable-cell {
@@ -214,7 +214,7 @@ html[data-viewport='mobile'] .ytable-cell.right {
 }
 
 html[data-viewport='mobile'] .ytable-actions {
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
 /* The scroll wrapper's desktop max-height cap is unnecessary once rows are cards and the pane/page
@@ -274,7 +274,7 @@ html[data-viewport='mobile'] .ytable {
 .yt-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 22px;
   padding: 0 9px;
   border-radius: 11px;
@@ -314,7 +314,7 @@ html[data-viewport='mobile'] .ytable {
 .yt-copy {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -345,7 +345,7 @@ html[data-viewport='mobile'] .ytable {
 .yt-entity {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -536,7 +536,7 @@ html[data-viewport='mobile'] .ytable {
 .yt-user {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -552,7 +552,7 @@ html[data-viewport='mobile'] .ytable {
 
 /* ============================================================ states */
 .yt-empty {
-  padding: 40px 16px;
+  padding: 40px var(--space-4);
   text-align: center;
   color: var(--text-secondary);
 }
@@ -560,7 +560,7 @@ html[data-viewport='mobile'] .ytable {
 .yt-empty-title {
   font-size: var(--font-md);
   color: var(--text-primary);
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 
 .yt-empty-sub {
@@ -570,7 +570,7 @@ html[data-viewport='mobile'] .ytable {
 
 .yt-skel-bar {
   height: 10px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: linear-gradient(
     90deg,
     var(--bg-tertiary),
@@ -635,7 +635,7 @@ html[data-viewport='mobile'] .ytable {
 
 /* Centered ghost pager under read-only / append-only logs ("Load older entries"). */
 .table-more {
-  margin-top: 12px;
+  margin-top: var(--space-3);
   display: flex;
   justify-content: center;
 }
@@ -650,7 +650,7 @@ html[data-viewport='mobile'] .ytable {
 
 .segmented button {
   height: 30px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   background: var(--bg-secondary);
   border: none;
   border-left: var(--border-width) solid var(--border-color);
@@ -691,7 +691,7 @@ html[data-viewport='mobile'] .ytable {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: var(--border-width) solid var(--border-color);
   transition: background var(--transition);
 }
@@ -713,7 +713,7 @@ html[data-viewport='mobile'] .ytable {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .il-line1 {
@@ -734,7 +734,7 @@ html[data-viewport='mobile'] .ytable {
 .il-line2 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--font-sm);
   color: var(--text-tertiary);
   flex-wrap: wrap;
@@ -747,7 +747,7 @@ html[data-viewport='mobile'] .ytable {
 .il-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex: none;
 }
 
@@ -755,13 +755,13 @@ html[data-viewport='mobile'] .ytable {
    uses this group, and it was the last whose actions stayed invisible until hovered. */
 .il-actions {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
   opacity: var(--row-action-rest-opacity);
   transition: opacity var(--transition);
 }
 
 .il-empty {
-  padding: 40px 16px;
+  padding: 40px var(--space-4);
   text-align: center;
   color: var(--text-secondary);
   font-size: var(--font-sm);
@@ -809,9 +809,9 @@ html[data-viewport='mobile'] .ytable {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 20px;
-  padding: 0 8px 0 7px;
+  padding: 0 var(--space-2) 0 7px;
   border-radius: 10px;
   font-size: var(--font-xs);
   border: var(--border-width) solid var(--border-color);
@@ -846,7 +846,7 @@ html[data-viewport='mobile'] .ytable {
   display: inline-flex;
   align-items: center;
   height: 18px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: 9px;
   font-size: var(--font-2xs);
   font-weight: var(--weight-medium);
@@ -865,7 +865,7 @@ html[data-viewport='mobile'] .identity-list {
 
 html[data-viewport='mobile'] .il-row {
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: var(--space-2) var(--space-3);
 }
 
 html[data-viewport='mobile'] .il-right {
@@ -886,7 +886,7 @@ html[data-viewport='mobile'] .il-right .muted {
    something is narrowing the list — so it reads as a way out of a state, not as a permanent
    control. Matches `.mfilt-btn`, its counterpart in the mobile sheet's footer. */
 .clear-filters {
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   min-height: var(--control-h);
   background: none;
   border: var(--border-width) solid var(--border-color);

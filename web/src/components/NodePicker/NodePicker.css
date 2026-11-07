@@ -9,7 +9,7 @@
 .nodepick-control {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 180px;
 }
 
@@ -74,7 +74,7 @@
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  padding: 6px;
+  padding: var(--space-1-5);
   z-index: 70;
   box-shadow: 0 8px 24px var(--overlay);
 }
@@ -87,7 +87,7 @@
 }
 
 .nodepick-search {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .nodepick-list {
@@ -103,7 +103,7 @@
   gap: 10px;
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -136,7 +136,7 @@
 }
 
 .nodepick-empty {
-  padding: 8px;
+  padding: var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--font-sm);
 }

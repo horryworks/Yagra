@@ -3,7 +3,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: var(--space-5);
   background: var(--bg-primary);
 }
 
@@ -22,17 +22,17 @@
 .login-brand {
   background: var(--brand-fixed);
   color: var(--on-brand);
-  padding: 32px 24px;
+  padding: var(--space-6) var(--space-5);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .login-brand-name {
   font-size: var(--font-4xl);
   font-weight: var(--weight-medium);
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 .login-brand-tag {
@@ -41,7 +41,7 @@
 }
 
 .login-form-side {
-  padding: 32px;
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -94,7 +94,7 @@
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .login-label {
@@ -108,7 +108,7 @@
 .login-error {
   margin: 0;
   font-size: var(--font-sm);
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-radius: var(--radius-sm);
   border: var(--border-width) solid;
 }
@@ -141,13 +141,13 @@
    sign-in path is the primary one on this screen, and this is the answer for the visitor who has
    no account at all. Centred so it reads as a separate offer rather than a footnote on the form. */
 .login-public {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   align-self: center;
   font-size: var(--font-sm);
   color: var(--text-secondary);
   text-decoration: none;
   border-bottom: var(--border-width) solid var(--border-color);
-  padding-bottom: 2px;
+  padding-bottom: var(--space-0-5);
 }
 
 .login-public:hover,

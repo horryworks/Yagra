@@ -16,7 +16,7 @@
   display: flex;
   align-items: center;
   height: 40px;
-  padding: 0 8px 0 14px;
+  padding: 0 var(--space-2) 0 14px;
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -47,7 +47,7 @@
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  padding: 6px 0;
+  padding: var(--space-1-5) 0;
 }
 
 .sidebar-group {
@@ -64,7 +64,7 @@
 /* Group header — same eyebrow treatment as the pane titles (INVENTORY etc.). Accent stays
    active-only, so headers use the tertiary text color, never brand orange. */
 .sidebar-group-head {
-  padding: 6px 14px 4px;
+  padding: var(--space-1-5) 14px var(--space-1);
   font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -78,15 +78,15 @@
 
 /* Collapsed rail: headers are hidden (label is empty), so separate groups with a thin rule. */
 .sidebar.collapsed .sidebar-group + .sidebar-group {
-  margin-top: 6px;
-  padding-top: 6px;
+  margin-top: var(--space-1-5);
+  padding-top: var(--space-1-5);
   border-top: var(--border-width) solid var(--border-color);
 }
 
 .sidebar-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: var(--row-h);
   padding: 0 14px;
   color: var(--text-secondary);
@@ -137,7 +137,7 @@
 .sidebar.collapsed .sidebar-item {
   height: auto;
   min-height: var(--row-h);
-  padding: 6px 10px;
+  padding: var(--space-1-5) 10px;
   align-items: center;
 }
 

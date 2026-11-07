@@ -14,6 +14,7 @@
     "i18n:check": "vitest run src/i18n.test.ts",
     "generate:api": "openapi-typescript src/api/openapi.json -o src/api/schema.d.ts",
     "test:ui": "playwright test --project=ui",
+    "test:shots": "playwright test --project=shots",
     "test:e2e": "playwright test --project=e2e",
     "test:e2e:upgrade": "node tests/e2e/waitForVersion.mjs && playwright test --project=e2e",
     "generate:widget-routes": "node scripts/gen-widget-routes.mjs"

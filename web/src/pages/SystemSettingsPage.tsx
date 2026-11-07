@@ -18,7 +18,9 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
+import { Page } from '../components/ui/Page';
 import { Card } from '../components/ui/Card';
+import { CheckField, SaveNote, SettingGroup, SettingRow } from '../components/ui/FormLayout';
 import { Button } from '../components/ui/Button';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { TextInput } from '../components/ui/Field';
@@ -105,56 +107,52 @@ export function SystemSettingsPage() {
   };
 
   return (
-    <div>
+    <Page layout="sections">
       <PageHeader
         title={t('nav:settings.system')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.system') }]}
       />
-      <Card title={t('settings.polling.title')}>
-        <div className="sys-setting">
-          <div className="sys-setting-label">
-            <div className="sys-setting-name">
-              {t('settings.polling.intervalName')}
-              <InfoTip
-                infoKey="system:settings.polling.info"
-                label={t('settings.polling.intervalName')}
-              />
-            </div>
-          </div>
-          <div className="sys-setting-control">
-            <TextInput
-              className="sys-setting-input"
-              value={value}
-              onChange={(e) => {
-                setValue(e.target.value);
-                setSaved(false);
-              }}
-              inputMode="numeric"
-              disabled={!canConfig || !loaded || busy}
-              aria-label={t('settings.polling.intervalAria')}
-            />
-            <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
-            <span className="sys-setting-band muted">
-              {t('settings.retention.band', { min: MIN, max: MAX })}
-            </span>
-            {canConfig && (
+      <Card
+        title={t('settings.polling.title')}
+        footer={
+          canConfig && (
+            <>
+              {error && <SaveNote tone="error">{error}</SaveNote>}
+              {saved && <SaveNote tone="ok">{t('settings.saved')}</SaveNote>}
               <Button variant="primary" onClick={save} disabled={busy || !loaded}>
                 {t('common:actions.save')}
               </Button>
-            )}
-          </div>
-        </div>
-        {!canConfig && (
-        <PermissionHint permission="manage_config" />
-      )}
-        {error && <p className="form-error">{error}</p>}
-        {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
+            </>
+          )
+        }
+      >
+        <SettingRow
+          label={t('settings.polling.intervalName')}
+          info={
+            <InfoTip infoKey="system:settings.polling.info" label={t('settings.polling.intervalName')} />
+          }
+        >
+          <TextInput
+            className="sys-setting-input"
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setSaved(false);
+            }}
+            inputMode="numeric"
+            disabled={!canConfig || !loaded || busy}
+            aria-label={t('settings.polling.intervalAria')}
+          />
+          <span className="muted">{t('settings.polling.seconds')}</span>
+          <span className="muted">{t('settings.retention.band', { min: MIN, max: MAX })}</span>
+        </SettingRow>
+        {!canConfig && <PermissionHint permission="manage_config" />}
       </Card>
       <NeighborCard canConfig={canConfig} />
       {/* Retention is how long each store keeps data — a deployment decision, not a monitoring
           one, so it asks for ManageSystem while the two cards above stay ManageConfig (ADR-057). */}
       <RetentionCard canSystem={canSystem} />
-    </div>
+    </Page>
   );
 }
 
@@ -242,104 +240,89 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
       : false;
 
   return (
-    <Card title={t('settings.neighbors.title')}>
+    <Card
+      title={t('settings.neighbors.title')}
+      footer={
+        canConfig && (
+          <>
+            {error && <SaveNote tone="error">{error}</SaveNote>}
+            {ok && <SaveNote tone="ok">{t('settings.saved')}</SaveNote>}
+            <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
+              {t('common:actions.save')}
+            </Button>
+          </>
+        )
+      }
+    >
       {DISCOVERY_WALKS.map((walk) => (
-        <div key={walk} className="sys-setting-group">
-          <div className="sys-setting">
-            <div className="sys-setting-label">
-              <div className="sys-setting-name">
-                <InfoPress infoKey={WALK_INFO[walk]}>
-                  {t(`settings.neighbors.walk.${walk}.name`)}
-                </InfoPress>
-              </div>
-              {/* The one walk whose cost scales with the network rather than the device: say so
-                  only once it is switched on, beside where its results land. */}
-              {walk === 'arp' && form?.arp.enabled && (
-                <div className="sys-setting-warn">
+        <SettingGroup key={walk}>
+          <SettingRow
+            label={
+              <InfoPress infoKey={WALK_INFO[walk]}>{t(`settings.neighbors.walk.${walk}.name`)}</InfoPress>
+            }
+            // The one walk whose cost scales with the network rather than the device: say so only
+            // once it is switched on, beside where its results land.
+            warn={
+              walk === 'arp' &&
+              form?.arp.enabled && (
+                <>
                   {t('settings.neighbors.walk.arp.warn')} <ScreenLink to="/nodes/discovery" />
-                </div>
-              )}
-            </div>
-            <div className="sys-setting-control">
-              <label className="sys-setting-toggle">
-                <input
-                  type="checkbox"
-                  checked={form?.[walk].enabled ?? false}
-                  disabled={!canConfig || !form || busy}
-                  onChange={(e) => patch(walk, { enabled: e.target.checked })}
-                />
-                <span>
-                  {form?.[walk].enabled
-                    ? t('settings.neighbors.enabledOn')
-                    : t('settings.neighbors.enabledOff')}
-                </span>
-              </label>
-            </div>
-          </div>
-          <div className="sys-setting">
-            <div className="sys-setting-label">
-              <div className="sys-setting-name">{t('settings.neighbors.intervalName')}</div>
-              <div className="sys-setting-help muted">
-                {describeCadence(Number(form?.[walk].intervalSecs ?? 0), t)}
-              </div>
-            </div>
-            <div className="sys-setting-control">
-              <TextInput
-                className="sys-setting-input"
-                value={form?.[walk].intervalSecs ?? ''}
-                onChange={(e) => patch(walk, { intervalSecs: e.target.value })}
-                inputMode="numeric"
-                disabled={!canConfig || !form || busy}
-                aria-label={`${t(`settings.neighbors.walk.${walk}.name`)} — ${t('settings.neighbors.intervalName')}`}
-              />
-              <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
-              <span className="sys-setting-band muted">
-                {t('settings.retention.band', {
-                  min: saved?.min_interval_secs ?? MIN_NEIGHBOR_INTERVAL_SECS,
-                  max: saved?.max_interval_secs ?? MAX_NEIGHBOR_INTERVAL_SECS,
-                })}
-              </span>
-            </div>
-          </div>
-        </div>
+                </>
+              )
+            }
+          >
+            <CheckField
+              checked={form?.[walk].enabled ?? false}
+              disabled={!canConfig || !form || busy}
+              onChange={(next) => patch(walk, { enabled: next })}
+              label={
+                form?.[walk].enabled ? t('settings.neighbors.enabledOn') : t('settings.neighbors.enabledOff')
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            label={t('settings.neighbors.intervalName')}
+            detail={describeCadence(Number(form?.[walk].intervalSecs ?? 0), t)}
+          >
+            <TextInput
+              className="sys-setting-input"
+              value={form?.[walk].intervalSecs ?? ''}
+              onChange={(e) => patch(walk, { intervalSecs: e.target.value })}
+              inputMode="numeric"
+              disabled={!canConfig || !form || busy}
+              aria-label={`${t(`settings.neighbors.walk.${walk}.name`)} — ${t('settings.neighbors.intervalName')}`}
+            />
+            <span className="muted">{t('settings.polling.seconds')}</span>
+            <span className="muted">
+              {t('settings.retention.band', {
+                min: saved?.min_interval_secs ?? MIN_NEIGHBOR_INTERVAL_SECS,
+                max: saved?.max_interval_secs ?? MAX_NEIGHBOR_INTERVAL_SECS,
+              })}
+            </span>
+          </SettingRow>
+        </SettingGroup>
       ))}
-      <div className="sys-setting">
-        <div className="sys-setting-label">
-          <div className="sys-setting-name">{t('settings.neighbors.scanLimit.name')}</div>
-        </div>
-        <div className="sys-setting-control">
-          <TextInput
-            className="sys-setting-input"
-            value={limit ?? ''}
-            onChange={(e) => {
-              setLimit(e.target.value);
-              setOk(false);
-            }}
-            inputMode="numeric"
-            disabled={!canConfig || limit === null || busy}
-            aria-label={t('settings.neighbors.scanLimit.name')}
-          />
-          <span className="sys-setting-unit muted">{t('settings.neighbors.scanLimit.unit')}</span>
-          <span className="sys-setting-band muted">
-            {t('settings.retention.band', {
-              min: saved?.scan_max_targets_min || MIN_SCAN_MAX_TARGETS,
-              max: saved?.scan_max_targets_max || MAX_SCAN_MAX_TARGETS,
-            })}
-          </span>
-        </div>
-      </div>
-      {canConfig && (
-        <div className="sys-setting-actions">
-          <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
-            {t('common:actions.save')}
-          </Button>
-        </div>
-      )}
-      {!canConfig && (
-        <PermissionHint permission="manage_config" />
-      )}
-      {error && <p className="form-error">{error}</p>}
-      {ok && <p className="sys-setting-saved">{t('settings.saved')}</p>}
+      <SettingRow label={t('settings.neighbors.scanLimit.name')}>
+        <TextInput
+          className="sys-setting-input"
+          value={limit ?? ''}
+          onChange={(e) => {
+            setLimit(e.target.value);
+            setOk(false);
+          }}
+          inputMode="numeric"
+          disabled={!canConfig || limit === null || busy}
+          aria-label={t('settings.neighbors.scanLimit.name')}
+        />
+        <span className="muted">{t('settings.neighbors.scanLimit.unit')}</span>
+        <span className="muted">
+          {t('settings.retention.band', {
+            min: saved?.scan_max_targets_min || MIN_SCAN_MAX_TARGETS,
+            max: saved?.scan_max_targets_max || MAX_SCAN_MAX_TARGETS,
+          })}
+        </span>
+      </SettingRow>
+      {!canConfig && <PermissionHint permission="manage_config" />}
     </Card>
   );
 }
@@ -407,7 +390,20 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
   const dirty = policy && form ? isDirty(form, policy.settings) : false;
 
   return (
-    <Card title={t('settings.retention.title')}>
+    <Card
+      title={t('settings.retention.title')}
+      footer={
+        canSystem && (
+          <>
+            {error && <SaveNote tone="error">{error}</SaveNote>}
+            {saved && <SaveNote tone="ok">{t('settings.saved')}</SaveNote>}
+            <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
+              {t('common:actions.save')}
+            </Button>
+          </>
+        )
+      }
+    >
       {(policy?.rows ?? []).map((row) => (
         <RetentionRowView
           key={row.subject}
@@ -420,18 +416,7 @@ function RetentionCard({ canSystem }: { canSystem: boolean }) {
           }}
         />
       ))}
-      {canSystem && (
-        <div className="sys-setting-actions">
-          <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
-            {t('common:actions.save')}
-          </Button>
-        </div>
-      )}
-      {!canSystem && (
-        <PermissionHint permission="manage_system" />
-      )}
-      {error && <p className="form-error">{error}</p>}
-      {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
+      {!canSystem && <PermissionHint permission="manage_system" />}
       {confirming && (
         <ConfirmDeleteModal
           title={t('settings.retention.title')}
@@ -482,16 +467,14 @@ function RetentionRowView({
           disabled={disabled}
           aria-label={name}
         />
-        <span className="sys-setting-unit muted">
-          {t(`settings.retention.unit.${row.unit || 'days'}`)}
-        </span>
-        <span className="sys-setting-band muted">{t('settings.retention.band', { min, max })}</span>
+        <span className="muted">{t(`settings.retention.unit.${row.unit || 'days'}`)}</span>
+        <span className="muted">{t('settings.retention.band', { min, max })}</span>
       </>
     );
   } else if (mode === 'store-owned') {
     const v = storeValue(row);
     control = (
-      <span className="sys-setting-readonly muted">
+      <span className="muted">
         {v.kind === 'reported'
           ? t('settings.retention.storeValue', { value: v.value })
           : v.kind === 'not-configured'
@@ -500,20 +483,19 @@ function RetentionRowView({
       </span>
     );
   } else {
-    control = (
-      <span className="sys-setting-readonly muted">{t('settings.retention.indefinite')}</span>
-    );
+    control = <span className="muted">{t('settings.retention.indefinite')}</span>;
   }
 
   return (
-    <div className="sys-setting">
-      <div className="sys-setting-label">
-        <div className="sys-setting-name">{name}</div>
-        <div className="sys-setting-help muted">
+    <SettingRow
+      label={name}
+      detail={
+        <>
           {row.store} — {row.note}
-        </div>
-      </div>
-      <div className="sys-setting-control">{control}</div>
-    </div>
+        </>
+      }
+    >
+      {control}
+    </SettingRow>
   );
 }

@@ -97,7 +97,7 @@
 .mp-site-name {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -117,7 +117,7 @@
 .mp-tag {
   margin-left: var(--space-1);
   font-size: var(--font-2xs);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
@@ -130,7 +130,7 @@
 .mp-kind {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   max-width: 100%;
   font-size: var(--font-sm);
@@ -148,16 +148,16 @@
 .mp-chips {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
 .mp-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-xs);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -195,7 +195,7 @@
 .mp-gaps .ytable-row {
   align-items: start;
   min-height: 0;
-  padding: 6px 0;
+  padding: var(--space-1-5) 0;
   font-size: var(--font-sm);
 }
 
@@ -210,7 +210,7 @@
 .mp-seen {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
   max-width: 100%;
 }
@@ -220,7 +220,7 @@
 .mp-links {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
   max-width: 100%;
 }

@@ -106,12 +106,13 @@ test('shortening a retention window asks first; lengthening one does not', async
 
 test('the ARP load warning appears only once the walk is switched on', async ({ page }) => {
   await page.goto('/settings/system');
-  const warn = page.locator('.sys-setting-warn');
-  await expect(page.getByRole('button', { name: 'ARP / IPv6 neighbor cache' })).toHaveCount(1);
+  const warn = page.locator('.ui-setting-warn');
+  const name = page.getByRole('button', { name: 'ARP / IPv6 neighbor cache' });
+  await expect(name).toHaveCount(1);
   await expect(warn).toHaveCount(0);
 
-  // The toggle beside the ARP name is the third walk's checkbox.
-  await page.locator('.sys-setting-toggle input').nth(2).check();
+  // The toggle in the ARP walk's own row (ADR-246 `SettingRow`), found through the name beside it.
+  await page.locator('.ui-setting', { has: name }).getByRole('checkbox').check();
   await expect(warn).toContainText('adds load on busy switches');
   await expect(warn.getByRole('link', { name: /Discovery/ })).toHaveAttribute(
     'href',

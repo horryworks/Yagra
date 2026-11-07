@@ -8,7 +8,7 @@
 .scope-picker-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
   cursor: pointer;
@@ -41,17 +41,17 @@
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  padding: 6px;
+  padding: var(--space-1-5);
   z-index: 70;
   box-shadow: 0 8px 24px var(--overlay);
 }
 
 .scope-pop-modes {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .scope-search {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .scope-list {
@@ -67,7 +67,7 @@
   gap: 10px;
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -105,7 +105,7 @@
 }
 
 .scope-empty {
-  padding: 8px;
+  padding: var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--font-sm);
 }

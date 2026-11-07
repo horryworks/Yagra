@@ -27,14 +27,14 @@
 .donut-center-value {
   fill: var(--text-primary);
   font-family: var(--ui-font-family);
-  font-size: 9px;
+  font-size: 9px; /* ui-allow: SVG user units inside a viewBox; the chart scales them */
   font-weight: var(--weight-medium);
 }
 
 .donut-center-sub {
   fill: var(--text-tertiary);
   font-family: var(--ui-font-family);
-  font-size: 3px;
+  font-size: 3px; /* ui-allow: SVG user units inside a viewBox; the chart scales them */
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -42,7 +42,7 @@
 .donut-legend {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -52,7 +52,7 @@
 .donut-legend-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--font-sm);
 }
 

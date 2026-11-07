@@ -12,7 +12,7 @@
 .grouppick-trigger {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   text-align: left;
   cursor: pointer;
@@ -38,11 +38,11 @@
 
 .grouppick-pop {
   min-width: 260px;
-  padding: 6px;
+  padding: var(--space-1-5);
 }
 
 .grouppick-search {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .grouppick-list {
@@ -57,7 +57,7 @@
   align-items: baseline;
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -84,7 +84,7 @@
 }
 
 .grouppick-empty {
-  padding: 8px;
+  padding: var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--font-sm);
 }

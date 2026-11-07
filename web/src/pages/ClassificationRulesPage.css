@@ -17,7 +17,7 @@
   display: grid;
   grid-template-columns: 48px 1fr;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   min-width: 0;
   font-size: var(--font-xs);
@@ -26,7 +26,7 @@
 /* Small "OID" / "descr" kind chip in the gutter. */
 .classrules-sig-kind {
   justify-self: start;
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);

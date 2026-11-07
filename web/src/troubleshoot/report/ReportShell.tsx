@@ -66,7 +66,7 @@ function Processing({
           ))}
         </div>
         {onCancel && (
-          <Button style={{ marginTop: 8 }} onClick={onCancel}>
+          <Button style={{ marginTop: 'var(--space-2)' }} onClick={onCancel}>
             {t('common:actions.cancel')}
           </Button>
         )}

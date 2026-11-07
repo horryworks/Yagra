@@ -36,7 +36,7 @@
 }
 
 .gsearch-section {
-  padding: 6px 10px;
+  padding: var(--space-1-5) 10px;
   background: var(--bg-tertiary);
   border-bottom: var(--border-width) solid var(--border-color);
   color: var(--text-tertiary);
@@ -82,7 +82,7 @@
 
 .gsearch-empty,
 .gsearch-foot {
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   color: var(--text-tertiary);
   font-size: var(--font-xs);
 }

@@ -92,7 +92,7 @@
   content: '';
   position: absolute;
   background: var(--border-color);
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   transition: background var(--transition);
 }
 
@@ -141,7 +141,7 @@
 .modal-head {
   display: flex;
   align-items: center;
-  padding: 14px 16px;
+  padding: var(--space-3) var(--space-4);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -169,15 +169,15 @@
 }
 
 .modal-body {
-  padding: 16px;
+  padding: var(--space-4);
   overflow-y: auto;
 }
 
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 16px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   border-top: var(--border-width) solid var(--border-color);
 }
 
@@ -186,8 +186,8 @@
 .modal-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 14px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-3);
 }
 
 .modal-field:last-child {
@@ -247,7 +247,7 @@ html[data-viewport='mobile'] .modal-field-row {
 }
 
 html[data-viewport='mobile'] .modal-field-row .modal-field {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-3);
 }
 
 /* A field whose value cannot be changed here, where a control would otherwise sit — an
@@ -259,7 +259,7 @@ html[data-viewport='mobile'] .modal-field-row .modal-field {
   display: flex;
   align-items: center;
   height: var(--control-h);
-  padding: 0 10px;
+  padding: 0 var(--space-2);
   color: var(--text-primary);
   font-size: var(--font-md);
 }
@@ -305,7 +305,7 @@ html[data-viewport='mobile'] .modal-footer {
   position: sticky;
   bottom: 0;
   background: var(--bg-secondary);
-  padding-bottom: calc(14px + var(--safe-bottom));
+  padding-bottom: calc(var(--space-3) + var(--safe-bottom));
 }
 
 /* Full-width action buttons in the sheet footer. */

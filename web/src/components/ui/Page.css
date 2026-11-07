@@ -1,0 +1,66 @@
+/* The body of a screen (ADR-246). One gap between whatever it stacks. */
+.ui-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The page owns the space under its header; the header's own margin would double it. A compound
+   selector, so it wins over `.pageheader` whatever order the two stylesheets load in. */
+.ui-page > .pageheader {
+  margin-bottom: 0;
+}
+
+/* A list or a canvas fills the height: the table or the surface below the header scrolls inside
+   itself rather than the page (ui-conventions.md, "Layout & information design"). */
+.ui-page.is-list,
+.ui-page.is-canvas {
+  height: 100%;
+}
+
+.ui-page.is-canvas > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.ui-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ui-inline {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ui-inline.justify-start {
+  justify-content: flex-start;
+}
+
+.ui-inline.justify-end {
+  justify-content: flex-end;
+}
+
+.ui-inline.justify-between {
+  justify-content: space-between;
+}
+
+.ui-inline.align-center {
+  align-items: center;
+}
+
+.ui-inline.align-start {
+  align-items: flex-start;
+}
+
+.ui-inline.align-baseline {
+  align-items: baseline;
+}
+
+.ui-inline.align-end {
+  align-items: flex-end;
+}

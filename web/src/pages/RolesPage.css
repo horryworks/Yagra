@@ -11,7 +11,7 @@
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
-  padding: 8px 0;
+  padding: var(--space-2) 0;
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -36,7 +36,7 @@
   color: var(--text-tertiary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
 }
 
 .roles-role-desc {
@@ -46,7 +46,7 @@
 }
 
 .roles-matrix-card {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .roles-matrix {
@@ -59,7 +59,7 @@
   letter-spacing: 0.01em;
   color: var(--text-tertiary);
   font-weight: var(--weight-medium);
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -75,7 +75,7 @@
 .roles-cell-perm {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .roles-perm-label {

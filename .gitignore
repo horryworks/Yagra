@@ -12,6 +12,8 @@ dist/
 *.zip
 # Playwright run artefacts (ADR-052) — traces, screenshots and reports for failed walks.
 web/test-results/
+# ADR-246 screen pictures (npm run test:shots) - one machine's baseline, never committed.
+web/.shots/
 web/playwright-report/
 web/blob-report/
 web/.playwright/

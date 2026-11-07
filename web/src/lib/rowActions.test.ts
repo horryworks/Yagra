@@ -22,7 +22,9 @@ describe('rowActionsWidth', () => {
   // a browser would notice — so read the CSS and fail here instead.
   it('agrees with the CSS it copies', () => {
     expect(read('../components/ui/IconButton.css')).toMatch(/\.icon-btn \{\s*width: 28px;/);
-    expect(read('../styles/table.css')).toMatch(/\.ytable-actions \{[^}]*gap: 4px;/);
+    // 4px, spelled as its step of the scale since ADR-246 (`components/ui/space.test.ts` pins the
+    // token's value), so a change of step fails here just as a change of number did.
+    expect(read('../styles/table.css')).toMatch(/\.ytable-actions \{[^}]*gap: var\(--space-1\);/);
     expect(read('../components/ui/DataTable.css')).toMatch(/\.dt-cell \{[^}]*padding: 0 14px;/);
   });
 });

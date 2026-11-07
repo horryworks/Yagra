@@ -33,7 +33,7 @@
 .mtopbar-home {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   background: none;
   border: none;
   padding: 0;
@@ -52,7 +52,7 @@
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: none;
 }
 
@@ -102,7 +102,7 @@
   left: 0;
   right: 0;
   display: flex;
-  padding: 8px max(10px, var(--safe-right)) 8px max(10px, var(--safe-left));
+  padding: var(--space-2) max(10px, var(--safe-right)) var(--space-2) max(10px, var(--safe-left));
   background: var(--bg-secondary);
   border-bottom: var(--border-width) solid var(--border-color);
   z-index: 30;

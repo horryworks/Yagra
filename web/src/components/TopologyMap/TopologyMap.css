@@ -32,7 +32,7 @@
   bottom: var(--gap);
   transform: translateX(-50%);
   max-width: calc(100% - 2 * var(--gap));
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   font-family: var(--ui-font-family);
   font-size: var(--font-sm);
   color: var(--text-primary);
@@ -54,13 +54,13 @@
   top: var(--gap);
   right: var(--gap);
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   z-index: 1;
 }
 .topomap-ctl {
   min-width: 30px;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-family: var(--ui-font-family);
   font-size: var(--font-sm);
   color: var(--text-secondary);

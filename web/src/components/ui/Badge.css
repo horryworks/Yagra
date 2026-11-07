@@ -2,7 +2,7 @@
   display: inline-flex;
   align-items: center;
   height: 18px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   font-size: var(--font-xs);
   font-weight: var(--weight-medium);

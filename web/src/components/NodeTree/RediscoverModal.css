@@ -12,8 +12,8 @@
 .rediscover-grid {
   display: grid;
   grid-template-columns: auto minmax(5em, auto) minmax(0, 1fr) minmax(0, 1fr) auto;
-  column-gap: 12px;
-  row-gap: 6px;
+  column-gap: var(--space-3);
+  row-gap: var(--space-1-5);
   align-items: center;
   font-size: var(--font-sm);
 }

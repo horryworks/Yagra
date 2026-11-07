@@ -14,7 +14,7 @@
 
 /* Separate the second section (rules) from the first (channels). */
 .routing-rules-section {
-  margin-top: 24px;
+  margin-top: var(--space-5);
 }
 
 /* The env default route above the rules table (ADR-200 Inc.28): name, "all alerts", the kinds. */
@@ -22,8 +22,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 8px;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
   font-size: var(--font-sm);
 }
 
@@ -31,7 +31,7 @@
 .routing-zone {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -42,8 +42,8 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
 }
 
 /* Each level keeps its name and count on one line: the shared control stretches its buttons to
@@ -63,21 +63,21 @@
 .routing-grouping .table-section-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* Channel multi-select inside the add-rule modal. */
 .routing-picks {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  padding: 8px 0 2px;
+  gap: var(--space-3);
+  padding: var(--space-2) 0 var(--space-0-5);
 }
 
 .routing-pick {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
   cursor: pointer;
 }
@@ -91,14 +91,14 @@
 }
 
 .routing-test-result {
-  margin: 12px 0 0;
+  margin: var(--space-3) 0 0;
   overflow-wrap: anywhere;
 }
 
 /* The delivery log (ADR-195). An explicit height: the page is not a full-height flex column, so a
    virtualized table needs a bounded box to scroll inside. */
 .routing-log-section {
-  margin-top: 24px;
+  margin-top: var(--space-5);
 }
 
 .routing-log-table {
@@ -109,23 +109,23 @@
 }
 
 .routing-log-detail {
-  padding: 8px 16px 12px;
+  padding: var(--space-2) var(--space-4) var(--space-3);
   font-size: var(--font-sm);
 }
 
 .routing-log-verdict {
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-1-5);
   font-weight: var(--weight-medium);
 }
 
 .routing-log-line {
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-1-5);
   overflow-wrap: anywhere;
 }
 
 .routing-log-response {
-  margin: 4px 0 0;
-  padding: 6px 8px;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1-5) var(--space-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--bg-secondary);
@@ -134,6 +134,6 @@
 }
 
 .routing-log-attempts {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   padding-left: 20px;
 }

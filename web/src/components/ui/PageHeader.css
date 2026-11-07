@@ -1,14 +1,14 @@
 .pageheader {
-  margin-bottom: 18px;
+  margin-bottom: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .pageheader-row {
   display: flex;
   align-items: flex-end;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .pageheader-title {
@@ -19,7 +19,7 @@
 .pageheader-titlerow {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -28,7 +28,7 @@
 }
 
 .pageheader-note {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -37,7 +37,7 @@
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 /* Mobile (ADR-027): let the action cluster wrap under the title instead of squeezing it, and keep
@@ -45,7 +45,7 @@
 html[data-viewport='mobile'] .pageheader-row {
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
 html[data-viewport='mobile'] .pageheader-row > div:first-child {

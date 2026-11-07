@@ -1,7 +1,7 @@
 .pref-row {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: var(--space-5);
 }
 
 .pref-label {
@@ -21,7 +21,7 @@
 
 .pref-seg-btn {
   height: 30px;
-  padding: 0 16px;
+  padding: 0 var(--space-4);
   background: var(--bg-secondary);
   border: none;
   border-right: var(--border-width) solid var(--border-color);

@@ -41,7 +41,7 @@
   .infotip-btn {
     width: 32px;
     height: 32px;
-    margin: -7px;
+    margin: calc(-1 * var(--space-1-5));
   }
 }
 
@@ -86,7 +86,7 @@ button.infopress.badge:not(.badge-neutral) {
 
 button.infopress.badge::after {
   content: '▾';
-  margin-left: 4px;
+  margin-left: var(--space-1);
   font-size: var(--font-2xs);
   opacity: 0.8;
 }
@@ -104,7 +104,7 @@ button.infopress.badge:focus-visible {
 /* The popover: a short paragraph that never runs past a phone's edge. */
 .infotip-pop {
   max-width: min(320px, calc(100vw - 32px));
-  padding: 10px 12px;
+  padding: var(--space-2) var(--space-3);
   color: var(--text-primary);
   font-size: var(--font-sm);
   line-height: 1.5;

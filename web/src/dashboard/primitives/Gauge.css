@@ -2,7 +2,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .gauge-svg {
@@ -27,14 +27,14 @@
 .gauge-value {
   fill: var(--text-primary);
   font-family: var(--ui-font-family);
-  font-size: 9px;
+  font-size: 9px; /* ui-allow: SVG user units inside a viewBox; the chart scales them */
   font-weight: var(--weight-medium);
 }
 
 .gauge-label {
   fill: var(--text-tertiary);
   font-family: var(--ui-font-family);
-  font-size: 3px;
+  font-size: 3px; /* ui-allow: SVG user units inside a viewBox; the chart scales them */
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }

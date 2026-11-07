@@ -5,7 +5,7 @@
 .alert-subject-org {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   max-width: 100%;
 }

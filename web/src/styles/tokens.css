@@ -224,16 +224,27 @@
   --z-modal: 100;
   --z-popover: 110;
 
+  /* The three radii (ADR-246 decision 1). A pill is a shape, not a size: anything fully rounded
+     at its ends (a badge, a chip, a switch track) uses it whatever its height. */
   --radius: 6px;
   --radius-sm: 4px;
+  --radius-pill: 999px;
   --border-width: 0.5px;
   --gap: 12px;
-  /* Spacing scale (4px base) — use instead of raw px for gaps/margins/padding. */
+  /* The spacing scale - the only values a padding, margin or gap may take (ADR-246 decision 1).
+     Eight steps: 2, 4, 6, 8, 12, 16, 24, 32px. The names keep the original 4px-base numbering, so
+     the half steps read as such (`--space-1-5` is 1.5 x 4px). `web/src/uiBudget.test.ts` counts
+     every raw px value against a ceiling that only goes down, and the edit hook in
+     `.claude/hooks/ui-guard.js` reports one the moment it is written. A value between two steps
+     goes to the smaller one inside a component and to the larger one between blocks. */
+  --space-0-5: 2px;
   --space-1: 4px;
+  --space-1-5: 6px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
+  --space-6: 32px;
   --row-h: 30px;
   --topbar-h: 52px;
   --sidebar-w: 220px;

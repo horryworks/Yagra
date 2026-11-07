@@ -24,7 +24,7 @@
 .fwd-health {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -36,7 +36,7 @@
 /* Two fields side by side in the modal, stacking on narrow viewports. */
 .fwd-row {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .fwd-row > .modal-field {
@@ -48,8 +48,8 @@
 .fwd-mode {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 .fwd-mode > select {
@@ -60,8 +60,8 @@
 .fwd-cond {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1-5);
 }
 
 .fwd-cond > select {

@@ -10,29 +10,40 @@
 .card-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
-.card-title {
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
+/* `.card-title` is the one heading look, in Section.css (ADR-246 decision 3). */
 
 .card-actions {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .card-body {
-  padding: 16px;
+  padding: var(--space-4);
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* Inside a migrated screen the body spaces what it holds (ADR-246 Inc.2). Scoped to `.ui-page`
+   so a screen not yet moved onto the parts, whose children carry their own margins, does not get
+   the gap on top of them; Inc.8 makes it every Card's. */
+.ui-page .card-body {
+  gap: var(--space-3);
+}
+
+/* The action row: under the content, right-aligned like a dialog's footer. */
+.card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
 }

@@ -181,7 +181,7 @@
 .nd-nb-dl {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 2px var(--space-3);
+  gap: var(--space-0-5) var(--space-3);
   margin: 0;
   font-size: var(--font-sm);
 }
@@ -208,7 +208,7 @@
 .nd-nb-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -246,12 +246,12 @@
 .nd-nb-caps {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .nd-nb-cap {
   font-size: var(--font-xs);
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
@@ -297,7 +297,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   font-size: var(--font-sm);
   min-width: 0;
 }
@@ -355,7 +355,7 @@
 /* On a phone the timestamp column would leave nothing for the change itself. */
 html[data-viewport='mobile'] .nd-nb-entry {
   grid-template-columns: 1fr;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 html[data-viewport='mobile'] .nd-nb-table {
@@ -380,7 +380,7 @@ html[data-viewport='mobile'] .nd-nb-table {
 
 .nd-nb-setup-open {
   align-self: flex-start;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   height: 22px;
   font-family: var(--ui-font-family);
   font-size: var(--font-xs);

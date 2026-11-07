@@ -11,16 +11,16 @@
 .tok-copyrow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 /* The raw token: monospace, selectable, wraps rather than overflowing the modal. */
 .tok-token {
   flex: 1;
   min-width: 0;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg-tertiary);
   color: var(--text-primary);
   word-break: break-all;
@@ -30,9 +30,9 @@
 /* The ready-to-paste MCP client command. */
 .tok-cmd {
   display: block;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   word-break: break-all;
@@ -46,13 +46,13 @@
 .tok-surfaces {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .tok-surface {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
   cursor: pointer;
 }
 
@@ -78,14 +78,14 @@
 /* Surface badges in the list. */
 .tok-surface-badges {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--space-1);
   flex-wrap: wrap;
 }
 
 .tok-owner {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* Marks an owner that signs in through an IdP — the case where going quiet ends the token. Paired

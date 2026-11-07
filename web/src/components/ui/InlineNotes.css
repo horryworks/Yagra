@@ -7,7 +7,7 @@
 
 /* The pencil sits in an uppercase section title, so it is drawn small and unpadded. */
 .inline-notes-pen {
-  padding: 0 2px;
+  padding: 0 var(--space-0-5);
 }
 
 /* The note itself is the button that starts editing, so it must still read as text. */
@@ -18,8 +18,8 @@
   background: none;
   border: none;
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
-  margin-left: -6px;
+  padding: var(--space-1) var(--space-1-5);
+  margin-left: calc(-1 * var(--space-1-5));
   font: inherit;
   cursor: text;
 }

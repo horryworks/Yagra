@@ -2,7 +2,7 @@
   display: grid;
   /* row-label column + N equal cell columns */
   grid-template-columns: auto repeat(var(--heat-cols), 1fr);
-  gap: 2px;
+  gap: var(--space-0-5);
   align-items: center;
 }
 
@@ -21,7 +21,7 @@
 .heatmap-rowhead {
   font-size: var(--font-xs);
   color: var(--text-secondary);
-  padding-right: 6px;
+  padding-right: var(--space-1-5);
   white-space: nowrap;
 }
 

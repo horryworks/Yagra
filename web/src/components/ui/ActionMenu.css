@@ -12,16 +12,16 @@
   max-width: 280px;
   display: flex;
   flex-direction: column;
-  padding: 4px;
+  padding: var(--space-1);
 }
 
 .amenu-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: none;
   border: none;
   border-radius: var(--radius-sm);

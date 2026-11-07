@@ -5,9 +5,9 @@
 .zclock-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: var(--control-h);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   background: none;
   border: var(--border-width) solid transparent;
   border-radius: var(--radius);
@@ -36,18 +36,18 @@
 
 .zclock-pop {
   width: 300px;
-  padding: 6px;
+  padding: var(--space-1-5);
 }
 
 .zclock-searchbox {
   width: 100%;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .zclock-search {
   width: 100%;
   height: var(--control-h);
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   background: var(--bg-tertiary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
@@ -71,9 +71,9 @@
 .zclock-item {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: none;
   border: none;
   border-radius: var(--radius);
@@ -98,12 +98,12 @@
 
 .zclock-sep {
   height: 0;
-  margin: 4px 0;
+  margin: var(--space-1) 0;
   border-top: var(--border-width) solid var(--border-color);
 }
 
 .zclock-empty {
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--font-sm);
 }
@@ -135,14 +135,14 @@ html[data-viewport='mobile'] .zclock-item {
 }
 
 .zclock-country {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   color: var(--text-tertiary);
   font-size: var(--font-xs);
 }
 
 .zmap {
   position: relative;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .zmap-svg {
@@ -193,7 +193,7 @@ html[data-viewport='mobile'] .zclock-item {
 .zmap-tip {
   position: absolute;
   transform: translate(-50%, calc(-100% - 8px));
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   background: var(--bg-primary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);

@@ -16,7 +16,7 @@
 
 /* ---------------- header (shared by node + group) ---------------- */
 .nd-head {
-  padding: 18px 20px 16px;
+  padding: 18px 20px var(--space-4);
   border-bottom: var(--border-width) solid var(--border-color);
   flex: none;
 }
@@ -26,7 +26,7 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-tertiary);
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -64,8 +64,8 @@
 .nd-namerow {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 2px;
+  gap: var(--space-3);
+  margin-top: var(--space-0-5);
   flex-wrap: wrap;
 }
 
@@ -129,12 +129,12 @@
 .nd-actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .nd-sub {
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
   display: flex;
@@ -155,7 +155,7 @@
 .nd-statepill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 22px;
   padding: 0 9px;
   border-radius: 11px;
@@ -196,7 +196,7 @@
 }
 
 .nd-statepill-n {
-  padding-left: 6px;
+  padding-left: var(--space-1-5);
   border-left: var(--border-width) solid currentColor;
   font-variant-numeric: tabular-nums;
 }
@@ -217,7 +217,7 @@
   background: none;
   border: var(--border-width) solid transparent;
   border-radius: var(--radius);
-  padding: 1px 6px;
+  padding: 1px var(--space-1-5);
   font: inherit;
   font-size: var(--font-xs);
   color: var(--accent-color);
@@ -283,7 +283,7 @@
 
 .nd-tab {
   height: 40px;
-  padding: 0 2px;
+  padding: 0 var(--space-0-5);
   margin-right: 22px;
   background: none;
   border: none;
@@ -312,7 +312,7 @@
   font-size: var(--font-xs);
   color: var(--text-tertiary);
   background: var(--bg-tertiary);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   min-width: 17px;
   height: 16px;
   padding: 0 5px;
@@ -339,7 +339,7 @@
 }
 
 .nd-tabpad {
-  padding: 16px 20px;
+  padding: var(--space-4) 20px;
 }
 
 /* Events tab: a bounded flex column so the virtualized DataTable sizes + scrolls inside .nd-body. */
@@ -348,7 +348,7 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 16px 20px;
+  padding: var(--space-4) 20px;
   gap: 10px;
 }
 
@@ -382,7 +382,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 /* The title claims the slack so any number of trailing controls (range picker, the URL/DNS
@@ -404,7 +404,7 @@
    monitor's check settings and the node's own), so a device's single-part form stays unheaded.
    The first one carries no rule above it — the modal header is already the line. */
 .nd-edit-section {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
   padding-top: 14px;
   border-top: var(--border-width) solid var(--border-color);
   font-size: var(--font-sm);
@@ -529,7 +529,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 /* ---------------- Overview ---------------- */
 .nd-overview {
-  padding: 16px 20px 22px;
+  padding: var(--space-4) 20px 22px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -589,7 +589,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-alerts {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .nd-alert {
@@ -601,7 +601,7 @@ html[data-viewport='mobile'] .nd-extract-row {
      page, and an interface alert spells out a port too (`ifInErrors on port 12 above 0`), so the
      one-line assumption this rule was written under no longer holds at every width. */
   flex-wrap: wrap;
-  row-gap: 2px;
+  row-gap: var(--space-0-5);
 }
 
 /* min-width:0 lets the breach text be the part that gives when the row is tight, instead of a flex
@@ -638,13 +638,13 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-health-metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .nd-health-metric {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -652,7 +652,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .nd-health-metric-label {
@@ -683,7 +683,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .nd-row {
@@ -712,7 +712,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-health-metric-meaning {
   font-size: var(--font-xs);
   color: var(--text-tertiary);
-  margin: -4px 0 0;
+  margin: calc(-1 * var(--space-1)) 0 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -734,14 +734,14 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-mk-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px 24px;
-  margin-bottom: 16px;
+  gap: var(--space-3) var(--space-5);
+  margin-bottom: var(--space-4);
 }
 
 .nd-mk-tile {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -772,7 +772,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-mk-uplinks {
   display: grid;
   grid-template-columns: minmax(3em, 1fr) auto auto auto;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
   font-size: var(--font-sm);
 }
 
@@ -782,7 +782,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 /* Padding, not column-gap, spaces the columns: a gap would break each row's rule into four pieces. */
 .nd-mk-uplink > span {
-  padding: 6px 16px 6px 0;
+  padding: var(--space-1-5) var(--space-4) var(--space-1-5) 0;
   border-bottom: var(--border-width) solid var(--border-color);
   white-space: nowrap;
 }
@@ -811,7 +811,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-mk-chart {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -824,7 +824,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 /* URL-monitor card: the monitored URL under the section head, and the status-code line. */
 .nd-url-target {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   word-break: break-all;
 }
 
@@ -871,7 +871,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-heat-legend {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin-left: auto;
   font-size: var(--font-xs);
   color: var(--text-tertiary);
@@ -1046,7 +1046,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   align-self: flex-start;
   max-width: 100%;
   margin-left: -3px;
-  padding: 0 2px;
+  padding: 0 var(--space-0-5);
   border: var(--border-width) solid transparent;
   border-radius: var(--radius-sm);
   background: none;
@@ -1077,7 +1077,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-nb {
   display: flex;
   align-items: baseline;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .nd-if-nb-link {
@@ -1169,7 +1169,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-addr {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -1207,7 +1207,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 /* The popover reuses the Neighbors panel (`.nd-if-nbpop`); its list is one address per line, so
    the lines sit closer together than the neighbour cards do. */
 .nd-if-addrpop-list {
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .nd-if-addrpop-item {
@@ -1414,10 +1414,10 @@ html[data-viewport='mobile'] .nd-extract-row {
   overflow: hidden;
   border-top: var(--border-width) solid var(--border-color);
   background: var(--bg-secondary);
-  padding: 14px 18px 16px;
+  padding: 14px 18px var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 /* Drag the dock's TOP edge to make the charts taller (issue #65). The mirror image of
@@ -1492,7 +1492,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 }
 
 .nd-if-dock-stats .nd-muted {
-  margin-right: 4px;
+  margin-right: var(--space-1);
 }
 
 .nd-if-dock-err {
@@ -1621,7 +1621,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .nd-if-legend {
@@ -1641,7 +1641,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-legend-k {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .nd-if-legend-sw {
@@ -1667,7 +1667,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-chart-ctl {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 /* Slim hint shown in place of the dock when nothing is selected. */
@@ -1675,7 +1675,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   flex: none;
   border-top: var(--border-width) solid var(--border-color);
   background: var(--bg-secondary);
-  padding: 12px 18px;
+  padding: var(--space-3) 18px;
   font-size: var(--font-sm);
   color: var(--text-tertiary);
   text-align: center;
@@ -1696,8 +1696,8 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-status {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
+  gap: var(--space-3);
+  padding: var(--space-3) 14px;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
@@ -1747,7 +1747,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-status-s {
   font-size: var(--font-sm);
   color: var(--text-secondary);
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 
 .nd-coll-status-r {
@@ -1771,14 +1771,14 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-sets {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .nd-coll-set {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 9px 12px;
+  padding: 9px var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
@@ -1911,7 +1911,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-mname {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* Reserve the caret's width on every row so the metric names line up whether or not a row can be
@@ -1936,7 +1936,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 }
 
 .nd-coll-mfanout {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   color: var(--text-tertiary);
 }
 
@@ -1957,7 +1957,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 }
 
 .nd-coll-mchart {
-  padding: 4px 14px 12px;
+  padding: var(--space-1) 14px var(--space-3);
   background: var(--bg-secondary);
 }
 
@@ -1970,7 +1970,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 20px 20px;
+  padding: var(--space-4) 20px 20px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -1992,7 +1992,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-grp-legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -2072,7 +2072,7 @@ html[data-viewport='mobile'] .nd-member-link {
    chrome padding, let the tab bar scroll horizontally instead of overflowing, and drop the 2-column
    facts grid to one column. */
 html[data-viewport='mobile'] .nd-head {
-  padding: 12px 12px 10px;
+  padding: var(--space-3) var(--space-3) 10px;
 }
 
 /* The breadcrumb eyebrow (region / site path) is redundant on mobile — the "‹ Inventory" back
@@ -2102,7 +2102,7 @@ html[data-viewport='mobile'] .nd-actions > * {
 }
 
 html[data-viewport='mobile'] .nd-tabs {
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
@@ -2114,20 +2114,20 @@ html[data-viewport='mobile'] .nd-tabs::-webkit-scrollbar {
 
 html[data-viewport='mobile'] .nd-tab {
   flex: none;
-  margin-right: 16px;
+  margin-right: var(--space-4);
 }
 
 html[data-viewport='mobile'] .nd-overview {
-  padding: 14px 12px 20px;
+  padding: 14px var(--space-3) 20px;
 }
 
 html[data-viewport='mobile'] .nd-tabpad {
-  padding: 12px;
+  padding: var(--space-3);
 }
 
 html[data-viewport='mobile'] .nd-facts {
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 /* Active alerts: at ~390px the severity word, the breach text and the timestamp do not share a
@@ -2156,12 +2156,12 @@ html[data-viewport='mobile'] .nd-if-row {
   grid-template-areas:
     'name oper oper'
     'spark in out';
-  gap: 4px 10px;
+  gap: var(--space-1) 10px;
   height: auto;
   /* The desktop floor above is the sum of thirteen tracks; this layout has three and must fit. */
   min-width: 0;
   min-height: var(--touch-target);
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
 }
 
 html[data-viewport='mobile'] .nd-if-id {
@@ -2260,7 +2260,7 @@ html[data-viewport='mobile'] .nd-if-dock-addrs {
 /* Collection tab: the status card's right-aligned stat cluster (profile / credential / last poll)
    would overflow ~390px — let the card wrap and drop the stats to a full-width row. */
 html[data-viewport='mobile'] .nd-coll {
-  padding: 14px 12px 20px;
+  padding: 14px var(--space-3) 20px;
 }
 
 html[data-viewport='mobile'] .nd-coll-status {
@@ -2271,7 +2271,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   margin-left: 0;
   width: 100%;
   flex-wrap: wrap;
-  gap: 12px 20px;
+  gap: var(--space-3) 20px;
 }
 
 /* Collection tab: the "arriving only" toggle beside the metric search, sized like the section's
@@ -2279,7 +2279,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 .nd-coll-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   color: var(--text-secondary);
   font-size: var(--font-sm);
   white-space: nowrap;
@@ -2322,14 +2322,14 @@ html[data-viewport='mobile'] .nd-coll-status-r {
    "cidr — name — where it came from"; `margin-left: auto` stays on the description so a row with
    no description still pushes this to the right edge. */
 .nd-prefix-src {
-  margin-left: 8px;
+  margin-left: var(--space-2);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
   white-space: nowrap;
 }
 
 .nd-prefix-desc + .nd-prefix-src {
-  margin-left: 8px;
+  margin-left: var(--space-2);
 }
 
 .nd-prefix-cidr + .nd-prefix-src {
@@ -2342,7 +2342,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
    fit beside the reason on a narrow pane. Only `unregistered` is coloured: it is the one that
    says "register this"; the others point at a range that exists and read as information. */
 .nd-gap-read {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
   font-size: var(--font-xs);
 }
 
@@ -2363,7 +2363,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 4px 9px;
+  gap: var(--space-1) 9px;
 }
 
 .nd-gap-kind {
@@ -2380,7 +2380,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 .nd-gap-seen {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px 12px;
+  gap: var(--space-0-5) var(--space-3);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
   min-width: 0;
@@ -2396,7 +2396,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 .nd-grpmap-toggle {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin-right: auto;
   padding: 0;
   font: inherit;
@@ -2417,7 +2417,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
    the title and the link, and the row wraps when the pane is narrow. */
 .nd-grpmap-head {
   flex-wrap: wrap;
-  row-gap: 6px;
+  row-gap: var(--space-1-5);
 }
 .nd-grpmap-head > .nd-grpmap-toggle {
   margin-right: 0;
@@ -2432,10 +2432,10 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 .nd-grpmap-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   max-width: 100%;
-  padding: 1px 4px 1px 8px;
+  padding: 1px var(--space-1) 1px var(--space-2);
   margin-bottom: 9px;
   font-size: var(--font-sm);
   color: var(--text-secondary);
@@ -2450,7 +2450,7 @@ html[data-viewport='mobile'] .nd-coll-status-r {
 .nd-grpmap-chip-x {
   background: none;
   border: none;
-  padding: 0 2px;
+  padding: 0 var(--space-0-5);
   color: inherit;
   cursor: pointer;
 }
@@ -2518,19 +2518,19 @@ html[data-viewport='mobile'] .nd-grpmap-chip-x {
   }
 }
 .nd-grpmap-summary {
-  margin: 6px 0 0;
+  margin: var(--space-1-5) 0 0;
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
 .nd-grpmap-edge {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 /* A folder row's device profile, after its address (ADR-231): muted, and the generic one marked. */
 .nd-member-profile {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
   white-space: nowrap;
@@ -2541,5 +2541,5 @@ html[data-viewport='mobile'] .nd-grpmap-chip-x {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }

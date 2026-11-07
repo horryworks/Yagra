@@ -83,12 +83,12 @@ code,
 .form-stack {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-3);
 }
 
 .form-row {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   flex-wrap: wrap;
   align-items: flex-end;
 }
@@ -96,7 +96,7 @@ code,
 .form-label {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -105,7 +105,7 @@ code,
 .form-label.form-check {
   flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .form-error {
@@ -119,7 +119,7 @@ code,
    by the text colour, so the node names in it stay readable. */
 .form-warning {
   margin: 0;
-  padding: 6px 10px;
+  padding: var(--space-1-5) var(--space-3);
   border-left: 3px solid var(--status-warning);
   background: var(--bg-secondary);
   font-size: var(--font-sm);
@@ -128,16 +128,16 @@ code,
 
 .form-warning p,
 .form-warning ul {
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 
 .form-warning ul {
-  padding-left: 18px;
+  padding-left: var(--space-4);
 }
 
 /* Required-field marker (RequiredMark): red asterisk, no underline. */
 .form-req {
-  margin-left: 3px;
+  margin-left: var(--space-0-5);
   color: var(--status-critical);
   text-decoration: none;
   cursor: help;
@@ -172,7 +172,7 @@ code,
   max-height: 140px;
   overflow-y: auto;
   margin: 0;
-  padding: 6px 8px 6px 22px;
+  padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-5);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -181,7 +181,7 @@ code,
 }
 
 .form-targets li {
-  padding: 1px 0;
+  padding: var(--space-0-5) 0;
 }
 
 /* ============================================================ responsive / mobile base

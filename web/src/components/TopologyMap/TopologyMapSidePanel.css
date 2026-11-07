@@ -27,7 +27,7 @@
 .topomap-panel-facts {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
 }
 .topomap-panel-fact {
@@ -45,7 +45,7 @@
 .topomap-panel-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -55,7 +55,7 @@
   flex-direction: column;
   align-items: flex-start;
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   font: inherit;
   color: inherit;
   text-align: left;
@@ -76,8 +76,8 @@
 .topomap-panel-member {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 0;
+  gap: var(--space-0-5);
+  padding: var(--space-1-5) 0;
   border-bottom: var(--border-width) solid var(--border-color);
   overflow-wrap: anywhere;
 }
@@ -104,7 +104,7 @@
 .topomap-panel-legend {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -113,7 +113,7 @@
 .topomap-panel-legend li {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .topomap-legend-kind {
   display: inline-block;
@@ -148,7 +148,7 @@
 .topomap-panel-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -156,8 +156,8 @@
 .topomap-panel-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 8px;
+  gap: var(--space-1-5);
+  padding: var(--space-0-5) var(--space-2);
   font-size: var(--font-xs);
   font-variant-numeric: tabular-nums;
   background: var(--bg-primary);
@@ -167,7 +167,7 @@
 .topomap-panel-port {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .topomap-panel-port-head {
   display: flex;
@@ -186,6 +186,6 @@
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   text-decoration: none;
 }

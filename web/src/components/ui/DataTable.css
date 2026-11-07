@@ -140,7 +140,7 @@
 }
 
 .dt-empty {
-  padding: 40px 16px;
+  padding: 40px var(--space-4);
   text-align: center;
   color: var(--text-secondary);
   font-size: var(--font-sm);
@@ -154,7 +154,7 @@
   top: 0;
   left: 0;
   width: 100%;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -171,7 +171,7 @@
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .dt-card-pair {

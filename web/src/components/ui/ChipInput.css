@@ -32,7 +32,7 @@
   font-size: var(--font-sm);
   font-weight: var(--weight-semibold);
   gap: calc(var(--space-1) / 2);
-  padding: 2px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   /* A label may be a phrase; let the row wrap rather than the word. */
   max-width: 100%;
   overflow-wrap: anywhere;

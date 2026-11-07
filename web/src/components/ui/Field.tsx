@@ -3,12 +3,16 @@
 // one stylesheet so every form field looks identical. Focus = accent border (not outline),
 // per ui-conventions interactive states.
 
-import type {
-  InputHTMLAttributes,
-  ReactNode,
-  Ref,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
+import {
+  cloneElement,
+  isValidElement,
+  useId,
+  type InputHTMLAttributes,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { InfoTip } from './InfoTip';
@@ -39,12 +43,18 @@ export function TextInput({
 }
 
 /**
- * One labelled field in a dialog or form, for a field that carries an ⓘ or its own error line
- * (ADR-200). The label is a sibling of the control, tied by `htmlFor`, so the ⓘ button beside it is
- * not inside a `<label>` — a button there becomes the label's control and the field loses its name.
+ * One labelled field in a dialog or form - the only way a form draws one since ADR-246, inside
+ * `Fields` / `FieldRow` (FormLayout.tsx). The label is a sibling of the control, tied by `htmlFor`,
+ * so the ⓘ button beside it is not inside a `<label>` — a button there becomes the label's control
+ * and the field loses its name.
  *
- * Only fields that need one of the two move onto this; the plain `modal-field` markup elsewhere is
- * not a backlog. `error` is a validation message for this field, shown in the critical colour.
+ * `htmlFor` may be left out: the field then makes an id and gives it to its one child, so the label
+ * names the control without the screen inventing ids (137 of 160 hand-written labels named nothing
+ * when this was measured). A child that already has an `id` keeps it. `error` is a validation
+ * message for this field, shown in the critical colour.
+ *
+ * It still carries `.modal-field` until ADR-246 Inc.8, so a dialog not yet moved onto `Fields`
+ * keeps its spacing.
  */
 export function Field({
   label,
@@ -55,23 +65,28 @@ export function Field({
   children,
 }: {
   label: string;
-  htmlFor: string;
+  htmlFor?: string;
   required?: boolean;
   /** A namespaced `.info` key (`settings-tokens:field.owner.info`). */
   infoKey?: string;
   error?: string | null;
   children: ReactNode;
 }) {
+  const auto = useId();
+  const child = isValidElement<{ id?: string }>(children) ? (children as ReactElement<{ id?: string }>) : null;
+  const ownId = child?.props.id;
+  const id = htmlFor ?? ownId ?? auto;
+  const control = child && !htmlFor && !ownId ? cloneElement(child, { id }) : children;
   return (
-    <div className="modal-field">
+    <div className="ui-field modal-field">
       <div className="field-head">
-        <label className="modal-field-label" htmlFor={htmlFor}>
+        <label className="modal-field-label" htmlFor={id}>
           {label}
           {required && <RequiredMark />}
         </label>
         {infoKey && <InfoTip infoKey={infoKey} label={label} />}
       </div>
-      {children}
+      {control}
       {error && (
         <p className="field-error" role="alert">
           {error}

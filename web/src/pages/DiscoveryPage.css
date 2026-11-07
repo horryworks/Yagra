@@ -13,15 +13,15 @@
 
 .disco-toggle .ts-seg button {
   flex: none;
-  padding: 0 16px;
+  padding: 0 var(--space-4);
 }
 
 .disco-target {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 /* The field takes the slack; the buttons keep their own width beside it. Wide enough for
@@ -29,7 +29,7 @@
 .disco-target .disco-target-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   flex: 1 1 320px;
   min-width: 0;
   max-width: 560px;
@@ -48,14 +48,14 @@
 .disco-site-ranges {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   max-width: 640px;
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 /* The folded settings (ADR-244 decision 3): closed, it is one line that says what will be used. */
 .disco-how {
-  margin-top: 12px;
+  margin-top: var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: 8px;
 }
@@ -64,8 +64,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 12px;
-  padding: 8px 12px;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   cursor: pointer;
 }
 
@@ -83,8 +83,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
-  gap: 12px 24px;
-  padding: 12px;
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-3);
   border-top: var(--border-width) solid var(--border-color);
 }
 
@@ -118,7 +118,7 @@ html[data-viewport='mobile'] .disco-target .btn {
 }
 
 .disco-results-card {
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 
 .disco-table {
@@ -140,8 +140,8 @@ html[data-viewport='mobile'] .disco-target .btn {
     28px minmax(0, 1.4fr) minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1.2fr)
     minmax(0, 1.2fr);
   align-items: center;
-  gap: 12px;
-  padding: 8px 0;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
 }
 
 .disco-head {
@@ -217,7 +217,7 @@ html[data-viewport='mobile'] .disco-target .btn {
 
 /* Accepted target formats, shown under the scan row. */
 .disco-target-hint {
-  margin-top: 8px;
+  margin-top: var(--space-2);
   font-size: var(--font-sm);
   color: var(--text-tertiary);
 }
@@ -228,7 +228,7 @@ html[data-viewport='mobile'] .disco-target .btn {
 
 /* Page-level pointer to Credentials & secrets (add a credential without leaving discovery). */
 .disco-creds-link {
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
   font-size: var(--font-sm);
   color: var(--text-tertiary);
 }
@@ -247,7 +247,7 @@ html[data-viewport='mobile'] .disco-target .btn {
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 /* Explicit import outcome next to the button (status color + icon/text, not color alone). */
@@ -305,7 +305,7 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
 .disco-seen-table {
   display: flex;
   flex-direction: column;
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 
 /* ⚠️ ONE declaration for the header and every row — see the note on `.disco-head` above. */
@@ -321,8 +321,8 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
     minmax(0, 1.1fr) minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.4fr)
     minmax(0, 1.4fr);
   align-items: center;
-  gap: 12px;
-  padding: 8px 0;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
   border-bottom: var(--border-width) solid var(--border-color);
 }
 
@@ -352,14 +352,14 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
 .disco-seen-sources {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 /* Address above the name a source reported for it (LLDP system name, syslog hostname). */
@@ -443,7 +443,7 @@ html[data-viewport='mobile'] .disco-seen-row > :nth-child(6) {
 .disco-filter-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   color: var(--text-secondary);
   font-size: var(--font-sm);
   white-space: nowrap;
@@ -466,7 +466,7 @@ html[data-viewport='mobile'] .disco-seen-row > :nth-child(6) {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 /* A row is a button because selecting a sweep is the only thing it does — which also makes the
@@ -475,8 +475,8 @@ html[data-viewport='mobile'] .disco-seen-row > :nth-child(6) {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 8px;
+  gap: var(--space-3);
+  padding: var(--space-1-5) var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: none;
@@ -512,15 +512,15 @@ html[data-viewport='mobile'] .disco-scan {
 .disco-prefixes {
   display: flex;
   flex-direction: column;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
 .disco-prefix {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: var(--control-h);
-  padding: 2px 0;
+  padding: var(--space-0-5) 0;
   border-top: var(--border-width) solid var(--border-color);
   font-size: var(--font-sm);
 }
@@ -575,7 +575,7 @@ html[data-viewport='mobile'] .disco-scan {
 .disco-dest {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 

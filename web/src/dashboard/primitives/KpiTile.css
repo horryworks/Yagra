@@ -1,7 +1,7 @@
 .kpitile {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .kpitile-value {
@@ -17,14 +17,14 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-tertiary);
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 
 .kpitile-delta {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-top: 8px;
+  margin-top: var(--space-2);
   font-size: var(--font-sm);
   /* Delta is categorical (a change, not a node state) — keep it off the status channel. */
   color: var(--text-secondary);

@@ -47,7 +47,7 @@
 /* W/C badge pairing — shared by the modal bounds row and the Bounds table cell. */
 .thresholds-bounds {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* One side of the band (ADR-081): a label naming the direction, then its warning and critical
@@ -57,8 +57,8 @@
 .thresholds-bound-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-1-5);
 }
 
 .thresholds-bound-side {
@@ -81,7 +81,7 @@ html[data-viewport='mobile'] .thresholds-bound-side {
 /* The "no reachability rule" warning, in the warning colour: it is not an error (the operator may
    have meant it) but it must not read as prose. */
 .thresholds-warn-card {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
   border-left: 2px solid var(--status-warning);
 }
 
@@ -138,7 +138,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
 .thresholds-scopes {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
   max-width: 100%;
 }
@@ -180,7 +180,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
   display: inline-flex;
   font-size: var(--font-sm);
   gap: calc(var(--space-1) / 2);
-  padding: 2px var(--space-1);
+  padding: var(--space-0-5) var(--space-1);
 }
 
 .thresholds-chip button {
@@ -203,7 +203,7 @@ html[data-viewport='mobile'] .thresholds-meaning {
 .thresholds-overridden {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
   max-width: 100%;
 }

@@ -10,8 +10,8 @@
 .integration-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 16px;
+  gap: var(--space-2);
+  padding: var(--space-4);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
@@ -40,7 +40,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .integration-card-name {
@@ -58,7 +58,7 @@
 
 .integration-chip {
   flex: none;
-  padding: 2px 8px;
+  padding: var(--space-0-5) var(--space-2);
   border-radius: var(--radius-sm);
   font-size: var(--font-xs);
   font-weight: var(--weight-medium);

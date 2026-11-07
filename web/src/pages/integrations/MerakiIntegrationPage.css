@@ -14,7 +14,7 @@
 .meraki-switch {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-weight: var(--weight-semibold);
   color: var(--text-primary);
   cursor: pointer;
@@ -33,15 +33,15 @@
 .meraki-org-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .meraki-org {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: 10px var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
@@ -52,7 +52,7 @@
 .meraki-org-info {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   flex: 1 1 18rem;
 }
@@ -63,7 +63,7 @@
 .meraki-org-main {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -115,7 +115,7 @@
 
 .meraki-org-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex-wrap: wrap;
 }
 
@@ -123,7 +123,7 @@
 .meraki-org-picker {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   max-height: 320px;
   overflow-y: auto;
 }
@@ -131,10 +131,10 @@
 .meraki-check-row {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 6px 4px;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-1);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius);
 }
 
 .meraki-check-row:hover {
@@ -197,7 +197,7 @@
 .meraki-source-choice {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   color: var(--text-secondary);
   cursor: pointer;
 }

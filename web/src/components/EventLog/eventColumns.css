@@ -6,7 +6,7 @@
 .events-msg-cell {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -42,7 +42,7 @@
 
 .events-msg-full {
   margin: 0;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: var(--font-sm);
@@ -62,7 +62,7 @@
 .ev-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -70,7 +70,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px 8px;
+  gap: var(--space-1-5) var(--space-2);
   min-width: 0;
   font-size: var(--font-sm);
 }
@@ -88,7 +88,7 @@
 .ev-card-msg > summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: var(--touch-target);
   min-width: 0;
   cursor: pointer;
@@ -133,7 +133,7 @@
 
 .ev-card-msg[open] .ev-card-msg-full {
   display: block;
-  padding: 4px 0 2px;
+  padding: var(--space-1) 0 var(--space-0-5);
   font-size: var(--font-sm);
   line-height: 1.45;
   white-space: pre-wrap;
@@ -144,7 +144,7 @@
 /* The admission that the search was broadened. Sits between the action row and the table, in the
    secondary tone: it explains the rows below rather than warning about them. */
 .ev-widened {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -153,7 +153,7 @@
    the table rather than inside the page note, so the note stays one clean line — the thing G1
    asserts on every screen — while this one may wrap over several endpoints. */
 .ev-listening {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
@@ -168,7 +168,7 @@
    matched no rule are kept for a shorter period, so the older part of the list can be missing the
    very events a rule is being written for. Same tone as `.ev-widened` — it explains the rows. */
 .ev-retention {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }

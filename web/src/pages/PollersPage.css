@@ -7,7 +7,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--gap);
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .pool-card {
@@ -16,8 +16,8 @@
   max-width: 280px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
+  gap: var(--space-2);
+  padding: var(--space-3) 14px;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
@@ -31,7 +31,7 @@
 .pool-card-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .pool-card-name {
@@ -48,7 +48,7 @@
 .pool-card-stats {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -103,7 +103,7 @@
 /* ============================================================ register-poller snippet */
 .poller-copyrow {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: stretch;
 }
 
@@ -113,7 +113,7 @@
   margin: 0;
   overflow-x: auto;
   white-space: pre;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-primary);
@@ -128,14 +128,14 @@
 
 /* ============================================================ monitoring gaps (store-and-forward) */
 .poller-gaps {
-  margin-top: 24px;
+  margin-top: var(--space-5);
 }
 
 .poller-gaps-title {
   font-size: var(--font-md);
   font-weight: var(--weight-medium);
   color: var(--text-primary);
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 
 .poller-gaps-note {
@@ -148,8 +148,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 4px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-1);
 }
 
 .poller-drill {
@@ -188,7 +188,7 @@
 }
 
 .pool-subhead.poller-register-manual {
-  margin: 18px 0 8px;
+  margin: 18px 0 var(--space-2);
 }
 
 /* The checkbox row and its ⓘ, which stays outside the <label> (ADR-200). */
@@ -247,7 +247,7 @@
   display: inline-flex;
   align-items: center;
   flex: none;
-  margin-right: -6px;
+  margin-right: calc(-1 * var(--space-1-5));
 }
 
 .pool-filter-btn svg {
@@ -264,7 +264,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin: -6px 0 10px;
+  margin: calc(-1 * var(--space-1-5)) 0 10px;
 }
 
 .pool-filter-chip {
@@ -272,7 +272,7 @@
   align-items: center;
   gap: 5px;
   max-width: 100%;
-  padding: 0 2px 0 8px;
+  padding: 0 var(--space-0-5) 0 var(--space-2);
   border: var(--border-width) solid var(--accent-color);
   border-radius: var(--radius-sm);
   color: var(--accent-color);
@@ -350,7 +350,7 @@
   align-items: center;
   justify-content: center;
   min-height: 96px;
-  padding: 12px 14px;
+  padding: var(--space-3) 14px;
   border: var(--border-width) dashed var(--border-color);
   border-radius: var(--radius);
   background: none;
@@ -380,7 +380,7 @@
    because without it a touch drag scrolls the page instead of picking the row up. */
 .pool-grip {
   flex: none;
-  padding: 0 2px;
+  padding: 0 var(--space-0-5);
   color: var(--text-tertiary);
   font-size: var(--font-sm);
   line-height: 1;
@@ -440,7 +440,7 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -472,7 +472,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   margin: 0;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border-left: 2px solid var(--status-warning);
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--status-warning) 12%, transparent);
@@ -485,7 +485,7 @@
   width: 14px;
   height: 14px;
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   color: var(--status-warning);
 }
 

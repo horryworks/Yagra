@@ -6,13 +6,13 @@
   display: flex;
   align-items: end;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .support-bundle-card .sb-window {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-sm);
 }
 
@@ -21,7 +21,7 @@
 .support-bundle-card .sb-node {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   font-size: var(--font-sm);
   min-width: 240px;
 }
@@ -40,5 +40,5 @@
 .support-bundle-card .sb-done {
   color: var(--status-ok);
   font-size: var(--font-sm);
-  margin: 12px 0 0;
+  margin: var(--space-3) 0 0;
 }

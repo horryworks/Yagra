@@ -1,0 +1,64 @@
+.ui-facts {
+  margin: 0;
+  min-width: 0;
+}
+
+.ui-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* rows: one column of labels, one of values. The pair's own box steps aside so both columns
+   line up across every row. */
+.ui-facts.is-rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1-5) var(--space-4);
+}
+
+.ui-facts.is-rows .ui-fact {
+  display: contents;
+}
+
+.ui-facts.is-rows dt,
+.ui-facts.is-inline dt {
+  color: var(--text-secondary);
+}
+
+/* On a phone the label column would take half the width; the value goes under its label. */
+html[data-viewport='mobile'] .ui-facts.is-rows {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: var(--space-0-5);
+}
+
+html[data-viewport='mobile'] .ui-facts.is-rows dd + dt {
+  margin-top: var(--space-2);
+}
+
+/* grid: the label (the one heading look, Section.css) over its value. */
+.ui-facts.is-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-3) var(--space-5);
+}
+
+.ui-facts.is-grid .ui-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.ui-facts.is-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+
+.ui-facts.is-inline .ui-fact {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  min-width: 0;
+}

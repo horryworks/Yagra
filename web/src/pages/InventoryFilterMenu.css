@@ -8,7 +8,7 @@
 .invf-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .invf-trigger svg {
@@ -25,7 +25,7 @@
 .invf-count {
   min-width: 16px;
   height: 16px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border-radius: 8px;
   background: var(--accent-color);
   color: var(--on-brand);
@@ -56,7 +56,7 @@
 
 .invf-sec {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: 0;
   padding: 0;
   border: 0;
@@ -65,7 +65,7 @@
 
 .invf-h {
   padding: 0;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0-5);
   font-size: var(--font-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -83,9 +83,9 @@
 .invf-sw {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 26px;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   border-radius: var(--radius-sm);
   font-size: var(--font-sm);
   color: var(--text-primary);
@@ -176,7 +176,7 @@
 .invf-clear {
   border: 0;
   background: none;
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   color: var(--accent-color);
   font: inherit;
   font-size: var(--font-sm);
@@ -192,16 +192,16 @@
 /* ---- the chip row (a `.nodes-pane-filters`, so it keeps that row's height cap) ---- */
 
 .invf-chips {
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .invf-chip {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   max-width: 100%;
   height: 22px;
-  padding: 0 2px 0 8px;
+  padding: 0 var(--space-0-5) 0 var(--space-2);
   border-radius: 11px;
   border: var(--border-width) solid var(--border-color);
   background: var(--bg-tertiary);
@@ -245,7 +245,7 @@
 
 .invf-chips .clear-filters {
   min-height: 22px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   font-size: var(--font-xs);
 }
 

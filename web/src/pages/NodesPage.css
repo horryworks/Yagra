@@ -28,7 +28,7 @@
 }
 
 .nodes-truncated {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: var(--font-sm);
 }
 
@@ -64,9 +64,9 @@
 .nodes-pane-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 38px;
-  padding: 0 8px 0 12px;
+  padding: 0 var(--space-2) 0 var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
   flex: none;
 }
@@ -88,7 +88,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -120,7 +120,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: none;
   padding: var(--space-1) var(--space-3) var(--space-2);
   border-bottom: var(--border-width) solid var(--border-color);
@@ -149,7 +149,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: none;
   padding: var(--space-1) var(--space-3) var(--space-2);
   border-top: var(--border-width) solid var(--border-color);
@@ -210,7 +210,7 @@
 .nodes-rail-btn {
   height: 28px;
   min-width: 24px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   background: none;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -228,7 +228,7 @@
 /* The collapsed rail: just a centered expand button at the top. */
 .nodes-rail {
   align-items: center;
-  padding-top: 8px;
+  padding-top: var(--space-2);
 }
 
 .nodes-rail-btn {
@@ -321,11 +321,11 @@ html[data-viewport='mobile'] .nodes-split.has-sel > .nodes-pane:not(.nodes-detai
 html[data-viewport='mobile'] .nodes-detail-back {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex: none;
   width: 100%;
   min-height: var(--touch-target);
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   background: none;
   border: none;
   border-bottom: var(--border-width) solid var(--border-color);
@@ -340,7 +340,7 @@ html[data-viewport='mobile'] .nodes-detail-back {
 html[data-viewport='mobile'] .nodes-pane-head {
   height: auto;
   min-height: var(--touch-target);
-  padding: 4px 8px 4px 12px;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
 }
 
 html[data-viewport='mobile'] .nodes-pane-add {

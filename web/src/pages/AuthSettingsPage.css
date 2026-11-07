@@ -1,32 +1,32 @@
 .auth-toolbar {
   display: flex;
   justify-content: flex-end;
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
 }
 
 .auth-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .auth-provider {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .auth-provider-name {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .auth-provider-meta {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -34,7 +34,7 @@
 .auth-badge {
   font-size: var(--font-xs);
   font-weight: 600;
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   border-radius: 10px;
   border: var(--border-width) solid var(--border-color);
 }
@@ -55,13 +55,13 @@
 /* "What Yagra will request" — the scopes and claim a product decides. Disclosed rather than hidden:
    it is what an operator has to reason about when the IdP refuses a sign-in. */
 .auth-advanced {
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 .auth-advanced > summary {
   cursor: pointer;
   color: var(--text-secondary);
   font-size: var(--font-sm);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 .auth-advanced > summary:hover {
   color: var(--text-primary);
@@ -71,8 +71,8 @@
 .auth-replace {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 4px 0 12px;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-3);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -80,14 +80,14 @@
 .auth-rolemap {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 6px;
+  gap: var(--space-2);
+  margin-top: var(--space-1-5);
 }
 
 .auth-rolemap-row {
   display: grid;
   grid-template-columns: 1fr 140px auto;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
 }
 
@@ -99,8 +99,8 @@
   display: grid;
   grid-template-columns: minmax(150px, max-content) minmax(0, 1fr);
   align-items: center;
-  gap: 8px 12px;
-  margin: 8px 0 12px;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .auth-grid textarea {
@@ -111,8 +111,8 @@
   color: var(--text-primary);
   background: var(--bg-primary);
   border: var(--border-width) solid var(--border-color);
-  border-radius: 4px;
-  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1-5) var(--space-2);
 }
 .auth-grid textarea:focus {
   outline: none;
@@ -125,21 +125,21 @@
 }
 
 .auth-test {
-  margin-top: 12px;
-  padding: 12px;
+  margin-top: var(--space-3);
+  padding: var(--space-3);
   border: var(--border-width) solid var(--border-color);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-secondary);
 }
 
 .auth-stages {
   list-style: none;
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   padding: 0;
 }
 /* Never colour alone: the marker carries the same answer for a colour-blind operator. */
 .auth-stages li::before {
-  margin-right: 8px;
+  margin-right: var(--space-2);
   font-weight: 600;
 }
 .auth-stages li.ok {
@@ -158,7 +158,7 @@
 /* On mobile the label column would squeeze every DN into two characters. */
 html[data-viewport='mobile'] .auth-grid {
   grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 /* A state with a consequence the screen cannot otherwise show: the stored OIDC redirect URI no
@@ -170,12 +170,12 @@ html[data-viewport='mobile'] .auth-grid {
 
 /* The step frames (ADR-200 kind d): under the IdP picker, and under the redirect warning. */
 .auth-steps {
-  margin: 8px 0 12px;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 /* Where the public board's contents are edited: a link, not a sentence. */
 .auth-compose {
-  margin: 8px 0;
+  margin: var(--space-2) 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }

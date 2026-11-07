@@ -59,7 +59,7 @@
   right: 0;
   justify-self: end;
   align-self: center;
-  margin-right: 12px;
+  margin-right: var(--space-3);
   z-index: 2;
   display: flex;
   align-items: center;

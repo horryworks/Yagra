@@ -1,0 +1,199 @@
+.ui-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* A `Field` still carries `.modal-field` until ADR-246 Inc.8, and with it a bottom margin that
+   spaced fields before `Fields` did. Inside the new parts the gap does that job alone. */
+.ui-fields > .modal-field,
+.ui-field-row > .modal-field {
+  margin-bottom: 0;
+}
+
+.ui-field-row {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ui-field-row > * {
+  flex: 1;
+  min-width: 0;
+}
+
+html[data-viewport='mobile'] .ui-field-row {
+  flex-direction: column;
+}
+
+.ui-field-value {
+  display: flex;
+  align-items: center;
+  height: var(--control-h);
+  padding: 0 var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--font-md);
+}
+
+.ui-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.ui-check.has-detail {
+  align-items: flex-start;
+}
+
+.ui-check > input {
+  flex: none;
+  margin: 0;
+}
+
+.ui-check.is-disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ui-check-text,
+.ui-choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.ui-check-detail,
+.ui-choice-detail {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.ui-choice-detail.is-danger {
+  color: var(--status-critical);
+}
+
+.ui-choices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ui-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ui-choice:hover {
+  border-color: var(--text-tertiary);
+}
+
+.ui-choice.is-checked {
+  border-color: var(--accent-color);
+}
+
+.ui-choice.is-disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ui-choice > input {
+  flex: none;
+  margin: var(--space-0-5) 0 0;
+}
+
+.ui-choice-label {
+  font-weight: var(--weight-medium);
+}
+
+/* A setting: the name on the left, the control on the right, a rule between subjects. */
+.ui-setting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.ui-setting-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.ui-setting-name {
+  font-weight: var(--weight-medium);
+}
+
+.ui-setting-detail {
+  margin-top: var(--space-0-5);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.ui-setting-warn {
+  margin-top: var(--space-1);
+  color: var(--status-warning);
+  font-size: var(--font-sm);
+}
+
+.ui-setting-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* The unit and the band beside an input ("seconds (10-3600)"), and a read-only value in place of
+   one. Marked `.muted` by the screen, which already gives the colour. */
+.ui-setting-control > .muted {
+  font-size: var(--font-sm);
+}
+
+.ui-setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ui-setting + .ui-setting,
+.ui-setting + .ui-setting-group,
+.ui-setting-group + .ui-setting,
+.ui-setting-group + .ui-setting-group {
+  padding-top: var(--space-3);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.ui-setting-group > .ui-setting + .ui-setting {
+  padding-top: 0;
+  border-top: none;
+}
+
+html[data-viewport='mobile'] .ui-setting {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+html[data-viewport='mobile'] .ui-setting-control {
+  justify-content: flex-start;
+}
+
+.ui-save-note {
+  margin: 0;
+  font-size: var(--font-sm);
+}
+
+.ui-save-note.is-ok {
+  color: var(--status-ok);
+}
+
+.ui-save-note.is-error {
+  color: var(--status-critical);
+}

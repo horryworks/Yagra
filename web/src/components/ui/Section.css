@@ -1,0 +1,141 @@
+/* The one heading look (ADR-246 decision 3): a Card's title, a section's heading inside it, and
+   the label of a fact in a grid. Small, upper case, quiet - the exception to design-system.md
+   §1.4's "no ALL CAPS", which this rule is the only place to spell. */
+.card-title,
+.ui-section-title,
+.ui-facts.is-grid dt {
+  margin: 0;
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.ui-section-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ui-section-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ui-callout {
+  margin: 0;
+  padding: var(--space-1-5) var(--space-3);
+  border-left: 3px solid var(--accent-color);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}
+
+.ui-callout.is-warning {
+  border-left-color: var(--status-warning);
+}
+
+.ui-callout.is-critical {
+  border-left-color: var(--status-critical);
+}
+
+.ui-callout > :first-child {
+  margin-top: 0;
+}
+
+.ui-callout > :last-child {
+  margin-bottom: 0;
+}
+
+.ui-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ui-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ui-disclosure > summary::before {
+  content: '▸';
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform var(--transition);
+}
+
+.ui-disclosure[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.ui-disclosure > summary:hover,
+.ui-disclosure > summary:focus-visible {
+  outline: none;
+  color: var(--accent-color);
+}
+
+.ui-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.ui-item-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-item-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.ui-item-row + .ui-item-row {
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.ui-item-row:first-child {
+  padding-top: 0;
+}
+
+.ui-item-row:last-child {
+  padding-bottom: 0;
+}
+
+.ui-item-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.ui-item-title {
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.ui-item-detail {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.ui-item-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}

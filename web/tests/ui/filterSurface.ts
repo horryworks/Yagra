@@ -84,7 +84,11 @@ export async function inspectFilterSurface(page: Page): Promise<FilterFinding[]>
         }
         const cx = b.left + b.width / 2;
         const cy = b.top + b.height / 2;
-        const inView = cx >= 0 && cy >= 0 && cx <= window.innerWidth && cy <= window.innerHeight;
+        // Strictly less than: the last row of pixels is `innerHeight - 1`, and a point AT
+        // `innerHeight` is outside the window, where `elementFromPoint` answers null. A funnel
+        // whose centre landed exactly on the bottom edge read as covered (Pollers, when ADR-246
+        // moved its table up 6px, from 726 to 720).
+        const inView = cx >= 0 && cy >= 0 && cx < window.innerWidth && cy < window.innerHeight;
         if (inView) {
           const hit = document.elementFromPoint(cx, cy);
           if (!hit || !(trigger === hit || trigger.contains(hit))) {

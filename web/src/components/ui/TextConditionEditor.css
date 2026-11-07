@@ -4,8 +4,8 @@
 .tcond {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: var(--space-1-5);
+  padding: var(--space-2);
   min-width: 260px;
   max-width: 340px;
 }
@@ -13,7 +13,7 @@
 .tcond-input {
   /* Grows to its own padding, rather than taking the shared `--control-h` from `.sfield-input`. */
   height: auto;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: var(--bg-primary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -30,7 +30,7 @@
 .tcond-controls {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* The mode switch. A real checkbox carries the semantics (`role="switch"` + keyboard + focus);
@@ -42,7 +42,7 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   color: var(--text-secondary);
   font-size: var(--font-xs);
   cursor: pointer;
@@ -110,7 +110,7 @@
 
 .tcond-not {
   flex: none;
-  padding: 4px 10px;
+  padding: var(--space-1) 10px;
   background: none;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);

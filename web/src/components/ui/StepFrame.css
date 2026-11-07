@@ -9,7 +9,7 @@
 }
 
 .step-frame > summary {
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   color: var(--text-secondary);
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
@@ -29,12 +29,12 @@
 
 .step-frame > ol {
   margin: 0;
-  padding: 10px 12px 10px 32px;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-6);
   font-size: var(--font-sm);
   line-height: 1.6;
   color: var(--text-primary);
 }
 
 .step-frame > ol > li + li {
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }

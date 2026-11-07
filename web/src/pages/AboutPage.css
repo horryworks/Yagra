@@ -14,7 +14,7 @@
 .about-row {
   display: flex;
   align-items: baseline;
-  gap: 24px;
+  gap: var(--space-5);
 }
 
 .about-label {

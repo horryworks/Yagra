@@ -6,7 +6,7 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* ---- joined segmented presets ---- */
@@ -55,7 +55,7 @@
 .rc-cal {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   height: 28px;
   padding: 0 9px;
   border: var(--border-width) solid var(--border-color);
@@ -103,7 +103,7 @@
   padding: 13px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-primary);
@@ -113,7 +113,7 @@
 .rc-pop-sec {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .rc-pop-label {
@@ -127,14 +127,14 @@
 .rc-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .rc-chip {
   height: 24px;
   padding: 0 9px;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-secondary);
   color: var(--text-secondary);
   font-family: var(--ui-font-family);
@@ -161,7 +161,7 @@
 .rc-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 
 .rc-field-label {
@@ -188,12 +188,12 @@
 .rc-pop-foot {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .rc-btn {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: transparent;

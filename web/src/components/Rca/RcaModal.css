@@ -35,7 +35,7 @@
 /* Confidence is a closed set (high/medium/low/unknown) — never colour alone, the badge carries the
    word too (ui-conventions: colour-blind safe). */
 .rca-conf {
-  padding: 1px 8px;
+  padding: 1px var(--space-2);
   border-radius: 10px;
   border: var(--border-width) solid var(--border-color);
   font-size: var(--font-xs);
@@ -126,7 +126,7 @@
   font-size: var(--font-xs);
   font-weight: var(--weight-semibold);
   color: var(--text-tertiary);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0-5);
 }
 
 .rca-ev-value {
@@ -136,14 +136,14 @@
 }
 
 .rca-ev-note {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
 .rca-flap {
   margin-left: var(--space-2);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: 8px;
   border: var(--border-width) solid var(--status-warning);
   color: var(--status-warning);
@@ -162,7 +162,7 @@
   display: grid;
   grid-template-columns: 120px 90px 1fr;
   gap: var(--space-2);
-  padding: 2px 0;
+  padding: var(--space-0-5) 0;
   font-size: var(--font-sm);
   border-bottom: var(--border-width) solid var(--border-color);
 }

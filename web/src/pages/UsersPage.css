@@ -12,21 +12,21 @@
 .users-scope-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   max-height: 260px;
   overflow-y: auto;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: var(--radius);
+  padding: var(--space-1-5);
   background: var(--bg-primary);
 }
 
 .users-scope-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 4px;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   min-height: var(--touch-target, 44px);
 }
@@ -42,7 +42,7 @@
 /* An account's kind pill, pressable since it explains itself (ADR-200): the pill's own look rather
    than the dotted underline a pressable word gets, plus the ▾ every pressable badge carries. */
 .il-line1 button.infopress.you-pill {
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border: var(--border-width) solid var(--brand);
   background: none;
   color: var(--brand);
@@ -56,7 +56,7 @@
 
 .il-line1 button.infopress.you-pill::after {
   content: '▾';
-  margin-left: 4px;
+  margin-left: var(--space-1);
   opacity: 0.8;
 }
 

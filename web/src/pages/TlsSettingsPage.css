@@ -5,19 +5,19 @@
 .tlspage {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .tls-muted {
   color: var(--text-secondary);
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 
 .tls-headline {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
 }
 
 /* Two columns on desktop, stacked on narrow screens (mobile mode, ADR-027). The label column is
@@ -25,8 +25,8 @@
 .tls-facts {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 6px 16px;
-  margin: 12px 0;
+  gap: var(--space-1-5) var(--space-4);
+  margin: var(--space-3) 0;
 }
 
 .tls-facts dt {
@@ -49,7 +49,7 @@
 
 .tls-label {
   display: block;
-  margin: 12px 0 4px;
+  margin: var(--space-3) 0 var(--space-1);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -58,27 +58,27 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 6px;
+  gap: var(--space-3);
+  margin-top: var(--space-1-5);
 }
 
 .tls-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .tls-alert {
-  margin: 12px 0;
-  padding: 10px 12px;
-  border-radius: 6px;
+  margin: var(--space-3) 0;
+  padding: 10px var(--space-3);
+  border-radius: var(--radius);
   border: var(--border-width) solid var(--border-color);
   color: var(--text-primary);
   font-size: var(--font-sm);
 }
 
 .tls-alert p {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
 }
 
 .tls-alert-warn {
@@ -99,10 +99,10 @@
 @media (max-width: 700px) {
   .tls-facts {
     grid-template-columns: 1fr;
-    gap: 2px;
+    gap: var(--space-0-5);
   }
 
   .tls-facts dd {
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
   }
 }

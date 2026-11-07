@@ -29,7 +29,7 @@
 .tpl-edit {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -48,13 +48,13 @@
 /* "Wrap long lines", above the two columns. */
 .tpl-wrap {
   justify-content: flex-end;
-  margin: -6px 0 10px;
+  margin: calc(-1 * var(--space-1-5)) 0 10px;
   font-size: var(--font-xs);
 }
 
 /* Free layout (ADR-199): under the body field, before the hints that explain it. */
 .tpl-free-layout {
-  margin: 8px 0 4px;
+  margin: var(--space-2) 0 var(--space-1);
   font-size: var(--font-sm);
 }
 
@@ -97,7 +97,7 @@
   border: 0;
   background: none;
   color: var(--text-secondary);
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   font-size: var(--font-xs);
   cursor: pointer;
 }
@@ -129,7 +129,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .tpl-same {
@@ -137,7 +137,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
-  padding: 16px;
+  padding: var(--space-4);
   border: var(--border-width) dashed var(--border-color);
   border-radius: var(--radius);
   font-size: var(--font-sm);
@@ -153,13 +153,13 @@
 .tpl-field-wrap {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .tpl-field-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -174,7 +174,7 @@
 
 .tpl-field {
   min-height: 38px;
-  padding: 6px 10px;
+  padding: var(--space-1-5) 10px;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -206,7 +206,7 @@
   align-items: center;
   gap: 3px;
   margin: 0 1px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -254,7 +254,7 @@
 
 .tpl-picker-search {
   width: 100%;
-  padding: 8px 28px 8px 10px;
+  padding: var(--space-2) 28px var(--space-2) 10px;
   border: 0;
   border-bottom: var(--border-width) solid var(--border-color);
   border-radius: 0;
@@ -271,11 +271,11 @@
 .tpl-picker-list {
   max-height: 320px;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 
 .tpl-picker-group {
-  padding: 8px 10px 2px;
+  padding: var(--space-2) 10px var(--space-0-5);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
   letter-spacing: 0.04em;
@@ -302,7 +302,7 @@
 .tpl-picker-label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
 }
 
@@ -311,7 +311,7 @@
   color: var(--text-tertiary);
   border: var(--border-width) dashed var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 0 4px;
+  padding: 0 var(--space-1);
 }
 
 .tpl-picker-desc,
@@ -327,10 +327,10 @@
 
 .tpl-chip-settings {
   width: 300px;
-  padding: 12px;
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .tpl-chip-head {
@@ -352,15 +352,15 @@
 .tpl-chip-missing {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--space-2) 10px;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
 }
 
 .tpl-chip-missing legend {
-  padding: 0 4px;
+  padding: 0 var(--space-1);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
@@ -368,7 +368,7 @@
 .tpl-chip-opt {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   font-size: var(--font-sm);
 }
 
@@ -378,7 +378,7 @@
 
 .tpl-chip-fallback {
   width: 90px;
-  padding: 2px 6px;
+  padding: var(--space-0-5) var(--space-1-5);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -397,19 +397,19 @@
 .tpl-vars-title {
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
 }
 
 .tpl-vars-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .tpl-var {
   font-family: var(--font-family);
   font-size: var(--font-xs);
-  padding: 3px 8px;
+  padding: 3px var(--space-2);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
@@ -425,7 +425,7 @@
 /* Marks a variable that is not on every alert, so a template using it wants a `default`. */
 .tpl-var-opt {
   color: var(--text-tertiary);
-  margin-left: 2px;
+  margin-left: var(--space-0-5);
 }
 
 /* ── Preview ──────────────────────────────────────────────────────────────────────────────── */
@@ -435,7 +435,7 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
-  padding: 12px;
+  padding: var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-secondary);
@@ -444,7 +444,7 @@
 .tpl-preview-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -457,13 +457,13 @@
 .tpl-samples {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .tpl-sample {
-  padding: 2px 10px;
+  padding: var(--space-0-5) 10px;
   border: var(--border-width) solid var(--border-color);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-primary);
   color: var(--text-secondary);
   font-size: var(--font-xs);
@@ -485,8 +485,8 @@
 .tpl-card-title {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: var(--space-2);
+  padding: 10px var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
   font-size: var(--font-sm);
   font-weight: var(--weight-medium);
@@ -494,7 +494,7 @@
 }
 
 .tpl-card-meta {
-  padding: 4px 12px;
+  padding: var(--space-1) var(--space-3);
   border-bottom: var(--border-width) solid var(--border-color);
   font-size: var(--font-xs);
   color: var(--text-tertiary);
@@ -502,7 +502,7 @@
 
 /* A rendered body can be long; scroll it inside the dialog rather than growing the dialog. */
 .tpl-card-body {
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   max-height: 220px;
   overflow: auto;
   font-size: var(--font-xs);
@@ -511,14 +511,14 @@
 }
 
 .tpl-card-body .badge {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
 }
 
 .tpl-cut-mark {
   display: inline-block;
   width: 2px;
   height: 1em;
-  margin: 0 2px;
+  margin: 0 var(--space-0-5);
   vertical-align: middle;
   /* Not a status colour: where a title is cut says nothing about a device (tokens.css). */
   background: var(--accent-color);
@@ -536,7 +536,7 @@
 
 .tpl-problems-lead {
   color: var(--status-warning);
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-1-5);
 }
 
 .tpl-problems ul {
@@ -547,7 +547,7 @@
 }
 
 .tpl-fixed p {
-  margin: 2px 0 0;
+  margin: var(--space-0-5) 0 0;
   font-size: var(--font-xs);
   color: var(--text-secondary);
 }
@@ -559,8 +559,8 @@
 }
 
 .tpl-saved pre {
-  margin: 4px 0 8px;
-  padding: 8px 10px;
+  margin: var(--space-1) 0 var(--space-2);
+  padding: var(--space-2) 10px;
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   font-family: var(--font-family);
@@ -591,8 +591,8 @@
   max-width: 300px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: var(--space-1);
+  padding: var(--space-2) 10px;
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
@@ -605,8 +605,8 @@
 .tpl-status {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
+  gap: var(--space-0-5);
+  padding: var(--space-2) var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   font-size: var(--font-sm);
@@ -632,8 +632,8 @@
 .tpl-status-acts {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1-5);
 }
 
 /* The built-in text, read-only (decision 3): an inset, dashed box, labelled as such. */
@@ -668,7 +668,7 @@
 .tpl-cond-num {
   display: inline-block;
   min-width: 1.2em;
-  margin: 0 1px 0 2px;
+  margin: 0 1px 0 var(--space-0-5);
   color: var(--text-tertiary);
   font-family: var(--ui-font-family);
   font-size: var(--font-xs);
@@ -682,7 +682,7 @@
 
 /* A whole line kept or dropped: its condition at the end of the line, no number. */
 .tpl-line-when {
-  margin-left: 12px;
+  margin-left: var(--space-3);
   color: var(--text-tertiary);
   font-family: var(--ui-font-family);
   font-size: var(--font-xs);
@@ -691,7 +691,7 @@
 
 .tpl-legend {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -701,7 +701,7 @@
 
 .tpl-legend li {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   align-items: baseline;
 }
 
@@ -725,7 +725,7 @@
 
 /* A webhook subject that is saved and reaches no one (decision 8). */
 .tpl-unsent p {
-  margin: 2px 0 0;
+  margin: var(--space-0-5) 0 0;
 }
 
 /* The built-in JSON's keys, explained (decision 9). */
@@ -740,14 +740,14 @@
 
 .tpl-keys dl {
   display: grid;
-  gap: 4px;
-  margin: 6px 0 0;
+  gap: var(--space-1);
+  margin: var(--space-1-5) 0 0;
 }
 
 .tpl-keys dl div {
   display: grid;
   grid-template-columns: 9em minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .tpl-keys dd {
@@ -785,14 +785,14 @@
 .tpl-builtin-acts {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .tpl-code-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .tpl-insert .tpl-link {

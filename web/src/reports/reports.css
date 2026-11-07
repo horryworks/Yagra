@@ -4,7 +4,7 @@
 /* ── Row action clusters (tables, builder section header) ── */
 .rp-actions {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--space-1);
   justify-content: flex-end;
   align-items: center;
 }
@@ -18,7 +18,7 @@
 .rb-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .rb-field > span {
   font-size: var(--font-sm);
@@ -30,7 +30,7 @@
 .rb-check {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
@@ -42,7 +42,7 @@
   font-size: var(--font-sm);
   color: var(--text-secondary);
   border-top: var(--border-width) solid var(--border-color);
-  padding-top: 12px;
+  padding-top: var(--space-3);
 }
 
 .rb-catalog {
@@ -51,24 +51,24 @@
   background: var(--bg-primary);
   max-height: 220px;
   overflow-y: auto;
-  padding: 8px;
+  padding: var(--space-2);
 }
 .rb-cat-group + .rb-cat-group {
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 .rb-cat-group-title {
   font-size: var(--font-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-tertiary);
-  margin: 4px 4px 6px;
+  margin: var(--space-1) var(--space-1) var(--space-1-5);
 }
 .rb-cat-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-sm);
 }
 .rb-cat-item:hover {
@@ -86,18 +86,18 @@
 .rb-sections {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .rb-empty {
   font-size: var(--font-sm);
   color: var(--text-tertiary);
   font-style: italic;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
 }
 .rb-section {
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   background: var(--bg-primary);
 }
 .rb-section-top {
@@ -114,12 +114,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 8px;
+  margin-top: var(--space-2);
 }
 .rb-setting {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 140px;
 }
 .rb-setting > span {
@@ -158,7 +158,7 @@
   font-weight: var(--weight-normal);
 }
 .rp-viewer-error {
-  margin-bottom: 12px;
+  margin-bottom: var(--space-3);
   font-size: var(--font-sm);
   color: var(--status-critical);
 }
@@ -180,7 +180,7 @@
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 24px;
+  padding: var(--space-5);
 }
 /* A viewer the operator made taller (ADR-198) gives the frame all of it rather than 62% of the
    window: the body becomes a column and the frame takes what the error line leaves. */

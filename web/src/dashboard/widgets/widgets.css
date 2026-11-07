@@ -8,7 +8,7 @@
   align-items: flex-end;
   gap: 3px;
   min-height: 120px;
-  padding-top: 4px;
+  padding-top: var(--space-1);
 }
 
 .vbar {
@@ -40,7 +40,7 @@
 .dwl-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: var(--font-sm);
   min-width: 0;
 }
@@ -78,10 +78,10 @@
 .matrix-tile {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: var(--space-2);
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
-  padding: 8px 10px 8px 0;
+  padding: var(--space-2) 10px var(--space-2) 0;
   overflow: hidden;
 }
 
@@ -94,7 +94,7 @@
 .matrix-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 
@@ -115,14 +115,14 @@
 /* Stat strip (poller health): a row of big-number stats. */
 .statstrip {
   display: flex;
-  gap: 24px;
+  gap: var(--space-5);
   flex-wrap: wrap;
 }
 
 .statstrip-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .statstrip-val {
@@ -264,7 +264,7 @@ html[data-viewport='mobile'] .iftraffic-actions select {
 .iftraffic-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -391,7 +391,7 @@ html[data-viewport='mobile'] .vpnsess-actions select {
 .vpnsess-chip {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -455,7 +455,7 @@ html[data-viewport='mobile'] .vpnsess-actions select {
 .vpnsess-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -572,7 +572,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
 .wclock-meta {
   display: flex;
   flex-wrap: wrap;
-  column-gap: 6px;
+  column-gap: var(--space-1-5);
   min-width: 0;
   color: var(--text-tertiary);
   font-size: var(--font-xs);
@@ -609,14 +609,14 @@ html[data-viewport='mobile'] .vpnsess-rm {
 .wclock-sec {
   margin-left: 1px;
   color: var(--text-tertiary);
-  font-size: 0.6em;
+  font-size: 0.6em; /* ui-allow: sized against the clock digits it follows */
 }
 
 .wclock-ampm {
   margin-left: 3px;
   color: var(--text-tertiary);
   font-family: var(--ui-font-family);
-  font-size: 0.5em;
+  font-size: 0.5em; /* ui-allow: sized against the clock digits it follows */
   font-weight: 500;
 }
 
@@ -655,7 +655,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
     grid-template-areas:
       'name ico'
       'time time';
-    row-gap: 2px;
+    row-gap: var(--space-0-5);
     padding: var(--space-2) 10px;
     border: 0;
     border-radius: var(--radius-sm);
@@ -690,7 +690,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
 .wclock-solo .wclock-label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   max-width: 100%;
 }
 
@@ -735,7 +735,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 96px auto auto auto;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .wclock-labelinput {
@@ -759,7 +759,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
 
 .wclock-addrow {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .wclock-addinput {
@@ -777,5 +777,5 @@ html[data-viewport='mobile'] .vpnsess-rm {
 .wclock-check {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }

@@ -8,7 +8,7 @@
 }
 
 .catalog-section-title {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
   font-size: var(--font-xs);
   font-weight: var(--weight-medium);
   text-transform: uppercase;
@@ -25,9 +25,9 @@
 .catalog-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   text-align: left;
-  padding: 10px 12px;
+  padding: 10px var(--space-3);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-primary);
@@ -43,7 +43,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .catalog-item-title {
@@ -57,7 +57,7 @@
 }
 
 .catalog-item-add {
-  margin-top: 4px;
+  margin-top: var(--space-1);
   font-size: var(--font-xs);
   color: var(--accent-color);
 }

@@ -10,13 +10,13 @@
 .mfilt-sec {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 .mfilt-h {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   font-size: var(--font-xs);
   font-weight: var(--weight-medium);
@@ -27,12 +27,12 @@
    "something is set here" border is not on screen — the sheet is the only place it can be said. */
 .mfilt-on {
   color: var(--accent-color);
-  font-size: 0.7em;
+  font-size: 0.7em; /* ui-allow: a glyph sized against the column name it sits beside */
 }
 
 .mfilt-clear,
 .mfilt-btn {
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   /* Toolbar height, so it lines up with the pickers and the search box it sits beside. The mobile
      override below puts the tap target back — see the token's own note. */
   min-height: var(--control-h);
@@ -95,5 +95,5 @@ html[data-viewport='mobile'] .mfilt-clear {
   width: 300px;
   max-height: 70vh;
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--space-3);
 }

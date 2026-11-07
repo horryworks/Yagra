@@ -1,18 +1,27 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Card / pane (§4): the flat surface container (replaces the old `.pane`). Optional title and
 // a right-aligned actions slot for a toolbar.
+//
+// ADR-246: `footer` is the section's action row - under the content, right-aligned like a
+// dialog's - with the save note beside the button that saved. Inside a `Page` the body spaces
+// its own children (12px), so a migrated screen sets no margin between the rows it puts here.
 
 import type { ReactNode } from 'react';
+import { isShown } from './space';
 import './Card.css';
+// The title is the one heading look, defined there (ADR-246 decision 3).
+import './Section.css';
 
 interface Props {
   title?: ReactNode;
   actions?: ReactNode;
+  /** The action row under the content: buttons, and a `SaveNote` before them. */
+  footer?: ReactNode;
   className?: string;
   children: ReactNode;
 }
 
-export function Card({ title, actions, className, children }: Props) {
+export function Card({ title, actions, footer, className, children }: Props) {
   return (
     <section className={['card', className].filter(Boolean).join(' ')}>
       {(title || actions) && (
@@ -22,6 +31,7 @@ export function Card({ title, actions, className, children }: Props) {
         </div>
       )}
       <div className="card-body">{children}</div>
+      {isShown(footer) && <div className="card-footer">{footer}</div>}
     </section>
   );
 }

@@ -5,7 +5,7 @@
 .reclassify-select-all {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   cursor: pointer;
 }
 
@@ -16,7 +16,7 @@
 
 .reclassify-message {
   color: var(--text-primary);
-  margin: 8px 0;
+  margin: var(--space-2) 0;
 }
 
 .reclassify-lock {

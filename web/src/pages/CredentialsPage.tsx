@@ -23,7 +23,9 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
-import { TextInput, Select, FieldError } from '../components/ui/Field';
+import { TextInput, Select, Field } from '../components/ui/Field';
+import { Fields, FieldRow, FieldValue } from '../components/ui/FormLayout';
+import { Inline } from '../components/ui/Page';
 import { SecretInput } from '../components/ui/SecretInput';
 import { ScreenLink } from '../components/ui/ScreenLink';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -144,10 +146,7 @@ function CliLoginFields({
   const { t } = useTranslation('access');
   return (
     <>
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="cred-cli-user">
-          {t('cred.cli.username')}
-        </label>
+      <Field label={t('cred.cli.username')}>
         <TextInput
           id="cred-cli-user"
           autoComplete="off"
@@ -155,22 +154,16 @@ function CliLoginFields({
           value={value.username}
           onChange={(e) => onChange({ ...value, username: e.target.value })}
         />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="cred-cli-password">
-          {t('cred.cli.password')}
-        </label>
+      </Field>
+      <Field label={t('cred.cli.password')}>
         <SecretInput
           id="cred-cli-password"
           stored={false}
           value={value.password}
           onChange={(password) => onChange({ ...value, password })}
         />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label" htmlFor="cred-cli-enable">
-          {t('cred.cli.enable')}
-        </label>
+      </Field>
+      <Field label={t('cred.cli.enable')}>
         <SecretInput
           id="cred-cli-enable"
           stored={false}
@@ -178,7 +171,7 @@ function CliLoginFields({
           value={value.enable}
           onChange={(enable) => onChange({ ...value, enable })}
         />
-      </div>
+      </Field>
     </>
   );
 }
@@ -198,8 +191,7 @@ function HttpAuthFields({
   const set = (patch: Partial<HttpAuthState>) => onChange({ ...value, ...patch });
   return (
     <>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('cred.http.scheme')}</label>
+      <Field label={t('cred.http.scheme')}>
         <Select
           value={value.scheme}
           onChange={(e) => set({ scheme: e.target.value as HttpAuthScheme })}
@@ -210,15 +202,13 @@ function HttpAuthFields({
             </option>
           ))}
         </Select>
-      </div>
+      </Field>
       {value.scheme === 'basic' && (
         <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.http.username')}</label>
+          <Field label={t('cred.http.username')}>
             <TextInput value={value.username} onChange={(e) => set({ username: e.target.value })} />
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.http.password')}</label>
+          </Field>
+          <Field label={t('cred.http.password')}>
             <TextInput
               className="mono"
               type="password"
@@ -226,12 +216,11 @@ function HttpAuthFields({
               onChange={(e) => set({ password: e.target.value })}
               autoComplete="new-password"
             />
-          </div>
+          </Field>
         </>
       )}
       {value.scheme === 'bearer' && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('cred.http.token')}</label>
+        <Field label={t('cred.http.token')}>
           <TextInput
             className="mono"
             type="password"
@@ -239,24 +228,22 @@ function HttpAuthFields({
             onChange={(e) => set({ token: e.target.value })}
             autoComplete="new-password"
           />
-        </div>
+        </Field>
       )}
       {value.scheme === 'header' && (
         <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.http.headerName')}</label>
+          <Field
+            label={t('cred.http.headerName')}
+            error={headerNameRefused(value.headerName) ? t('cred.http.headerNameRefused') : null}
+          >
             <TextInput
               className="mono"
               placeholder="X-API-Key"
               value={value.headerName}
               onChange={(e) => set({ headerName: e.target.value })}
             />
-            {headerNameRefused(value.headerName) && (
-              <FieldError>{t('cred.http.headerNameRefused')}</FieldError>
-            )}
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.http.headerValue')}</label>
+          </Field>
+          <Field label={t('cred.http.headerValue')}>
             <TextInput
               className="mono"
               type="password"
@@ -264,7 +251,7 @@ function HttpAuthFields({
               onChange={(e) => set({ headerValue: e.target.value })}
               autoComplete="new-password"
             />
-          </div>
+          </Field>
         </>
       )}
     </>
@@ -279,17 +266,15 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
   const set = (patch: Partial<V3State>) => onChange({ ...value, ...patch });
   return (
     <>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('cred.v3.usmUser')}</label>
+      <Field label={t('cred.v3.usmUser')}>
         <TextInput
           className="mono"
           placeholder={t('cred.v3.usmUserPlaceholder')}
           value={value.user}
           onChange={(e) => set({ user: e.target.value })}
         />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('cred.v3.securityLevel')}</label>
+      </Field>
+      <Field label={t('cred.v3.securityLevel')}>
         <Select
           value={value.level}
           onChange={(e) => set({ level: e.target.value as (typeof V3_LEVELS)[number] })}
@@ -300,11 +285,10 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
             </option>
           ))}
         </Select>
-      </div>
+      </Field>
       {needsAuth && (
-        <div className="cred-v3-pair">
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.v3.authProtocol')}</label>
+        <FieldRow>
+          <Field label={t('cred.v3.authProtocol')}>
             <Select value={value.authProto} onChange={(e) => set({ authProto: e.target.value })}>
               {V3_AUTH_PROTOCOLS.map((p) => (
                 <option key={p} value={p}>
@@ -312,9 +296,8 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
                 </option>
               ))}
             </Select>
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.v3.authPassphrase')}</label>
+          </Field>
+          <Field label={t('cred.v3.authPassphrase')}>
             <TextInput
               className="mono"
               type="password"
@@ -322,13 +305,12 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
               onChange={(e) => set({ authKey: e.target.value })}
               autoComplete="new-password"
             />
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
       )}
       {needsPriv && (
-        <div className="cred-v3-pair">
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.v3.privacyProtocol')}</label>
+        <FieldRow>
+          <Field label={t('cred.v3.privacyProtocol')}>
             <Select value={value.privProto} onChange={(e) => set({ privProto: e.target.value })}>
               {V3_PRIV_PROTOCOLS.map((p) => (
                 <option key={p} value={p}>
@@ -336,9 +318,8 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
                 </option>
               ))}
             </Select>
-          </div>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.v3.privacyPassphrase')}</label>
+          </Field>
+          <Field label={t('cred.v3.privacyPassphrase')}>
             <TextInput
               className="mono"
               type="password"
@@ -346,8 +327,8 @@ function V3Fields({ value, onChange }: { value: V3State; onChange: (v: V3State) 
               onChange={(e) => set({ privKey: e.target.value })}
               autoComplete="new-password"
             />
-          </div>
-        </div>
+          </Field>
+        </FieldRow>
       )}
     </>
   );
@@ -428,50 +409,47 @@ function AddCredentialModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('cred.field.name')}</label>
-        <TextInput
-          placeholder={t('cred.add.namePlaceholder')}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('cred.field.type')}</label>
-        <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
-          {kinds.map((k) => (
-            <option key={k} value={k}>
-              {kindLabel(k, t)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      {isV3 ? (
-        <V3Fields value={v3} onChange={setV3} />
-      ) : isHttpAuth ? (
-        <HttpAuthFields value={httpAuth} onChange={setHttpAuth} />
-      ) : isCli ? (
-        <CliLoginFields value={cli} onChange={setCli} />
-      ) : (
-        <div className="modal-field">
-          <label className="modal-field-label" htmlFor="cred-add-secret">
-            {t('cred.field.secret')}
-          </label>
-          <SecretInput
-            id="cred-add-secret"
-            stored={false}
-            placeholder={
-              kind === 'api_token'
-                ? t('cred.add.secretPlaceholder.apiToken')
-                : t('cred.add.secretPlaceholder.community')
-            }
-            value={secret}
-            onChange={setSecret}
+      <Fields>
+        <Field label={t('cred.field.name')}>
+          <TextInput
+            placeholder={t('cred.add.namePlaceholder')}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
           />
-        </div>
-      )}
-      <FormError form={form} />
+        </Field>
+        <Field label={t('cred.field.type')}>
+          <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
+            {kinds.map((k) => (
+              <option key={k} value={k}>
+                {kindLabel(k, t)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {isV3 ? (
+          <V3Fields value={v3} onChange={setV3} />
+        ) : isHttpAuth ? (
+          <HttpAuthFields value={httpAuth} onChange={setHttpAuth} />
+        ) : isCli ? (
+          <CliLoginFields value={cli} onChange={setCli} />
+        ) : (
+          <Field label={t('cred.field.secret')}>
+            <SecretInput
+              id="cred-add-secret"
+              stored={false}
+              placeholder={
+                kind === 'api_token'
+                  ? t('cred.add.secretPlaceholder.apiToken')
+                  : t('cred.add.secretPlaceholder.community')
+              }
+              value={secret}
+              onChange={setSecret}
+            />
+          </Field>
+        )}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -545,76 +523,72 @@ function EditCredentialModal({
         />
       }
     >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('cred.field.name')}</label>
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-      </div>
-      {/* A kind this build does not know gets no replacement at all: it cannot know the shape the
-          secret is sealed in, and a control that can only do harm is not drawn. */}
-      {/* The stored secret is a masked mark with Replace (`SecretInput`); Replace opens the type
-          and the new value, and "Keep stored" closes them again without sending a secret. */}
-      {replacement.mode !== 'rename_only' && !replace && (
-        <div className="modal-field">
-          <label className="modal-field-label">{t('cred.field.secret')}</label>
-          <SecretInput
-            stored
-            value=""
-            onChange={setSecret}
-            replacing={false}
-            onReplacingChange={setReplace}
-          />
-        </div>
-      )}
-      {replace && (
-        <>
-          <div className="modal-field">
-            <label className="modal-field-label">{t('cred.field.type')}</label>
-            {fixedKind ? (
-              // An integration's key keeps its kind: the select never held it, so it showed
-              // another one over it and saved that. `.modal-field-value` is what a field holds
-              // where a control cannot go — it keeps the row the height every other field is.
-              <span className="modal-field-value">{kindLabel(fixedKind, t)}</span>
-            ) : (
-              <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
-                {KINDS.map((k) => (
-                  <option key={k} value={k}>
-                    {kindLabel(k, t)}
-                  </option>
-                ))}
-              </Select>
-            )}
-          </div>
-          {isV3 || isCli ? (
-            <>
-              {isV3 ? (
-                <V3Fields value={v3} onChange={setV3} />
+      <Fields>
+        <Field label={t('cred.field.name')}>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </Field>
+        {/* A kind this build does not know gets no replacement at all: it cannot know the shape the
+            secret is sealed in, and a control that can only do harm is not drawn. */}
+        {/* The stored secret is a masked mark with Replace (`SecretInput`); Replace opens the type
+            and the new value, and "Keep stored" closes them again without sending a secret. */}
+        {replacement.mode !== 'rename_only' && !replace && (
+          <Field label={t('cred.field.secret')}>
+            <SecretInput
+              stored
+              value=""
+              onChange={setSecret}
+              replacing={false}
+              onReplacingChange={setReplace}
+            />
+          </Field>
+        )}
+        {replace && (
+          <>
+            <Field label={t('cred.field.type')}>
+              {fixedKind ? (
+                // An integration's key keeps its kind: the select never held it, so it showed
+                // another one over it and saved that. `FieldValue` is what a field holds where a
+                // control cannot go — it keeps the row the height every other field is.
+                <FieldValue>{kindLabel(fixedKind, t)}</FieldValue>
               ) : (
-                <CliLoginFields value={cli} onChange={setCli} />
+                <Select value={kind} onChange={(e) => setKind(e.target.value as Kind)}>
+                  {KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {kindLabel(k, t)}
+                    </option>
+                  ))}
+                </Select>
               )}
-              <div className="cred-keep">
-                <Button type="button" onClick={() => setReplace(false)}>
-                  {t('common:secret.keep')}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <div className="modal-field">
-              <label className="modal-field-label" htmlFor="cred-new-secret">
-                {t('cred.edit.newSecret')}
-              </label>
-              <SecretInput
-                id="cred-new-secret"
-                stored
-                value={secret}
-                onChange={setSecret}
-                replacing
-                onReplacingChange={setReplace}
-              />
-            </div>
-          )}
-        </>
-      )}
-      <FormError form={form} />
+            </Field>
+            {isV3 || isCli ? (
+              <>
+                {isV3 ? (
+                  <V3Fields value={v3} onChange={setV3} />
+                ) : (
+                  <CliLoginFields value={cli} onChange={setCli} />
+                )}
+                <Inline>
+                  <Button type="button" onClick={() => setReplace(false)}>
+                    {t('common:secret.keep')}
+                  </Button>
+                </Inline>
+              </>
+            ) : (
+              <Field label={t('cred.edit.newSecret')}>
+                <SecretInput
+                  id="cred-new-secret"
+                  stored
+                  value={secret}
+                  onChange={setSecret}
+                  replacing
+                  onReplacingChange={setReplace}
+                />
+              </Field>
+            )}
+          </>
+        )}
+        <FormError form={form} />
+      </Fields>
     </Modal>
   );
 }
@@ -652,23 +626,24 @@ function RevealCredentialModal({ cred, onClose }: { cred: CredentialSummary; onC
         </Button>
       }
     >
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-      {!revealed && !error && <p className="form-status">{t('common:loading')}</p>}
-      {shownRevealFields(revealed?.fields ?? []).map((f) => (
-        <div className="modal-field" key={f.field}>
-          <label className="modal-field-label">{t(`cred.reveal.field.${f.field}`)}</label>
-          <div className="cred-reveal-row">
-            <code className="cred-reveal-value mono">{f.value}</code>
-            <Button variant="outline" onClick={() => copy(f.value, f.field)}>
-              {copied === f.field ? t('common:copy.copied') : t('cred.reveal.copy')}
-            </Button>
-          </div>
-        </div>
-      ))}
+      <Fields>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        {!revealed && !error && <p className="form-status">{t('common:loading')}</p>}
+        {shownRevealFields(revealed?.fields ?? []).map((f) => (
+          <Field key={f.field} label={t(`cred.reveal.field.${f.field}`)}>
+            <div className="cred-reveal-row">
+              <code className="cred-reveal-value mono">{f.value}</code>
+              <Button variant="outline" onClick={() => copy(f.value, f.field)}>
+                {copied === f.field ? t('common:copy.copied') : t('cred.reveal.copy')}
+              </Button>
+            </div>
+          </Field>
+        ))}
+      </Fields>
     </Modal>
   );
 }

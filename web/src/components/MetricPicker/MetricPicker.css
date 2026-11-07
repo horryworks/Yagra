@@ -13,7 +13,7 @@
   width: 100%;
   min-width: 0;
   text-align: left;
-  padding: 6px 10px;
+  padding: var(--space-1-5) 10px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -46,11 +46,11 @@
    height is a scroller because the catalog is ~90 rows. */
 .metricpick-pop {
   width: min(460px, calc(100vw - 24px));
-  padding: 8px;
+  padding: var(--space-2);
 }
 
 .metricpick-search {
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 
 .metricpick-list {
@@ -62,7 +62,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  padding: 6px 8px 2px;
+  padding: var(--space-1-5) var(--space-2) var(--space-0-5);
   background: var(--bg-secondary);
   color: var(--text-tertiary);
   font-size: var(--font-xs);
@@ -72,10 +72,10 @@
 .metricpick-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   width: 100%;
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   background: none;
   border: none;
   border-radius: var(--radius-sm);
@@ -96,7 +96,7 @@
 .metricpick-head {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -131,14 +131,14 @@
 .metricpick-empty,
 .metricpick-note {
   margin: 0;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--font-sm);
 }
 
 .metricpick-note {
   border-top: 1px solid var(--border-color);
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
 }
 
 /* A 6px row is not a touch target, and this list is scrolled with a thumb on a tablet. */

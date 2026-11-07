@@ -3,7 +3,7 @@
 .nd-pin {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
 /* The same yellow as the tree's mark, so the button reads as the thing that makes the mark. */

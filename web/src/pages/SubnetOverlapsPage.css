@@ -73,7 +73,7 @@
 .so-kind {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   white-space: nowrap;
   font-size: var(--font-sm);
 }
@@ -103,7 +103,7 @@
 .so-sites {
   display: inline-flex;
   flex-wrap: nowrap;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -114,7 +114,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--font-xs);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -135,7 +135,7 @@
 
 .so-hint {
   display: inline-flex;
-  gap: 6px;
+  gap: var(--space-1-5);
   align-items: center;
   min-width: 0;
   max-width: 100%;
@@ -152,7 +152,7 @@
   flex: none;
   font-size: var(--font-2xs);
   font-weight: var(--weight-semibold);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-radius: var(--radius-sm);
   color: var(--tag-fg);
   background: var(--tag-bg);
@@ -192,7 +192,7 @@
 .so-bars {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   max-width: 640px;
 }
 
@@ -240,13 +240,13 @@
   text-align: left;
   font-weight: var(--weight-medium);
   color: var(--text-secondary);
-  padding: 2px var(--space-3) 2px 0;
+  padding: var(--space-0-5) var(--space-3) var(--space-0-5) 0;
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
 }
 
 .so-places td {
-  padding: 2px var(--space-3) 2px 0;
+  padding: var(--space-0-5) var(--space-3) var(--space-0-5) 0;
   white-space: nowrap;
 }
 

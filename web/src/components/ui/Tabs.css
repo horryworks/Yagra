@@ -1,19 +1,19 @@
 /* Page tab bar (Tabs.tsx). All values are design tokens (ui-conventions). */
 .ui-tabs {
   display: flex;
-  gap: 4px;
+  gap: var(--space-1);
   border-bottom: var(--border-width) solid var(--border-color);
-  margin: 4px 0 12px;
+  margin: var(--space-1) 0 var(--space-3);
 }
 .ui-tab {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  margin-bottom: -1px; /* ui-allow: the active tab's underline sits on the bar's bottom border */
   color: var(--text-secondary);
   font-size: var(--font-md);
   cursor: pointer;
@@ -32,7 +32,7 @@
   color: var(--text-tertiary);
   background: var(--bg-tertiary);
   border-radius: var(--radius-sm);
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
 }
 
 /* On a phone the bar scrolls sideways rather than wrapping or crushing its labels. */

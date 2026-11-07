@@ -1,6 +1,6 @@
 .field {
   height: var(--control-h);
-  padding: 0 10px;
+  padding: 0 var(--space-2);
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
@@ -42,7 +42,7 @@ select.field {
 }
 
 .field-affix .field {
-  padding-right: 4.5em;
+  padding-right: 4.5em; /* ui-allow: room for the unit suffix drawn inside the box, sized in its own text */
 }
 
 .field-suffix {
@@ -62,13 +62,13 @@ select.field {
    unit, varies by browser, and would sit on the native calendar button. So there the suffix stands
    beside the box rather than over its padding. */
 .field-affix:has(> .field[type='datetime-local']) {
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .field-affix > .field[type='datetime-local'] {
   flex: 1;
   min-width: 0;
-  padding-right: 10px;
+  padding-right: var(--space-2);
 }
 
 .field-affix > .field[type='datetime-local'] + .field-suffix {
@@ -79,7 +79,7 @@ select.field {
 .field-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 
@@ -93,7 +93,7 @@ select.field {
 .field.field-area {
   height: auto;
   min-height: 84px;
-  padding: 6px 10px;
+  padding: var(--space-1-5) var(--space-2);
   font-family: var(--font-family);
   line-height: 1.4;
   resize: vertical;

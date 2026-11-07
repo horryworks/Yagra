@@ -15,14 +15,14 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 24px;
+  padding: 20px var(--space-5);
 }
 
 /* Mobile content pane (ADR-027): tighter padding + safe-area insets on the physical edges. Keeps
    the scroll/flex behaviour of .shell-content and only overrides the padding. */
 .shell-content--mobile {
-  padding: 12px;
-  padding-left: max(12px, var(--safe-left));
-  padding-right: max(12px, var(--safe-right));
-  padding-bottom: max(12px, var(--safe-bottom));
+  padding: var(--space-3);
+  padding-left: max(var(--space-3), var(--safe-left));
+  padding-right: max(var(--space-3), var(--safe-right));
+  padding-bottom: max(var(--space-3), var(--safe-bottom));
 }
