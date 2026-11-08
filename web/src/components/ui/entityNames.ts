@@ -21,6 +21,13 @@ export function isEntityResolved(name: string, id?: string): boolean {
   return id != null && id !== '' && id !== name;
 }
 
+/** A site's name for a Site column (ADR-248): `''` when there is no site, and `''` — never the raw
+ *  id — when the folder list does not carry it (deleted since, or not loaded yet). Pure — unit-tested. */
+export function siteNameOf(list: { id: string; name: string }[], siteId: string | null | undefined): string {
+  if (!siteId) return '';
+  return list.find((e) => e.id === siteId)?.name ?? '';
+}
+
 /** Returns id→name resolvers for node / group / profile references. Each resolver returns the raw
  *  id unchanged when no match is found (so a deleted/unknown reference degrades to the only thing we
  *  have).
@@ -43,6 +50,8 @@ export function useEntityNames() {
   // the names rather than fetched separately: the answer already carries it, and a second request
   // per node would undo the batching.
   const [nodeGroups, setNodeGroups] = useState<Record<string, string | null>>({});
+  // The site each resolved node sits under, from the same batch (ADR-248).
+  const [nodeSites, setNodeSites] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
     api.listNodeGroups().then(setGroups).catch(() => undefined);
@@ -72,6 +81,11 @@ export function useEntityNames() {
           for (const e of entries) next[e.id] = e.group_id ?? null;
           return next;
         });
+        setNodeSites((prev) => {
+          const next = { ...prev };
+          for (const e of entries) next[e.id] = e.site_id ?? null;
+          return next;
+        });
       },
     });
   }
@@ -95,6 +109,18 @@ export function useEntityNames() {
       return undefined;
     },
     [nodeGroups],
+  );
+  /** The name of the site a node sits under (ADR-248), or `''` — no Site folder above it, the
+   *  node not resolved yet (asking enqueues it), or a site this account's folder list cannot name. */
+  const nodeSite = useCallback(
+    (id: string): string => {
+      if (!(id in nodeSites)) {
+        batcher.current?.request(id);
+        return '';
+      }
+      return siteNameOf(groups, nodeSites[id]);
+    },
+    [nodeSites, groups],
   );
   const groupName = useCallback((id: string) => resolveName(groups, id), [groups]);
   const profileName = useCallback((id: string) => resolveName(profiles, id), [profiles]);
@@ -130,5 +156,5 @@ export function useEntityNames() {
     [nodeName, profileName, groupName],
   );
 
-  return { groups, profiles, nodeName, nodeGroup, groupName, profileName, scopeName };
+  return { groups, profiles, nodeName, nodeGroup, nodeSite, groupName, profileName, scopeName };
 }

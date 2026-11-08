@@ -51,6 +51,9 @@ export interface NameEntry {
   /** The folder the node is filed in, `null` for an ungrouped node (ADR-243 decision 4). Optional
    *  only so a fake in a test may leave it out; the endpoint always sends it. */
   group_id?: string | null;
+  /** The nearest Site folder at or above that folder, `null` when there is none (ADR-248). Optional
+   *  for the same reason as `group_id`. */
+  site_id?: string | null;
 }
 
 export interface NameBatchDeps {

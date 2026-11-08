@@ -40,6 +40,7 @@
     "transitionsLoaded": "件の遷移を読み込み",
     "cols": {
       "severity": "重大度",
+      "site": "サイト",
       "node": "ノード",
       "what": "内容",
       "state": "状態",

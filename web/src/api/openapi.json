@@ -40620,6 +40620,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "site_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The nearest folder of type Site at or above `group_id`; `null` when no folder on the way up\nis a Site (ADR-248). The alert lists show it in their Site column. Always present."
           }
         }
       },

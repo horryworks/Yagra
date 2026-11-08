@@ -12145,6 +12145,12 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+            /**
+             * Format: uuid
+             * @description The nearest folder of type Site at or above `group_id`; `null` when no folder on the way up
+             *     is a Site (ADR-248). The alert lists show it in their Site column. Always present.
+             */
+            site_id?: string | null;
         };
         /** @description Request body for `POST /api/v1/node-names`: the node ids whose display names to resolve. */
         NodeNamesReq: {

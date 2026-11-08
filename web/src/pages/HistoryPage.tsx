@@ -23,6 +23,8 @@ import { useLoad } from '../lib/useLoad';
 import { Badge } from '../components/ui/Badge';
 import { useEntityNames } from '../components/ui/entityNames';
 import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClippedText } from '../components/ui/ClippedText';
+import { subjectNodeId } from '../lib/alertSubject';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { serverToolbarFilters } from '../lib/listToolbar';
 import { isAnyFiltered, specColumns } from '../lib/columnFilter';
@@ -44,7 +46,7 @@ export function HistoryPage() {
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
-  const { nodeName, groupName } = useEntityNames();
+  const { nodeName, nodeSite, groupName } = useEntityNames();
 
   // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
   // `useFilterParams` derives the filter state from whatever list it is given and the fetch effect
@@ -69,13 +71,27 @@ export function HistoryPage() {
         ),
       },
       {
+        // ADR-248: the nearest Site folder above the node, as it is filed NOW; blank for none and
+        // for a pool alert. No filter and no sort, like every column here (both are server-side).
+        key: 'site',
+        header: t('history.cols.site'),
+        // The floors here and on Node and What keep the table at 870px, inside a 1152px window
+        // (`filterGeometry.spec.ts`); three columns at the default 160px floor pushed When's funnel
+        // off the edge.
+        width: 'minmax(100px, 0.8fr)',
+        render: (r) => {
+          const node = subjectNodeId(r);
+          return <ClippedText text={node === null ? '' : nodeSite(node)} />;
+        },
+      },
+      {
         // ⚠️ Keyed `node_q`, not `node`: the column key **is** the filter's URL key (ADR-053
         // decision 12) and this one carries a node-*name* substring, not the id `node_id` already
         // means. Nothing type-checks the `specs[c.key]` lookup below — a mismatch here silently
         // ships a column with no filter row cell.
         key: 'node_q',
         header: t('history.cols.node'),
-        width: '1.4fr',
+        width: 'minmax(140px, 1.4fr)',
         // A row whose subject is not a node has nothing to resolve through the inventory — see
         // `lib/alertSubject` for why reading `node` without the kind is the mistake to avoid.
         render: (r) => <AlertSubjectName alert={r} nodeName={nodeName} />,
@@ -85,7 +101,7 @@ export function HistoryPage() {
         // the URL key.
         key: 'metric',
         header: t('history.cols.what'),
-        width: '1.6fr',
+        width: 'minmax(140px, 1.6fr)',
         render: (r) => <AlertWhatText what={alertWhat(r)} />,
       },
       {
@@ -124,7 +140,7 @@ export function HistoryPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [nodeName, specs, t]);
+  }, [nodeName, nodeSite, specs, t]);
 
   // The filters live in the URL — the only source of truth for them, so a node page can deep-link
   // to "this node's alert history" and a narrowed view survives a reload and can be shared. Since

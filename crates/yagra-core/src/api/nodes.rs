@@ -968,6 +968,9 @@ pub(crate) struct NodeNameEntry {
     /// alerting node under its site pin by it (ADR-191 Inc.15). Always present, so a client can
     /// tell "ungrouped" from a core too old to say.
     group_id: Option<Uuid>,
+    /// The nearest folder of type Site at or above `group_id`; `null` when no folder on the way up
+    /// is a Site (ADR-248). The alert lists show it in their Site column. Always present.
+    site_id: Option<Uuid>,
 }
 
 /// Resolve a batch of node ids to their display names. The shared `useEntityNames` resolver, and
@@ -995,12 +998,17 @@ async fn node_names_batch(
         return Ok(Json(Vec::new()));
     };
     // Best-effort like `resolve_node_names`: a failed read answers nothing, and every cell keeps
-    // the raw id it already had.
-    let found = admin
-        .repo
-        .node_names_and_groups(scope.group_filter(), &ids)
-        .await
-        .unwrap_or_default();
+    // the raw id it already had. A failed folder read only blanks the Site column.
+    let (found, groups) = tokio::join!(
+        admin.repo.node_names_and_groups(scope.group_filter(), &ids),
+        admin.groups.list(),
+    );
+    let found = found.unwrap_or_default();
+    let groups = groups.unwrap_or_default();
+    let sites = crate::inventory::sites::nearest_site_by_node(
+        &groups,
+        found.iter().map(|(id, (_, group_id))| (*id, *group_id)),
+    );
     Ok(Json(
         ids.iter()
             .filter_map(|id| {
@@ -1008,6 +1016,7 @@ async fn node_names_batch(
                     id: *id,
                     name: name.clone(),
                     group_id: *group_id,
+                    site_id: sites.get(id).copied().flatten(),
                 })
             })
             .collect(),
@@ -4015,6 +4024,53 @@ mod tests {
             vec![a.to_string().as_str()],
             "the scope did not narrow the answer"
         );
+    }
+
+    /// `POST /node-names` names each node's site (ADR-248): the nearest Site folder at or above its
+    /// folder, and `null` — present, not left out — when there is none, never the node's own
+    /// folder.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn node_names_carry_the_nearest_site_folder_or_null(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use yagra_base::groups::{GroupRepo, GroupType};
+        use yagra_base::pgtest;
+        let repo = GroupRepo::new(pool.clone());
+        let site = pgtest::group(&pool, "site-a").await;
+        let floor = repo
+            .create("floor-1", GroupType::Generic, Some(site), None)
+            .await
+            .unwrap();
+        let plain = repo
+            .create("core", GroupType::DeviceType, None, None)
+            .await
+            .unwrap();
+        let under = pgtest::node(&pool, "sw-01", 1, Some(floor)).await;
+        let inside = pgtest::node(&pool, "sw-02", 2, Some(site)).await;
+        let no_site = pgtest::node(&pool, "rt-01", 3, Some(plain)).await;
+        let root = pgtest::node(&pool, "loose", 4, None).await;
+        let st = live_state(pool).await;
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let body = serde_json::json!({ "ids": [under, inside, no_site, root] });
+        let (status, rows) = send(&st, "POST", "/api/v1/node-names", &viewer, Some(body)).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{rows}");
+        let rows = rows.as_array().expect("an array");
+        let row = |id: Uuid| rows.iter().find(|r| r["id"] == id.to_string()).unwrap();
+        assert_eq!(row(under)["site_id"], site.to_string(), "under a site");
+        assert_eq!(
+            row(inside)["site_id"],
+            site.to_string(),
+            "in the site itself"
+        );
+        for (id, what) in [(no_site, "no site above"), (root, "at the root")] {
+            assert!(
+                row(id)
+                    .get("site_id")
+                    .is_some_and(serde_json::Value::is_null),
+                "{what}: must say null, not leave the field out or name the own folder"
+            );
+        }
     }
 
     /// Writing only the note is **accepted** (204) and touches nothing else on the node (ADR-239).

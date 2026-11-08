@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Alerts ▸ Active alerts and History show each alert's site.** A Site column between Severity and Node names the nearest folder of type *Site* above the node. It is blank when no folder above the node is a Site, and for a poller-pool alert. History shows the site the node is filed under now, not where it was when the alert fired. To list one site's alerts, pick that folder in the scope picker on the left; the column itself has no filter. `POST /api/v1/node-names` now answers a `site_id` beside each node's `group_id` (`null` when there is none), and the MCP tools `get_active_alerts` and `get_alert_history` return a `site_name` (ADR-248).
+
 ## v0.3.73 — Use your own LLM server for AI analysis, match syslog and flows by any interface address, and one layout across every screen
 
 ### New Features

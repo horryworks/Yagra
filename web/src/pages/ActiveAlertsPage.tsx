@@ -28,6 +28,7 @@ import { Page, Stack } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClippedText } from '../components/ui/ClippedText';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels, serverToolbarFilters } from '../lib/listToolbar';
 import { isAnyFiltered, specColumns } from '../lib/columnFilter';
@@ -68,7 +69,7 @@ export function ActiveAlertsPage() {
   const alerts = useAlertStore((s) => s.alerts);
   // Worst first, then newest — the order the table opens in and returns to when a sort is cleared.
   const all = useMemo(() => sortedAlerts(alerts), [alerts]);
-  const { nodeName, nodeGroup, groups, groupName } = useEntityNames();
+  const { nodeName, nodeGroup, nodeSite, groups, groupName } = useEntityNames();
   const held = useHeldNotifications();
 
   // One answer per row to "which notes", shared by the cell, the Notes filter and its sort.
@@ -156,6 +157,10 @@ export function ActiveAlertsPage() {
   const navigate = useNavigate();
 
   const columns = useMemo<Column<Alert>[]>(() => {
+    const siteOf = (a: Alert) => {
+      const node = subjectNodeId(a);
+      return node === null ? '' : nodeSite(node);
+    };
     const cols: Column<Alert>[] = [
       {
         key: 'severity',
@@ -169,15 +174,26 @@ export function ActiveAlertsPage() {
         ),
       },
       {
+        // ADR-248: the nearest Site folder above the node; blank for none and for a pool alert.
+        key: 'site',
+        header: t('history.cols.site'),
+        // The same tracks as History's Site, Node and What, so the two tables line up.
+        width: 'minmax(100px, 0.8fr)',
+        render: (a) => <ClippedText text={siteOf(a)} />,
+        // No filter (a site is narrowed with the scope picker), so it states its own order; a
+        // blank site sorts last rather than first.
+        sortValue: (a) => siteOf(a) || null,
+      },
+      {
         key: 'node_q',
         header: t('history.cols.node'),
-        width: '1.4fr',
+        width: 'minmax(140px, 1.4fr)',
         render: (a) => <AlertSubjectName alert={a} nodeName={nodeName} />,
       },
       {
         key: 'metric',
         header: t('history.cols.what'),
-        width: '1.6fr',
+        width: 'minmax(140px, 1.6fr)',
         // What the check measured, in place of the check's (unnameable) hash id; the id stays on
         // hover because it is the handle the API takes (RCA).
         render: (a) => (
@@ -242,7 +258,7 @@ export function ActiveAlertsPage() {
     }
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, nodeName, notesOf, canExplain, specs]);
+  }, [t, nodeName, nodeSite, notesOf, canExplain, specs]);
 
   const sorting = useClientSort(columns, shown);
 

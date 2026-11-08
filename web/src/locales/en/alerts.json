@@ -40,6 +40,7 @@
     "transitionsLoaded": "transitions loaded",
     "cols": {
       "severity": "Severity",
+      "site": "Site",
       "node": "Node",
       "what": "What",
       "state": "State",

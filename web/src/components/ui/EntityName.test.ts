@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { isEntityResolved, resolveName } from './entityNames';
+import { isEntityResolved, resolveName, siteNameOf } from './entityNames';
+
+describe('siteNameOf (ADR-248)', () => {
+  const folders = [{ id: 'site-1', name: 'site-a' }];
+
+  it('names a site the folder list carries', () => {
+    expect(siteNameOf(folders, 'site-1')).toBe('site-a');
+  });
+
+  it('is blank for no site, and blank rather than the raw id for a site it cannot name', () => {
+    expect(siteNameOf(folders, null)).toBe('');
+    expect(siteNameOf(folders, undefined)).toBe('');
+    expect(siteNameOf(folders, 'gone-9')).toBe('');
+    expect(siteNameOf([], 'site-1')).toBe('');
+  });
+});
 
 describe('EntityName helpers', () => {
   const nodes = [

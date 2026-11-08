@@ -154,6 +154,9 @@ pub struct AlertDto {
     pub check_id: Uuid,
     /// Resolved node display name when available (else `None`; the caller keeps the id).
     pub node_name: Option<String>,
+    /// The node's site: the name of the nearest folder of type Site above it (ADR-248). `null`
+    /// when no folder above the node is a Site, and for an alert that is not about a node.
+    pub site_name: Option<String>,
     /// `info` / `warning` / `critical`.
     pub severity: String,
     /// The committed state that fired: `warning`/`critical`/`unreachable`/…
@@ -207,6 +210,8 @@ impl AlertDto {
             subject_name: alert.subject.name().map(str::to_owned),
             check_id: alert.check.0,
             node_name,
+            // Filled by the caller, which can read the folder tree; this builder cannot.
+            site_name: None,
             severity: alert.severity.as_str().to_owned(),
             state: alert.state.as_str().to_owned(),
             metric: alert.metric.clone(),
@@ -239,6 +244,9 @@ pub struct AlertHistoryDto {
     /// The subject's name, for a subject identified by name rather than by id (the poller pool).
     pub subject_name: Option<String>,
     pub node_name: Option<String>,
+    /// The node's site **now** — the nearest folder of type Site above it (ADR-248) — not where it
+    /// was filed when this row was written. `null` when no folder above it is a Site.
+    pub site_name: Option<String>,
     pub severity: String,
     pub state: String,
     pub metric: Option<String>,
@@ -292,6 +300,8 @@ impl AlertHistoryDto {
             subject_kind: row.subject_kind.as_str().to_owned(),
             subject_name: row.subject_name.clone(),
             node_name,
+            // Filled by the caller, which can read the folder tree; this builder cannot.
+            site_name: None,
             severity: row.severity.as_str().to_owned(),
             state: row.state.as_str().to_owned(),
             metric: row.metric.clone(),
@@ -1303,6 +1313,7 @@ mod tests {
             subject_name: None,
             check_id: uuid::Uuid::new_v4(),
             node_name: Some("edge-router-1".to_owned()),
+            site_name: Some("site-a".to_owned()),
             severity: "critical".to_owned(),
             state: "unreachable".to_owned(),
             metric: "icmp_rtt_ms".to_owned(),

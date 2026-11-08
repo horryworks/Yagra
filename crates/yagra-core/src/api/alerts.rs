@@ -137,6 +137,44 @@ pub(crate) async fn port_names_of(
         })
 }
 
+/// The name of each node's site — the nearest Site folder at or above its folder (ADR-248) —
+/// keyed by node id. A node with no Site folder above it is absent, and so is one outside the
+/// caller's scope. Decorative like [`port_names`]: a failed read (or skeleton mode) answers an
+/// empty map and the alerts are served without it.
+pub(crate) async fn site_names(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    nodes: impl IntoIterator<Item = Uuid>,
+) -> HashMap<Uuid, String> {
+    let Some(admin) = st.admin.as_ref() else {
+        return HashMap::new();
+    };
+    let ids: Vec<Uuid> = nodes
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if ids.is_empty() {
+        return HashMap::new();
+    }
+    let (found, groups) = tokio::join!(
+        admin.repo.node_names_and_groups(scope.group_filter(), &ids),
+        admin.groups.list(),
+    );
+    let (Ok(found), Ok(groups)) = (found, groups) else {
+        tracing::warn!("failed to read node folders; serving alerts without their site");
+        return HashMap::new();
+    };
+    let names: HashMap<Uuid, &str> = groups.iter().map(|g| (g.id, g.name.as_str())).collect();
+    crate::inventory::sites::nearest_site_by_node(
+        &groups,
+        found.iter().map(|(id, (_, group_id))| (*id, *group_id)),
+    )
+    .into_iter()
+    .filter_map(|(node, site)| Some((node, (*names.get(&site?)?).to_owned())))
+    .collect()
+}
+
 /// The `(node, ifindex)` a live alert is about, when it is about one port of a node — the key
 /// [`port_names`] answers by.
 fn port_key(alert: &Alert) -> Option<(Uuid, u32)> {
