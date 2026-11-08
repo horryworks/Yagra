@@ -74,7 +74,9 @@ pub struct LlmConfigInput {
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
     /// Write-only credential. Three-valued on purpose:
-    /// * `None` — keep whatever is stored (so editing the model does not require re-entering a key);
+    /// * `None` — keep whatever is stored (so editing the model does not require re-entering a key),
+    ///   but only while `provider` and `base_url` stay as saved: a key belongs to the vendor, and for
+    ///   `local` to the address, it was entered for, so changing either clears it;
     /// * `Some("")` — clear it, which is how an operator moves Vertex onto Workload Identity;
     /// * `Some(key)` — replace it.
     #[serde(default)]

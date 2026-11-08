@@ -24,7 +24,7 @@ import { Button } from '../ui/Button';
 import { Segmented } from '../ui/Segmented';
 import { Switch } from '../ui/Switch';
 import { Field, Select } from '../ui/Field';
-import { FieldGroup } from '../ui/FormLayout';
+import { CheckField, FieldGroup } from '../ui/FormLayout';
 import { EmptyState } from '../ui/EmptyState';
 import { Inline, Stack } from '../ui/Page';
 import { Callout, Disclosure, SectionHead } from '../ui/Section';
@@ -378,15 +378,14 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                     settings appear only once it is on, and SSH that does not connect on that fetch
                     is followed by telnet straight away (ADR-242 decision 8). */}
                 {canStart && !v.enabled && (
-                  <label className="nd-check-toggle cfgb-card-ssh">
-                    <input
-                      type="checkbox"
+                  <span className="cfgb-card-ssh">
+                    <CheckField
                       checked={sshOnly(form)}
                       disabled={busy}
-                      onChange={(e) => setForm(withSshOnly(form, e.target.checked))}
+                      onChange={(on) => setForm(withSshOnly(form, on))}
+                      label={t('config.input.ssh')}
                     />
-                    <span>{t('config.input.ssh')}</span>
-                  </label>
+                  </span>
                 )}
                 {canStart && (
                   <Switch
@@ -489,15 +488,12 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                   </Select>
                 </Field>
               </div>
-              <label className="nd-check-toggle">
-                <input
-                  type="checkbox"
-                  checked={sshOnly(form)}
-                  disabled={!canStart}
-                  onChange={(e) => setForm(withSshOnly(form, e.target.checked))}
-                />
-                <span>{t('config.input.ssh')}</span>
-              </label>
+              <CheckField
+                checked={sshOnly(form)}
+                disabled={!canStart}
+                onChange={(on) => setForm(withSshOnly(form, on))}
+                label={t('config.input.ssh')}
+              />
               {canStart && (
                 <div className="cfgb-logins">
                   <FieldGroup

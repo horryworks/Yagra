@@ -12,7 +12,8 @@
 //!    the network map uses (`yagra_topology::sole_claimant`, ADR-043 decision 2): a VRRP/HSRP
 //!    virtual address or a private plan reused at every site identifies nobody. Where several
 //!    carry it, the pool of the poller that received the datagram narrows them, and a single
-//!    survivor is the answer.
+//!    survivor is the answer. A sole carrier is held to the same pool: a datagram received by
+//!    another pool's poller is not matched by an interface address at all.
 //!
 //! Addresses that never name one device are left out of the second tier entirely
 //! ([`usable_source`]).
@@ -33,8 +34,10 @@ use yagra_base::repo::{CarriedAddressesMark, ManagedAddress, NodeRepo};
 use crate::fleet::poolres::PoolResolver;
 
 /// How long the interface-address lists may be kept before they are read whole again even though
-/// the mark did not move — a backstop for a change the mark cannot see (two writes in one
-/// transaction-start instant), not the normal path.
+/// the mark did not move — a backstop for a change the mark cannot see, not the normal path. The
+/// mark misses a set change whose transaction began before the mark was read and committed after
+/// it: `first_seen` is `now()`, the transaction's start, so the row lands older than the newest
+/// value already observed while the row count stays the same.
 const CARRIED_FULL_READ: Duration = Duration::from_secs(600);
 
 /// Which tier answered.
@@ -151,8 +154,14 @@ impl AddressBook {
             });
         }
         let claimants = self.carried.get(&source)?;
+        // The receiving pool, when known, must be the carrier's own — even for a sole carrier. A
+        // private plan reused at a site Yagra does not monitor has one claimant here, and a datagram
+        // from that site arrives through that site's poller, not the claimant's (user decision,
+        // 2026-11-08). The cost: a site whose devices send to a poller of another pool is matched
+        // by its inventory address only.
+        let in_pool = |n: &Uuid| pool.is_none_or(|p| self.pools.get(n).is_some_and(|q| &**q == p));
         if let [node] = claimants.as_slice() {
-            return Some(Resolved {
+            return in_pool(node).then_some(Resolved {
                 node: *node,
                 via: Via::Carried,
             });
@@ -307,6 +316,31 @@ mod tests {
 
     /// Nothing that matched before ADR-245 changes node: another node's interface carrying the
     /// same address does not take it over.
+    /// A sole carrier in another pool is not the sender: the same private address at a site Yagra
+    /// does not monitor arrives through that site's poller (user decision, 2026-11-08).
+    #[test]
+    fn a_sole_carrier_in_another_pool_is_not_matched() {
+        let b = book(
+            &[managed(1, "192.0.2.1", Some("osaka"))],
+            &[(1, "10.1.1.1")],
+        );
+        assert_eq!(b.resolve(ip("10.1.1.1"), Some("tokyo")), None);
+        assert_eq!(
+            b.resolve(ip("10.1.1.1"), Some("osaka")).map(|r| r.via),
+            Some(Via::Carried)
+        );
+        // With no receiving pool to compare, the sole carrier still answers.
+        assert_eq!(
+            b.resolve(ip("10.1.1.1"), None).map(|r| r.node),
+            Some(node(1))
+        );
+        // The inventory address is not held to the pool: nothing that matched before changes.
+        assert_eq!(
+            b.resolve(ip("192.0.2.1"), Some("tokyo")).map(|r| r.node),
+            Some(node(1))
+        );
+    }
+
     #[test]
     fn the_inventory_address_beats_another_nodes_interface() {
         let b = book(

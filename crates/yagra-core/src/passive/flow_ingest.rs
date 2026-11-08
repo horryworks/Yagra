@@ -40,11 +40,18 @@ const FLOW_INSERT_FLUSH_SECS: u64 = 5;
 /// The event engine refreshes the same book every 30 s, so this normally finds it fresh and reads
 /// nothing.
 const FLOW_ADDR_REFRESH_SECS: u64 = 60;
-/// Cap on the flow consumer's "already-missed" exporter set (throttles miss-triggered addr-map
-/// reloads to once per distinct exporter). Bounded well above any realistic exporter count; a
+/// Cap on the flow consumer's "already-missed" set (throttles miss-triggered address-book
+/// reloads to once per distinct exporter and receiving pool). Bounded well above any realistic
+/// exporter count; a
 /// pathological flood of distinct source IPs clears it, re-arming the periodic refresh as the
 /// backstop rather than growing memory unbounded.
 const FLOW_MISS_CACHE_MAX: usize = 65_536;
+/// The shortest interval between two miss-triggered address-book reloads, whatever the exporter.
+/// A flow datagram's source address can be forged, so a stream of distinct spoofed exporters would
+/// otherwise rebuild the whole book back to back (three reads and a full rebuild each, under the
+/// lock the event engine's reload shares) while the `yagra.flows` subscription waits. A node added
+/// just now is still picked up within this long.
+const FLOW_MISS_RELOAD_MIN_SECS: u64 = 5;
 /// Bounded hand-off queue between the flow consumer (bus → rows) and the ClickHouse writer. A full
 /// queue means the writer is behind a slow/hung ClickHouse; the consumer then drops + counts rows
 /// (`channel_full`) instead of stalling the `yagra.flows` subscription into a silent NATS drop (S27).
@@ -232,7 +239,10 @@ pub(crate) async fn consume_flows<S>(
             missed.clear();
         }
         if should_reload_on_miss(&book.current(), &mut missed, batch.exporter_ip, &batch.pool)
-            && book.refresh(&repo).await.is_ok()
+            && book
+                .refresh_if_older(&repo, Duration::from_secs(FLOW_MISS_RELOAD_MIN_SECS))
+                .await
+                .is_ok()
         {
             last_refresh = Instant::now();
         }

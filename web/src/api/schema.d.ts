@@ -10293,7 +10293,9 @@ export interface components {
         LlmConfigInput: {
             /**
              * @description Write-only credential. Three-valued on purpose:
-             *     * `None` — keep whatever is stored (so editing the model does not require re-entering a key);
+             *     * `None` — keep whatever is stored (so editing the model does not require re-entering a key),
+             *       but only while `provider` and `base_url` stay as saved: a key belongs to the vendor, and for
+             *       `local` to the address, it was entered for, so changing either clears it;
              *     * `Some("")` — clear it, which is how an operator moves Vertex onto Workload Identity;
              *     * `Some(key)` — replace it.
              */
@@ -22924,7 +22926,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Configuration saved; an omitted `api_key` keeps the stored one */
+            /** @description Configuration saved; an omitted `api_key` keeps the stored one while the provider and `base_url` are unchanged, and is cleared when either changes */
             204: {
                 headers: {
                     [name: string]: unknown;

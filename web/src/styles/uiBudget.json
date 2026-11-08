@@ -92,7 +92,7 @@
       "why": "before ADR-246"
     },
     "components/NodeDetail/NodeDetail.css": {
-      "lines": 447,
+      "lines": 438,
       "why": "before ADR-246"
     },
     "components/NodeDetail/OverviewTab.css": {

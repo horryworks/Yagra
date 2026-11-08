@@ -21,11 +21,11 @@
     "findingCount_one": "{{count}} finding",
     "findingCount_other": "{{count}} findings",
     "state": {
-      "failed": "failed",
-      "cancelled": "cancelled",
-      "queued": "queued",
-      "running": "running",
-      "done": "done"
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "queued": "Queued",
+      "running": "Running",
+      "done": "Done"
     },
     "analysisError": "analysis error",
     "toast": {

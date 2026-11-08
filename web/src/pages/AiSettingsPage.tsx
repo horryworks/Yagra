@@ -245,6 +245,8 @@ export function AiSettingsPage() {
                 disabled={!canSystem || loading || busy}
                 onChange={(e) => {
                   setBaseUrl(e.target.value);
+                  // A new address has no stored key to remove, so the key box must come back.
+                  setClearKey(false);
                   dirty();
                 }}
               />

@@ -8497,7 +8497,7 @@
         },
         "responses": {
           "204": {
-            "description": "Configuration saved; an omitted `api_key` keeps the stored one"
+            "description": "Configuration saved; an omitted `api_key` keeps the stored one while the provider and `base_url` are unchanged, and is cleared when either changes"
           },
           "400": {
             "description": "A field of the configuration is invalid",
@@ -37185,7 +37185,7 @@
               "string",
               "null"
             ],
-            "description": "Write-only credential. Three-valued on purpose:\n* `None` — keep whatever is stored (so editing the model does not require re-entering a key);\n* `Some(\"\")` — clear it, which is how an operator moves Vertex onto Workload Identity;\n* `Some(key)` — replace it."
+            "description": "Write-only credential. Three-valued on purpose:\n* `None` — keep whatever is stored (so editing the model does not require re-entering a key),\n  but only while `provider` and `base_url` stay as saved: a key belongs to the vendor, and for\n  `local` to the address, it was entered for, so changing either clears it;\n* `Some(\"\")` — clear it, which is how an operator moves Vertex onto Workload Identity;\n* `Some(key)` — replace it."
           },
           "base_url": {
             "type": "string",

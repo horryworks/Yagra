@@ -243,7 +243,7 @@ pub(crate) async fn llm_config_view(admin: &super::AdminState) -> ApiResult<LlmC
     put, path = "/api/v1/llm/config", tag = "rca",
     request_body = crate::rca::store::LlmConfigInput,
     responses(
-        (status = 204, description = "Configuration saved; an omitted `api_key` keeps the stored one"),
+        (status = 204, description = "Configuration saved; an omitted `api_key` keeps the stored one while the provider and `base_url` are unchanged, and is cleared when either changes"),
         (status = 400, description = "A field of the configuration is invalid", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),

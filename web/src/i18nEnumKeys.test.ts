@@ -163,6 +163,7 @@ import { SCAN_STATE_SPECS } from './pages/discoveryScans';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES, TOOL_GROUPS } from './troubleshoot/data';
+import { RUN_STATES } from './troubleshoot/runFilters';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 import { BUNDLE_TABLES } from './pages/configBundle';
 import { RETENTION_FIELDS, RETENTION_SUBJECTS } from './pages/retentionSettings';
@@ -589,14 +590,21 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     );
   });
 
-  it('every terminal analysis-job state has a label (troubleshoot:runs.state.*)', () => {
-    // `AnalysisJob.state` is a bare string in the schema; the report shell and the runs list only
-    // build `runs.state.${state}` for the terminal subset, so that subset is what must resolve.
+  it('every analysis-job state a label is drawn for has one (troubleshoot:runs.state.*)', () => {
+    // The report shell builds `runs.state.${state}` for the terminal subset, and since ADR-246
+    // Inc.7 the Runs table's State column builds it for every state but `running` (drawn as its
+    // progress) — `unknown` is drawn as `cancelled`. Both sets must resolve.
     expectKeys(
       'terminal job state',
       { en: enTroubleshoot, ja: jaTroubleshoot },
       'runs.state.',
       TERMINAL_JOB_STATES,
+    );
+    expectKeys(
+      'run state',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'runs.state.',
+      RUN_STATES.filter((s) => s !== 'running'),
     );
   });
 
