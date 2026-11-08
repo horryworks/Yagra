@@ -164,13 +164,17 @@ fn send_flow_rows(tx: &tokio::sync::mpsc::Sender<FlowRow>, rows: Vec<FlowRow>) -
 /// cannot spin a full-table `SELECT` + map rebuild on the flow-ingest hot path once per batch. A
 /// genuinely just-added node is still picked up: its first miss reloads immediately, and thereafter
 /// it is present in the map; anything still unmapped is caught by the periodic refresh (S27 follow-up).
+///
+/// A miss is remembered per exporter **and receiving pool**: since ADR-245 the pool takes part in
+/// the answer, so an address left ambiguous in one pool can be the sole claimant in another, and a
+/// miss recorded there must not hold back the other pool's one-shot reload.
 fn should_reload_on_miss(
     book: &AddressBook,
-    missed: &mut std::collections::HashSet<std::net::IpAddr>,
+    missed: &mut std::collections::HashSet<(std::net::IpAddr, String)>,
     exporter_ip: std::net::IpAddr,
     pool: &str,
 ) -> bool {
-    book.resolve(exporter_ip, Some(pool)).is_none() && missed.insert(exporter_ip)
+    book.resolve(exporter_ip, Some(pool)).is_none() && missed.insert((exporter_ip, pool.to_owned()))
 }
 
 /// Consume verbatim flow datagrams from `yagra.flows.raw` and tee them to the forwarder (ADR-034
@@ -211,7 +215,8 @@ pub(crate) async fn consume_flows<S>(
     let mut last_refresh = Instant::now();
     // Exporters we've already tried (and failed) to resolve since startup — throttles the
     // miss-triggered reload below to once per distinct exporter (see `should_reload_on_miss`).
-    let mut missed: std::collections::HashSet<std::net::IpAddr> = std::collections::HashSet::new();
+    let mut missed: std::collections::HashSet<(std::net::IpAddr, String)> =
+        std::collections::HashSet::new();
     while let Some(batch) = flows.next().await {
         // Keep the shared book current (nodes are added/removed at runtime). Normally the event
         // engine's 30 s reload already did, and this reads nothing.
@@ -362,7 +367,7 @@ mod tests {
         use std::net::IpAddr;
         let mapped: IpAddr = "10.0.0.1".parse().unwrap();
         let addr_map = book_of(&[(mapped, Uuid::from_u128(1))]);
-        let mut missed: HashSet<IpAddr> = HashSet::new();
+        let mut missed: HashSet<(IpAddr, String)> = HashSet::new();
 
         // A mapped exporter never triggers a reload and is never recorded as missed.
         assert!(!should_reload_on_miss(
@@ -408,6 +413,21 @@ mod tests {
             &mut missed,
             unknown2,
             DEFAULT_POOL
+        ));
+
+        // The same exporter received through another pool is a different question since ADR-245
+        // (the pool narrows an ambiguous address), so it gets its own one-shot reload too.
+        assert!(should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown2,
+            "site-a"
+        ));
+        assert!(!should_reload_on_miss(
+            &addr_map,
+            &mut missed,
+            unknown2,
+            "site-a"
         ));
     }
 
