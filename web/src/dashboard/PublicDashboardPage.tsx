@@ -44,6 +44,7 @@ import { useAlertStream } from '../hooks/useAlertStream';
 import { api, setAnonymousPreview } from '../services/api';
 import { useCan } from '../store';
 import { CatalogModal } from './CatalogModal';
+import { LinksEnabledContext } from '../components/ui/linksEnabled';
 import { LayoutStoreProvider } from './LayoutStoreContext';
 import { usePublicLayoutStore } from './layoutStore';
 import { boardReadsAlerts } from './publicCatalog';
@@ -169,9 +170,14 @@ export function PublicDashboardPage({ viewerOnly = false }: PublicDashboardPageP
                 reordering ? ' is-reordering' : ''
               }`}
             >
-              {widgets.map((w) => (
-                <WidgetFrame key={w.instanceId} instance={w} editing={editing} />
-              ))}
+              {/* No widget on this board links out (ADR-250 decision 4): a stranger cannot open the
+                  screens a link names, and the signed-in view of this board is the preview of
+                  what that stranger sees. */}
+              <LinksEnabledContext.Provider value={false}>
+                {widgets.map((w) => (
+                  <WidgetFrame key={w.instanceId} instance={w} editing={editing} />
+                ))}
+              </LinksEnabledContext.Provider>
             </div>
           </SortableContext>
         </DndContext>

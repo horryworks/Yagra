@@ -10,6 +10,7 @@
 // folder, whereas a pin is about a place, and a place contains its racks.
 
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../../lib/format';
 import { MAP_HEIGHT, MAP_WIDTH, placedOnly, project } from '../../pages/geoProjection';
@@ -24,6 +25,9 @@ import {
   topLevelRollupFromCounts,
   worstStateFromCounts,
 } from './util';
+import { DrillLink } from '../../components/ui/DrillLink';
+import { useLinksEnabled } from '../../components/ui/linksEnabled';
+import { folderDrill } from './drill';
 import { geoWidgetBox, pinRadius } from './geoWidgetBox';
 import { loadOutline, type Outline } from '../../lib/worldOutlineLoad';
 
@@ -48,7 +52,13 @@ export function SiteHealthMatrixWidget() {
         const up = c.ok ?? 0;
         const total = countsTotal(c);
         return (
-          <div className="matrix-tile" key={tile.id} title={`${tile.name}: ${stateLabel(worst)}`}>
+          <DrillLink
+            block
+            to={folderDrill(tile.id)}
+            className="matrix-tile"
+            key={tile.id}
+            title={`${tile.name}: ${stateLabel(worst)}`}
+          >
             <span className="matrix-bar" style={{ background: stateColorVar(worst) }} />
             <span className="matrix-info">
               <span className="matrix-name">{tile.name}</span>
@@ -56,7 +66,7 @@ export function SiteHealthMatrixWidget() {
                 {up}/{total}
               </span>
             </span>
-          </div>
+          </DrillLink>
         );
       })}
     </div>
@@ -78,6 +88,7 @@ export function RegionRollupWidget() {
       label: r.name,
       value: r.pct,
       valueText: `${r.pct}% · ${r.up}/${r.total}`,
+      href: folderDrill(r.id),
       // % up reads as health — use the status channel, green→amber→red by threshold.
       color:
         r.pct >= 90
@@ -94,6 +105,10 @@ export function GeoMapWidget() {
   const { summary, loading, error } = useGroupSummary();
   const groups = usePolled(() => api.listNodeGroups(), []);
   const [outline, setOutline] = useState<Outline | null>(null);
+  // A pin opens its folder (ADR-250). The pin is SVG, so it navigates on press; the same folder is
+  // a keyboard stop in the Site matrix and the tree.
+  const navigate = useNavigate();
+  const links = useLinksEnabled();
   useEffect(() => {
     let live = true;
     // A failed fetch leaves the pins on the ocean colour: the widget still answers its question.
@@ -137,7 +152,10 @@ export function GeoMapWidget() {
         return (
           <circle
             key={g.id}
-            className={look === 'empty' ? 'geo-pin geo-pin-empty' : 'geo-pin'}
+            className={[look === 'empty' ? 'geo-pin geo-pin-empty' : 'geo-pin', links ? 'drill' : '']
+              .filter(Boolean)
+              .join(' ')}
+            onClick={links ? () => navigate(folderDrill(g.id)) : undefined}
             cx={p.x}
             cy={p.y}
             r={r}

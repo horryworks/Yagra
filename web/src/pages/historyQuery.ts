@@ -10,6 +10,8 @@
 
 import type { TFunction } from 'i18next';
 import {
+  CUSTOM_RANGE,
+  decodeRange,
   decodeSet,
   normalizeSets,
   rangeSecondsIn,
@@ -20,7 +22,7 @@ import {
 import { decodeCondition } from '../lib/filterCondition';
 import { sinceIso, unset } from '../lib/filterQuery';
 import { rangePresets, type RangeToken } from '../lib/filterPresets';
-import { severityLabel, stateLabel } from '../lib/format';
+import { localInputToIso, severityLabel, stateLabel } from '../lib/format';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { PAGE_SIZE } from './historyCursor';
 import { SEVERITIES, type AlertHistoryRow } from '../types/api';
@@ -139,8 +141,23 @@ export function historyFilters(
       // derives the rest, so there is no hand-written defaults object to forget a key in — and no
       // second URL codec either, since `useFilterParams` reads and writes these keys directly.
       defaultPreset: 'all',
+      // Two instants as well as the presets (ADR-250 Inc.3): a dashboard bar or calendar cell opens
+      // the hour it is about. The window goes out as `since` / `until`.
+      custom: true,
     },
   };
+}
+
+/** The custom window as RFC 3339 instants, or null when the range is on a preset. */
+export function customWindow(
+  columns: HistoryColumns,
+  s: FilterState,
+): { since?: string; until?: string } | null {
+  const col = columns.find((c) => c.filter.kind === 'range');
+  if (!col || col.filter.kind !== 'range') return null;
+  const v = decodeRange(s[col.key] ?? '', col.filter);
+  if (v.preset !== CUSTOM_RANGE) return null;
+  return { since: localInputToIso(v.from), until: localInputToIso(v.to) };
 }
 
 /** The columns this module's functions read (ADR-053 Inc.10, decision AA). */
@@ -187,6 +204,7 @@ export function queryFor(
   nowMs: number,
 ) {
   const f = normalizeSets(columns, s);
+  const custom = customWindow(columns, f);
   return {
     limit: PAGE_SIZE,
     severity: unset(f.severity),
@@ -199,7 +217,8 @@ export function queryFor(
     node_q: unset(decodeCondition(f.node_q ?? '').term),
     site: unset(f.site),
     group_id: unset(scope.groupId),
-    since: sinceIso(rangeSecondsIn(columns, f), nowMs),
+    since: custom ? custom.since : sinceIso(rangeSecondsIn(columns, f), nowMs),
+    until: custom?.until,
     before: cursor?.before,
     before_id: cursor?.before_id,
   };

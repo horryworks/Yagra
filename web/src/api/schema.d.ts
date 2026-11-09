@@ -9506,6 +9506,13 @@ export interface components {
             /** @description Fires that would have paged waiting for a failing neighbour to commit first. */
             notified_waiting: number;
         };
+        /** @description One heatmap row's interface. */
+        HeatmapLink: {
+            /** Format: int32 */
+            ifindex: number;
+            /** Format: uuid */
+            node_id: string;
+        };
         /**
          * @description What the notifier was handed when it held a notification.
          * @enum {string}
@@ -9867,6 +9874,11 @@ export interface components {
          *     is the same length and the client can shade cells without bounds checks.
          */
         InterfaceHeatmap: {
+            /**
+             * @description The interface behind each entry of `links`, in the same order: which node and which
+             *     `ifindex`, so a client can open that port.
+             */
+            link_refs: components["schemas"]["HeatmapLink"][];
             links: string[];
             /**
              * @description `true` when the link set covers only the groups the calling account may see and links it is

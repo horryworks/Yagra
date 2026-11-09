@@ -13,7 +13,7 @@
 import type { HasSubject } from '../lib/alertSubject';
 import { alertSubject } from '../lib/alertSubject';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { DrillLink } from '../components/ui/DrillLink';
 import { EntityName } from '../components/ui/EntityName';
 import { InfoPress, InfoTip } from '../components/ui/InfoTip';
 import { merakiOrgPath, nodeHref } from '../lib/entityHref';
@@ -66,9 +66,9 @@ export function AlertSubjectName({
       const label = t('row.merakiOrgSubject', { org: subject.name ?? subject.orgId });
       return (
         <span className="alert-subject-org">
-          <Link to={merakiOrgPath(subject.orgId)} title={label}>
+          <DrillLink to={merakiOrgPath(subject.orgId)} title={label}>
             {label}
-          </Link>
+          </DrillLink>
           <InfoTip infoKey="alerts:row.merakiOrgSubjectWhy.info" label={label} />
         </span>
       );
@@ -76,7 +76,7 @@ export function AlertSubjectName({
     case 'config_remote':
       // One destination for the deployment (ADR-210 stage 4): the link is the page that says why
       // the last push failed.
-      return <Link to={GIT_REMOTE_PATH}>{t('row.configRemoteSubject')}</Link>;
+      return <DrillLink to={GIT_REMOTE_PATH}>{t('row.configRemoteSubject')}</DrillLink>;
     default: {
       const unknown: never = subject;
       return unknown;

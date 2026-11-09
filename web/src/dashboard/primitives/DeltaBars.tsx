@@ -4,6 +4,7 @@
 // series color (a delta direction is not a node status), passed in by the widget.
 
 import { useTranslation } from 'react-i18next';
+import { DrillLink } from '../../components/ui/DrillLink';
 import './DeltaBars.css';
 
 export interface DeltaRow {
@@ -12,6 +13,8 @@ export interface DeltaRow {
   value: number;
   /** Right-aligned display (e.g. "▲ +1.2 Gbps"); defaults to the signed number. */
   valueText?: string;
+  /** The screen narrowed to this row (ADR-250). The whole row becomes the link. */
+  href?: string;
 }
 
 interface Props {
@@ -35,7 +38,8 @@ export function DeltaBars({ rows, color = 'var(--series-4)', empty, partial }: P
         const pct = peak > 0 ? Math.max(0, Math.min(100, (Math.abs(r.value) / peak) * 100)) : 0;
         const arrow = r.value > 0 ? '▲' : r.value < 0 ? '▼' : '◆';
         return (
-          <li className="deltabar" key={r.label}>
+          <li key={r.label}>
+            <DrillLink to={r.href} className="deltabar">
             <span className="deltabar-label" title={r.label}>
               {r.label}
             </span>
@@ -48,6 +52,7 @@ export function DeltaBars({ rows, color = 'var(--series-4)', empty, partial }: P
               </span>
                 {r.valueText ?? String(r.value)}
               </span>
+            </DrillLink>
             </li>
           );
         })}

@@ -9,6 +9,7 @@
 // The resolvers and the `useEntityNames` hook are in `entityNames.ts`; this file renders.
 
 import { Link } from 'react-router-dom';
+import { useLinksEnabled } from './linksEnabled';
 import { isEntityResolved } from './entityNames';
 
 /** Render a resolved entity name; the raw id is available only in the hover tooltip. When the
@@ -18,6 +19,8 @@ import { isEntityResolved } from './entityNames';
  *  `to` makes the name a link to the entity's own page (ADR-209 decision 2). An unresolved
  *  reference gets no link — it usually means the entity is gone. */
 export function EntityName({ name, id, to }: { name: string; id?: string; to?: string }) {
+  // Where links are off (the public board, ADR-250) the name is drawn as text.
+  const links = useLinksEnabled();
   if (!isEntityResolved(name, id)) {
     const raw = name || id || '—';
     return (
@@ -28,7 +31,7 @@ export function EntityName({ name, id, to }: { name: string; id?: string; to?: s
   }
   return (
     <span className="yt-entity" title={id}>
-      {to ? (
+      {to && links ? (
         <Link className="yt-entity-name" to={to}>
           {name}
         </Link>

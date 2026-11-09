@@ -13,6 +13,7 @@
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { navItemForPath } from '../../nav';
+import { useLinksEnabled } from './linksEnabled';
 import './ScreenLink.css';
 
 export function ScreenLink({
@@ -26,7 +27,15 @@ export function ScreenLink({
 }) {
   const { t } = useTranslation('nav');
   const hit = navItemForPath(to);
+  // Where links are off (the public board, ADR-250) the screen is named, not linked.
+  const links = useLinksEnabled();
   if (!hit) return null;
+  if (!links && !href)
+    return (
+      <span>
+        {t(hit.section.labelKey)} ▸ {t(hit.item.labelKey)}
+      </span>
+    );
   if (href)
     return (
       <a href={href} className="screen-link" target="_blank" rel="noopener noreferrer">

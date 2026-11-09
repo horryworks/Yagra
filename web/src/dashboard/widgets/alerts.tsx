@@ -2,9 +2,7 @@
 // 02 · Alerts widgets. Active alerts + flapping + severity mix read the live alert store (kept live by
 // the one useAlertStream AppShell mounts); alert volume buckets the history endpoint client-side.
 
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../../components/ui/Button';
 import { WEEKDAY_KEYS } from '../../lib/cadence';
 import {
   alertWhatOf,
@@ -23,7 +21,9 @@ import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Donut } from '../primitives/Donut';
 import { Heatmap } from '../primitives/Heatmap';
 import { RankedBars } from '../primitives/RankedBars';
+import { DrillLink } from '../../components/ui/DrillLink';
 import { usePolled } from '../usePolled';
+import { alertHistoryHourDrill, alertsDrill, nodeDrill } from './drill';
 import { bucketAlertsByHour, calendarMatrix } from './util';
 
 const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => (h % 6 === 0 ? String(h) : ''));
@@ -34,17 +34,6 @@ export function ActiveAlertsWidget() {
   return <AlertRows limit={20} empty={t('widgets.activeAlerts.empty')} />;
 }
 
-/** View-mode header action for the active-alerts widget: jump to the full triage screen. */
-export function ActiveAlertsActions() {
-  const { t } = useTranslation('dashboard');
-  const navigate = useNavigate();
-  return (
-    <Button variant="ghost" onClick={() => navigate('/alerts')}>
-      {t('widgets.activeAlerts.viewAll')}
-    </Button>
-  );
-}
-
 export function SeverityMixWidget() {
   const { t } = useTranslation('dashboard');
   const alerts = useAlertStore((s) => s.alerts);
@@ -53,9 +42,24 @@ export function SeverityMixWidget() {
   const by = { critical: 0, warning: 0, info: 0 };
   for (const a of list) by[a.severity] += 1;
   const segments = [
-    { label: severityLabel('critical'), value: by.critical, color: severityColorVar('critical') },
-    { label: severityLabel('warning'), value: by.warning, color: severityColorVar('warning') },
-    { label: severityLabel('info'), value: by.info, color: severityColorVar('info') },
+    {
+      label: severityLabel('critical'),
+      value: by.critical,
+      color: severityColorVar('critical'),
+      href: alertsDrill({ severity: 'critical' }),
+    },
+    {
+      label: severityLabel('warning'),
+      value: by.warning,
+      color: severityColorVar('warning'),
+      href: alertsDrill({ severity: 'warning' }),
+    },
+    {
+      label: severityLabel('info'),
+      value: by.info,
+      color: severityColorVar('info'),
+      href: alertsDrill({ severity: 'info' }),
+    },
   ].filter((s) => s.value > 0);
   return (
     <Donut segments={segments} centerValue={String(list.length)} centerSub={t('widgets.severityMix.active')} />
@@ -102,11 +106,16 @@ export function AlertVolumeWidget() {
   if (total === 0) return <p className="muted">{t('widgets.alertVolume.empty')}</p>;
   const peak = Math.max(...buckets.map((b) => b.count), 1);
   return (
-    <div className="vbars" role="img" aria-label={t('widgets.alertVolume.aria')}>
+    <div className="vbars" role="group" aria-label={t('widgets.alertVolume.aria')}>
       {buckets.map((b) => (
-        <span className="vbar" key={b.t} title={t('widgets.alertVolume.opened', { count: b.count })}>
+        <DrillLink
+          key={b.t}
+          to={b.count > 0 ? alertHistoryHourDrill(Math.floor(b.t / 1000)) : undefined}
+          className="vbar"
+          title={t('widgets.alertVolume.opened', { count: b.count })}
+        >
           <span className="vbar-fill" style={{ height: `${(b.count / peak) * 100}%` }} />
-        </span>
+        </DrillLink>
       ))}
     </div>
   );
@@ -122,6 +131,7 @@ export function TopAlertingNodesWidget() {
     value: e.count,
     valueText: String(e.count),
     color: 'var(--series-2)',
+    href: alertsDrill({ nodeId: e.node_id }),
   }));
   return (
     <RankedBars
@@ -172,7 +182,9 @@ export function RecentStateChangesWidget() {
                 : severityColorVar(row.severity),
             }}
           />
-          <span className="dwl-name">{row.name}</span>
+          <DrillLink to={nodeDrill(row.node_id)} className="dwl-name">
+            {row.name}
+          </DrillLink>
           <span className="dwl-sub muted">
             {row.resolved
               ? `→ ${t('widgets.recentChanges.recovered')}`

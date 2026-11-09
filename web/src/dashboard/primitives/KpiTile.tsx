@@ -3,6 +3,7 @@
 // window. The delta is categorical, not a node status, so its ▲/▼ uses neutral series-ish text
 // tones (never status red/green) — direction is shown by the arrow + sign, not color alone.
 
+import { DrillLink } from '../../components/ui/DrillLink';
 import './KpiTile.css';
 
 interface Props {
@@ -14,12 +15,14 @@ interface Props {
   delta?: number;
   /** Word describing the delta window (e.g. "vs 1h ago"). */
   deltaLabel?: string;
+  /** The screen listing what the figure counts (ADR-250). The whole tile becomes the link. */
+  to?: string;
 }
 
-export function KpiTile({ value, caption, delta, deltaLabel }: Props) {
+export function KpiTile({ value, caption, delta, deltaLabel, to }: Props) {
   const dir = delta == null ? null : delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
   return (
-    <div className="kpitile">
+    <DrillLink to={to} block className="kpitile">
       <div className="kpitile-value">{value}</div>
       <div className="kpitile-caption">{caption}</div>
       {dir && (
@@ -34,6 +37,6 @@ export function KpiTile({ value, caption, delta, deltaLabel }: Props) {
           {deltaLabel && <span className="kpitile-delta-label">{deltaLabel}</span>}
         </div>
       )}
-    </div>
+    </DrillLink>
   );
 }

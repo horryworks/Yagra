@@ -37,3 +37,19 @@ export function portToSelect(
   if (!focus || focus.seq === appliedSeq) return null;
   return ifindexes.includes(focus.ifindex) ? focus.ifindex : null;
 }
+
+/** The column-free key, under the Interfaces tab's `interfaces.` prefix, that asks the tab to open
+ *  one port's dock (ADR-250 Inc.2): `/nodes/<id>?tab=interfaces&interfaces.port=<ifindex>`.
+ *
+ *  A request, not state. The tab applies it once and drops it from the URL, because an ifindex
+ *  names a different port on the next device the tree walks to (ADR-134's reason the selected row
+ *  stays out of the URL). */
+export const PORT_PARAM = 'interfaces.port';
+
+/** The port a URL asks for, or `null` for none or a value that is not an ifindex. */
+export function readPortParam(params: URLSearchParams): number | null {
+  const raw = params.get(PORT_PARAM);
+  if (raw === null || !/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) ? n : null;
+}

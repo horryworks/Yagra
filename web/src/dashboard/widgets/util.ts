@@ -19,6 +19,7 @@ import type { DeltaRow } from '../primitives/DeltaBars';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
 import { SEVERITY_ORDER, emptyStateCounts, worstState } from '../../lib/nodeState';
 import type { WidgetSettings } from '../types';
+import { interfaceDrill } from './drill';
 
 /** The now / trailing-1h-peak window every Top-N widget stores in its settings bag, defaulting to
  *  `now`. Shared because the widgets that write it (`TopAggActions`) and the ones that plan a query
@@ -330,6 +331,8 @@ export function deltaBarRows(data: RankedInterfaces | null): DeltaRow[] {
     label: interfaceEntryLabel(e),
     value: e.value,
     valueText: `${e.value >= 0 ? '+' : '−'}${formatBps(Math.abs(e.value))}`,
+    // The port the bar is about, opened on its node (ADR-250 Inc.2).
+    href: interfaceDrill(e.node_id, e.ifindex),
   }));
 }
 

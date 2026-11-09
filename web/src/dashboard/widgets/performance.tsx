@@ -12,6 +12,7 @@ import type { InterfaceTopMetric, MetricTopAgg } from '../../types/api';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
+import { interfaceDrill, nodeDrill } from './drill';
 // The now/1h window reader lives in `util.ts` — the metric Top-N widget plans its query from the
 // same settings key in a file tests can reach, and one default is the point of sharing it.
 import {
@@ -65,6 +66,7 @@ function NodeTopN({
     label: e.name,
     value: e.value,
     valueText: format(e.value),
+    href: nodeDrill(e.node_id),
   }));
   return <RankedBars rows={rows} max={max} empty={empty} partial={data?.partial} />;
 }
@@ -130,6 +132,7 @@ function InterfaceTopN({
     label: ifaceLabel(e),
     value: e.value,
     valueText: format(e.value),
+    href: interfaceDrill(e.node_id, e.ifindex),
   }));
   return <RankedBars rows={rows} empty={empty} partial={data?.partial} />;
 }
@@ -200,6 +203,7 @@ export function BusiestInterfacesWidget({ instance }: WidgetProps) {
     label: ifaceLabel(e),
     value: util ?? e.value,
     valueText: util != null ? `${Math.round(util)}% · ${formatBps(e.value)}` : formatBps(e.value),
+    href: interfaceDrill(e.node_id, e.ifindex),
     color:
       util == null
         ? 'var(--series-1)'

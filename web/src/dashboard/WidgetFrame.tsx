@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { AnchoredPopover } from '../components/ui/AnchoredPopover';
 import { focusPopoverTrigger } from '../components/ui/focusPopoverTrigger';
 import { Card } from '../components/ui/Card';
+import { DrillLink } from '../components/ui/DrillLink';
 import { useLayoutStoreContext } from './layoutStoreHook';
 import { widgetHeading, widgetLabel, WIDGET_TITLE_MAX } from './layout';
 import { getDefinition } from './registry';
@@ -145,7 +146,14 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       <Card
         title={
           <span className="widgetframe-title">
-            <span className="widgetframe-kind">{heading.base}</span>
+            {/* Outside Customize the type's name opens the list the card summarizes (ADR-250). In
+                Customize it stays text: the card is being arranged, not read. */}
+            <DrillLink
+              to={editing ? undefined : def.titleHref?.(instance)}
+              className="widgetframe-kind"
+            >
+              {heading.base}
+            </DrillLink>
             {/* The separator is an element rather than a `::before`, because in edit mode the thing
                 it precedes is an <input> — a replaced element, which generates no pseudo-elements.
                 Keeping it out of the name string also means an unnamed card carries no stray mark

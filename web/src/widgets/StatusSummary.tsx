@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { stateColorVar, stateLabel } from '../lib/format';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import type { NodeState } from '../types/api';
+import { DrillLink } from '../components/ui/DrillLink';
 import './StatusSummary.css';
 
 /** Roll-up of node counts by state. `counts` + `total` are computed server-side over the whole
@@ -16,10 +17,13 @@ export function StatusSummary({
   counts,
   total,
   loading,
+  hrefFor,
 }: {
   counts: Partial<Record<NodeState, number>>;
   total: number;
   loading?: boolean;
+  /** The screen listing the nodes in one state (ADR-250); each state's line becomes its link. */
+  hrefFor?: (state: NodeState) => string;
 }) {
   const { t } = useTranslation();
   const present = SEVERITY_ORDER.filter((s) => counts[s]);
@@ -37,11 +41,11 @@ export function StatusSummary({
           </span>
         )}
         {present.map((s) => (
-          <div className="statussummary-item" key={s}>
+          <DrillLink block to={hrefFor?.(s)} className="statussummary-item" key={s}>
             <span className="statussummary-dot" style={{ background: stateColorVar(s) }} />
             <span className="statussummary-count">{counts[s]}</span>
             <span className="statussummary-label">{stateLabel(s)}</span>
-          </div>
+          </DrillLink>
         ))}
       </div>
     </div>

@@ -392,6 +392,11 @@ describe('deltaBarRows', () => {
     expect(rows[1].valueText).toBe('\u22128.0 Mbps');
   });
 
+  it('opens the port each bar is about (ADR-250)', () => {
+    const rows = deltaBarRows({ entries: [entry(1)] } as never);
+    expect(rows[0].href).toBe('/nodes/n1?tab=interfaces&interfaces.port=1');
+  });
+
   it('renders nothing at all rather than throwing when the query has not answered', () => {
     expect(deltaBarRows(null)).toEqual([]);
     expect(deltaBarRows({} as never)).toEqual([]);

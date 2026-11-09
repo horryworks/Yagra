@@ -5,6 +5,7 @@
 // the widget owns the channel (series for counts, status for utilization).
 
 import { useTranslation } from 'react-i18next';
+import { DrillLink } from '../../components/ui/DrillLink';
 import './Heatmap.css';
 
 interface Props {
@@ -20,9 +21,19 @@ interface Props {
   colorBase?: string;
   /** Cell hover/title formatter. */
   title?: (row: string, col: string, value: number) => string;
+  /** The screen each row is about (ADR-250), by row index; its label becomes the link. */
+  rowHrefs?: readonly (string | undefined)[];
 }
 
-export function Heatmap({ rowLabels, colLabels, values, max, colorBase = 'var(--series-1)', title }: Props) {
+export function Heatmap({
+  rowLabels,
+  colLabels,
+  values,
+  max,
+  colorBase = 'var(--series-1)',
+  title,
+  rowHrefs,
+}: Props) {
   const { t: tr } = useTranslation('dashboard');
   const peak = max ?? Math.max(1, ...values.flat());
   return (
@@ -35,7 +46,9 @@ export function Heatmap({ rowLabels, colLabels, values, max, colorBase = 'var(--
       ))}
       {rowLabels.map((row, r) => (
         <div className="heatmap-rowgroup" key={`r${r}`} style={{ display: 'contents' }}>
-          <div className="heatmap-rowhead">{row}</div>
+          <DrillLink block to={rowHrefs?.[r]} className="heatmap-rowhead">
+            {row}
+          </DrillLink>
           {colLabels.map((_, c) => {
             const raw = values[r]?.[c];
             const missing = raw == null;

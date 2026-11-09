@@ -1315,6 +1315,9 @@ pub(super) struct HeatmapQuery {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceHeatmap {
     pub links: Vec<String>,
+    /// The interface behind each entry of `links`, in the same order: which node and which
+    /// `ifindex`, so a client can open that port.
+    pub link_refs: Vec<HeatmapLink>,
     pub timestamps: Vec<i64>,
     pub values: Vec<Vec<f64>>,
     // Same flag as `util::Ranked::partial`, an added field rather than an envelope only because
@@ -1322,6 +1325,13 @@ pub(crate) struct InterfaceHeatmap {
     /// `true` when the link set covers only the groups the calling account may see and links it is
     /// entitled to may be missing. Always `false` for an account with unrestricted visibility.
     pub partial: bool,
+}
+
+/// One heatmap row's interface.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct HeatmapLink {
+    pub node_id: Uuid,
+    pub ifindex: i32,
 }
 
 /// Build the grid from each link's independently-sampled series.
@@ -1353,6 +1363,14 @@ fn build_heatmap(
     let timestamps: Vec<i64> = union.into_iter().collect();
     InterfaceHeatmap {
         links: per_link.iter().map(|(l, _)| l.clone()).collect(),
+        link_refs: entries
+            .iter()
+            .take(per_link.len())
+            .map(|e| HeatmapLink {
+                node_id: e.node_id,
+                ifindex: e.ifindex,
+            })
+            .collect(),
         values: per_link
             .iter()
             .map(|(_, m)| {
@@ -1493,6 +1511,35 @@ pub(crate) async fn fleet_throughput(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_heatmap_row_names_its_interface_in_order() {
+        // ADR-250 Inc.2: the dashboard opens the port a row is about, so `link_refs[i]` must be
+        // the interface behind `links[i]`.
+        let entry = |n: u128, ifindex: i32| InterfaceTopEntry {
+            node_id: Uuid::from_u128(n),
+            node_name: format!("sw-{n}"),
+            ifindex,
+            if_name: Some(format!("Gi0/{ifindex}")),
+            if_alias: None,
+            if_speed_bps: None,
+            value: 1.0,
+        };
+        let entries = [entry(1, 3), entry(2, 7)];
+        let point = |t, v| MetricPoint { t, v };
+        let grid = build_heatmap(
+            &entries,
+            vec![vec![point(10, 1.0)], vec![point(20, 2.0)]],
+            false,
+        );
+        assert_eq!(grid.links, vec!["sw-1 · Gi0/3", "sw-2 · Gi0/7"]);
+        let refs: Vec<(Uuid, i32)> = grid
+            .link_refs
+            .iter()
+            .map(|r| (r.node_id, r.ifindex))
+            .collect();
+        assert_eq!(refs, vec![(Uuid::from_u128(1), 3), (Uuid::from_u128(2), 7)]);
+    }
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};
     use axum::body::{to_bytes, Body};

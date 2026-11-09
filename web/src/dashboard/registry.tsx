@@ -8,7 +8,6 @@
 import { DASHBOARD_VERSION, type RegistryView } from './layout';
 import type { DashboardLayout, RowSpan, Span, WidgetDefinition, WidgetInstance } from './types';
 import {
-  ActiveAlertsActions,
   ActiveAlertsWidget,
   AlertCalendarWidget,
   AlertVolumeWidget,
@@ -80,6 +79,16 @@ import {
   FlowTrendWidget,
 } from './widgets/flow';
 import { WorldClockSettings, WorldClockWidget } from './widgets/general';
+import {
+  alertsDrill,
+  asEventKind,
+  DOWN_STATES,
+  eventsDrill,
+  metricChartHref,
+  nodesInStates,
+} from './widgets/drill';
+import { interfaceTrafficHref } from './widgets/interfaceTraffic';
+import { eventKindOf } from './widgets/util';
 import './widgets/widgets.css';
 
 // Section order is the registry array order (catalogBySection preserves it). Values are i18n keys
@@ -110,6 +119,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [6, 8, 12],
     reads: ['GET /api/v1/fleet/summary'],
     Component: StatusSummaryWidget,
+    titleHref: () => '/nodes',
   },
   {
     type: 'health-ring',
@@ -121,6 +131,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     reads: ['GET /api/v1/fleet/summary'],
     Component: HealthRingWidget,
+    titleHref: () => '/nodes',
   },
   {
     type: 'nodes-down',
@@ -132,6 +143,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     reads: ['GET /api/v1/fleet/summary'],
     Component: NodesDownWidget,
+    titleHref: () => nodesInStates(DOWN_STATES),
   },
   {
     type: 'fleet-health-timeline',
@@ -156,6 +168,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/alerts/transitions'],
     Component: RecentStateChangesWidget,
+    titleHref: () => '/alerts/history',
   },
   {
     type: 'active-alerts',
@@ -172,7 +185,7 @@ export const REGISTRY: WidgetDefinition[] = [
     // swallowed, so a public board read "no active alerts" in the middle of an outage.
     reads: ['GET /api/v1/alerts', 'GET /api/v1/stream/alerts'],
     Component: ActiveAlertsWidget,
-    Actions: ActiveAlertsActions,
+    titleHref: () => alertsDrill(),
   },
   {
     type: 'alert-volume',
@@ -185,6 +198,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2],
     reads: ['GET /api/v1/alerts/history'],
     Component: AlertVolumeWidget,
+    titleHref: () => '/alerts/history',
   },
   {
     type: 'severity-mix',
@@ -197,6 +211,7 @@ export const REGISTRY: WidgetDefinition[] = [
     // See `active-alerts`: the seed is half of what this reads.
     reads: ['GET /api/v1/alerts', 'GET /api/v1/stream/alerts'],
     Component: SeverityMixWidget,
+    titleHref: () => alertsDrill(),
   },
   {
     type: 'flapping-watchlist',
@@ -214,6 +229,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'POST /api/v1/node-names',
     ],
     Component: FlappingWatchlistWidget,
+    titleHref: () => alertsDrill({ flapping: true }),
   },
   {
     type: 'top-alerting-nodes',
@@ -226,6 +242,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/alerts/top-nodes'],
     Component: TopAlertingNodesWidget,
+    titleHref: () => alertsDrill(),
   },
   {
     type: 'alert-calendar',
@@ -238,6 +255,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2],
     reads: ['GET /api/v1/alerts/calendar'],
     Component: AlertCalendarWidget,
+    titleHref: () => '/alerts/history',
   },
   {
     type: 'top-rtt',
@@ -295,6 +313,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'GET /api/v1/nodes/{node_id}/metrics/{metric}/range',
     ],
     Component: MetricChartWidget,
+    titleHref: (i) => metricChartHref(i.settings),
     // No view-mode actions at all: both of this widget's controls choose its subject, so both sit
     // behind the ⚙ (ADR-072). It has no window and no lens to leave in the header.
     Settings: MetricChartSettings,
@@ -442,6 +461,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series',
     ],
     Component: InterfaceTrafficWidget,
+    titleHref: (i) => interfaceTrafficHref(i.settings),
     // Unit and window in the header; which interfaces are plotted behind the ⚙ (ADR-072).
     Actions: InterfaceTrafficActions,
     Settings: InterfaceTrafficSettings,
@@ -484,6 +504,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'POST /api/v1/node-names',
     ],
     Component: EventFeedWidget,
+    titleHref: (i) => eventsDrill({ kind: asEventKind(eventKindOf(i.settings) ?? '') }),
     Actions: EventFeedActions,
   },
   {
@@ -497,6 +518,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2],
     reads: ['GET /api/v1/events/stats'],
     Component: EventVolumeWidget,
+    titleHref: () => eventsDrill(),
   },
   {
     type: 'event-kind-mix',
@@ -508,6 +530,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     reads: ['GET /api/v1/events/stats'],
     Component: EventKindMixWidget,
+    titleHref: () => eventsDrill(),
   },
   {
     type: 'top-trap-types',
@@ -520,6 +543,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/events/stats'],
     Component: TopTrapTypesWidget,
+    titleHref: () => eventsDrill({ kind: 'trap' }),
   },
   {
     type: 'event-triage-mix',
@@ -531,6 +555,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     reads: ['GET /api/v1/events/stats'],
     Component: EventTriageMixWidget,
+    titleHref: () => eventsDrill(),
   },
   {
     type: 'noisy-event-sources',
@@ -546,6 +571,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'POST /api/v1/node-names',
     ],
     Component: NoisyEventSourcesWidget,
+    titleHref: () => eventsDrill(),
   },
   {
     type: 'event-rule-coverage',
@@ -557,6 +583,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     reads: ['GET /api/v1/events/stats'],
     Component: EventRuleCoverageWidget,
+    titleHref: () => eventsDrill(),
   },
   {
     type: 'flow-top-talkers',
@@ -644,6 +671,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'GET /api/v1/node-groups',
     ],
     Component: SiteHealthMatrixWidget,
+    titleHref: () => '/nodes',
   },
   {
     type: 'region-rollup',
@@ -659,6 +687,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'GET /api/v1/node-groups',
     ],
     Component: RegionRollupWidget,
+    titleHref: () => '/nodes',
   },
   {
     type: 'geo-map',
@@ -674,6 +703,7 @@ export const REGISTRY: WidgetDefinition[] = [
       'GET /api/v1/node-groups',
     ],
     Component: GeoMapWidget,
+    titleHref: () => '/topology/geo',
   },
   {
     type: 'maintenance',
@@ -686,6 +716,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/maintenance-windows'],
     Component: MaintenanceWidget,
+    titleHref: () => '/alerts/maintenance',
   },
   {
     type: 'poller-health',
@@ -697,6 +728,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [6, 8, 12],
     reads: ['GET /api/v1/poller-health'],
     Component: PollerHealthWidget,
+    titleHref: () => '/settings/pollers',
   },
   {
     type: 'discovery-queue',
@@ -709,6 +741,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/discovery/candidates'],
     Component: DiscoveryQueueWidget,
+    titleHref: () => '/nodes/discovery',
   },
   {
     type: 'data-coverage',
@@ -720,6 +753,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     reads: ['GET /api/v1/fleet/coverage'],
     Component: DataCoverageWidget,
+    titleHref: () => '/settings/system-health',
   },
   {
     type: 'stale-data',
@@ -744,6 +778,7 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     reads: ['GET /api/v1/audit'],
     Component: AuditWidget,
+    titleHref: () => '/settings/audit',
   },
   {
     // Reads no API at all (ADR-237): the time is the browser's clock through `Intl`, so `reads` is

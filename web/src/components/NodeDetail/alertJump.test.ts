@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { alertJumpOf, offersJump, portToSelect } from './alertJump';
+import { alertJumpOf, offersJump, portToSelect, readPortParam } from './alertJump';
 
 describe('alertJumpOf', () => {
   it('sends a port alert to the Interfaces tab with its ifindex', () => {
@@ -48,5 +48,17 @@ describe('portToSelect', () => {
   it('does nothing without a request', () => {
     expect(portToSelect(null, 0, [5])).toBeNull();
     expect(portToSelect(undefined, 0, [5])).toBeNull();
+  });
+});
+
+describe('readPortParam (ADR-250)', () => {
+  it('reads an ifindex and refuses anything else', () => {
+    expect(readPortParam(new URLSearchParams('interfaces.port=12'))).toBe(12);
+    expect(readPortParam(new URLSearchParams('interfaces.port=0'))).toBe(0);
+    expect(readPortParam(new URLSearchParams(''))).toBeNull();
+    expect(readPortParam(new URLSearchParams('interfaces.port=-1'))).toBeNull();
+    expect(readPortParam(new URLSearchParams('interfaces.port=1.5'))).toBeNull();
+    expect(readPortParam(new URLSearchParams('interfaces.port=abc'))).toBeNull();
+    expect(readPortParam(new URLSearchParams('interfaces.port=99999999999999999999'))).toBeNull();
   });
 });

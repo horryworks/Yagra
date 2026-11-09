@@ -4,7 +4,9 @@
 // shared server-computed `useFleetSummary()` poll (`/fleet/summary`) — correct over the whole
 // fleet, not the first page of `listNodes()` (S12) — so adding several costs one fetch.
 
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useLinksEnabled } from '../../components/ui/linksEnabled';
 import { stateColorValue, stateColorVar, stateLabel } from '../../lib/format';
 import { HARD_DOWN_STATES } from '../../lib/nodeState';
 import { api } from '../../services/api';
@@ -13,6 +15,7 @@ import { StatusSummary } from '../../widgets/StatusSummary';
 import { Donut } from '../primitives/Donut';
 import { KpiTile } from '../primitives/KpiTile';
 import { useFleetSummary } from '../useFleetSummary';
+import { alertHistoryHourDrill, DOWN_STATES, hourStartOf, nodesInStates } from './drill';
 import { usePolled } from '../usePolled';
 
 /** 🚨 The three tiles below all read `useFleetSummary`, and all three used to ignore its `error`.
@@ -29,7 +32,12 @@ export function StatusSummaryWidget() {
   const { summary, loading, error } = useFleetSummary();
   if (error) return <FleetSummaryFailed />;
   return (
-    <StatusSummary counts={summary?.states ?? {}} total={summary?.total ?? 0} loading={loading} />
+    <StatusSummary
+      counts={summary?.states ?? {}}
+      total={summary?.total ?? 0}
+      loading={loading}
+      hrefFor={(s) => nodesInStates([s])}
+    />
   );
 }
 
@@ -41,15 +49,36 @@ export function HealthRingWidget() {
   if (!summary || summary.total === 0) return <p className="muted">{t('widgets.noNodes')}</p>;
   const c = summary.states;
   const segments = [
-    { label: t('widgets.healthRing.healthy'), value: c.ok, color: stateColorVar('ok') },
-    { label: stateLabel('warning'), value: c.warning, color: stateColorVar('warning') },
+    {
+      label: t('widgets.healthRing.healthy'),
+      value: c.ok,
+      color: stateColorVar('ok'),
+      href: nodesInStates(['ok']),
+    },
+    {
+      label: stateLabel('warning'),
+      value: c.warning,
+      color: stateColorVar('warning'),
+      href: nodesInStates(['warning']),
+    },
     {
       label: stateLabel('critical'),
       value: HARD_DOWN_STATES.reduce((n, s) => n + c[s], 0),
       color: stateColorVar('critical'),
+      href: nodesInStates(DOWN_STATES),
     },
-    { label: stateLabel('unknown'), value: c.unknown, color: stateColorVar('unknown') },
-    { label: stateLabel('maintenance'), value: c.maintenance, color: stateColorVar('maintenance') },
+    {
+      label: stateLabel('unknown'),
+      value: c.unknown,
+      color: stateColorVar('unknown'),
+      href: nodesInStates(['unknown']),
+    },
+    {
+      label: stateLabel('maintenance'),
+      value: c.maintenance,
+      color: stateColorVar('maintenance'),
+      href: nodesInStates(['maintenance']),
+    },
   ].filter((s) => s.value > 0);
   const pct = summary.total > 0 ? Math.round((c.ok / summary.total) * 100) : 0;
   return (
@@ -68,11 +97,20 @@ export function NodesDownWidget() {
   if (loading && !summary) return <p className="muted">{t('widgets.loadingNodes')}</p>;
   // Hard-down over the whole fleet (the one HARD_DOWN_STATES definition).
   const down = summary ? HARD_DOWN_STATES.reduce((n, s) => n + summary.states[s], 0) : 0;
-  return <KpiTile value={String(down)} caption={t('widgets.nodesDown.caption')} />;
+  return (
+    <KpiTile
+      value={String(down)}
+      caption={t('widgets.nodesDown.caption')}
+      to={nodesInStates(DOWN_STATES)}
+    />
+  );
 }
 
 export function FleetHealthTimelineWidget() {
   const { t } = useTranslation('dashboard');
+  // Pressing the chart opens the alerts that opened in that hour (ADR-250 Inc.3).
+  const navigate = useNavigate();
+  const links = useLinksEnabled();
   const { data, loading, error } = usePolled(() => api.getStateHistory(), []);
   if (error) return <p className="muted">{error}</p>;
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
@@ -93,6 +131,7 @@ export function FleetHealthTimelineWidget() {
       timestamps={ts}
       fill
       yFormat={(v) => String(Math.round(v))}
+      onPick={links ? (at) => navigate(alertHistoryHourDrill(hourStartOf(at))) : undefined}
       series={[
         { label: t('widgets.fleetTimeline.down'), values: down, color: stateColorValue('critical') },
         { label: stateLabel('warning'), values: s.warning ?? [], color: stateColorValue('warning') },

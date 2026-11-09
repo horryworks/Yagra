@@ -3,7 +3,10 @@
 // severity mix widgets. Colors are passed in (CSS-var strings) — the widget chooses the channel
 // (status for health, severity for the alert mix), so this primitive stays channel-agnostic.
 
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { DrillLink } from '../../components/ui/DrillLink';
+import { useLinksEnabled } from '../../components/ui/linksEnabled';
 import './Donut.css';
 
 export interface DonutSegment {
@@ -11,6 +14,9 @@ export interface DonutSegment {
   value: number;
   /** CSS color (e.g. `var(--status-up)`). */
   color: string;
+  /** The screen narrowed to this slice (ADR-250). Its legend line becomes the link, and pressing the
+   *  slice itself goes there too; the legend is the keyboard's way in. */
+  href?: string;
 }
 
 interface Props {
@@ -29,6 +35,8 @@ const CIRC = 2 * Math.PI * R;
 
 export function Donut({ segments, centerValue, centerSub, legend = true }: Props) {
   const { t } = useTranslation('dashboard');
+  const navigate = useNavigate();
+  const links = useLinksEnabled();
   const total = segments.reduce((s, x) => s + Math.max(0, x.value), 0);
   // Cumulative offset so segments lay end-to-end starting at 12 o'clock.
   let acc = 0;
@@ -47,7 +55,8 @@ export function Donut({ segments, centerValue, centerSub, legend = true }: Props
             return (
               <circle
                 key={seg.label}
-                className="donut-seg"
+                className={links && seg.href ? 'donut-seg drill' : 'donut-seg'}
+                onClick={links && seg.href ? () => navigate(seg.href!) : undefined}
                 cx="21"
                 cy="21"
                 r={R}
@@ -71,10 +80,12 @@ export function Donut({ segments, centerValue, centerSub, legend = true }: Props
       {legend && (
         <ul className="donut-legend">
           {segments.map((seg) => (
-            <li className="donut-legend-item" key={seg.label}>
-              <span className="donut-legend-dot" style={{ background: seg.color }} />
-              <span className="donut-legend-label">{seg.label}</span>
-              <span className="donut-legend-value">{seg.value}</span>
+            <li key={seg.label}>
+              <DrillLink to={seg.href} className="donut-legend-item">
+                <span className="donut-legend-dot" style={{ background: seg.color }} />
+                <span className="donut-legend-label">{seg.label}</span>
+                <span className="donut-legend-value">{seg.value}</span>
+              </DrillLink>
             </li>
           ))}
         </ul>

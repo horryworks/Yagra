@@ -308,8 +308,7 @@
       "down": "Down"
     },
     "activeAlerts": {
-      "empty": "No active alerts. All monitored nodes are healthy.",
-      "viewAll": "View all"
+      "empty": "No active alerts. All monitored nodes are healthy."
     },
     "severityMix": {
       "empty": "No active alerts.",
@@ -469,8 +468,7 @@
       "allKinds": "All kinds",
       "syslog": "syslog",
       "trap": "trap",
-      "webhook": "webhook",
-      "viewAll": "View all"
+      "webhook": "webhook"
     },
     "eventVolume": {
       "empty": "No events in the last 24h.",

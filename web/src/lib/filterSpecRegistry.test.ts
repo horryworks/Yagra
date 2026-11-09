@@ -30,6 +30,8 @@ import {
 } from './columnFilter';
 
 import { eventFilters } from '../components/EventLog/eventFilterSpec';
+import { DRILL_SAMPLES } from '../dashboard/widgets/drill';
+import { PORT_PARAM } from '../components/NodeDetail/alertJump';
 import { flowFilters } from '../components/NodeDetail/flowTabFilters';
 import {
   apFilters,
@@ -378,10 +380,10 @@ const NODE_TABS: readonly RouteTable[] = [
 const ROUTES: readonly Route[] = [
   {
     path: '/nodes',
-    own: ['sel', 'tab', TREE_SEARCH_KEY, GROUP_MAP_SEARCH_KEY],
+    own: ['sel', 'tab', TREE_SEARCH_KEY, GROUP_MAP_SEARCH_KEY, PORT_PARAM],
     tables: [{ entries: ['inventoryFilterSpecs'], prefix: '' }, ...NODE_TABS],
   },
-  { path: '/nodes/:nodeId', own: ['tab'], tables: NODE_TABS },
+  { path: '/nodes/:nodeId', own: ['tab', PORT_PARAM], tables: NODE_TABS },
   {
     // One table per tab (ADR-205 Inc.1). The page draws only the active one, through one component
     // that takes its prefix by the tab — hence one spelling for all four.
@@ -616,6 +618,25 @@ describe('the route ledger (ADR-153)', () => {
       return [...keys].map((k) => ({ key: table.prefix + k, from: table.entries[0] }));
     });
   }
+
+  it('lets a dashboard drill link name only keys its route reads (ADR-250)', () => {
+    // A widget's link that named a key the destination does not read would open the unfiltered
+    // screen and look as if it worked. Every href `dashboard/widgets/drill.ts` builds is checked here.
+    let inspected = 0;
+    for (const href of DRILL_SAMPLES) {
+      const url = new URL(href, 'http://x');
+      const route =
+        ROUTES.find((r) => r.path === url.pathname) ??
+        (/^\/nodes\/[^/]+$/.test(url.pathname) ? ROUTES.find((r) => r.path === '/nodes/:nodeId') : undefined);
+      expect(route, `${href}: no route in the ledger`).toBeDefined();
+      const allowed = new Set([...(route?.own ?? []), ...(route ? filterKeys(route).map((k) => k.key) : [])]);
+      for (const key of url.searchParams.keys()) {
+        expect(allowed.has(key), `${href}: ${route?.path} does not read "${key}"`).toBe(true);
+        inspected += 1;
+      }
+    }
+    expect(inspected).toBeGreaterThanOrEqual(12);
+  });
 
   it('names only builders that are in the registry', () => {
     for (const route of ROUTES) {

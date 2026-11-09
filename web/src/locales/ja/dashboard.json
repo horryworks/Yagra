@@ -308,8 +308,7 @@
       "down": "ダウン"
     },
     "activeAlerts": {
-      "empty": "アクティブアラートはありません。監視中のすべてのノードが正常です。",
-      "viewAll": "すべて表示"
+      "empty": "アクティブアラートはありません。監視中のすべてのノードが正常です。"
     },
     "severityMix": {
       "empty": "アクティブアラートはありません。",
@@ -466,8 +465,7 @@
       "allKinds": "すべての種別",
       "syslog": "syslog",
       "trap": "トラップ",
-      "webhook": "Webhook",
-      "viewAll": "すべて表示"
+      "webhook": "Webhook"
     },
     "eventVolume": {
       "empty": "過去 24 時間にイベントはありません。",

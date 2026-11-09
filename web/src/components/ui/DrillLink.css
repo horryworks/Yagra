@@ -1,0 +1,16 @@
+/* A part of a widget that opens a narrowed screen (ADR-250). Hover underlines, focus draws the
+   ring RankedBars' clickable rows use; neither moves anything. */
+.drill {
+  cursor: pointer;
+}
+
+.drill:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.drill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-color);
+  border-radius: var(--radius-sm);
+}

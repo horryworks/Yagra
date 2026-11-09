@@ -5,7 +5,9 @@
 
 import { Trans, useTranslation } from 'react-i18next';
 import { Badge } from '../../components/ui/Badge';
+import { DrillLink } from '../../components/ui/DrillLink';
 import { ScreenLink } from '../../components/ui/ScreenLink';
+import { maintenanceDrill, nodeDrill } from './drill';
 import {
   formatCount,
   httpStatusLabel,
@@ -38,7 +40,9 @@ export function MaintenanceWidget() {
           <Badge tone={w.active ? 'info' : 'neutral'}>
             {w.active ? t('widgets.maintenance.active') : t('widgets.maintenance.upcoming')}
           </Badge>
-          <span className="dwl-name">{w.name}</span>
+          <DrillLink to={maintenanceDrill(w.name)} className="dwl-name">
+            {w.name}
+          </DrillLink>
           <span className="dwl-sub muted">
             {w.active
               ? t('widgets.maintenance.ends', { time: relativeTime(w.ends_at, now) })
@@ -81,7 +85,9 @@ export function StaleDataWidget() {
       {stale.map((s) => (
         <li className="dwl-row" key={s.node_id}>
           <span className="dwl-dot" style={{ background: stateColorVar('unknown') }} />
-          <span className="dwl-name">{s.name}</span>
+          <DrillLink to={nodeDrill(s.node_id)} className="dwl-name">
+            {s.name}
+          </DrillLink>
           <span className="dwl-sub muted">{t('widgets.staleData.noRecent')}</span>
         </li>
       ))}

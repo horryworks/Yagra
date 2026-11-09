@@ -5,7 +5,7 @@
 
 import { Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { DrillLink } from '../components/ui/DrillLink';
 import { EntityName } from '../components/ui/EntityName';
 import { noteKey, type AlertNote } from '../lib/alertNotes';
 import { nodeHref } from '../lib/entityHref';
@@ -63,9 +63,9 @@ export function AlertNotes({
           ? t('row.heldUntil', { until: formatTimestamp(Date.parse(n.releaseAt)) })
           : t('row.held');
         return (
-          <Link className="alertrow-muted" to="/alerts/routing" title={text}>
+          <DrillLink className="alertrow-muted" to="/alerts/routing" title={text}>
             {text}
-          </Link>
+          </DrillLink>
         );
       }
       default: {

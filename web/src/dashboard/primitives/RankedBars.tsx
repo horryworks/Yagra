@@ -5,6 +5,7 @@
 // color by default (Top-N is categorical, not a node status); callers may override per row.
 
 import { useTranslation } from 'react-i18next';
+import { DrillLink } from '../../components/ui/DrillLink';
 import './RankedBars.css';
 
 export interface RankedRow {
@@ -16,6 +17,8 @@ export interface RankedRow {
   valueText?: string;
   /** Fill color (CSS var); defaults to the shared series-1. */
   color?: string;
+  /** The screen narrowed to this row (ADR-250). The whole row becomes the link. */
+  href?: string;
 }
 
 interface Props {
@@ -48,6 +51,28 @@ export function RankedBars({ rows, max, empty, onRowClick, partial }: Props) {
       <ul className="rankedbars">
         {rows.map((r, i) => {
         const pct = peak > 0 ? Math.max(0, Math.min(100, (r.value / peak) * 100)) : 0;
+        const body = (
+          <>
+            <span className="rankedbar-label" title={r.label}>
+              {r.label}
+            </span>
+            <span className="rankedbar-track">
+              <span
+                className="rankedbar-fill"
+                style={{ width: `${pct}%`, background: r.color ?? 'var(--series-1)' }}
+              />
+            </span>
+            <span className="rankedbar-value">{r.valueText ?? String(r.value)}</span>
+          </>
+        );
+        if (r.href && !clickable)
+          return (
+            <li key={r.label}>
+              <DrillLink to={r.href} className="rankedbar">
+                {body}
+              </DrillLink>
+            </li>
+          );
         return (
           <li
             className={clickable ? 'rankedbar clickable' : 'rankedbar'}
@@ -66,18 +91,9 @@ export function RankedBars({ rows, max, empty, onRowClick, partial }: Props) {
                 : undefined
             }
           >
-            <span className="rankedbar-label" title={r.label}>
-              {r.label}
-            </span>
-            <span className="rankedbar-track">
-              <span
-                className="rankedbar-fill"
-                style={{ width: `${pct}%`, background: r.color ?? 'var(--series-1)' }}
-              />
-            </span>
-              <span className="rankedbar-value">{r.valueText ?? String(r.value)}</span>
-            </li>
-          );
+            {body}
+          </li>
+        );
         })}
       </ul>
     </>

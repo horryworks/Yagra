@@ -138,6 +138,10 @@ export interface WidgetDefinition {
   Settings?: FC<WidgetProps>;
   /** Cap on how many instances may be added (omit = unlimited). */
   maxInstances?: number;
+  /** The screen the card's title opens outside Customize: the whole list the widget summarizes,
+   *  unfiltered by any one part (ADR-250 decision 2). Built in `widgets/drill.ts` or a plain path;
+   *  `undefined` (or a widget that has none) leaves the title as text. */
+  titleHref?: (instance: WidgetInstance) => string | undefined;
 }
 
 /** One placed widget on a board. Array position is its order. */

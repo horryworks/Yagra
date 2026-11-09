@@ -41,6 +41,7 @@ import {
   timeColLabels,
   trailingSecs,
 } from './util';
+import { interfaceDrill } from './drill';
 
 export function TrafficSpikesWidget() {
   const { t } = useTranslation('dashboard');
@@ -119,6 +120,7 @@ export function InterfaceHeatmapWidget() {
         values={data?.values ?? []}
         colorBase="var(--series-3)"
         title={(row, col, v) => `${row} ${col || ''} — ${formatBps(v)}`}
+        rowHrefs={(data?.link_refs ?? []).map((l) => interfaceDrill(l.node_id, l.ifindex))}
       />
     </>
   );

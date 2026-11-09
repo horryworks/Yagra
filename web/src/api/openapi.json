@@ -35579,6 +35579,24 @@
           }
         }
       },
+      "HeatmapLink": {
+        "type": "object",
+        "description": "One heatmap row's interface.",
+        "required": [
+          "node_id",
+          "ifindex"
+        ],
+        "properties": {
+          "ifindex": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "HeldEvent": {
         "type": "string",
         "description": "What the notifier was handed when it held a notification.",
@@ -36237,11 +36255,19 @@
         "description": "A links × time grid. `values[i][j]` is link `i`'s throughput at `timestamps[j]`, so every row\nis the same length and the client can shade cells without bounds checks.",
         "required": [
           "links",
+          "link_refs",
           "timestamps",
           "values",
           "partial"
         ],
         "properties": {
+          "link_refs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeatmapLink"
+            },
+            "description": "The interface behind each entry of `links`, in the same order: which node and which\n`ifindex`, so a client can open that port."
+          },
           "links": {
             "type": "array",
             "items": {

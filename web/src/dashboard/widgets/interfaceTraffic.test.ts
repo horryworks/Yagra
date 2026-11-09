@@ -25,6 +25,7 @@ import {
   selectedNodeIds,
   type LinkSeries,
   type ResolvedLink,
+  interfaceTrafficHref,
 } from './interfaceTraffic';
 // The default window moved to `util.ts` with the range list itself (ADR-136 decision 6); the settings
 // reader still has to land on it, so the tests below still name it.
@@ -434,5 +435,15 @@ describe('everyLinkFailed', () => {
     // Nothing was asked, so nothing failed — the "pick some interfaces" branch owns this state
     // and must not be overwritten by an error message.
     expect(everyLinkFailed([])).toBe(false);
+  });
+});
+
+describe('interfaceTrafficHref (ADR-250)', () => {
+  it('opens the port only when the card charts exactly one', () => {
+    const one = { links: [{ nodeId: 'n1', ifindex: 4 }] };
+    const two = { links: [{ nodeId: 'n1', ifindex: 4 }, { nodeId: 'n1', ifindex: 5 }] };
+    expect(interfaceTrafficHref(one)).toBe('/nodes/n1?tab=interfaces&interfaces.port=4');
+    expect(interfaceTrafficHref(two)).toBeUndefined();
+    expect(interfaceTrafficHref(undefined)).toBeUndefined();
   });
 });

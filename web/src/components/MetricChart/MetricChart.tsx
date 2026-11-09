@@ -119,6 +119,10 @@ interface Props {
    *  toggling and focus stay per chart, because synced charts plot different series and matching
    *  them by position would toggle an unrelated line. Omit for an independent chart. */
   syncKey?: string;
+  /** Pressing the plot reports the instant under the cursor (unix seconds, the nearest sample) —
+   *  how a dashboard chart opens the screen for that moment (ADR-250 Inc.3). Omit and the plot is
+   *  not pressable. Read through a ref, so a new function each render does not rebuild the chart. */
+  onPick?: (unixSeconds: number) => void;
 }
 
 /** Pin the live legend to the most recent sample whenever the cursor is away, so an unhovered
@@ -140,8 +144,11 @@ export function MetricChart({
   referenceBands,
   mirrored,
   syncKey,
+  onPick,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
+  const pickRef = useRef(onPick);
+  pickRef.current = onPick;
   const plotRef = useRef<uPlot | null>(null);
   // 🚨 **Every colour on this canvas is resolved once, at build time**, and captured in the option
   // closures — the axis, the grid, the reference line, the palette and (ADR-128) the two grounds.
@@ -419,6 +426,14 @@ export function MetricChart({
     const plot = new uPlot(opts, data, el);
     plotRef.current = plot;
     applyIdleLegend(plot);
+    // A press on the plot is a pick when the chart was given somewhere to send it.
+    const onPlotClick = () => {
+      const idx = plot.cursor.idx;
+      const t = idx == null ? undefined : plot.data[0][idx];
+      if (pickRef.current && t != null) pickRef.current(t);
+    };
+    plot.over.addEventListener('click', onPlotClick);
+    if (pickRef.current) plot.over.style.cursor = 'pointer';
 
     // Resize the plot to its pane. Width always tracks the container; height tracks too in `fill`
     // mode (a resizable dashboard cell). CRITICAL: in fill mode the plot height must be the pane
@@ -454,6 +469,7 @@ export function MetricChart({
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      plot.over.removeEventListener('click', onPlotClick);
       plot.destroy();
       plotRef.current = null;
     };

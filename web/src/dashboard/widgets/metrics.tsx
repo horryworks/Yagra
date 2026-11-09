@@ -36,7 +36,9 @@ import {
 } from '../../lib/metricInventoryCache';
 import { api } from '../../services/api';
 import type { NodeMetricEntry } from '../../types/api';
+import { DrillLink } from '../../components/ui/DrillLink';
 import { NothingChosen } from '../primitives/NothingChosen';
+import { nodeDrill } from './drill';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
@@ -291,6 +293,7 @@ export function MetricTopWidget({ instance, openSettings }: WidgetProps) {
     label: e.name,
     value: e.value,
     valueText: formatSi(e.value),
+    href: nodeDrill(e.node_id),
   }));
   return (
     <RankedBars
@@ -549,7 +552,9 @@ export function VpnSessionsWidget({ instance, openSettings }: WidgetProps) {
               style={{ background: r.color }}
               aria-hidden="true"
             />
-            <span className="vpnsess-chip-node">{r.label}</span>
+            <DrillLink to={nodeDrill(r.nodeId)} className="vpnsess-chip-node">
+              {r.label}
+            </DrillLink>
             <span className="vpnsess-chip-val">
               {r.value == null ? '—' : formatCount(r.value)}
             </span>

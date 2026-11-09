@@ -15,6 +15,7 @@ import type { ChartSeries } from '../../components/MetricChart/MetricChart';
 import type { RateUnit } from '../../prefs';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import type { WidgetSettings } from '../types';
+import { interfaceDrill } from './drill';
 // The header's window list and its polling cadence are shared with the VPN-sessions widget
 // (ADR-136 decision 6). They lived here while one widget had a window.
 import { DEFAULT_WIDGET_RANGE_SECS, WIDGET_RANGES } from './util';
@@ -321,4 +322,11 @@ export function buildTrafficSeries(
   });
 
   return { timestamps, series };
+}
+
+/** The interface traffic card's port, when it charts exactly one; several ports have no single
+ *  screen to open. */
+export function interfaceTrafficHref(settings: WidgetSettings | undefined): string | undefined {
+  const { links } = readTrafficSettings(settings);
+  return links.length === 1 ? interfaceDrill(links[0].nodeId, links[0].ifindex) : undefined;
 }

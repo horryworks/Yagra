@@ -2,6 +2,7 @@
 // Unit tests for the alert-history filter state (no DOM — Vitest node env).
 
 import { describe, expect, it } from 'vitest';
+import { unixToLocalInput } from '../lib/format';
 import type { TFunction } from 'i18next';
 import {
   defaultFilters,
@@ -122,6 +123,18 @@ describe('queryFor', () => {
     expect(query({ severity: 'bogus' }).severity).toBeUndefined();
     expect(query({ severity: 'bogus,critical' }).severity).toBe('critical');
     expect(query({ phase: 'exploded' }).resolved).toBeUndefined();
+  });
+
+  it('sends a custom window as since and until (ADR-250)', () => {
+    // The dashboard's alert-volume bar opens one hour; the instants round-trip through the wall
+    // time the range editor shows, whatever the display zone is.
+    const from = 1_786_000_800;
+    const to = from + 3600;
+    const q = query({ range: `custom:${unixToLocalInput(from)}|${unixToLocalInput(to)}` });
+    expect(q.since).toBe(new Date(from * 1000).toISOString());
+    expect(q.until).toBe(new Date(to * 1000).toISOString());
+    // An open end sends only the bound it has.
+    expect(query({ range: `custom:${unixToLocalInput(from)}|` }).until).toBeUndefined();
   });
 
   it('falls back to the default window for a preset a stale URL names', () => {

@@ -142,3 +142,27 @@ describe('widget registry', () => {
     expect(new Set(flat.map((d) => d.type)).size).toBe(REGISTRY.length);
   });
 });
+
+describe('card title links (ADR-250)', () => {
+  it('open a screen the menu lists, or a node page', async () => {
+    const { navItemForPath } = await import('../nav');
+    // A chosen node, metric and port, so the cards whose title follows a choice build theirs too.
+    const settings = { nodeId: 'n1', metric: 'cpu', kind: 'trap', links: [{ nodeId: 'n1', ifindex: 1 }] };
+    let inspected = 0;
+    for (const def of REGISTRY) {
+      if (!def.titleHref) continue;
+      const href = def.titleHref({ instanceId: 'i', type: def.type, span: def.defaultSpan, settings });
+      expect(href, def.type).toBeDefined();
+      const path = new URL(href!, 'http://x').pathname;
+      const known = navItemForPath(path) !== null || /^\/nodes\/[^/]+$/.test(path);
+      expect(known, `${def.type}: ${path} is not a screen`).toBe(true);
+      inspected += 1;
+    }
+    expect(inspected).toBeGreaterThanOrEqual(20);
+  });
+
+  it('give the metric chart no title link until a node is chosen', () => {
+    const def = getDefinition('metric-chart')!;
+    expect(def.titleHref?.({ instanceId: 'i', type: def.type, span: def.defaultSpan })).toBeUndefined();
+  });
+});

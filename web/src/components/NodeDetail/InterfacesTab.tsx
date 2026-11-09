@@ -9,6 +9,7 @@
 // refreshes on an interval (shared with the tab badge); per-interface series are loaded lazily.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { formatBps, formatDbm, formatPps, formatSi } from '../../lib/format';
@@ -16,7 +17,7 @@ import type { InterfaceAddress, InterfaceRow, InterfaceSeries, Neighbor } from '
 import { StatusDot } from '../ui/StatusDot';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/palette';
-import { portToSelect, type PortFocus } from './alertJump';
+import { PORT_PARAM, portToSelect, readPortParam, type PortFocus } from './alertJump';
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useCan, useRangeStore } from '../../store';
@@ -188,6 +189,21 @@ export function InterfacesTab({
     setSelected(port);
     onFocusApplied?.();
   }, [focus, rows, onFocusApplied]);
+  // A link that names a port (a dashboard row, ADR-250 Inc.2) opens its dock the same way, once:
+  // the request leaves the URL when it is applied, or when a loaded list does not have the port.
+  // ⚠️ Not on an EMPTY loaded list: the pane reports "loaded, no rows" for a moment while it is
+  // still deciding the node's kind, and dropping the request then lost it before the rows came.
+  const [params, setParams] = useSearchParams();
+  const urlPort = readPortParam(params);
+  useEffect(() => {
+    if (!params.has(PORT_PARAM)) return;
+    const found = urlPort != null && rows.some((r) => r.ifindex === urlPort);
+    if (!found && !(loaded && rows.length > 0)) return;
+    if (found) setSelected(urlPort);
+    const next = new URLSearchParams(params);
+    next.delete(PORT_PARAM);
+    setParams(next, { replace: true });
+  }, [params, urlPort, rows, loaded, setParams]);
   // Escape closes the dock (ADR-073). It was the one dismissal this tab lacked — re-clicking the
   // row and the dock's own ✕ were already there, and `keepSelectedInView` exists specifically to
   // keep the first of those one click away.
