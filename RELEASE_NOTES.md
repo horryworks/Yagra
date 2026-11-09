@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.75 — Ask whether anything is running out on a node or a whole site, and open a narrowed screen from any dashboard widget
+
 ### New Features
 
 - **Troubleshoot ▸ Investigate answers "is anything on this node running out?".** Pick a node, or choose Investigate from a node's More menu, and the page answers yes, no or can't tell for its memory, disk, CPU and its eight busiest links, with the series behind each answer. A series is judged against the warning bound in force for that node and metric, else the critical one, else 100%, and is a yes when it is already over that line, when its daily peaks reach it within 30 days, or when it climbs and resets at each restart, the shape of a leak. Too few samples, or under seven days of them, is "can't tell", never "no". A table metric such as `hr_storage_used_pct` is divided row by row, so a full small filesystem is not hidden by a large empty one. The Troubleshoot tab now opens on Investigate; the analysis tools moved under an Analyses heading with their addresses unchanged (ADR-251).
