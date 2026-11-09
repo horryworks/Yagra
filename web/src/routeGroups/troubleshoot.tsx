@@ -16,7 +16,9 @@ import { RunsPage } from '../troubleshoot/RunsPage';
 import { SavedFindingsPage } from '../troubleshoot/SavedFindingsPage';
 import { ScheduledPage } from '../troubleshoot/ScheduledPage';
 import { ReportRoutePage } from '../troubleshoot/report/ReportRoutePage';
-import { InvestigatePage } from '../troubleshoot/investigate/InvestigatePage';
+import { InvestigateHome } from '../troubleshoot/investigate/InvestigateHome';
+import { RunningOutPage } from '../troubleshoot/investigate/RunningOutPage';
+import { QUESTION_CARDS } from '../troubleshoot/investigate/investigate';
 
 /** Redirect that keeps the query string — a bare `<Navigate to="/x"/>` drops it, which would strip
  *  the `?job=<id>` off existing `/troubleshoot/anomaly?job=…` links and land on an empty report. */
@@ -29,7 +31,11 @@ export default function TroubleshootRoutes() {
   return (
     <Routes>
       <Route index element={<TroubleshootCatalogPage />} />
-      <Route path="investigate" element={<InvestigatePage />} />
+      <Route path="investigate" element={<InvestigateHome />} />
+      <Route
+        path={`investigate/${QUESTION_CARDS.running_out.slug}`}
+        element={<RunningOutPage />}
+      />
       <Route path="runs" element={<RunsPage />} />
       {/* One parameterized route serves every tool's report — adding a report touches only the
           registry, never this file. The old per-tool path stays as a redirect for live deep links

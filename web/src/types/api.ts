@@ -1488,6 +1488,10 @@ export type InvestigateEvidence = components['schemas']['Evidence'];
 export type InvestigateHypothesis = InvestigateReport['hypotheses'][number]['hypothesis'];
 export type InvestigateVerdict = InvestigateEvidence['verdict'];
 export type InvestigateReason = InvestigateEvidence['reason'];
+export type InvestigateQuestion = InvestigateReport['question'];
+export type FolderInvestigateReport = components['schemas']['FolderInvestigateReport'];
+/** The questions Investigate answers, in the order the cards show them (ADR-251 decision 10). */
+export const INVESTIGATE_QUESTIONS = ['running_out'] as const satisfies readonly InvestigateQuestion[];
 /** What Investigate checks, in the order the report lists them (ADR-251). Iterated by
  *  `i18nEnumKeys.test.ts`, like every union whose members are label keys. */
 export const INVESTIGATE_HYPOTHESES = [

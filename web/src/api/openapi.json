@@ -11684,6 +11684,102 @@
         }
       }
     },
+    "/api/v1/node-groups/{id}/investigate/running-out": {
+      "get": {
+        "tags": [
+          "analysis"
+        ],
+        "operationId": "folder_running_out",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Folder id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "description": "How many days back to read, 7 to 90. Defaults to 30.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether anything is running out on the nodes of this folder and every folder beneath it. A first pass reads each node's memory, disk and CPU percentages now and a week ago, and its ports' current traffic; the nodes it puts at 50% or more in 30 days are judged exactly as the single-node question judges them, busiest first, at most 20. The counts say how many nodes were read, how many were candidates and how many candidates were not judged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderInvestigateReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`days` outside 7 to 90, or `too_many_nodes`: the folder holds more than 2,000 nodes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such folder, or not one this caller may see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode: no database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/node-groups/{id}/notes": {
       "put": {
         "tags": [
@@ -34933,6 +35029,78 @@
           },
           "level": {
             "$ref": "#/components/schemas/GroupingLevel"
+          }
+        }
+      },
+      "FolderInvestigateReport": {
+        "type": "object",
+        "description": "The answer to one question about a folder.",
+        "required": [
+          "question",
+          "group_id",
+          "from",
+          "to",
+          "nodes_total",
+          "nodes_with_data",
+          "candidates",
+          "judged",
+          "not_judged",
+          "links_screened",
+          "nodes"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "integer",
+            "description": "Nodes the first pass put at or above 50% in 30 days.",
+            "minimum": 0
+          },
+          "from": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The window each judged node was read over, Unix seconds."
+          },
+          "group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "judged": {
+            "type": "integer",
+            "description": "Candidates judged in full — the busiest, at most 20.",
+            "minimum": 0
+          },
+          "links_screened": {
+            "type": "boolean",
+            "description": "Whether ports were part of the first pass. False when no port in the folder has a usable\nspeed, or the store did not answer."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvestigateReport"
+            },
+            "description": "The judged nodes, those with a hit first."
+          },
+          "nodes_total": {
+            "type": "integer",
+            "description": "Nodes in the folder and every folder beneath it.",
+            "minimum": 0
+          },
+          "nodes_with_data": {
+            "type": "integer",
+            "description": "Nodes that reported any memory, disk or CPU percentage in the last hour.",
+            "minimum": 0
+          },
+          "not_judged": {
+            "type": "integer",
+            "description": "Candidates not judged because 20 were. Never read these as fine.",
+            "minimum": 0
+          },
+          "question": {
+            "$ref": "#/components/schemas/Question"
+          },
+          "to": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
           }
         }
       },

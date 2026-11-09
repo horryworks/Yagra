@@ -1310,6 +1310,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("investigate_node"),
     ),
     (
+        "GET",
+        "/api/v1/node-groups/:id/investigate/running-out",
+        // Refuses a folder the caller cannot see; every node it reads is inside that folder.
+        GroupFiltered,
+        Tool("investigate_folder"),
+    ),
+    (
         "PUT",
         "/api/v1/nodes/:node_id/bindings",
         NodeScoped,

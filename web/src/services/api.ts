@@ -122,6 +122,7 @@ import type {
   NodeAssignment,
   NodeAvailability,
   InvestigateReport,
+  FolderInvestigateReport,
   NotificationChannel,
   PollerHealth,
   PollerNodesResponse,
@@ -1476,6 +1477,10 @@ export const api = {
   /** Investigate (ADR-251): is anything on this node running out? Answered in the request. */
   investigateRunningOut: (id: string): Promise<InvestigateReport> =>
     apiGet('/api/v1/nodes/{node_id}/investigate/running-out', { path: { node_id: id } }),
+
+  /** Investigate over a folder and every folder beneath it (ADR-251 decision 12). */
+  investigateFolderRunningOut: (id: string): Promise<FolderInvestigateReport> =>
+    apiGet('/api/v1/node-groups/{id}/investigate/running-out', { path: { id } }),
 
   /** The pools that exist, for the assignment picker. View-gated; names only.
    *  Separate from `listPollers` (which scans the whole node table to build its per-pool counts). */

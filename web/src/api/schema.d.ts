@@ -2378,6 +2378,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-groups/{id}/investigate/running-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["folder_running_out"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/node-groups/{id}/notes": {
         parameters: {
             query?: never;
@@ -9087,6 +9103,39 @@ export interface components {
             /** Format: uuid */
             group_id: string;
             level: components["schemas"]["GroupingLevel"];
+        };
+        /** @description The answer to one question about a folder. */
+        FolderInvestigateReport: {
+            /** @description Nodes the first pass put at or above 50% in 30 days. */
+            candidates: number;
+            /**
+             * Format: int64
+             * @description The window each judged node was read over, Unix seconds.
+             */
+            from: number;
+            /** Format: uuid */
+            group_id: string;
+            /** @description Candidates judged in full — the busiest, at most 20. */
+            judged: number;
+            /**
+             * @description Whether ports were part of the first pass. False when no port in the folder has a usable
+             *     speed, or the store did not answer.
+             */
+            links_screened: boolean;
+            /** @description The judged nodes, those with a hit first. */
+            nodes: components["schemas"]["InvestigateReport"][];
+            /** @description Nodes in the folder and every folder beneath it. */
+            nodes_total: number;
+            /** @description Nodes that reported any memory, disk or CPU percentage in the last hour. */
+            nodes_with_data: number;
+            /** @description Candidates not judged because 20 were. Never read these as fine. */
+            not_judged: number;
+            question: components["schemas"]["Question"];
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            to: number;
         };
         /** @description A destination as the API exposes it — no secrets, ever. */
         ForwardDestination: {
@@ -25735,6 +25784,77 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    folder_running_out: {
+        parameters: {
+            query?: {
+                /** @description How many days back to read, 7 to 90. Defaults to 30. */
+                days?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Folder id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether anything is running out on the nodes of this folder and every folder beneath it. A first pass reads each node's memory, disk and CPU percentages now and a week ago, and its ports' current traffic; the nodes it puts at 50% or more in 30 days are judged exactly as the single-node question judges them, busiest first, at most 20. The counts say how many nodes were read, how many were candidates and how many candidates were not judged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderInvestigateReport"];
+                };
+            };
+            /** @description `days` outside 7 to 90, or `too_many_nodes`: the folder holds more than 2,000 nodes */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Missing View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such folder, or not one this caller may see */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode: no database */
             503: {
                 headers: {
                     [name: string]: unknown;

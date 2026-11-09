@@ -748,8 +748,7 @@
     }
   },
   "investigate": {
-    "pickNode": "ノードを選ぶ",
-    "empty": "確かめるノードを選んでください。",
+    "empty": "このノードには出せる物がありません。",
     "noMetric": "データなし",
     "question": {
       "running_out": "足りなくなりそう"
@@ -780,9 +779,37 @@
       "current": "今",
       "target": "線",
       "days": "残り日数",
-      "reason": "理由"
+      "reason": "理由",
+      "node": "ノード"
     },
     "gaps_one": "この期間に収集が {{count}} 回止まり、その時間のデータはありません。",
-    "gaps_other": "この期間に収集が {{count}} 回止まり、その時間のデータはありません。"
+    "gaps_other": "この期間に収集が {{count}} 回止まり、その時間のデータはありません。",
+    "about": "{{name}} について",
+    "clearTarget": "別の物を調べる",
+    "changeTarget": "変える",
+    "openNode": "ノードを開く",
+    "questionDesc": {
+      "running_out": "メモリ・ディスク・CPU・回線が 30 日以内に上限に届くか"
+    },
+    "pick": {
+      "search": "名前・アドレスで探す",
+      "searchPlaceholder": "名前・IP アドレス",
+      "folder": "サイト・フォルダごと調べる",
+      "folderPlaceholder": "サイトかフォルダを選ぶ",
+      "alerting": "アラートが出ているノード",
+      "noAlerting": "アラートが出ているノードはありません。",
+      "recent": "最近見たノード"
+    },
+    "folder": {
+      "total": "台数",
+      "withData": "データあり",
+      "candidates": "候補",
+      "judged": "詳しく見た",
+      "notJudged_one": "ほかに {{count}} 台の候補を詳しく見ていません。下のフォルダで調べてください。",
+      "notJudged_other": "ほかに {{count}} 台の候補を詳しく見ていません。下のフォルダで調べてください。",
+      "noLinks": "ポートは見ていません。このフォルダには速度の分かるポートがありません。",
+      "empty": "詳しく見たノードに、足りなくなりそうな物はありません。",
+      "hits": "当たり"
+    }
   }
 }

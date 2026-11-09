@@ -1,9 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import type { InvestigateEvidence, InvestigateReport } from '../../types/api';
-import { INVESTIGATE_VERDICTS } from '../../types/api';
+import type {
+  Alert,
+  FolderInvestigateReport,
+  InvestigateEvidence,
+  InvestigateReport,
+} from '../../types/api';
+import { INVESTIGATE_QUESTIONS, INVESTIGATE_VERDICTS } from '../../types/api';
 import {
+  QUESTION_CARDS,
   VERDICT_TONE,
+  alertingNodeIds,
+  folderCounts,
+  folderRows,
+  questionHref,
+  targetFromParams,
   formatDays,
   formatPct,
   investigateHref,
@@ -90,5 +101,89 @@ describe('formatting', () => {
 
   it('has a tone for every verdict', () => {
     for (const v of INVESTIGATE_VERDICTS) expect(VERDICT_TONE[v]).toBeTruthy();
+  });
+});
+
+describe('questions and targets', () => {
+  it('has a card for every question, each at its own path', () => {
+    const slugs = INVESTIGATE_QUESTIONS.map((q) => QUESTION_CARDS[q].slug);
+    expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  it('carries the target onto the question page', () => {
+    expect(questionHref('running_out')).toBe('/troubleshoot/investigate/running-out');
+    expect(questionHref('running_out', { kind: 'node', id: NODE })).toBe(
+      `/troubleshoot/investigate/running-out?node=${NODE}`,
+    );
+    expect(questionHref('running_out', { kind: 'folder', id: 'g1' })).toBe(
+      '/troubleshoot/investigate/running-out?group=g1',
+    );
+  });
+
+  it('reads a node before a folder from the URL', () => {
+    expect(targetFromParams(new URLSearchParams(`node=${NODE}&group=g1`))).toEqual({
+      kind: 'node',
+      id: NODE,
+    });
+    expect(targetFromParams(new URLSearchParams('group=g1'))).toEqual({ kind: 'folder', id: 'g1' });
+    expect(targetFromParams(new URLSearchParams())).toBeNull();
+  });
+});
+
+describe('a folder answer', () => {
+  const judged = (id: string, verdicts: InvestigateReport['hypotheses']) => ({
+    ...report,
+    node_id: id,
+    hypotheses: verdicts,
+  });
+  const folder: FolderInvestigateReport = {
+    question: 'running_out',
+    group_id: 'g1',
+    from: 0,
+    to: 1,
+    nodes_total: 10,
+    nodes_with_data: 9,
+    candidates: 3,
+    judged: 3,
+    not_judged: 0,
+    links_screened: true,
+    nodes: [
+      judged('a', report.hypotheses),
+      judged('b', [{ hypothesis: 'disk', verdict: 'unknown', evidence: [] }]),
+      judged('c', [{ hypothesis: 'cpu', verdict: 'miss', evidence: [evidence({})] }]),
+    ],
+  };
+
+  it('lists only the hits, each with the series that made it', () => {
+    const rows = folderRows(folder);
+    expect(rows.map((r) => [r.nodeId, r.hypothesis])).toEqual([['a', 'memory']]);
+    expect(rows[0].evidence?.verdict).toBe('hit');
+  });
+
+  it('counts each judged node once, by its worst answer', () => {
+    expect(folderCounts(folder)).toEqual({ hit: 1, miss: 1, unknown: 1 });
+  });
+});
+
+describe('nodes with an alert', () => {
+  const alert = (node: string, severity: string, at: number, kind?: string) =>
+    ({ node, severity, at_unix_ms: at, subject_kind: kind }) as unknown as Alert;
+
+  it('puts the worst first, names each node once and leaves out a pool', () => {
+    const ids = alertingNodeIds(
+      [
+        alert('n1', 'warning', 3),
+        alert('n2', 'critical', 1),
+        alert('n1', 'critical', 2),
+        alert('pool:p', 'critical', 4, 'pool'),
+      ],
+      8,
+    );
+    expect(ids).toEqual(['n1', 'n2']);
+  });
+
+  it('stops at the limit', () => {
+    const many = Array.from({ length: 5 }, (_, i) => alert(`n${i}`, 'warning', i));
+    expect(alertingNodeIds(many, 2)).toHaveLength(2);
   });
 });

@@ -86,6 +86,8 @@ pub(super) struct SeededMetrics {
     rows: Mutex<HashMap<(Uuid, String, u32), Vec<MetricPoint>>>,
     /// One port's traffic in bits/sec, keyed `(node, ifindex, inbound)`.
     ports: Mutex<HashMap<(Uuid, i32, bool), Vec<MetricPoint>>>,
+    /// The ports `interface_candidates` answers with, as `(node, ifindex, bits/sec, inbound)`.
+    candidates: Mutex<Vec<(Uuid, i32, f64, bool)>>,
 }
 
 impl SeededMetrics {
@@ -135,6 +137,24 @@ impl SeededMetrics {
             .lock()
             .expect("ports poisoned")
             .insert((node, ifindex, matches!(dir, PortDirection::In)), points);
+    }
+
+    /// Seed one port's current traffic, as the interface-candidate read reports it.
+    pub(super) fn candidate(&self, node: Uuid, ifindex: i32, dir: PortDirection, bps: f64) {
+        self.candidates.lock().expect("candidates poisoned").push((
+            node,
+            ifindex,
+            bps,
+            matches!(dir, PortDirection::In),
+        ));
+    }
+
+    /// The value a seeded series had `offset_secs` before its last point: the last point at or
+    /// before that instant.
+    fn at_offset(points: &[MetricPoint], offset_secs: u64) -> Option<f64> {
+        let last = points.last()?.t;
+        let at = last - i64::try_from(offset_secs).ok()?;
+        points.iter().rev().find(|p| p.t <= at).map(|p| p.v)
     }
 
     pub(super) fn interfaces(&self, node: Uuid, live: HashMap<i32, InterfaceLive>) {
@@ -225,11 +245,28 @@ impl MetricStore for SeededMetrics {
 
     async fn interface_candidates(
         &self,
-        _metric: InterfaceTopMetric,
-        _floor_bps: f64,
-        _nodes: Option<&[Uuid]>,
+        metric: InterfaceTopMetric,
+        floor_bps: f64,
+        nodes: Option<&[Uuid]>,
     ) -> Option<Vec<(Uuid, i32, f64)>> {
-        Some(Vec::new())
+        let inbound = match metric {
+            InterfaceTopMetric::InBps => true,
+            InterfaceTopMetric::OutBps => false,
+            InterfaceTopMetric::Throughput
+            | InterfaceTopMetric::Errors
+            | InterfaceTopMetric::Discards => return Some(Vec::new()),
+        };
+        Some(
+            self.candidates
+                .lock()
+                .expect("candidates poisoned")
+                .iter()
+                .filter(|(n, _, bps, i)| {
+                    *i == inbound && *bps >= floor_bps && nodes.is_none_or(|ns| ns.contains(n))
+                })
+                .map(|(n, ifindex, bps, _)| (*n, *ifindex, *bps))
+                .collect(),
+        )
     }
 
     async fn fresh_node_ids(&self, _metrics: &[&str], _within_secs: u64) -> Vec<Uuid> {
@@ -304,6 +341,34 @@ impl MetricStore for SeededMetrics {
             .filter(|((n, m, _), _)| m == metric && nodes.is_none_or(|ns| ns.contains(n)))
             .filter_map(|((n, _, row), pts)| Some(((*n, i64::from(*row)), pts.last()?.v)))
             .collect()
+    }
+
+    /// Rows and scalar series alike: a scalar series answers as row 0, as the real store does.
+    async fn rows_at_offset(
+        &self,
+        metric: &str,
+        nodes: &[Uuid],
+        offset_secs: u64,
+    ) -> HashMap<(Uuid, i64), f64> {
+        let mut out: HashMap<(Uuid, i64), f64> = self
+            .raw
+            .lock()
+            .expect("raw poisoned")
+            .iter()
+            .filter(|((n, m), _)| m == metric && nodes.contains(n))
+            .filter_map(|((n, _), pts)| Some(((*n, 0), Self::at_offset(pts, offset_secs)?)))
+            .collect();
+        out.extend(
+            self.rows
+                .lock()
+                .expect("rows poisoned")
+                .iter()
+                .filter(|((n, m, _), _)| m == metric && nodes.contains(n))
+                .filter_map(|((n, _, row), pts)| {
+                    Some(((*n, i64::from(*row)), Self::at_offset(pts, offset_secs)?))
+                }),
+        );
+        out
     }
 
     async fn interface_bps_range(

@@ -123,7 +123,7 @@
     "settingsAudit": "誰が何を変更・ACK したか、その時刻",
     "dashboardPublic": "サインインしなくても見える 1 枚",
     "alertsAlertRules": "集めた値のしきい値と、届いたイベントの一致条件",
-    "troubleshootInvestigate": "ノードを選び、足りなくなりそうな物があるかを確かめる"
+    "troubleshootInvestigate": "問いを選び、ノードやサイトへの心当たりを確かめる"
   },
   "shell": {
     "home": "ホーム",

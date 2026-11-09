@@ -134,6 +134,8 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/upgrade': 300,
   '/topology/map': 103,
   '/troubleshoot': 1319,
+  // One line per question card, the kind ADR-200 allows on a pick list (ADR-251 decision 10).
+  '/troubleshoot/investigate': 60,
 };
 
 export type Expect =
@@ -196,10 +198,8 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
     kind: 'none',
     why: 'The tool catalog comes from the client-side registry, not the API. The only served data on it is the run counters, which are numbers.',
   },
-  '/troubleshoot/investigate': {
-    kind: 'none',
-    why: 'Opened without a node it asks the operator to pick one and reads nothing from the API.',
-  },
+  // The question cards come from the web's own registry and read nothing from the API.
+  '/troubleshoot/investigate': { kind: 'locator', sel: '.investigate-card' },
   '/troubleshoot/runs': MARKER,
   '/troubleshoot/scheduled': MARKER,
   '/troubleshoot/findings': MARKER,

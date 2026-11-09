@@ -764,8 +764,7 @@
     }
   },
   "investigate": {
-    "pickNode": "Pick a node",
-    "empty": "Pick a node to check.",
+    "empty": "Nothing to show for this node.",
     "noMetric": "No data",
     "question": {
       "running_out": "Running out"
@@ -796,9 +795,37 @@
       "current": "Now",
       "target": "Line",
       "days": "Days left",
-      "reason": "Why"
+      "reason": "Why",
+      "node": "Node"
     },
     "gaps_one": "Collection stopped {{count}} time in this window, so those hours have no data.",
-    "gaps_other": "Collection stopped {{count}} times in this window, so those hours have no data."
+    "gaps_other": "Collection stopped {{count}} times in this window, so those hours have no data.",
+    "about": "About {{name}}",
+    "clearTarget": "Ask about something else",
+    "changeTarget": "Change",
+    "openNode": "Open the node",
+    "questionDesc": {
+      "running_out": "Memory, disk, CPU or a link nearing its limit within 30 days"
+    },
+    "pick": {
+      "search": "By name or address",
+      "searchPlaceholder": "Name or IP address",
+      "folder": "A site or folder, and everything in it",
+      "folderPlaceholder": "Pick a site or folder",
+      "alerting": "Nodes with an alert",
+      "noAlerting": "No node has an open alert.",
+      "recent": "Opened lately"
+    },
+    "folder": {
+      "total": "Nodes",
+      "withData": "With data",
+      "candidates": "Candidates",
+      "judged": "Checked in full",
+      "notJudged_one": "{{count}} more candidate was not checked in full. Ask about a smaller folder to check it.",
+      "notJudged_other": "{{count}} more candidates were not checked in full. Ask about a smaller folder to check them.",
+      "noLinks": "Ports were not checked: no port in this folder has a known speed.",
+      "empty": "Nothing is running out on the nodes checked in full.",
+      "hits": "Running out"
+    }
   }
 }

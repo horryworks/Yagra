@@ -123,7 +123,7 @@
     "settingsAudit": "Who changed or acknowledged what, and when",
     "dashboardPublic": "The one board people can see without signing in",
     "alertsAlertRules": "Thresholds on polled metrics and patterns on received events",
-    "troubleshootInvestigate": "Pick a node and confirm whether something on it is running out"
+    "troubleshootInvestigate": "Pick a question and confirm a hunch about a node or a whole site"
   },
   "shell": {
     "home": "Home",

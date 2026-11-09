@@ -8,6 +8,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useConfigChanges } from '../../lib/configChanges';
+import { rememberNode } from '../../lib/recentNodes';
 import { Trans, useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { topologyMapHref } from '../../lib/entityHref';
@@ -169,6 +170,8 @@ export function NodeDetail({
   const clearPortFocus = useCallback(() => setPortFocus(null), []);
   // A request made on one node is not carried to the next one the split shows.
   useEffect(() => setPortFocus(null), [nodeId]);
+  // Investigate offers the nodes opened last as one way to pick what to ask about (ADR-251).
+  useEffect(() => rememberNode(nodeId), [nodeId]);
   const [polling, setPolling] = useState(false);
   const [pollMsg, setPollMsg] = useState<{ text: string; tone: 'info' | 'error' } | null>(null);
   // A re-read that does NOT blank the pane — after **Poll now**, and since ADR-203 after an edit too.

@@ -401,6 +401,27 @@ pub trait MetricStore: Send + Sync {
         std::collections::HashMap::new()
     }
 
+    /// The latest value of every series of `metric` on `nodes`, keyed by `(node, row)`, as it
+    /// stood `offset_secs` ago — `0` for now. Rows exactly as [`Self::series_rows`] spells them.
+    ///
+    /// For a question asked about a whole folder (ADR-251 decision 12): two instants per metric
+    /// cost one read per ~200 nodes each, where a range per node would cost one read per node.
+    ///
+    /// ⚠️ **Any size of `nodes` is the implementation's problem**, as for
+    /// [`Self::fresh_node_ids_scoped`]: [`VmStore`] splits it into queries VictoriaMetrics accepts,
+    /// and a batch that fails costs only its own nodes — they read as "no data", which the caller
+    /// counts and never reads as "fine". An empty `nodes` asks nothing.
+    ///
+    /// Default: empty, for the same reason as `series_rows`.
+    async fn rows_at_offset(
+        &self,
+        _metric: &str,
+        _nodes: &[Uuid],
+        _offset_secs: u64,
+    ) -> std::collections::HashMap<(Uuid, i64), f64> {
+        std::collections::HashMap::new()
+    }
+
     /// Persist a host self-metrics sample as low-cardinality `yagra_host_*{instance,role[,pool]
     /// [,mount]}` series (self-observability). Core is the single writer for **every** instance —
     /// its own host (`role="core"`) and each poller (`role="poller"`, whose samples arrive over
@@ -1486,6 +1507,29 @@ fn fresh_scoped_queries(metrics: &[&str], within_secs: u64, scope: &[Uuid]) -> V
         .collect()
 }
 
+/// How far back [`MetricStore::rows_at_offset`] looks for a row's last sample before the instant
+/// it asks about: an hour, so a node polled every 30 minutes still answers and one silent for a day
+/// does not.
+const ROWS_AT_OFFSET_LOOKBACK_SECS: u64 = 3_600;
+
+/// The queries that together read `metric` on every node of `nodes` at `offset_secs` ago, each
+/// short enough for VictoriaMetrics to accept.
+fn rows_at_offset_queries(metric: &str, nodes: &[Uuid], offset_secs: u64) -> Vec<String> {
+    let offset = if offset_secs == 0 {
+        String::new()
+    } else {
+        format!(" offset {offset_secs}s")
+    };
+    node_id_chunks(nodes, FRESH_MAX_SELECTOR_BYTES)
+        .map(|chunk| {
+            format!(
+                "last_over_time({metric}{{node=~\"{}\"}}[{ROWS_AT_OFFSET_LOOKBACK_SECS}s]{offset})",
+                node_alternation(chunk)
+            )
+        })
+        .collect()
+}
+
 /// Fleet interface rate-delta PromQL: per `(node,ifindex)`, total throughput now minus the rate
 /// `window_secs` ago, in bits/sec ([`port_throughput_expr`], so a Meraki switch port moves too).
 /// `Up` keeps the biggest increases (`topk`), `Down` the biggest decreases (`bottomk`). Both sides
@@ -2035,6 +2079,21 @@ impl MetricStore for VmStore {
                 |_| std::collections::HashMap::new(),
                 |json| parse_requested_rows(&json, rows),
             )
+    }
+
+    async fn rows_at_offset(
+        &self,
+        metric: &str,
+        nodes: &[Uuid],
+        offset_secs: u64,
+    ) -> std::collections::HashMap<(Uuid, i64), f64> {
+        let mut out = std::collections::HashMap::new();
+        for query in rows_at_offset_queries(metric, nodes, offset_secs) {
+            if let Ok(json) = self.read_instant("rows-at-offset", query).await {
+                out.extend(parse_node_row_values(&json));
+            }
+        }
+        out
     }
 
     async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -3530,6 +3589,33 @@ mod tests {
             [format!(
                 "last_over_time({{__name__=~\"icmp_rtt_ms\",node=~\"{one}\"}}[600s])"
             )]
+        );
+    }
+
+    #[test]
+    fn every_offset_rows_query_fits_the_server_and_names_each_node_once() {
+        // The longest metric the folder question reads, because the name is part of the length.
+        let metric = "cisco_cpu_mem_used";
+        let per_query = FRESH_MAX_SELECTOR_BYTES / NODE_ID_SELECTOR_BYTES;
+        // 2,000 is the folder question's own ceiling (ADR-251 decision 13).
+        for n in [0, 1, per_query + 1, 2_000] {
+            let nodes: Vec<Uuid> = (0..n as u128).map(Uuid::from_u128).collect();
+            let queries = rows_at_offset_queries(metric, &nodes, 604_800);
+            assert_eq!(queries.len(), n.div_ceil(per_query), "{n} nodes");
+            for q in &queries {
+                assert!(q.len() < VM_MAX_QUERY_LEN, "{n} nodes: {} bytes", q.len());
+                assert!(q.ends_with("[3600s] offset 604800s)"), "{q}");
+            }
+            let named: Vec<Uuid> = queries.iter().flat_map(|q| ids_named_in(q)).collect();
+            assert_eq!(named, nodes, "{n} nodes");
+        }
+        let one = Uuid::from_u128(7);
+        assert_eq!(
+            rows_at_offset_queries("huawei_mem_usage", &[one], 0),
+            [format!(
+                "last_over_time(huawei_mem_usage{{node=~\"{one}\"}}[3600s])"
+            )],
+            "now has no offset"
         );
     }
 

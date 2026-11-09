@@ -36,6 +36,16 @@ pub(super) struct InvestigateParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(super) struct InvestigateFolderParams {
+    /// The folder's UUID. Every folder beneath it is included.
+    group_id: Uuid,
+    /// The question: `running_out` (the default, and the only one so far).
+    question: Option<String>,
+    /// How many days back each judged node is read, 7 to 90 (default 30).
+    days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(super) struct RunRcaParams {
     /// The alerting node's UUID.
     node_id: Uuid,
@@ -130,6 +140,17 @@ pub(super) struct SearchFindingsParams {
 /// is not, and deliberately so: `dto.rs` is the ADR-018 enforcement boundary, and letting an
 /// internal model serialize itself straight to an AI client is exactly the leak that file exists to
 /// prevent. Sharing the query while keeping the projection is the whole point of the split.
+/// The one question either Investigate tool answers so far.
+fn question_is_running_out(q: Option<&str>) -> Result<(), crate::api::ApiError> {
+    match q {
+        None | Some("running_out") => Ok(()),
+        Some(_) => Err(crate::api::ApiError::bad_request(
+            "invalid_question",
+            "question must be running_out",
+        )),
+    }
+}
+
 pub(super) fn analysis_report_body(report: &crate::api::analysis::AnalysisReport) -> Value {
     serde_json::json!({
         "job": AnalysisJobDto::from_job(&report.job),
@@ -163,6 +184,30 @@ impl YagraMcp {
         }
     }
 
+    #[tool(
+        description = "investigate_node over a whole folder and every folder beneath it, for when \
+                       the hunch is \"something at this site\" rather than a node by name. A first \
+                       pass reads each node's memory, disk and CPU percentages now and a week ago, \
+                       and its ports' current traffic; the nodes it puts at 50% or more in 30 days \
+                       are judged exactly as investigate_node judges them, busiest first, at most \
+                       20. `nodes` holds those reports, hits first. Read the counts before calling \
+                       a folder fine: `not_judged` candidates were not looked at in full, and \
+                       `links_screened` false means ports were not read at all. A folder of more \
+                       than 2,000 nodes is refused with too_many_nodes - ask about a folder further \
+                       down. `days` is 7 to 90 (default 30)."
+    )]
+    async fn investigate_folder(
+        &self,
+        Parameters(p): Parameters<InvestigateFolderParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "investigate_folder";
+        match self.admit(identity_of(&ctx), TOOL, "").await {
+            Ok(scope) => self.investigate_folder_in(p, &scope).await,
+            Err(refusal) => refusal,
+        }
+    }
+
     pub(super) async fn investigate_in(
         &self,
         p: InvestigateParams,
@@ -175,21 +220,44 @@ impl YagraMcp {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable(TOOL, "investigate requires live mode");
         };
-        match p.question.as_deref() {
-            None | Some("running_out") => {}
-            Some(_) => {
-                let e = crate::api::ApiError::bad_request(
-                    "invalid_question",
-                    "question must be running_out",
-                );
-                return tool_api_error(TOOL, &e);
-            }
+        if let Err(e) = question_is_running_out(p.question.as_deref()) {
+            return tool_api_error(TOOL, &e);
         }
         let days = match crate::api::investigate::parse_days(p.days) {
             Ok(d) => d,
             Err(e) => return tool_api_error(TOOL, &e),
         };
         match crate::api::investigate::running_out_of(&self.state, admin, p.node_id, days).await {
+            Ok(r) => ok_json(TOOL, &r),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    pub(super) async fn investigate_folder_in(
+        &self,
+        p: InvestigateFolderParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "investigate_folder";
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "investigate requires live mode");
+        };
+        if let Err(e) = question_is_running_out(p.question.as_deref()) {
+            return tool_api_error(TOOL, &e);
+        }
+        let days = match crate::api::investigate::parse_days(p.days) {
+            Ok(d) => d,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
+        match crate::api::investigate::folder_running_out_of(
+            &self.state,
+            admin,
+            scope,
+            p.group_id,
+            days,
+        )
+        .await
+        {
             Ok(r) => ok_json(TOOL, &r),
             Err(e) => tool_api_error(TOOL, &e),
         }

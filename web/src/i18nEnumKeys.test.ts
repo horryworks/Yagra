@@ -58,6 +58,7 @@ import {
   INVESTIGATE_HYPOTHESES,
   INVESTIGATE_VERDICTS,
   INVESTIGATE_REASONS,
+  INVESTIGATE_QUESTIONS,
   METRIC_STATUSES,
   METRIC_DIMENSIONS,
   NODE_KINDS,
@@ -914,6 +915,8 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('investigate hypothesis', locales, 'investigate.hypothesis.', INVESTIGATE_HYPOTHESES);
     expectKeys('investigate verdict', locales, 'investigate.verdict.', INVESTIGATE_VERDICTS);
     expectKeys('investigate reason', locales, 'investigate.reason.', INVESTIGATE_REASONS);
+    expectKeys('investigate question', locales, 'investigate.question.', INVESTIGATE_QUESTIONS);
+    expectKeys('investigate question card', locales, 'investigate.questionDesc.', INVESTIGATE_QUESTIONS);
   });
 
   it('every upgrade run state has a label (settings-upgrade:runState.*)', () => {

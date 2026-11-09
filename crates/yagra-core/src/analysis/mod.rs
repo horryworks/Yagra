@@ -87,6 +87,7 @@ mod events;
 mod flow;
 mod incident;
 mod investigate;
+mod investigate_folder;
 mod metric;
 mod repo;
 mod seams;
@@ -97,7 +98,10 @@ mod types;
 // the sites outside this module and `use super::*` in a sibling still sees everything the single
 // file used to put in one scope.
 use investigate::Judgement;
-pub use investigate::{InvestigateInput, InvestigateReport, PortInfo, Reason, Verdict};
+pub use investigate::{InvestigateInput, InvestigateReport, PortInfo, Question, Reason, Verdict};
+pub use investigate_folder::{
+    rank_candidates, FolderInvestigateReport, Screen, DEEP_MAX, LINK_FLOOR_SHARE,
+};
 pub use repo::*;
 pub use types::*;
 // `stats` is the `self`-free half: everything in it is `pub(super)` because only this module's own
@@ -420,6 +424,11 @@ impl AnalysisRunner {
     /// job row, no progress, no queue. The caller has checked the node is visible to whoever asks.
     pub async fn investigate_running_out(&self, input: &InvestigateInput) -> InvestigateReport {
         self.engine.investigate_running_out(input).await
+    }
+
+    /// The wide, shallow first pass of a folder question (ADR-251 decision 12).
+    pub async fn screen_running_out(&self, nodes: &[Uuid], link_floor_bps: Option<f64>) -> Screen {
+        self.engine.screen_running_out(nodes, link_floor_bps).await
     }
 
     /// Record a creation against the sliding-window rate limit. `Err(RateLimited)` when the window is
