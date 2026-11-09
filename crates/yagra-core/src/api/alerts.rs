@@ -542,16 +542,24 @@ pub(crate) async fn history_page(
 }
 
 /// The folders filed under any of `sites` (ADR-248 Inc.2): every folder whose nearest Site is one
-/// of them. Each id must be a Site folder the caller can see — 404 outside the scope (the same
-/// answer `group_id` gives), 400 for a folder that is not a Site. Skeleton mode has no folders and
-/// answers none, which the store then never reads.
+/// of them, narrowed to the folders the caller can see. Each id must be a Site folder the caller's
+/// folder list names — 404 otherwise, 400 for a folder that is not a Site. Skeleton mode has no
+/// folders and answers none, which the store then never reads.
+///
+/// ⚠️ "Names", not "can see into": a Site *above* a scoped caller's folders is in their folder list
+/// as a breadcrumb, so the Site column shows it and the filter offers it. Refusing it would 404 the
+/// one choice that caller is most likely to make; answering it is safe because the folders returned
+/// are cut to the caller's own before the store reads them.
 async fn site_folders(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     sites: &[Uuid],
 ) -> Result<Vec<Uuid>, ApiError> {
-    for s in sites {
-        super::scope::require_visible_group(scope, *s)?;
+    if let Some(s) = sites.iter().find(|s| !scope.allows_group_row(**s)) {
+        return Err(ApiError::not_found(
+            "group_not_found",
+            format!("no group {s}"),
+        ));
     }
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Vec::new());
@@ -568,10 +576,10 @@ async fn site_folders(
             format!("site {s} is not a Site folder"),
         ));
     }
-    Ok(crate::inventory::sites::folders_of_sites(
-        &groups,
-        &sites.iter().copied().collect(),
-    ))
+    let mut folders =
+        crate::inventory::sites::folders_of_sites(&groups, &sites.iter().copied().collect());
+    folders.retain(|f| scope.allows_group(Some(*f)));
+    Ok(folders)
 }
 
 // ── History aggregations ─────────────────────────────────────────────────────
@@ -1438,6 +1446,96 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_filter");
+    }
+
+    /// A token scoped to a floor beneath a Site may filter by that Site — its folder list names the
+    /// Site as a breadcrumb, so the filter offers it — and gets its own floor's rows, never a
+    /// sibling floor's. A Site it cannot name at all is still 404.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_token_scoped_beneath_a_site_may_filter_by_that_site(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        use yagra_base::groups::{GroupRepo, GroupType};
+        use yagra_base::pgtest;
+        let repo = GroupRepo::new(pool.clone());
+        let site_a = pgtest::group(&pool, "site-a").await;
+        let mine = repo
+            .create("floor-1", GroupType::Generic, Some(site_a), None)
+            .await
+            .unwrap();
+        let theirs = repo
+            .create("floor-2", GroupType::Generic, Some(site_a), None)
+            .await
+            .unwrap();
+        let site_b = pgtest::group(&pool, "site-b").await;
+        let on_mine = pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let on_theirs = pgtest::node(&pool, "sw-02", 2, Some(theirs)).await;
+        let fire = |node: Uuid| Alert {
+            subject: yagra_alert::Subject::Node(NodeId::from(node)),
+            check: yagra_common::CheckId::from(Uuid::new_v4()),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 1_000,
+            root_cause: None,
+            flapping: false,
+            metric: "cpu".to_string(),
+            breach: None,
+            ifindex: None,
+            row: None,
+            row_name: None,
+            notify_held_until: None,
+        };
+        crate::alerts::history::AlertHistoryStore::new(pool.clone())
+            .record_batch(&[(fire(on_mine), false), (fire(on_theirs), false)])
+            .await
+            .expect("record");
+        let st = live_state(pool).await;
+        // The scope post-filter asks the alert engine which folder a node is in, and a live state's
+        // engine has not read the inventory yet.
+        {
+            use crate::alerts::{AlertConfig, NodeMeta};
+            let meta = [(on_mine, mine), (on_theirs, theirs)]
+                .into_iter()
+                .map(|(n, g)| {
+                    (
+                        NodeId::from(n),
+                        NodeMeta {
+                            folder_group: Some(g),
+                            ..NodeMeta::default()
+                        },
+                    )
+                })
+                .collect();
+            st.alerts.set_config(AlertConfig::new(Vec::new(), meta));
+        }
+        let scoped = scoped_token(&st, &[mine]);
+
+        let (status, rows) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/alerts/history?site={site_a}"),
+            &scoped,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{rows}");
+        let nodes: Vec<&str> = rows
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|r| r["node"].as_str().unwrap())
+            .collect();
+        assert_eq!(nodes, vec![on_mine.to_string()], "{rows}");
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("/api/v1/alerts/history?site={site_b}"),
+            &scoped,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     }
 
     #[tokio::test]

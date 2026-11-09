@@ -172,9 +172,11 @@ export function HistoryPage() {
   const firstPage = useLoad(
     () => api.listAlertHistory(queryFor(filterCols, filters, scopeIds, null, nowMs)),
     [filterCols, filters, scopeIds, nowMs],
-    // A site named in the URL has no option to match until the folder list answers, and
-    // `normalizeSets` would drop it — asking for the whole log under a Site filter. Wait for it.
-    { initial: [] as AlertHistoryRow[], enabled: groupsLoaded || !filters.site },
+    // Wait for the folder list, always. A site named in the URL has no option to match until it
+    // answers, and `normalizeSets` would drop it — asking for the whole log under a Site filter.
+    // And the Site options are part of `filterCols`, so the list arriving changes `filters`
+    // identity: asking before it would fetch the first page twice on every visit.
+    { initial: [] as AlertHistoryRow[], enabled: groupsLoaded },
   );
   const { loading } = firstPage;
   /** The pages scrolled to below the first, and the cursor past them — kept against the first page
