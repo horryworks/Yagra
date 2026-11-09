@@ -91,12 +91,12 @@ test('the table has History’s header row and funnels, and severity reads as a 
 }) => {
   await page.goto('/alerts');
   const head = page.locator('.dt-head');
-  for (const h of ['Severity', 'Node', 'What', 'State', 'Notes', 'When']) {
+  for (const h of ['Severity', 'Site', 'Node', 'What', 'State', 'Notes', 'When']) {
     await expect(head).toContainText(h);
   }
-  // Funnels beside every data column's header — History's four, plus Notes and When — and no
-  // toolbar funnel standing in for them.
-  await expect(head.locator('.hf-trigger')).toHaveCount(6);
+  // Funnels beside every data column's header — History's five (Site since ADR-248 Inc.2), plus
+  // Notes and When — and no toolbar funnel standing in for them.
+  await expect(head.locator('.hf-trigger')).toHaveCount(7);
   await expect(page.locator('.mfilt-menu')).toHaveCount(0);
   await expect(page.locator('.dt-row')).toHaveCount(4);
   await expect(page.locator('.dt-row').first()).toContainText('Critical');

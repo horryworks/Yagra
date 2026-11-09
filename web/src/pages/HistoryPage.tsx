@@ -21,7 +21,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { LoadGate } from '../components/ui/LoadGate';
 import { useLoad } from '../lib/useLoad';
 import { Badge } from '../components/ui/Badge';
-import { useEntityNames } from '../components/ui/entityNames';
+import { siteOptions, useEntityNames } from '../components/ui/entityNames';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClippedText } from '../components/ui/ClippedText';
 import { subjectNodeId } from '../lib/alertSubject';
@@ -46,14 +46,15 @@ export function HistoryPage() {
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
-  const { nodeName, nodeSite, groupName } = useEntityNames();
+  const { nodeName, nodeSite, groupName, groups, groupsLoaded } = useEntityNames();
 
   // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
   // `useFilterParams` derives the filter state from whatever list it is given and the fetch effect
   // depends on that state, so the list has to be stable — and the display columns are not: they
   // close over `nodeName`, whose identity changes every time a name batch resolves. Deriving from
   // them would refetch the first page at that moment and discard every "load older" page below it.
-  const specs = useMemo(() => historyFilters(t), [t]);
+  const sites = useMemo(() => siteOptions(groups), [groups]);
+  const specs = useMemo(() => historyFilters(t, sites), [t, sites]);
   const filterCols = useMemo(() => specColumns(specs), [specs]);
   // Columns close over `nodeName`, so they rebuild when the inventory resolves — which is what the
   // rendered names need and exactly what the filter list must not do.
@@ -72,7 +73,7 @@ export function HistoryPage() {
       },
       {
         // ADR-248: the nearest Site folder above the node, as it is filed NOW; blank for none and
-        // for a pool alert. No filter and no sort, like every column here (both are server-side).
+        // for a pool alert. Its filter is the server's `site` (Inc.2); no sort, like every column.
         key: 'site',
         header: t('history.cols.site'),
         // The floors here and on Node and What keep the table at 870px, inside a 1152px window
@@ -171,7 +172,9 @@ export function HistoryPage() {
   const firstPage = useLoad(
     () => api.listAlertHistory(queryFor(filterCols, filters, scopeIds, null, nowMs)),
     [filterCols, filters, scopeIds, nowMs],
-    { initial: [] as AlertHistoryRow[] },
+    // A site named in the URL has no option to match until the folder list answers, and
+    // `normalizeSets` would drop it — asking for the whole log under a Site filter. Wait for it.
+    { initial: [] as AlertHistoryRow[], enabled: groupsLoaded || !filters.site },
   );
   const { loading } = firstPage;
   /** The pages scrolled to below the first, and the cursor past them — kept against the first page
@@ -238,6 +241,7 @@ export function HistoryPage() {
           )}
           labels={{
             severity: t('history.cols.severity'),
+            site: t('history.cols.site'),
             state: t('history.cols.state'),
             phase: t('history.cols.event'),
             range: t('history.cols.when'),

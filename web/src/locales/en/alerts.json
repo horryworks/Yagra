@@ -54,6 +54,7 @@
     "emptyFiltered": "No transitions match these filters.",
     "filter": {
       "allSeverities": "All severities",
+      "allSites": "All sites",
       "allPhases": "Fires and clears",
       "allStates": "All states"
     }

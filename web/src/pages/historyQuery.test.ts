@@ -24,7 +24,13 @@ import { PAGE_SIZE } from './historyCursor';
 
 const NOW = Date.parse('2026-08-12T00:00:00.000Z');
 const t = ((k: string) => k) as unknown as TFunction;
-const COLUMNS: HistoryColumns = specColumns(historyFilters(t));
+const SITE_A = 'cccccccc-0000-0000-0000-00000000000a';
+const SITE_B = 'cccccccc-0000-0000-0000-00000000000b';
+const SITES = [
+  { value: SITE_A, label: 'site-a' },
+  { value: SITE_B, label: 'site-b' },
+];
+const COLUMNS: HistoryColumns = specColumns(historyFilters(t, SITES));
 /** The state the screen opens with — derived from the specs, exactly as the page derives it. */
 const DEFAULTS = defaultFilters(COLUMNS);
 const NO_SCOPE: ScopeIds = { nodeId: '', groupId: '' };
@@ -57,6 +63,7 @@ describe('queryFor', () => {
       metric: undefined,
       node_id: undefined,
       node_q: undefined,
+      site: undefined,
       group_id: undefined,
       since: undefined,
       before: undefined,
@@ -73,6 +80,7 @@ describe('queryFor', () => {
           severity: 'warning,critical',
           state: 'unreachable',
           phase: 'fired',
+          site: `${SITE_A},${SITE_B}`,
           node_q: contains('core-sw'),
           metric: contains('cpu'),
           range: '7d',
@@ -86,9 +94,18 @@ describe('queryFor', () => {
       metric: 'cpu',
       node_id: 'n1',
       node_q: 'core-sw',
+      site: `${SITE_A},${SITE_B}`,
       group_id: undefined,
       since: '2026-08-05T00:00:00.000Z',
     });
+  });
+
+  it('drops a site the folder list does not offer rather than sending it', () => {
+    // Why the page waits for the folder list before asking (ADR-248 Inc.2): with no options yet,
+    // a site from the URL would be dropped and the whole log asked for.
+    expect(query({ site: `${SITE_A},gone` }).site).toBe(SITE_A);
+    const bare = specColumns(historyFilters(t, []));
+    expect(queryFor(bare, { ...defaultFilters(bare), site: SITE_A }, NO_SCOPE, null, NOW).site).toBeUndefined();
   });
 
   it('treats both boxes ticked as the unfiltered view, not as a third answer', () => {
@@ -226,8 +243,8 @@ describe('the filter row (ADR-053 Inc.4)', () => {
     // value drops rows with nothing on screen saying so. `phase` is the exception that proves it —
     // a set in the control and a boolean on the wire, and `queryFor` sends "both ticked" as no
     // parameter at all rather than as one of the two.
-    const specs = historyFilters(t);
-    for (const key of ['severity', 'state', 'phase']) {
+    const specs = historyFilters(t, SITES);
+    for (const key of ['severity', 'site', 'state', 'phase']) {
       expect(specs[key].kind, key).toBe('enum');
       expect('single' in specs[key], `${key} still carries the removed single flag`).toBe(false);
     }
@@ -239,7 +256,7 @@ describe('the filter row (ADR-053 Inc.4)', () => {
     // which is why it was reported twice. If a column here loses its filter again, that is a
     // decision someone has to make deliberately.
     expect(COLUMNS.map((c) => c.key).sort()).toEqual(
-      ['metric', 'node_q', 'phase', 'range', 'severity', 'state'].sort(),
+      ['metric', 'node_q', 'phase', 'range', 'severity', 'site', 'state'].sort(),
     );
   });
 

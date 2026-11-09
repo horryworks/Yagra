@@ -16674,6 +16674,12 @@ export interface operations {
                 node_q?: string;
                 /** @description Only transitions about nodes in this folder group **or any group beneath it**. */
                 group_id?: string;
+                /**
+                 * @description Comma-separated ids of Site folders: only transitions about nodes whose site — the nearest
+                 *     Site folder at or above their folder, as the Site column shows it — is one of them. A Site
+                 *     nested inside another is its own site. Combines with `group_id` (both must hold).
+                 */
+                site?: string;
             };
             header?: never;
             path?: never;
@@ -16690,7 +16696,7 @@ export interface operations {
                     "application/json": components["schemas"]["AlertHistoryView"][];
                 };
             };
-            /** @description A cursor or range bound is not RFC 3339, or `severity`/`state` is not one of the listed values */
+            /** @description A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -16717,7 +16723,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The requested `node_id` or `group_id` is outside the caller's scope */
+            /** @description The requested `node_id`, `group_id` or `site` is outside the caller's scope */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -532,6 +532,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "site",
+            "in": "query",
+            "description": "Comma-separated ids of Site folders: only transitions about nodes whose site — the nearest\nSite folder at or above their folder, as the Site column shows it — is one of them. A Site\nnested inside another is its own site. Combines with `group_id` (both must hold).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -549,7 +558,7 @@
             }
           },
           "400": {
-            "description": "A cursor or range bound is not RFC 3339, or `severity`/`state` is not one of the listed values",
+            "description": "A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder",
             "content": {
               "application/json": {
                 "schema": {
@@ -579,7 +588,7 @@
             }
           },
           "404": {
-            "description": "The requested `node_id` or `group_id` is outside the caller's scope",
+            "description": "The requested `node_id`, `group_id` or `site` is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {

@@ -42,6 +42,9 @@ export interface FilterableAlert extends HasSubject {
 /** Resolve a node id to its display name; the raw id when it has not resolved yet. */
 export type NameOf = (id: string) => string;
 
+/** Resolve a node id to the id of its site; `''` for none or not resolved yet. */
+export type SiteOf = (nodeId: string) => string;
+
 /** The kinds of note a row carries — the caller's `alertNotes`, which needs the held list. */
 export type NotesOf<A> = (a: A) => readonly NoteKind[];
 
@@ -65,6 +68,8 @@ export function activeAlertFilters<A extends FilterableAlert>(
   notesOf: NotesOf<A>,
   severities: readonly Severity[],
   states: readonly NodeState[],
+  siteOf: SiteOf,
+  sites: readonly { value: string; label: string }[],
 ): Record<string, ColumnFilterSpec<A>> {
   return {
     severity: {
@@ -72,6 +77,20 @@ export function activeAlertFilters<A extends FilterableAlert>(
       options: severities.map((s) => ({ value: s, label: severityLabel(s) })),
       readValue: (a) => a.severity,
       allLabel: t('history.filter.allSeverities'),
+      counts: 'client',
+    },
+    // ADR-248 Inc.2: the row's site, by folder id — History's `site` key, so a link moves between
+    // the two screens. A row with no site (none above the node, a pool alert) matches no choice.
+    // ⚠️ Like the node column, `siteOf` asks the lazy resolver, so it is read only while filtering;
+    // a row whose node has not resolved yet joins when its answer lands.
+    site: {
+      kind: 'enum',
+      options: [...sites],
+      readValue: (a) => {
+        const node = subjectNodeId(a);
+        return node === null ? '' : siteOf(node);
+      },
+      allLabel: t('history.filter.allSites'),
       counts: 'client',
     },
     node_q: {

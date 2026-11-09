@@ -34,6 +34,15 @@ const NODE = 'aaaaaaaa-0000-0000-0000-000000000001';
 const OTHER = 'aaaaaaaa-0000-0000-0000-000000000002';
 const NAMES: Record<string, string> = { [NODE]: 'rtr-01' };
 const nameOf: NameOf = (id) => NAMES[id] ?? id;
+const SITE_A = 'cccccccc-0000-0000-0000-00000000000a';
+const SITE_B = 'cccccccc-0000-0000-0000-00000000000b';
+/** NODE sits under site A; OTHER has no site (or has not resolved yet — the same answer). */
+const SITES: Record<string, string> = { [NODE]: SITE_A };
+const siteOf = (id: string) => SITES[id] ?? '';
+const SITE_OPTIONS = [
+  { value: SITE_A, label: 'site-a' },
+  { value: SITE_B, label: 'site-b' },
+];
 
 /** `t` is only ever used for labels here, so echoing the key is enough and keeps i18n out. */
 const t = ((k: string) => k) as unknown as Parameters<typeof activeAlertFilters>[0];
@@ -46,6 +55,8 @@ const cols = (resolver: NameOf = nameOf) =>
       (a) => a.kinds ?? [],
       SEVERITIES,
       SEVERITY_ORDER as readonly NodeState[],
+      siteOf,
+      SITE_OPTIONS,
     ),
   );
 
@@ -80,7 +91,7 @@ const read = (qs: string) => normalizeSets(cols(), readFilterParams(cols(), new 
 
 describe('the columns', () => {
   it('are History’s filter keys, so a link moves between the two screens by its path', () => {
-    expect(cols().map((c) => c.key)).toEqual(['severity', 'node_q', 'metric', 'state', 'notes', 'range']);
+    expect(cols().map((c) => c.key)).toEqual(['severity', 'site', 'node_q', 'metric', 'state', 'notes', 'range']);
   });
 });
 
@@ -165,6 +176,15 @@ describe('the predicate', () => {
     expect(matches(poolAlert(), withFilters({ node_q: 'osaka' }))).toBe(false);
   });
 
+  it('keeps the rows under a chosen site, never a row with no site or a pool alert', () => {
+    // ADR-248 Inc.2.
+    expect(matches(nodeAlert(), withFilters({ site: SITE_A }))).toBe(true);
+    expect(matches(nodeAlert(), withFilters({ site: SITE_B }))).toBe(false);
+    expect(matches(nodeAlert(), withFilters({ site: `${SITE_B},${SITE_A}` }))).toBe(true);
+    expect(matches(nodeAlert({ node: OTHER }), withFilters({ site: SITE_A }))).toBe(false);
+    expect(matches(poolAlert(), withFilters({ site: SITE_A }))).toBe(false);
+  });
+
   it('applies every set filter together, not the first that matches', () => {
     const a = nodeAlert({ severity: 'warning' });
     expect(matches(a, withFilters({ severity: 'warning', metric: 'icmp' }))).toBe(true);
@@ -177,6 +197,7 @@ describe('isAnyFiltered', () => {
     expect(isAnyFiltered(cols(), DEFAULTS)).toBe(false);
     const sample: FilterState = {
       severity: 'critical',
+      site: SITE_A,
       node_q: 'rtr',
       metric: 'icmp',
       state: 'unreachable',
@@ -192,6 +213,7 @@ describe('the URL codec', () => {
     expect(read('')).toEqual(DEFAULTS);
     const f: FilterState = {
       severity: 'warning',
+      site: SITE_A,
       node_q: 'rtr-01',
       metric: 'icmp',
       state: 'maintenance',

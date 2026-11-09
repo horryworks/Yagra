@@ -136,7 +136,7 @@ const REGISTRY: readonly Entry[] = [
   {
     module: 'pages/activeAlertFilters.ts',
     name: 'activeAlertFilters',
-    build: () => specColumns(activeAlertFilters(t, none, () => [], [], [])),
+    build: () => specColumns(activeAlertFilters(t, none, () => [], [], [], () => '', [])),
   },
   {
     module: 'pages/apiTokenFilters.ts',
@@ -186,7 +186,7 @@ const REGISTRY: readonly Entry[] = [
   {
     module: 'pages/historyQuery.ts',
     name: 'historyFilters',
-    build: () => specColumns(historyFilters(t)),
+    build: () => specColumns(historyFilters(t, [])),
   },
   {
     module: 'pages/integrations/merakiDevices.ts',

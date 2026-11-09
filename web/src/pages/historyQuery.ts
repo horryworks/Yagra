@@ -56,7 +56,10 @@ export type HistoryRange = (typeof HISTORY_RANGES)[number];
  * from it would refetch the first page every time a name batch lands, discarding the pages below —
  * and the mobile sheet lists filters in the order it is given.
  */
-export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<AlertHistoryRow>> {
+export function historyFilters(
+  t: TFunction,
+  sites: readonly { value: string; label: string }[],
+): Record<string, ColumnFilterSpec<AlertHistoryRow>> {
   return {
     // ⚠️ The keys are the query parameters this screen has always used — the column keys were `sev`
     // and `at`, and were renamed to these. That is the cheap direction: a column key is internal,
@@ -73,6 +76,15 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       kind: 'enum',
       options: SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) })),
       allLabel: t('history.filter.allSeverities'),
+    },
+    // ADR-248 Inc.2: Site folder ids, answered by the server (`site`) — the nearest Site above the
+    // node's folder **now**, the same rule the column draws. ⚠️ The options are the folder list,
+    // so until it loads `normalizeSets` would drop a site named in the URL and ask for everything:
+    // the page holds its fetch until the list has answered.
+    site: {
+      kind: 'enum',
+      options: [...sites],
+      allLabel: t('history.filter.allSites'),
     },
     // The node's **current** name, matched as a substring by the server (`node_q`). Deliberately
     // not the same question as the action row's ScopePicker, which selects exactly one node — "every
@@ -185,6 +197,7 @@ export function queryFor(
     metric: unset(decodeCondition(f.metric ?? '').term),
     node_id: unset(scope.nodeId),
     node_q: unset(decodeCondition(f.node_q ?? '').term),
+    site: unset(f.site),
     group_id: unset(scope.groupId),
     since: sinceIso(rangeSecondsIn(columns, f), nowMs),
     before: cursor?.before,

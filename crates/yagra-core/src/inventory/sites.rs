@@ -38,6 +38,35 @@ pub(crate) fn nearest_site_by_node(
         .collect()
 }
 
+/// Every folder whose nearest Site (itself included) is one of `sites` (ADR-248 Inc.2): the
+/// folders a node must be filed in for its Site column to name one of them. A Site folder nested
+/// under another belongs to itself, never to the outer one, so the two columns and the filter
+/// cannot disagree. Sorted, so the answer is stable.
+pub(crate) fn folders_of_sites(
+    groups: &[yagra_base::groups::GroupSummary],
+    sites: &std::collections::HashSet<Uuid>,
+) -> Vec<Uuid> {
+    under_sites(&folders_of(groups), sites)
+}
+
+fn under_sites(
+    folders: &HashMap<Uuid, Folder>,
+    sites: &std::collections::HashSet<Uuid>,
+) -> Vec<Uuid> {
+    let mut out: Vec<Uuid> = folders
+        .keys()
+        .copied()
+        .filter(|g| nearest_site(folders, Some(*g)).is_some_and(|s| sites.contains(&s)))
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// Whether `id` names a folder of type Site.
+pub(crate) fn is_site(groups: &[yagra_base::groups::GroupSummary], id: Uuid) -> bool {
+    groups.iter().any(|g| g.id == id && g.group_type == "site")
+}
+
 /// What deciding a site needs to know about one folder.
 struct Folder {
     is_site: bool,
@@ -134,5 +163,30 @@ mod tests {
             None,
             "a folder that is not listed"
         );
+    }
+
+    /// ADR-248 Inc.2: a Site's folders are itself and everything under it that no nearer Site
+    /// claims; a plain folder, a cycle and an unlisted id belong to none.
+    #[test]
+    fn a_sites_folders_are_those_whose_nearest_site_it_is() {
+        let (mut folders, [site, sub, plain, _, _]) = tree();
+        let inner = Uuid::from_u128(6);
+        let under_inner = Uuid::from_u128(7);
+        folders.insert(inner, folder(true, Some(sub)));
+        folders.insert(under_inner, folder(false, Some(inner)));
+        let pick = |ids: &[Uuid]| under_sites(&folders, &ids.iter().copied().collect());
+
+        let mut outer = vec![site, sub];
+        outer.sort_unstable();
+        assert_eq!(
+            pick(&[site]),
+            outer,
+            "a nested site is not the outer site's"
+        );
+        assert_eq!(pick(&[inner]), vec![inner, under_inner]);
+        assert_eq!(pick(&[site, inner]).len(), 4, "several sites at once");
+        assert!(pick(&[plain]).is_empty(), "a plain folder is no site");
+        assert!(pick(&[Uuid::from_u128(99)]).is_empty(), "an unknown id");
+        assert!(pick(&[]).is_empty());
     }
 }

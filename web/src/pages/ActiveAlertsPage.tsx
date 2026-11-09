@@ -36,7 +36,7 @@ import { applyFilters } from '../lib/filterPredicate';
 import { facetCounts } from '../lib/filterCounts';
 import { useFilterParams } from '../lib/useFilterParams';
 import { useClientSort } from '../lib/useClientSort';
-import { useEntityNames } from '../components/ui/entityNames';
+import { siteOptions, useEntityNames } from '../components/ui/entityNames';
 import { subtreeGroupIds } from '../lib/nodeTree';
 import { RcaModal } from '../components/Rca/RcaModal';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -69,7 +69,8 @@ export function ActiveAlertsPage() {
   const alerts = useAlertStore((s) => s.alerts);
   // Worst first, then newest — the order the table opens in and returns to when a sort is cleared.
   const all = useMemo(() => sortedAlerts(alerts), [alerts]);
-  const { nodeName, nodeGroup, nodeSite, groups, groupName } = useEntityNames();
+  const { nodeName, nodeGroup, nodeSite, nodeSiteId, groups, groupName } = useEntityNames();
+  const sites = useMemo(() => siteOptions(groups), [groups]);
   const held = useHeldNotifications();
 
   // One answer per row to "which notes", shared by the cell, the Notes filter and its sort.
@@ -82,8 +83,9 @@ export function ActiveAlertsPage() {
   // The filters live in the URL under History's keys, so a narrowed triage view survives a reload
   // and can be pasted to whoever is looking at the same incident.
   const specs = useMemo(
-    () => activeAlertFilters<Alert>(t, nodeName, noteKindsOf, SEVERITIES, SEVERITY_ORDER),
-    [t, nodeName, noteKindsOf],
+    () =>
+      activeAlertFilters<Alert>(t, nodeName, noteKindsOf, SEVERITIES, SEVERITY_ORDER, nodeSiteId, sites),
+    [t, nodeName, noteKindsOf, nodeSiteId, sites],
   );
   const filterCols = useMemo(() => specColumns(specs), [specs]);
   const { filters, setFilters } = useFilterParams(filterCols);
@@ -180,8 +182,7 @@ export function ActiveAlertsPage() {
         // The same tracks as History's Site, Node and What, so the two tables line up.
         width: 'minmax(100px, 0.8fr)',
         render: (a) => <ClippedText text={siteOf(a)} />,
-        // No filter (a site is narrowed with the scope picker), so it states its own order; a
-        // blank site sorts last rather than first.
+        // Sorted by name, not by the filter's folder id; a blank site sorts last rather than first.
         sortValue: (a) => siteOf(a) || null,
       },
       {

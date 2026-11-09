@@ -28,6 +28,15 @@ export function siteNameOf(list: { id: string; name: string }[], siteId: string 
   return list.find((e) => e.id === siteId)?.name ?? '';
 }
 
+/** The Site column's filter choices (ADR-248 Inc.2): every folder of type Site, by name. The value
+ *  is the folder id, which is what the URL and the API carry. Pure — unit-tested. */
+export function siteOptions(list: readonly { id: string; name: string; group_type: string }[]) {
+  return list
+    .filter((g) => g.group_type === 'site')
+    .map((g) => ({ value: g.id, label: g.name }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 /** Returns id→name resolvers for node / group / profile references. Each resolver returns the raw
  *  id unchanged when no match is found (so a deleted/unknown reference degrades to the only thing we
  *  have).
@@ -44,6 +53,9 @@ export function siteNameOf(list: { id: string; name: string }[], siteId: string 
  *  never ran and the row kept showing a raw UUID. See `entityNameBatch.ts` for the full account. */
 export function useEntityNames() {
   const [groups, setGroups] = useState<NodeGroup[]>([]);
+  // Whether the folder list has answered (or failed): until then a site id in the URL has no
+  // option to match, and a screen that asks the server by site must wait rather than drop it.
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [nodeNames, setNodeNames] = useState<Record<string, string>>({});
   // The folder each resolved node is filed in, from the same batch (ADR-243 decision 4). Kept beside
@@ -54,7 +66,11 @@ export function useEntityNames() {
   const [nodeSites, setNodeSites] = useState<Record<string, string | null>>({});
 
   useEffect(() => {
-    api.listNodeGroups().then(setGroups).catch(() => undefined);
+    api
+      .listNodeGroups()
+      .then(setGroups)
+      .catch(() => undefined)
+      .finally(() => setGroupsLoaded(true));
     api.listProfiles().then(setProfiles).catch(() => undefined);
   }, []);
 
@@ -122,6 +138,18 @@ export function useEntityNames() {
     },
     [nodeSites, groups],
   );
+  /** The id of the site a node sits under (ADR-248 Inc.2), or `''` — no site, or not resolved yet
+   *  (asking enqueues it). What the Site filter compares against. */
+  const nodeSiteId = useCallback(
+    (id: string): string => {
+      if (!(id in nodeSites)) {
+        batcher.current?.request(id);
+        return '';
+      }
+      return nodeSites[id] ?? '';
+    },
+    [nodeSites],
+  );
   const groupName = useCallback((id: string) => resolveName(groups, id), [groups]);
   const profileName = useCallback((id: string) => resolveName(profiles, id), [profiles]);
 
@@ -156,5 +184,16 @@ export function useEntityNames() {
     [nodeName, profileName, groupName],
   );
 
-  return { groups, profiles, nodeName, nodeGroup, nodeSite, groupName, profileName, scopeName };
+  return {
+    groups,
+    groupsLoaded,
+    profiles,
+    nodeName,
+    nodeGroup,
+    nodeSite,
+    nodeSiteId,
+    groupName,
+    profileName,
+    scopeName,
+  };
 }

@@ -66,6 +66,10 @@ pub(crate) struct AlertHistoryParams {
     node_q: Option<String>,
     /// Only transitions about nodes in this folder group or any group beneath it.
     group_id: Option<Uuid>,
+    /// Site folder ids, comma-separated: only transitions about nodes whose site (the nearest Site
+    /// folder above them, the `site_name` a row carries) is one of these. Find the ids with
+    /// `list_node_groups`.
+    site: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -183,7 +187,7 @@ impl YagraMcp {
                        (default 100). Narrow with `severity` and `state` (each comma-separated for \
                        several values), `resolved` (false=fires, true=clears), `metric` (substring of the metric name), \
                        `node_id`, `node_q` (substring of the node's name), `group_id` (that folder \
-                       and everything beneath it) and `since`/`until` — the window to search, which \
+                       and everything beneath it), `site` (Site folder ids, comma-separated) and `since`/`until` — the window to search, which \
                        is separate from the cursor. To page, pass the oldest returned row's \
                        `cursor_at` as `before` and its `cursor_id` as `before_id` — both, and not \
                        its `at`, which is when the alert fired rather than when the row was \
@@ -228,6 +232,7 @@ impl YagraMcp {
             node_id: p.node_id,
             node_q: p.node_q.as_deref(),
             group_id: p.group_id,
+            site: p.site.as_deref(),
         };
         let rows = match crate::api::alerts::history_page(&self.state, scope, input).await {
             Ok(r) => r,

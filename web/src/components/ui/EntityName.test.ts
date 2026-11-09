@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { isEntityResolved, resolveName, siteNameOf } from './entityNames';
+import { isEntityResolved, resolveName, siteNameOf, siteOptions } from './entityNames';
 
 describe('siteNameOf (ADR-248)', () => {
   const folders = [{ id: 'site-1', name: 'site-a' }];
@@ -14,6 +14,21 @@ describe('siteNameOf (ADR-248)', () => {
     expect(siteNameOf(folders, undefined)).toBe('');
     expect(siteNameOf(folders, 'gone-9')).toBe('');
     expect(siteNameOf([], 'site-1')).toBe('');
+  });
+});
+
+describe('siteOptions (ADR-248 Inc.2)', () => {
+  it('offers only Site folders, by name, keyed by id', () => {
+    const folders = [
+      { id: 'b', name: 'site-b', group_type: 'site' },
+      { id: 'f', name: 'floor-1', group_type: 'generic' },
+      { id: 'a', name: 'site-a', group_type: 'site' },
+    ];
+    expect(siteOptions(folders)).toEqual([
+      { value: 'a', label: 'site-a' },
+      { value: 'b', label: 'site-b' },
+    ]);
+    expect(siteOptions([])).toEqual([]);
   });
 });
 

@@ -54,6 +54,7 @@
     "emptyFiltered": "この絞り込みに一致する遷移がありません。",
     "filter": {
       "allSeverities": "すべての重大度",
+      "allSites": "すべてのサイト",
       "allPhases": "発生と解消",
       "allStates": "すべての状態"
     }
