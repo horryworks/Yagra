@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-07
-# counts: MA-L=40347 MA-L-repeats-dropped=3 MA-M=6595 MA-S=7235 withheld=3
+# fetched: 2026-11-09
+# counts: MA-L=40347 MA-L-repeats-dropped=3 MA-M=6596 MA-S=7236 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13538,6 +13538,7 @@
 047AAE	Huawei Device Co., Ltd.
 047B43	IEEE Registration Authority
 047B435	Shenzhen XJ-Micro Technology Co., Ltd.
+047B438	MERAK HVAC
 047B43A	RUBISEC CORPORATION
 047B43B	ACADEMY FOR FUTURE HEALTH LTD
 047B43C	RR Technologies GmbH
@@ -38365,6 +38366,7 @@
 8C1F64CDD	The Signalling Company
 8C1F64CDF	Canway Technology GmbH
 8C1F64CE0	Potter Electric Signal Co. LLC
+8C1F64CE2	Kova, Corp.
 8C1F64CE3	Pixel Design & Manufacturing Sdn. Bhd.
 8C1F64CE4	SL USA, LLC
 8C1F64CE9	Landis+Gyr Equipamentos de Medição Ltda

@@ -31,6 +31,15 @@ ignore = [
     # Re-evaluate when `openidconnect` moves to `elliptic-curve` 0.14, or if anything starts signing
     # or deriving a key through these crates.
     "RUSTSEC-2026-0387",
+    # RUSTSEC-2026-0457 (the OAuth client's SSRF filter checks host strings) and RUSTSEC-2026-0462
+    # (a Streamable HTTP client buffers a response body without a bound) — both in `rmcp`'s CLIENT
+    # half, fixed only in 3.9.0, a major version above the 2.2 we use. Yagra is an MCP server only:
+    # the workspace enables `server`, `macros` and `transport-streamable-http-server`, and neither
+    # the `auth` nor any client transport feature is in the build (checked with
+    # `cargo tree -e features -i rmcp`), so the affected code is not compiled. Remove both when rmcp
+    # moves to 3.x, or at once if anything turns on an rmcp client or OAuth feature.
+    "RUSTSEC-2026-0457",
+    "RUSTSEC-2026-0462",
 ]
 
 [licenses]
