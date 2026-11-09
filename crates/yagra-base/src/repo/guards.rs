@@ -83,13 +83,17 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
             "profiles",
             "url_checks",
             "dns_checks",
-            // Named only by `DEVICE_SERIAL_SQL` (ADR-139 Inc.5): a Meraki device's serial is the
+            // Named by `DEVICE_SERIAL_SQL` (ADR-139 Inc.5): a Meraki device's serial is the
             // device, and a Discovery candidate is compared against it as against the node's own.
+            // And by `inventory_page` (ADR-249), which reads the same serial per node.
             "meraki_devices",
             // Named only by `inventory_page` (ADR-249): an imported access point's serial and MAC
             // are on its AP entry, and the inventory read answers them per node. Read, never
             // written — the AP list itself is core's `topology/wireless.rs`.
             "wireless_aps",
+            // Named only by `inventory_page` too (ADR-249 Inc.2): the MAC the Dashboard lists for a
+            // Meraki node's device. Read, never written — the inventory is `yagra-meraki`'s.
+            "meraki_inventory",
         ],
     ),
     // Which nodes claim an address, by inventory address or by an interface address (ADR-180).

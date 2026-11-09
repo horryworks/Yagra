@@ -641,16 +641,18 @@ pub(crate) struct NodeInventoryRow {
     model: Option<String>,
     /// The name the device gives itself (`sysName`); `null` ⇒ not read yet.
     sys_name: Option<String>,
-    /// The OS / software version the device last reported (ADR-138); `null` ⇒ never read.
-    /// Observed hourly, so it can trail an upgrade by up to an hour.
+    /// The OS / software version the device last reported (ADR-138), and for an imported wireless
+    /// access point the version its controller reports — the detail's `wireless.ap.sw_version`.
+    /// `null` ⇒ not known. Observed, so it can trail an upgrade.
     os_version: Option<String>,
     /// The serial number, as `GET /api/v1/nodes/{node_id}` gives it (ADR-147): what the device
     /// reported (a stack lists every member, joined with `, `), else the serial of its Meraki
     /// binding — and for an imported wireless access point, the serial its controller reports.
     /// `null` ⇒ not known.
     serial_number: Option<String>,
-    /// An imported wireless access point's MAC address, lower-case and colon-separated, as its
-    /// controller reports it. `null` on every other node.
+    /// The device's MAC address, lower-case and colon-separated: for an imported wireless access
+    /// point the one its controller reports, for a Meraki node the one the Dashboard lists.
+    /// `null` on every other node, and when neither reported one.
     mac: Option<String>,
 }
 
@@ -734,11 +736,14 @@ async fn list_node_inventory(
                 .copied()
                 .unwrap_or(NodeKind::Device),
             // The detail page's rule (ADR-147 decision 7), then the access point's own entry.
-            serial_number: serial_or(
-                serial_or(r.serial_number, r.meraki_serial.as_deref()),
+            serial_number: or_nonblank(
+                or_nonblank(r.serial_number, r.meraki_serial.as_deref()),
                 r.ap_serial.as_deref(),
             ),
-            mac: r.ap_mac,
+            mac: inventory_mac(r.ap_mac.as_deref(), r.meraki_mac.as_deref()),
+            // The node's own reading, then the access point's entry (ADR-249 decision 9) — what
+            // the detail shows as `os_version`, or else as `wireless.ap.sw_version`.
+            os_version: or_nonblank(r.os_version, r.ap_sw_version.as_deref()),
             id: r.node.id,
             name: r.node.name,
             address: r.node.address.to_string(),
@@ -746,10 +751,21 @@ async fn list_node_inventory(
             vendor: r.node.vendor,
             model: r.node.model,
             sys_name: r.sys_name,
-            os_version: r.os_version,
         })
         .collect();
     Ok(Json(NodeInventoryPage { nodes, next_cursor }))
+}
+
+/// The MAC an inventory row carries (ADR-249 decision 10): an access point's entry first, then a
+/// Meraki device's Dashboard listing, trimmed and lower-cased so both read the same way. A node
+/// has at most one of the two — an imported AP is a controller's AP, a Meraki node is not.
+fn inventory_mac(ap: Option<&str>, meraki: Option<&str>) -> Option<String> {
+    [ap, meraki]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|m| !m.is_empty())
+        .map(str::to_ascii_lowercase)
 }
 
 /// Parse the list's exact-address filter at the edge, for both the REST list and the MCP tool
@@ -1315,12 +1331,13 @@ pub(crate) fn serial_number_of(
     stored: Option<String>,
     meraki: Option<&yagra_common::MerakiDeviceConfig>,
 ) -> Option<String> {
-    serial_or(stored, meraki.map(|m| m.serial.as_str()))
+    or_nonblank(stored, meraki.map(|m| m.serial.as_str()))
 }
 
-/// `stored`, or else `fallback` when it is not blank — the one step [`serial_number_of`] takes,
-/// and which the inventory read takes twice (Meraki, then an access point's entry, ADR-249).
-fn serial_or(stored: Option<String>, fallback: Option<&str>) -> Option<String> {
+/// `stored`, or else `fallback` when it is not blank — the one step [`serial_number_of`] takes.
+/// The inventory read takes it twice for the serial (Meraki, then an access point's entry) and
+/// once for the OS version (an access point's `sw_version`, ADR-249 decision 9).
+fn or_nonblank(stored: Option<String>, fallback: Option<&str>) -> Option<String> {
     stored.or_else(|| {
         fallback
             .map(str::trim)
@@ -4437,7 +4454,8 @@ mod tests {
 
     /// ADR-249: the inventory read gives each kind of node the serial its detail page gives —
     /// a reported stack, a Meraki binding's — and an imported access point the serial and MAC of
-    /// its AP entry, which the detail page shows under `wireless.ap` instead.
+    /// its AP entry, which the detail page shows under `wireless.ap` instead — and since Inc.2 the
+    /// AP its version and a Meraki node the MAC the Dashboard lists.
     ///
     /// 🚨 The stack and the Meraki node are compared against `GET /nodes/{id}` itself, not against
     /// a literal: what this pins is that the two reads cannot disagree about one node.
@@ -4474,9 +4492,20 @@ mod tests {
         .execute(&pool)
         .await
         .expect("meraki binding");
+        // The Dashboard's listing of the same device, with its MAC in capitals, so the test also
+        // sees the read normalize it (ADR-249 decision 10).
         sqlx::query(
-            "INSERT INTO wireless_aps (ap_id, mac, node_id, serial, run_state, state) \
-             VALUES ($1, '00:00:5e:00:53:01', $2, 'AP0000000001', 'normal', 'associated')",
+            "INSERT INTO meraki_inventory (org_id, serial, name, product_type, network_id, mac) \
+             VALUES ($1, 'Q2XX-AAAA-BBBB', 'mx-1', 'appliance', 'N_1', '00:00:5E:00:53:02')",
+        )
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("meraki inventory row");
+        sqlx::query(
+            "INSERT INTO wireless_aps (ap_id, mac, node_id, serial, sw_version, run_state, state) \
+             VALUES ($1, '00:00:5e:00:53:01', $2, 'AP0000000001', '8.10.185.0', 'normal', \
+                     'associated')",
         )
         .bind(Uuid::new_v4())
         .bind(ap)
@@ -4505,9 +4534,23 @@ mod tests {
                 detail["serial_number"],
                 "the inventory and the detail disagree about {id}"
             );
-            assert_eq!(row(id)["os_version"], detail["os_version"]);
             assert_eq!(row(id)["kind"], detail["kind"]);
         }
+        // The rule the Issue #67 reporter checks their pull against (ADR-249 decision 9): for
+        // every node, the inventory's `os_version` is the detail's, or — where that is null — the
+        // detail's `wireless.ap.sw_version`.
+        for id in [stack, mx, ap, plain] {
+            let (_, detail) = send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+            let want = if detail["os_version"].is_null() {
+                detail["wireless"]["ap"]["sw_version"].clone()
+            } else {
+                detail["os_version"].clone()
+            };
+            assert_eq!(row(id)["os_version"], want, "os_version of {id}: {detail}");
+        }
+        assert_eq!(row(ap)["os_version"], "8.10.185.0");
+        assert_eq!(row(mx)["mac"], "00:00:5e:00:53:02", "lower-cased");
+        assert_eq!(row(plain)["mac"], serde_json::Value::Null);
         assert_eq!(row(stack)["serial_number"], "FCW0000A001, FCW0000A002");
         assert_eq!(row(stack)["os_version"], "15.2(7)E4");
         assert_eq!(row(mx)["serial_number"], "Q2XX-AAAA-BBBB");
@@ -4612,14 +4655,38 @@ mod tests {
     #[test]
     fn an_access_points_serial_fills_in_last() {
         assert_eq!(
-            serial_or(serial_or(None, None), Some("AP0000000001")).as_deref(),
+            or_nonblank(or_nonblank(None, None), Some("AP0000000001")).as_deref(),
             Some("AP0000000001")
         );
         assert_eq!(
-            serial_or(serial_or(Some("FCW0000A001".to_owned()), None), Some("AP1")).as_deref(),
+            or_nonblank(
+                or_nonblank(Some("FCW0000A001".to_owned()), None),
+                Some("AP1")
+            )
+            .as_deref(),
             Some("FCW0000A001")
         );
-        assert_eq!(serial_or(None, Some(" ")), None);
+        assert_eq!(or_nonblank(None, Some(" ")), None);
+    }
+
+    /// ADR-249 decision 10: an access point's MAC, else a Meraki device's, lower-cased, and a
+    /// blank one is no value.
+    #[test]
+    fn the_inventory_mac_is_the_aps_then_merakis_lower_cased() {
+        assert_eq!(
+            inventory_mac(Some("00:00:5e:00:53:01"), None).as_deref(),
+            Some("00:00:5e:00:53:01")
+        );
+        assert_eq!(
+            inventory_mac(None, Some(" 00:00:5E:00:53:02 ")).as_deref(),
+            Some("00:00:5e:00:53:02")
+        );
+        assert_eq!(
+            inventory_mac(Some(""), Some("00:00:5E:00:53:02")).as_deref(),
+            Some("00:00:5e:00:53:02")
+        );
+        assert_eq!(inventory_mac(None, Some("  ")), None);
+        assert_eq!(inventory_mac(None, None), None);
     }
 
     /// A bulk tag edit is **accepted**, it **merges**, and the node detail shows the result.

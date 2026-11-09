@@ -99,6 +99,12 @@ pub struct InventoryRow {
     /// The MAC in the node's access-point entry, lower-case and colon-separated; `None` ⇒ not an
     /// imported AP.
     pub ap_mac: Option<String>,
+    /// The software version in the node's access-point entry; `None` ⇒ not an imported AP, or the
+    /// controller reported none (ADR-249 Inc.2).
+    pub ap_sw_version: Option<String>,
+    /// The MAC the Meraki Dashboard lists for the node's device, as the inventory stored it;
+    /// `None` ⇒ not a Meraki node, or the Dashboard gave none (ADR-249 Inc.2).
+    pub meraki_mac: Option<String>,
 }
 
 /// One device node as Nodes ▸ Reclassify weighs it (ADR-140) — see [`NodeRepo::reclassify_inputs`].
@@ -371,10 +377,15 @@ impl NodeRepo {
     /// ⚠️ Not [`Self::DEVICE_SERIAL_SQL`]: that joins both serials for duplicate detection, while
     /// the detail page takes the first one it has.
     ///
-    /// Scalar subqueries rather than joins: each side table holds at most one row per node
-    /// (`meraki_devices.node_id` is the key, `wireless_aps.node_id` is `UNIQUE`), and a join would
-    /// make the unqualified [`Self::NODE_COLUMNS`] ambiguous (`wireless_aps` has a `name` and a
-    /// `model` too).
+    /// The OS version and MAC come back the same way (ADR-249 Inc.2): the node's own version and
+    /// its AP entry's `sw_version`, and the MAC of its AP entry and of its Meraki inventory row.
+    ///
+    /// Two `LATERAL` joins, each projecting only aliased columns: each side table holds at most
+    /// one row per node (`wireless_aps.node_id` is `UNIQUE`, `meraki_devices.node_id` is the key
+    /// and `meraki_inventory` is keyed by `(org_id, serial)`), and naming only aliases keeps the
+    /// unqualified [`Self::NODE_COLUMNS`] unambiguous — `wireless_aps` has a `name` and a `model`
+    /// too. A Meraki node whose device the Dashboard no longer lists keeps the MAC it last had:
+    /// `missing_since` is not filtered, because a device's MAC does not change.
     pub async fn inventory_page(
         &self,
         groups: GroupFilter<'_>,
@@ -385,10 +396,18 @@ impl NodeRepo {
         let limit = limit.clamp(1, 501);
         let rows = sqlx::query(&format!(
             "SELECT {cols}, n.os_version, n.sys_name, n.serial_number, \
-                    (SELECT m.serial FROM meraki_devices m WHERE m.node_id = n.id) AS meraki_serial, \
-                    (SELECT a.serial FROM wireless_aps a WHERE a.node_id = n.id) AS ap_serial, \
-                    (SELECT a.mac FROM wireless_aps a WHERE a.node_id = n.id) AS ap_mac \
+                    mk.meraki_serial, mk.meraki_mac, ap.ap_serial, ap.ap_mac, ap.ap_sw_version \
              FROM nodes n \
+             LEFT JOIN LATERAL ( \
+                 SELECT a.serial AS ap_serial, a.mac AS ap_mac, a.sw_version AS ap_sw_version \
+                 FROM wireless_aps a WHERE a.node_id = n.id \
+             ) ap ON true \
+             LEFT JOIN LATERAL ( \
+                 SELECT d.serial AS meraki_serial, i.mac AS meraki_mac \
+                 FROM meraki_devices d \
+                 LEFT JOIN meraki_inventory i ON i.org_id = d.org_id AND i.serial = d.serial \
+                 WHERE d.node_id = n.id \
+             ) mk ON true \
              WHERE {scope} AND ($2::uuid IS NULL OR n.id > $2) \
              ORDER BY n.id LIMIT $3",
             cols = Self::NODE_COLUMNS,
@@ -409,6 +428,8 @@ impl NodeRepo {
                     meraki_serial: row.try_get("meraki_serial")?,
                     ap_serial: row.try_get("ap_serial")?,
                     ap_mac: row.try_get("ap_mac")?,
+                    ap_sw_version: row.try_get("ap_sw_version")?,
+                    meraki_mac: row.try_get("meraki_mac")?,
                 })
             })
             .collect()

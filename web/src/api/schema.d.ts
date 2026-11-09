@@ -12137,15 +12137,17 @@ export interface components {
             /** @description What this node is, resolved the way `GET /api/v1/nodes` resolves it. */
             kind: components["schemas"]["NodeKind"];
             /**
-             * @description An imported wireless access point's MAC address, lower-case and colon-separated, as its
-             *     controller reports it. `null` on every other node.
+             * @description The device's MAC address, lower-case and colon-separated: for an imported wireless access
+             *     point the one its controller reports, for a Meraki node the one the Dashboard lists.
+             *     `null` on every other node, and when neither reported one.
              */
             mac?: string | null;
             model?: string | null;
             name: string;
             /**
-             * @description The OS / software version the device last reported (ADR-138); `null` ⇒ never read.
-             *     Observed hourly, so it can trail an upgrade by up to an hour.
+             * @description The OS / software version the device last reported (ADR-138), and for an imported wireless
+             *     access point the version its controller reports — the detail's `wireless.ap.sw_version`.
+             *     `null` ⇒ not known. Observed, so it can trail an upgrade.
              */
             os_version?: string | null;
             /**

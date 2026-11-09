@@ -13,6 +13,11 @@
 ### Improvements
 
 - **A Meraki MX's WAN latency and loss are charted.** Below the WAN traffic chart on the node's Overview, two charts draw the selected range: WAN latency in milliseconds and WAN loss in percent, one line per uplink in the same colour as in the traffic chart. Both axes start at zero, so a 5 ms latency does not look like a swing and 1% loss is still visible. They read the values already stored; no extra Dashboard API call (ADR-164).
+- **`GET /api/v1/nodes/inventory` gives a Meraki node's MAC address.** `mac` was set only on imported wireless access points. A Meraki node now carries the MAC the Dashboard lists for the device, lower-case and colon-separated like an access point's, so a script can match Meraki gear against switch MAC tables without calling the Meraki API itself. A device the Dashboard no longer lists keeps the MAC it last had. Other nodes still give `null` (ADR-249).
+
+### Bug Fixes
+
+- **`GET /api/v1/nodes/inventory` gives an imported wireless access point its software version.** `os_version` was `null` on every `kind: "wireless_ap"` row, while `GET /api/v1/nodes/{node_id}` showed the version under `wireless.ap.sw_version`. Those rows now carry that version, so the bulk read and the detail agree for every node. It is `null` only when the controller reported no version. Other kinds are unchanged (ADR-249).
 
 ## v0.3.74 — Filter alerts by site, read every node's serial number and OS version in pages, and see an MX's uplink loss and latency
 
