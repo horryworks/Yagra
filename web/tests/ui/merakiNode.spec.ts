@@ -112,6 +112,9 @@ function range(url: URL): Json {
   const rates: Record<string, Record<number, number>> = {
     meraki_uplink_sent_bps: { 1: 5_000, 3: 100 },
     meraki_uplink_recv_bps: { 1: 10_000, 3: 200 },
+    // Loss and latency (ADR-164 decision 43): cellular stored no latency, WAN1 lost nothing.
+    meraki_uplink_loss_pct: { 1: 0, 3: 100 },
+    meraki_uplink_latency_ms: { 1: 23.4 },
   };
   const v = rates[name]?.[row];
   // Inside the chart's default window (the last hour), so the lines are drawn and not only named.
@@ -238,7 +241,7 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
 
   // The chart: each uplink that has history is two series, sent above and received below, plus
   // uPlot's x-axis row. WAN2 stored nothing, so it draws nothing rather than a flat zero.
-  const legend = card.locator('.nd-mk-chart .u-legend .u-series');
+  const legend = card.locator('.nd-mk-chart').first().locator('.u-legend .u-series');
   await expect(legend).toHaveCount(5);
   await expect(legend.locator('.u-label')).toHaveText([
     'Time',
@@ -247,12 +250,18 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
     'cellular sent',
     'cellular received',
   ]);
+  // Latency and loss, one line per uplink, each on its own chart and in the uplink's traffic colour.
+  const charts = card.locator('.nd-mk-chart');
+  await expect(charts.locator('.nd-mk-tile-label')).toHaveText(['WAN traffic', 'WAN latency', 'WAN loss']);
+  await expect(charts.nth(1).locator('.u-legend .u-series .u-label')).toHaveText(['Time', 'WAN1']);
+  await expect(charts.nth(2).locator('.u-legend .u-series .u-label')).toHaveText(['Time', 'WAN1', 'cellular']);
+
   // It read each uplink's history back by its row key — without `row` the server would answer the
   // node's one aggregate series, and every uplink would draw the same line.
   const ranged = mock.requests
     .filter((r) => r.pathname.startsWith(`/api/v1/nodes/${NODE_ID}/metrics/meraki_uplink_`) && r.pathname.endsWith('/range'))
     .map((r) => `${r.pathname.split('/').slice(-2, -1)[0]}@${new URLSearchParams(r.search).get('row')}`);
-  for (const m of ['meraki_uplink_sent_bps', 'meraki_uplink_recv_bps']) {
+  for (const m of ['meraki_uplink_sent_bps', 'meraki_uplink_recv_bps', 'meraki_uplink_loss_pct', 'meraki_uplink_latency_ms']) {
     for (const row of ['1', '2', '3']) expect(ranged, `${m} row ${row}`).toContain(`${m}@${row}`);
   }
 
@@ -275,7 +284,7 @@ for (const width of [1280, 1000, 800]) {
     await page.setViewportSize({ width, height: 1000 });
     await page.goto(`/nodes/${NODE_ID}?tab=overview`);
     const card = cardOf(page);
-    await expect(card.locator('.nd-mk-chart .u-legend .u-series')).toHaveCount(5, { timeout: 15_000 });
+    await expect(card.locator('.nd-mk-chart').first().locator('.u-legend .u-series')).toHaveCount(5, { timeout: 15_000 });
     const { inspected, problems } = await layoutProblems(page);
     expect(inspected, 'the check found the tiles and the table it inspects').toBeGreaterThanOrEqual(4);
     expect(problems).toEqual([]);

@@ -91,6 +91,7 @@ import {
   merakiRadioLines,
   merakiTrafficSeries,
   merakiUplinkLines,
+  merakiUplinkQualitySeries,
   merakiVpnLine,
   type MerakiRadioHistory,
   type MerakiRadioLine,
@@ -672,21 +673,28 @@ function MerakiHealth({
           la.status === 'fulfilled' ? (la.value.rows ?? []) : [],
         );
         setUplinks(lines);
-        // The chart's uplinks are the ones the rows read just named — each uplink's two series,
-        // by its row key. A read that fails costs that series, not the chart.
+        // The charts' uplinks are the ones the rows read just named — each uplink's four series
+        // (traffic both ways, loss, latency), by its row key. A read that fails costs that series,
+        // not the chart.
+        const per = [MERAKI_CARD.sentBps, MERAKI_CARD.recvBps, MERAKI_CARD.lossPct, MERAKI_CARD.latencyMs];
         void Promise.allSettled(
-          lines.flatMap((l) => [
-            api.getNodeMetricRange(nodeId, MERAKI_CARD.sentBps, { from, to, row: l.row }),
-            api.getNodeMetricRange(nodeId, MERAKI_CARD.recvBps, { from, to, row: l.row }),
-          ]),
+          lines.flatMap((l) => per.map((m) => api.getNodeMetricRange(nodeId, m, { from, to, row: l.row }))),
         ).then((ranges) => {
           if (cancelled) return;
           const points = (i: number) => {
             const p = ranges[i];
             return p.status === 'fulfilled' ? p.value.points : [];
           };
+          const n = per.length;
           setHistory(
-            lines.map((l, i) => ({ row: l.row, name: l.name, sent: points(2 * i), recv: points(2 * i + 1) })),
+            lines.map((l, i) => ({
+              row: l.row,
+              name: l.name,
+              sent: points(n * i),
+              recv: points(n * i + 1),
+              loss: points(n * i + 2),
+              latency: points(n * i + 3),
+            })),
           );
           setWin([from, to]);
         });
@@ -781,6 +789,7 @@ function MerakiHealth({
       }),
     [history, t],
   );
+  const quality = useMemo(() => merakiUplinkQualitySeries(history, PALETTE), [history]);
 
   return (
     <Stack as="section" gap={8}>
@@ -987,6 +996,34 @@ function MerakiHealth({
                   in: t('overview.trafficAxis.received'),
                   out: t('overview.trafficAxis.sent'),
                 })}
+              />
+            </div>
+          )}
+          {quality.latency.timestamps.length > 0 && (
+            <div className="nd-mk-chart">
+              <div className="nd-mk-tile-label">{t('overview.wanLatency')}</div>
+              <MetricChart
+                title=""
+                timestamps={quality.latency.timestamps}
+                series={quality.latency.series}
+                xRange={win ?? undefined}
+                yRange={quality.latency.yRange}
+                yFormat={(v) => `${formatSi(v)} ms`}
+                legendFormat={formatRtt}
+              />
+            </div>
+          )}
+          {quality.loss.timestamps.length > 0 && (
+            <div className="nd-mk-chart">
+              <div className="nd-mk-tile-label">{t('overview.wanLoss')}</div>
+              <MetricChart
+                title=""
+                timestamps={quality.loss.timestamps}
+                series={quality.loss.series}
+                xRange={win ?? undefined}
+                yRange={quality.loss.yRange}
+                yFormat={(v) => formatUtil(v)}
+                legendFormat={(v) => formatUtil(v)}
               />
             </div>
           )}

@@ -460,6 +460,8 @@
     "pairPartnerRole": "（{{role}}）",
     "pairPartnerNone": "相方: 特定できない",
     "wanTraffic": "WAN の通信量",
+    "wanLatency": "WAN の遅延",
+    "wanLoss": "WAN の損失",
     "uplinkCols": {
       "uplink": "回線",
       "state": "状態",

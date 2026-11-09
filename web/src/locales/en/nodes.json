@@ -462,6 +462,8 @@
     "pairPartnerRole": " ({{role}})",
     "pairPartnerNone": "Partner: not identified",
     "wanTraffic": "WAN traffic",
+    "wanLatency": "WAN latency",
+    "wanLoss": "WAN loss",
     "uplinkCols": {
       "uplink": "Uplink",
       "state": "State",

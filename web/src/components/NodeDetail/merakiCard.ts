@@ -181,12 +181,14 @@ export function merakiPairLine(pair: MerakiPair | null | undefined): MerakiPairL
   };
 }
 
-/** One uplink's stored history, as the card read it back (ADR-164 decision 27). */
+/** One uplink's stored history, as the card read it back (ADR-164 decisions 27 and 43). */
 export interface MerakiUplinkHistory {
   row: number;
   name: string;
   sent: readonly MetricPoint[];
   recv: readonly MetricPoint[];
+  loss: readonly MetricPoint[];
+  latency: readonly MetricPoint[];
 }
 
 /**
@@ -234,6 +236,52 @@ export function merakiTrafficSeries(
     }
   });
   return { timestamps, series };
+}
+
+/**
+ * The WAN latency and loss charts (ADR-164 decision 43): one line per uplink in each.
+ *
+ * - **Milliseconds and percent never share an axis**, for the reason the access point's two charts
+ *   do not (`merakiApHistorySeries`).
+ * - **An uplink keeps its traffic-chart colour**: the colour is its place in `uplinks`, the same
+ *   list `merakiTrafficSeries` colours by, so WAN1 is one colour in all three charts.
+ * - Each axis starts at zero (`zeroFloorRange`), and the range is built here so the card can
+ *   memoise it with the series — `MetricChart` compares `yRange` by reference.
+ */
+export function merakiUplinkQualitySeries(
+  uplinks: readonly MerakiUplinkHistory[],
+  palette: readonly string[],
+): {
+  latency: { timestamps: number[]; series: ChartSeries[]; yRange: [number, number] };
+  loss: { timestamps: number[]; series: ChartSeries[]; yRange: [number, number] };
+} {
+  const lines = (pick: (u: MerakiUplinkHistory) => readonly MetricPoint[]) =>
+    alignedLines(uplinks.map((u, i) => ({ label: u.name, points: pick(u), color: palette[i % palette.length] })));
+  const latency = lines((u) => u.latency);
+  const loss = lines((u) => u.loss);
+  return {
+    latency: { ...latency, yRange: zeroFloorRange(latency.series, { atLeast: 1 }) },
+    loss: { ...loss, yRange: zeroFloorRange(loss.series, { atLeast: 1, atMost: 100 }) },
+  };
+}
+
+/**
+ * A value axis from zero to a little above the highest point (ADR-164 decision 43).
+ *
+ * Zero, not the data's minimum: a WAN whose latency moves between 4.7 and 5.8 ms drawn on an axis
+ * from 4.7 to 5.8 looks like it is swinging wildly. A little headroom (15%) keeps the top line off
+ * the frame. `atLeast` gives a flat-zero chart — the usual loss chart — an axis to draw on, and is
+ * small enough that 1% loss is still visible, which a fixed 0–100% axis would hide. `atMost` caps
+ * a percentage at 100.
+ */
+export function zeroFloorRange(
+  series: readonly ChartSeries[],
+  bounds: { atLeast: number; atMost?: number },
+): [number, number] {
+  let max = 0;
+  for (const s of series) for (const v of s.values) if (v != null && Number.isFinite(v) && v > max) max = v;
+  const top = Math.max(bounds.atLeast, max * 1.15);
+  return [0, bounds.atMost == null ? top : Math.min(bounds.atMost, top)];
 }
 
 /** One radio of a Meraki access point on the card (ADR-168): its band, and the last five minutes'

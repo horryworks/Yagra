@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A Meraki MX's WAN latency and loss are charted.** Below the WAN traffic chart on the node's Overview, two charts draw the selected range: WAN latency in milliseconds and WAN loss in percent, one line per uplink in the same colour as in the traffic chart. Both axes start at zero, so a 5 ms latency does not look like a swing and 1% loss is still visible. They read the values already stored; no extra Dashboard API call (ADR-164).
+
 ## v0.3.74 — Filter alerts by site, read every node's serial number and OS version in pages, and see an MX's uplink loss and latency
 
 ### New Features

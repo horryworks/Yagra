@@ -12,8 +12,10 @@ import {
   merakiRadioLines,
   merakiTrafficSeries,
   merakiUplinkLines,
+  merakiUplinkQualitySeries,
   merakiUplinkState,
   merakiVpnLine,
+  zeroFloorRange,
 } from './merakiCard';
 
 const row = (r: number, value: number, name?: string) => ({ row: r, value, name });
@@ -187,8 +189,8 @@ describe('merakiTrafficSeries (ADR-164 決定 27)', () => {
   it('draws sending above zero and receiving below it, one colour per uplink', () => {
     const { timestamps, series } = merakiTrafficSeries(
       [
-        { row: 1, name: 'WAN1', sent: pts([60, 100], [120, 200]), recv: pts([60, 10], [120, 20]) },
-        { row: 2, name: 'WAN2', sent: pts([60, 5]), recv: pts([60, 7]) },
+        { row: 1, name: 'WAN1', sent: pts([60, 100], [120, 200]), recv: pts([60, 10], [120, 20]), loss: [], latency: [] },
+        { row: 2, name: 'WAN2', sent: pts([60, 5]), recv: pts([60, 7]), loss: [], latency: [] },
       ],
       PAL,
       L,
@@ -204,7 +206,7 @@ describe('merakiTrafficSeries (ADR-164 決定 27)', () => {
 
   it('places each point by its timestamp, and keeps a gap a gap rather than a zero', () => {
     const { timestamps, series } = merakiTrafficSeries(
-      [{ row: 1, name: 'WAN1', sent: pts([120, 3]), recv: pts([60, 0], [180, 4]) }],
+      [{ row: 1, name: 'WAN1', sent: pts([120, 3]), recv: pts([60, 0], [180, 4]), loss: [], latency: [] }],
       PAL,
       L,
     );
@@ -218,8 +220,8 @@ describe('merakiTrafficSeries (ADR-164 決定 27)', () => {
   it('keeps an uplink on its colour when the one before it has no history', () => {
     const { series } = merakiTrafficSeries(
       [
-        { row: 1, name: 'WAN1', sent: [], recv: [] },
-        { row: 3, name: 'cellular', sent: pts([60, 1]), recv: [] },
+        { row: 1, name: 'WAN1', sent: [], recv: [], loss: [], latency: [] },
+        { row: 3, name: 'cellular', sent: pts([60, 1]), recv: [], loss: [], latency: [] },
       ],
       PAL,
       L,
@@ -228,7 +230,7 @@ describe('merakiTrafficSeries (ADR-164 決定 27)', () => {
   });
 
   it('has nothing to draw when nothing was stored', () => {
-    expect(merakiTrafficSeries([{ row: 1, name: 'WAN1', sent: [], recv: [] }], PAL, L)).toEqual({
+    expect(merakiTrafficSeries([{ row: 1, name: 'WAN1', sent: [], recv: [], loss: [], latency: [] }], PAL, L)).toEqual({
       timestamps: [],
       series: [],
     });
@@ -333,5 +335,68 @@ describe('countAxisLabel', () => {
     const fmt = (n: number) => String(n);
     expect([4, 3.5, 3, 2.5, 2].map((v) => countAxisLabel(v, fmt))).toEqual(['4', '', '3', '', '2']);
     expect(countAxisLabel(0, fmt)).toBe('0');
+  });
+});
+
+describe('merakiUplinkQualitySeries', () => {
+  const P = (...p: [number, number][]) => p.map(([t, v]) => ({ t, v }));
+  const PAL = ['c0', 'c1', 'c2'];
+  const up = (row: number, name: string, loss: [number, number][], latency: [number, number][]) => ({
+    row,
+    name,
+    sent: [],
+    recv: [],
+    loss: P(...loss),
+    latency: P(...latency),
+  });
+
+  it('draws one line per uplink in each chart, in the colour the traffic chart gives it', () => {
+    // WAN2 stored no latency: WAN1 and cellular keep their colours (place in the list, ADR-164
+    // decision 43) rather than cellular sliding onto WAN2's.
+    const q = merakiUplinkQualitySeries(
+      [
+        up(1, 'WAN1', [[60, 0], [120, 0]], [[60, 4.7], [120, 5.8]]),
+        up(2, 'WAN2', [[60, 2]], []),
+        up(3, 'cellular', [], [[120, 40]]),
+      ],
+      PAL,
+    );
+    expect(q.latency.timestamps).toEqual([60, 120]);
+    expect(q.latency.series).toEqual([
+      { label: 'WAN1', values: [4.7, 5.8], color: 'c0' },
+      { label: 'cellular', values: [null, 40], color: 'c2' },
+    ]);
+    expect(q.loss.timestamps).toEqual([60, 120]);
+    expect(q.loss.series).toEqual([
+      { label: 'WAN1', values: [0, 0], color: 'c0' },
+      { label: 'WAN2', values: [2, null], color: 'c1' },
+    ]);
+  });
+
+  it('starts both axes at zero', () => {
+    const q = merakiUplinkQualitySeries([up(1, 'WAN1', [[60, 0]], [[60, 4.7], [120, 5.8]])], PAL);
+    expect(q.latency.yRange[0]).toBe(0);
+    expect(q.latency.yRange[1]).toBeCloseTo(5.8 * 1.15);
+    // A loss chart that is all zero still gets an axis, and 1% would show on it.
+    expect(q.loss.yRange).toEqual([0, 1]);
+  });
+
+  it('draws nothing when no uplink stored a point', () => {
+    const q = merakiUplinkQualitySeries([up(1, 'WAN1', [], [])], PAL);
+    expect(q.latency.timestamps).toEqual([]);
+    expect(q.loss.series).toEqual([]);
+  });
+});
+
+describe('zeroFloorRange', () => {
+  const s = (...values: (number | null)[]) => [{ label: 'x', values }];
+  it('rises a little above the highest point, never below the floor', () => {
+    expect(zeroFloorRange(s(10, null, 20), { atLeast: 1 })).toEqual([0, 23]);
+    expect(zeroFloorRange(s(0.2), { atLeast: 1 })).toEqual([0, 1]);
+    expect(zeroFloorRange([], { atLeast: 1 })).toEqual([0, 1]);
+  });
+  it('caps a percentage at 100', () => {
+    expect(zeroFloorRange(s(100), { atLeast: 1, atMost: 100 })).toEqual([0, 100]);
+    expect(zeroFloorRange(s(50), { atLeast: 1, atMost: 100 })[1]).toBeCloseTo(57.5);
   });
 });
