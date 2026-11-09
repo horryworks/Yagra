@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.74 — Filter alerts by site, read every node's serial number and OS version in pages, and see an MX's uplink loss and latency
+
 ### New Features
 
 - **Alerts ▸ Active alerts and History show each alert's site.** A Site column between Severity and Node names the nearest folder of type *Site* above the node. It is blank when no folder above the node is a Site, and for a poller-pool alert. History shows the site the node is filed under now, not where it was when the alert fired. The Site column has a filter: tick one or more sites to list only their alerts. A site nested inside another counts as its own, and an alert with no site is left out. `GET /api/v1/alerts/history` and the MCP tool `get_alert_history` take the same filter as `site` (comma-separated Site folder ids); a folder that is not a Site is refused with 400. `POST /api/v1/node-names` now answers a `site_id` beside each node's `group_id` (`null` when there is none), and the MCP tools `get_active_alerts` and `get_alert_history` return a `site_name` (ADR-248).
@@ -18,6 +20,10 @@
 ### Improvements
 
 - **A Meraki MX's card shows each WAN uplink's packet loss and latency.** The uplink table on the node's Overview gains Loss and Latency columns, beside the state and the traffic. They are the values Yagra has collected every five minutes all along (`meraki_uplink_loss_pct`, `meraki_uplink_latency_ms`, to the Dashboard's test address), which until now were visible only on the Collection tab. No extra Dashboard API call (ADR-164).
+
+### Security
+
+- **The WebUI image's libexpat is 2.10.0.** The nginx base image carried libexpat 2.9.0, with four High-severity fixes available. Only the font library links it, and nothing in the image hands it outside XML, so the advisories do not reach Yagra; the bump removes the WebUI image's findings from the weekly image scan.
 
 ## v0.3.73 — Use your own LLM server for AI analysis, match syslog and flows by any interface address, and one layout across every screen
 
