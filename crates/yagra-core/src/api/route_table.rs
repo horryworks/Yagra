@@ -1727,6 +1727,19 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/nodes/inventory",
+        GroupFiltered,
+        // ADR-249 decision 8. No WebUI screen reads this route — it exists so a script can stop
+        // asking `/nodes/{node_id}` once per node — and every field it carries is answered by a
+        // tool already. Naming them keeps the reason falsifiable.
+        Exempt(
+            "the bulk form of fields three tools already answer: get_node_status gives one node's \
+             serial number, OS version and sysName, list_nodes lists the fleet, and \
+             list_wireless_aps gives each access point's serial and MAC",
+        ),
+    ),
+    (
+        "GET",
         "/api/v1/nodes/duplicates",
         // `GroupFiltered`, like `/reclassify` (ADR-148): every answer is a node, and `manage_config`
         // is Operator-held and an Operator can be scoped.
@@ -3063,6 +3076,13 @@ mod tests {
             "the network map reads one folder level from `/topology/map` since ADR-191; the flat \
              link list stays for the MCP `get_topology(kind=links)` branch and API clients that \
              page the whole graph",
+        ),
+        (
+            "GET",
+            "/api/v1/nodes/inventory",
+            "a bulk read for scripts that reconcile the inventory against another system (ADR-249, \
+             asked for by a NetBox reconcile job); the WebUI shows the same fields one node at a \
+             time from `/nodes/{node_id}`",
         ),
     ];
 

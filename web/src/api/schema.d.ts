@@ -2630,6 +2630,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every node with its observed identity — serial number, OS version, `sysName` — one keyset page
+         *     at a time, ordered by node id (ADR-249).
+         * @description For a script that reconciles this inventory against another system: the same fields
+         *     `GET /api/v1/nodes/{node_id}` gives, for a whole page in one request. A wireless access point
+         *     that has not been imported as a node is not listed; `GET /api/v1/wireless/aps` lists those.
+         */
+        get: operations["list_node_inventory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/move": {
         parameters: {
             query?: never;
@@ -12094,6 +12117,49 @@ export interface components {
         /** @description The nodes to examine. */
         NodeIdBatch: {
             node_ids: string[];
+        };
+        /** @description One keyset page of the inventory read. */
+        NodeInventoryPage: {
+            /** @description Pass back as `cursor` for the next page; `null` ⇒ this was the last one. */
+            next_cursor?: string | null;
+            nodes: components["schemas"]["NodeInventoryRow"][];
+        };
+        /** @description One node in the inventory read (ADR-249): who it is and what it reported about itself. */
+        NodeInventoryRow: {
+            /** @description The node's address. `0.0.0.0` (or `::`) means the node has none (see `NodeSummary.address`). */
+            address: string;
+            /**
+             * Format: uuid
+             * @description The node's folder; `null` ⇒ ungrouped.
+             */
+            group_id?: string | null;
+            id: components["schemas"]["NodeId"];
+            /** @description What this node is, resolved the way `GET /api/v1/nodes` resolves it. */
+            kind: components["schemas"]["NodeKind"];
+            /**
+             * @description An imported wireless access point's MAC address, lower-case and colon-separated, as its
+             *     controller reports it. `null` on every other node.
+             */
+            mac?: string | null;
+            model?: string | null;
+            name: string;
+            /**
+             * @description The OS / software version the device last reported (ADR-138); `null` ⇒ never read.
+             *     Observed hourly, so it can trail an upgrade by up to an hour.
+             */
+            os_version?: string | null;
+            /**
+             * @description The serial number, as `GET /api/v1/nodes/{node_id}` gives it (ADR-147): what the device
+             *     reported (a stack lists every member, joined with `, `), else the serial of its Meraki
+             *     binding — and for an imported wireless access point, the serial its controller reports.
+             *     `null` ⇒ not known.
+             */
+            serial_number?: string | null;
+            /** @description The state the node list shows for it. */
+            state: components["schemas"]["NodeState"];
+            /** @description The name the device gives itself (`sysName`); `null` ⇒ not read yet. */
+            sys_name?: string | null;
+            vendor?: string | null;
         };
         /**
          * @description A node's monitoring kind: the thing that decides which poll jobs it produces.
@@ -26442,6 +26508,58 @@ export interface operations {
                 };
             };
             /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_node_inventory: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the previous page; absent for the first. */
+                cursor?: string;
+                /** @description Page size, 1–500 (default 100). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One keyset page of nodes with their serial number and OS version */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeInventoryPage"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Too many inventory reads in flight — retry shortly (`list_busy`), or this deployment has no inventory store */
             503: {
                 headers: {
                     [name: string]: unknown;

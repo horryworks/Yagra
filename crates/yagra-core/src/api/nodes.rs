@@ -44,6 +44,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     create_node,
     search_nodes,
     list_group_nodes,
+    list_node_inventory,
     node_names_batch,
     get_node,
     delete_node,
@@ -76,6 +77,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         // someone "tidying" `search` below the param route and assuming it still works.
         .route("/api/v1/nodes/search", get(search_nodes))
         .route("/api/v1/nodes/by-group", get(list_group_nodes))
+        .route("/api/v1/nodes/inventory", get(list_node_inventory))
         .route("/api/v1/node-names", post(node_names_batch))
         .route("/api/v1/nodes/move", post(move_nodes))
         .route("/api/v1/nodes/delete", post(delete_nodes))
@@ -620,6 +622,134 @@ async fn list_nodes(
         // read both would show a "results were cut" notice on every page but the last.
         truncated: false,
     }))
+}
+
+/// One node in the inventory read (ADR-249): who it is and what it reported about itself.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct NodeInventoryRow {
+    id: NodeId,
+    name: String,
+    /// The node's address. `0.0.0.0` (or `::`) means the node has none (see `NodeSummary.address`).
+    address: String,
+    /// What this node is, resolved the way `GET /api/v1/nodes` resolves it.
+    kind: NodeKind,
+    /// The state the node list shows for it.
+    state: NodeState,
+    /// The node's folder; `null` ⇒ ungrouped.
+    group_id: Option<Uuid>,
+    vendor: Option<String>,
+    model: Option<String>,
+    /// The name the device gives itself (`sysName`); `null` ⇒ not read yet.
+    sys_name: Option<String>,
+    /// The OS / software version the device last reported (ADR-138); `null` ⇒ never read.
+    /// Observed hourly, so it can trail an upgrade by up to an hour.
+    os_version: Option<String>,
+    /// The serial number, as `GET /api/v1/nodes/{node_id}` gives it (ADR-147): what the device
+    /// reported (a stack lists every member, joined with `, `), else the serial of its Meraki
+    /// binding — and for an imported wireless access point, the serial its controller reports.
+    /// `null` ⇒ not known.
+    serial_number: Option<String>,
+    /// An imported wireless access point's MAC address, lower-case and colon-separated, as its
+    /// controller reports it. `null` on every other node.
+    mac: Option<String>,
+}
+
+/// One keyset page of the inventory read.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(crate) struct NodeInventoryPage {
+    nodes: Vec<NodeInventoryRow>,
+    /// Pass back as `cursor` for the next page; `null` ⇒ this was the last one.
+    next_cursor: Option<String>,
+}
+
+/// Keyset paging for the inventory read: the same `cursor` / `limit` as `GET /api/v1/nodes`.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct NodeInventoryQuery {
+    /// `next_cursor` from the previous page; absent for the first.
+    pub cursor: Option<Uuid>,
+    /// Page size, 1–500 (default 100).
+    pub limit: Option<i64>,
+}
+
+/// Every node with its observed identity — serial number, OS version, `sysName` — one keyset page
+/// at a time, ordered by node id (ADR-249).
+///
+/// For a script that reconciles this inventory against another system: the same fields
+/// `GET /api/v1/nodes/{node_id}` gives, for a whole page in one request. A wireless access point
+/// that has not been imported as a node is not listed; `GET /api/v1/wireless/aps` lists those.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/inventory", tag = "nodes",
+    params(NodeInventoryQuery),
+    responses(
+        (status = 200, description = "One keyset page of nodes with their serial number and OS version", body = NodeInventoryPage),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Too many inventory reads in flight — retry shortly (`list_busy`), or this deployment has no inventory store", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_node_inventory(
+    _perm: RequireView,
+    // A seat at the fleet-scale reads (ADR-125), for the reason `list_nodes` takes one: a page
+    // here runs the same enrichment over up to 500 nodes.
+    _seat: ListSlot,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    axum::extract::State(st): axum::extract::State<ApiState>,
+    Query(q): Query<NodeInventoryQuery>,
+) -> ApiResult<Json<NodeInventoryPage>> {
+    let limit = q
+        .limit
+        .unwrap_or(100)
+        .clamp(1, yagra_base::repo::NODE_SEARCH_MAX);
+    // One row past the page, as `list_nodes` does, so the last full page says so itself.
+    let mut rows = admin
+        .repo
+        .inventory_page(scope.group_filter(), q.cursor, limit + 1)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "node inventory", "failed to read the inventory")
+        })?;
+    let has_more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > limit;
+    if has_more {
+        rows.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    let next_cursor = if has_more {
+        rows.last().map(|r| r.node.id.to_string())
+    } else {
+        None
+    };
+    let ids: Vec<NodeId> = rows.iter().map(|r| r.node.id).collect();
+    let (states, kinds) = node_enrichment(&st, &ids).await;
+    let nodes = rows
+        .into_iter()
+        .map(|r| NodeInventoryRow {
+            state: states
+                .get(&r.node.id)
+                .copied()
+                .unwrap_or(NodeState::Unknown),
+            kind: kinds
+                .kinds
+                .get(&r.node.id.as_uuid())
+                .copied()
+                .unwrap_or(NodeKind::Device),
+            // The detail page's rule (ADR-147 decision 7), then the access point's own entry.
+            serial_number: serial_or(
+                serial_or(r.serial_number, r.meraki_serial.as_deref()),
+                r.ap_serial.as_deref(),
+            ),
+            mac: r.ap_mac,
+            id: r.node.id,
+            name: r.node.name,
+            address: r.node.address.to_string(),
+            group_id: r.node.group.map(|g| g.as_uuid()),
+            vendor: r.node.vendor,
+            model: r.node.model,
+            sys_name: r.sys_name,
+            os_version: r.os_version,
+        })
+        .collect();
+    Ok(Json(NodeInventoryPage { nodes, next_cursor }))
 }
 
 /// Parse the list's exact-address filter at the edge, for both the REST list and the MCP tool
@@ -1185,9 +1315,15 @@ pub(crate) fn serial_number_of(
     stored: Option<String>,
     meraki: Option<&yagra_common::MerakiDeviceConfig>,
 ) -> Option<String> {
+    serial_or(stored, meraki.map(|m| m.serial.as_str()))
+}
+
+/// `stored`, or else `fallback` when it is not blank — the one step [`serial_number_of`] takes,
+/// and which the inventory read takes twice (Meraki, then an access point's entry, ADR-249).
+fn serial_or(stored: Option<String>, fallback: Option<&str>) -> Option<String> {
     stored.or_else(|| {
-        meraki
-            .map(|m| m.serial.trim())
+        fallback
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     })
@@ -4297,6 +4433,193 @@ mod tests {
         );
         assert_eq!(serial_number_of(None, Some(&meraki("  "))), None);
         assert_eq!(serial_number_of(None, None), None);
+    }
+
+    /// ADR-249: the inventory read gives each kind of node the serial its detail page gives —
+    /// a reported stack, a Meraki binding's — and an imported access point the serial and MAC of
+    /// its AP entry, which the detail page shows under `wireless.ap` instead.
+    ///
+    /// 🚨 The stack and the Meraki node are compared against `GET /nodes/{id}` itself, not against
+    /// a literal: what this pins is that the two reads cannot disagree about one node.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_inventory_gives_each_node_the_serial_its_detail_gives(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use yagra_base::pgtest;
+        let st = live_state(pool.clone()).await;
+        let admin = st.admin.clone().expect("live state");
+        let stack = pgtest::node(&pool, "sw-stack", 1, None).await;
+        let mx = pgtest::node(&pool, "mx-1", 2, None).await;
+        let ap = pgtest::node(&pool, "ap-1", 3, None).await;
+        let plain = pgtest::node(&pool, "rt-1", 4, None).await;
+        let repo = pgtest::repo(pool.clone());
+        repo.update_serial_number_batch(&[(stack, "FCW0000A001, FCW0000A002".to_owned())])
+            .await
+            .expect("record a serial");
+        repo.update_os_version_batch(&[(stack, "15.2(7)E4".to_owned())])
+            .await
+            .expect("record a version");
+        let credential = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let org = admin
+            .meraki_orgs
+            .create("123456", "Acme", "https://api.meraki.com", credential)
+            .await
+            .expect("create org");
+        sqlx::query(
+            "INSERT INTO meraki_devices (node_id, org_id, serial, network_id, product_type) \
+             VALUES ($1, $2, 'Q2XX-AAAA-BBBB', 'N_1', 'appliance')",
+        )
+        .bind(mx)
+        .bind(org)
+        .execute(&pool)
+        .await
+        .expect("meraki binding");
+        sqlx::query(
+            "INSERT INTO wireless_aps (ap_id, mac, node_id, serial, run_state, state) \
+             VALUES ($1, '00:00:5e:00:53:01', $2, 'AP0000000001', 'normal', 'associated')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(ap)
+        .execute(&pool)
+        .await
+        .expect("ap entry");
+
+        let tok = token(&st, yagra_common::Role::Viewer);
+        let (status, page) = send(&st, "GET", "/api/v1/nodes/inventory", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        let rows = page["nodes"].as_array().expect("nodes");
+        assert_eq!(rows.len(), 4, "{page}");
+        assert_eq!(page["next_cursor"], serde_json::Value::Null, "{page}");
+        let row = |id: Uuid| {
+            rows.iter()
+                .find(|r| r["id"] == id.to_string())
+                .unwrap_or_else(|| panic!("{id} missing from {page}"))
+        };
+
+        for id in [stack, mx, plain] {
+            let (status, detail) =
+                send(&st, "GET", &format!("/api/v1/nodes/{id}"), &tok, None).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{detail}");
+            assert_eq!(
+                row(id)["serial_number"],
+                detail["serial_number"],
+                "the inventory and the detail disagree about {id}"
+            );
+            assert_eq!(row(id)["os_version"], detail["os_version"]);
+            assert_eq!(row(id)["kind"], detail["kind"]);
+        }
+        assert_eq!(row(stack)["serial_number"], "FCW0000A001, FCW0000A002");
+        assert_eq!(row(stack)["os_version"], "15.2(7)E4");
+        assert_eq!(row(mx)["serial_number"], "Q2XX-AAAA-BBBB");
+        assert_eq!(row(mx)["kind"], "meraki");
+        assert_eq!(row(plain)["serial_number"], serde_json::Value::Null);
+        assert_eq!(row(ap)["serial_number"], "AP0000000001");
+        assert_eq!(row(ap)["mac"], "00:00:5e:00:53:01");
+        assert_eq!(row(ap)["kind"], "wireless_ap");
+        assert_eq!(row(stack)["mac"], serde_json::Value::Null);
+    }
+
+    /// ADR-249: the inventory pages by node id, every node arrives exactly once, and the last
+    /// page says so with a `null` cursor — including when it is exactly full.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_inventory_pages_to_the_end_and_says_so(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use yagra_base::pgtest;
+        let mut all = Vec::new();
+        for (i, name) in ["n-1", "n-2", "n-3", "n-4"].into_iter().enumerate() {
+            all.push(pgtest::node(&pool, name, u8::try_from(i + 1).unwrap(), None).await);
+        }
+        all.sort_unstable();
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Viewer);
+
+        let mut seen = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let path = match &cursor {
+                Some(c) => format!("/api/v1/nodes/inventory?limit=2&cursor={c}"),
+                None => "/api/v1/nodes/inventory?limit=2".to_owned(),
+            };
+            let (status, page) = send(&st, "GET", &path, &tok, None).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+            pages += 1;
+            for r in page["nodes"].as_array().expect("nodes") {
+                seen.push(Uuid::parse_str(r["id"].as_str().unwrap()).unwrap());
+            }
+            match page["next_cursor"].as_str() {
+                Some(c) => cursor = Some(c.to_owned()),
+                None => break,
+            }
+            assert!(pages < 10, "the cursor never ran out");
+        }
+        assert_eq!(seen, all, "every node once, in id order");
+        assert_eq!(
+            pages, 2,
+            "4 nodes in pages of 2 is two pages, with no empty third"
+        );
+    }
+
+    /// ADR-249: a folder-scoped token reads only the nodes under its folders, its subfolders
+    /// included — the rule `GET /api/v1/nodes` applies.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_inventory_is_narrowed_to_the_callers_folders(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        use yagra_base::pgtest;
+        let mine = pgtest::group(&pool, "site-a").await;
+        let floor = pgtest::group(&pool, "site-a-floor-1").await;
+        sqlx::query("UPDATE node_groups SET parent_id = $1 WHERE id = $2")
+            .bind(mine)
+            .bind(floor)
+            .execute(&pool)
+            .await
+            .expect("nest the floor under the site");
+        let theirs = pgtest::group(&pool, "site-b").await;
+        let a = pgtest::node(&pool, "sw-01", 1, Some(mine)).await;
+        let b = pgtest::node(&pool, "sw-02", 2, Some(floor)).await;
+        pgtest::node(&pool, "sw-03", 3, Some(theirs)).await;
+        pgtest::node(&pool, "loose", 4, None).await;
+        let st = live_state(pool).await;
+
+        let scoped = scoped_token(&st, &[mine]);
+        let (status, page) = send(&st, "GET", "/api/v1/nodes/inventory", &scoped, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        let mut ids: Vec<String> = page["nodes"]
+            .as_array()
+            .expect("nodes")
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_owned())
+            .collect();
+        ids.sort_unstable();
+        let mut want = vec![a.to_string(), b.to_string()];
+        want.sort_unstable();
+        assert_eq!(ids, want, "{page}");
+    }
+
+    /// The inventory read is a View read: no token, no answer.
+    #[tokio::test]
+    async fn the_inventory_refuses_an_anonymous_caller() {
+        let st = crate::api::tests_support::private_state();
+        let (status, _) =
+            crate::api::tests_support::send(&st, "GET", "/api/v1/nodes/inventory", "", None).await;
+        assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    /// ADR-249: an access point's entry fills in only when nothing earlier did, and a blank one
+    /// is no value.
+    #[test]
+    fn an_access_points_serial_fills_in_last() {
+        assert_eq!(
+            serial_or(serial_or(None, None), Some("AP0000000001")).as_deref(),
+            Some("AP0000000001")
+        );
+        assert_eq!(
+            serial_or(serial_or(Some("FCW0000A001".to_owned()), None), Some("AP1")).as_deref(),
+            Some("FCW0000A001")
+        );
+        assert_eq!(serial_or(None, Some(" ")), None);
     }
 
     /// A bulk tag edit is **accepted**, it **merges**, and the node detail shows the result.

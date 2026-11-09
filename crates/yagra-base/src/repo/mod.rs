@@ -96,7 +96,7 @@ pub use migrate::embedded_migrations;
 #[cfg(any(test, feature = "test-util"))]
 pub use migrate::MIGRATIONS;
 pub use nodes::{
-    DuplicateInput, NameFollowed, NameFromDevice, NodeBindingUpdate, NodeWithNotes,
+    DuplicateInput, InventoryRow, NameFollowed, NameFromDevice, NodeBindingUpdate, NodeWithNotes,
     ReclassifyInput, ReclassifyWrite, RediscoverWrite, SHARED_VALUE_MAX,
 };
 // Re-exported for `InterfaceIdent`'s reason above, not by oversight: both are the return type of a

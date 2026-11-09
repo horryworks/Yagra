@@ -78,6 +78,29 @@ pub struct NodeWithNotes {
     pub sys_name: Option<String>,
 }
 
+/// One row of the inventory read (ADR-249) — see [`NodeRepo::inventory_page`].
+///
+/// A wrapper rather than fields on `Node`, for [`NodeWithNotes`]'s reason: `Node` is materialized
+/// fleet-wide by readers that need none of this.
+#[derive(Debug, Clone)]
+pub struct InventoryRow {
+    pub node: Node,
+    /// As [`NodeWithNotes::os_version`].
+    pub os_version: Option<String>,
+    /// As [`NodeWithNotes::sys_name`].
+    pub sys_name: Option<String>,
+    /// The serial the device reported (ADR-147); `None` ⇒ never read.
+    pub serial_number: Option<String>,
+    /// The serial of the node's Meraki binding, untrimmed; `None` ⇒ not a Meraki node.
+    pub meraki_serial: Option<String>,
+    /// The serial in the node's access-point entry; `None` ⇒ not an imported AP, or the controller
+    /// reported none.
+    pub ap_serial: Option<String>,
+    /// The MAC in the node's access-point entry, lower-case and colon-separated; `None` ⇒ not an
+    /// imported AP.
+    pub ap_mac: Option<String>,
+}
+
 /// One device node as Nodes ▸ Reclassify weighs it (ADR-140) — see [`NodeRepo::reclassify_inputs`].
 #[derive(Debug, Clone)]
 pub struct ReclassifyInput {
@@ -337,6 +360,58 @@ impl NodeRepo {
             }
         };
         rows.iter().map(node_from_row).collect()
+    }
+
+    /// One keyset page of the inventory read (ADR-249): every node in `groups` after `after`, by
+    /// id, with the observed identity the detail page shows and the paged list does not carry.
+    ///
+    /// The serial number comes back in its three parts — the node's own, its Meraki binding's,
+    /// and its access-point entry's — so the API can apply the detail page's rule
+    /// (`api/nodes.rs::serial_number_of`) and the two reads cannot disagree about one node.
+    /// ⚠️ Not [`Self::DEVICE_SERIAL_SQL`]: that joins both serials for duplicate detection, while
+    /// the detail page takes the first one it has.
+    ///
+    /// Scalar subqueries rather than joins: each side table holds at most one row per node
+    /// (`meraki_devices.node_id` is the key, `wireless_aps.node_id` is `UNIQUE`), and a join would
+    /// make the unqualified [`Self::NODE_COLUMNS`] ambiguous (`wireless_aps` has a `name` and a
+    /// `model` too).
+    pub async fn inventory_page(
+        &self,
+        groups: GroupFilter<'_>,
+        after: Option<Uuid>,
+        limit: i64,
+    ) -> anyhow::Result<Vec<InventoryRow>> {
+        // 501 for the same reason as `list_nodes_page`: one row past a 500-row page says "more".
+        let limit = limit.clamp(1, 501);
+        let rows = sqlx::query(&format!(
+            "SELECT {cols}, n.os_version, n.sys_name, n.serial_number, \
+                    (SELECT m.serial FROM meraki_devices m WHERE m.node_id = n.id) AS meraki_serial, \
+                    (SELECT a.serial FROM wireless_aps a WHERE a.node_id = n.id) AS ap_serial, \
+                    (SELECT a.mac FROM wireless_aps a WHERE a.node_id = n.id) AS ap_mac \
+             FROM nodes n \
+             WHERE {scope} AND ($2::uuid IS NULL OR n.id > $2) \
+             ORDER BY n.id LIMIT $3",
+            cols = Self::NODE_COLUMNS,
+            scope = Self::SCOPE_PREDICATE,
+        ))
+        .bind(Self::scope_bind(groups))
+        .bind(after)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok(InventoryRow {
+                    node: node_from_row(row)?,
+                    os_version: row.try_get("os_version")?,
+                    sys_name: row.try_get("sys_name")?,
+                    serial_number: row.try_get("serial_number")?,
+                    meraki_serial: row.try_get("meraki_serial")?,
+                    ap_serial: row.try_get("ap_serial")?,
+                    ap_mac: row.try_get("ap_mac")?,
+                })
+            })
+            .collect()
     }
 
     /// Create a node; returns its new id. Optional profile, bound credential, parent, and

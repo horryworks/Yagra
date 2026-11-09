@@ -12803,6 +12803,80 @@
         }
       }
     },
+    "/api/v1/nodes/inventory": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "Every node with its observed identity — serial number, OS version, `sysName` — one keyset page\nat a time, ordered by node id (ADR-249).",
+        "description": "For a script that reconciles this inventory against another system: the same fields\n`GET /api/v1/nodes/{node_id}` gives, for a whole page in one request. A wireless access point\nthat has not been imported as a node is not listed; `GET /api/v1/wireless/aps` lists those.",
+        "operationId": "list_node_inventory",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` from the previous page; absent for the first.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1–500 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One keyset page of nodes with their serial number and OS version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeInventoryPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the View permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Too many inventory reads in flight — retry shortly (`list_busy`), or this deployment has no inventory store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/move": {
       "post": {
         "tags": [
@@ -40553,6 +40627,107 @@
               "type": "string",
               "format": "uuid"
             }
+          }
+        }
+      },
+      "NodeInventoryPage": {
+        "type": "object",
+        "description": "One keyset page of the inventory read.",
+        "required": [
+          "nodes"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass back as `cursor` for the next page; `null` ⇒ this was the last one."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeInventoryRow"
+            }
+          }
+        }
+      },
+      "NodeInventoryRow": {
+        "type": "object",
+        "description": "One node in the inventory read (ADR-249): who it is and what it reported about itself.",
+        "required": [
+          "id",
+          "name",
+          "address",
+          "kind",
+          "state"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The node's address. `0.0.0.0` (or `::`) means the node has none (see `NodeSummary.address`)."
+          },
+          "group_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node's folder; `null` ⇒ ungrouped."
+          },
+          "id": {
+            "$ref": "#/components/schemas/NodeId"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NodeKind",
+            "description": "What this node is, resolved the way `GET /api/v1/nodes` resolves it."
+          },
+          "mac": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An imported wireless access point's MAC address, lower-case and colon-separated, as its\ncontroller reports it. `null` on every other node."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "os_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The OS / software version the device last reported (ADR-138); `null` ⇒ never read.\nObserved hourly, so it can trail an upgrade by up to an hour."
+          },
+          "serial_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The serial number, as `GET /api/v1/nodes/{node_id}` gives it (ADR-147): what the device\nreported (a stack lists every member, joined with `, `), else the serial of its Meraki\nbinding — and for an imported wireless access point, the serial its controller reports.\n`null` ⇒ not known."
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeState",
+            "description": "The state the node list shows for it."
+          },
+          "sys_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the device gives itself (`sysName`); `null` ⇒ not read yet."
+          },
+          "vendor": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
