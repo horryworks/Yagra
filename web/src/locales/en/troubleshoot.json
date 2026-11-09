@@ -762,5 +762,43 @@
       "desc": "Metric, event and flow signals that coincided on a node, in arrival order",
       "reveal": "cross-signal timeline · likely root cause"
     }
+  },
+  "investigate": {
+    "pickNode": "Pick a node",
+    "empty": "Pick a node to check.",
+    "noMetric": "No data",
+    "question": {
+      "running_out": "Running out"
+    },
+    "hypothesis": {
+      "memory": "Memory",
+      "disk": "Disk",
+      "cpu": "CPU",
+      "link_bandwidth": "Link bandwidth"
+    },
+    "verdict": {
+      "hit": "Yes",
+      "miss": "No",
+      "unknown": "Can't tell"
+    },
+    "reason": {
+      "already_over": "Already over the line",
+      "reaches": "Reaches the line within 30 days",
+      "leak": "Climbs and resets at restarts",
+      "not_reaching": "Not within 30 days",
+      "too_few_points": "Too few samples",
+      "too_few_days": "Under 7 days of data"
+    },
+    "cols": {
+      "hypothesis": "Check",
+      "verdict": "Answer",
+      "series": "Series",
+      "current": "Now",
+      "target": "Line",
+      "days": "Days left",
+      "reason": "Why"
+    },
+    "gaps_one": "Collection stopped {{count}} time in this window, so those hours have no data.",
+    "gaps_other": "Collection stopped {{count}} times in this window, so those hours have no data."
   }
 }

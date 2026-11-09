@@ -746,5 +746,43 @@
       "desc": "同じノードで重なったメトリクス・イベント・フローの兆候を発生順に",
       "reveal": "クロスシグナルなタイムライン · 有力な根本原因"
     }
+  },
+  "investigate": {
+    "pickNode": "ノードを選ぶ",
+    "empty": "確かめるノードを選んでください。",
+    "noMetric": "データなし",
+    "question": {
+      "running_out": "足りなくなりそう"
+    },
+    "hypothesis": {
+      "memory": "メモリ",
+      "disk": "ディスク",
+      "cpu": "CPU",
+      "link_bandwidth": "回線の帯域"
+    },
+    "verdict": {
+      "hit": "当たり",
+      "miss": "外れ",
+      "unknown": "判断できない"
+    },
+    "reason": {
+      "already_over": "すでに線を超えている",
+      "reaches": "30 日以内に線に届く",
+      "leak": "上がり続け、再起動で戻る",
+      "not_reaching": "30 日以内には届かない",
+      "too_few_points": "点が少ない",
+      "too_few_days": "7 日分に満たない"
+    },
+    "cols": {
+      "hypothesis": "確かめた物",
+      "verdict": "答え",
+      "series": "系列",
+      "current": "今",
+      "target": "線",
+      "days": "残り日数",
+      "reason": "理由"
+    },
+    "gaps_one": "この期間に収集が {{count}} 回止まり、その時間のデータはありません。",
+    "gaps_other": "この期間に収集が {{count}} 回止まり、その時間のデータはありません。"
   }
 }

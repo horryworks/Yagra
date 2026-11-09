@@ -121,6 +121,7 @@ import type {
   MonitoringGap,
   NodeAssignment,
   NodeAvailability,
+  InvestigateReport,
   NotificationChannel,
   PollerHealth,
   PollerNodesResponse,
@@ -1471,6 +1472,10 @@ export const api = {
       path: { node_id: id },
       query: { period },
     }),
+
+  /** Investigate (ADR-251): is anything on this node running out? Answered in the request. */
+  investigateRunningOut: (id: string): Promise<InvestigateReport> =>
+    apiGet('/api/v1/nodes/{node_id}/investigate/running-out', { path: { node_id: id } }),
 
   /** The pools that exist, for the assignment picker. View-gated; names only.
    *  Separate from `listPollers` (which scans the whole node table to build its per-pool counts). */

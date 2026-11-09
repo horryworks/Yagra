@@ -19,6 +19,7 @@ export type NodeHeaderPrimary = (typeof NODE_HEADER_PRIMARY)[number];
 export const NODE_HEADER_MORE = [
   'openDetail',
   'map',
+  'investigate',
   'thresholds',
   'pin',
   'move',
@@ -62,6 +63,7 @@ export function nodeHeaderActions(
   const moreShown: Record<NodeHeaderMore, boolean> = {
     openDetail: caps.inline,
     map: true,
+    investigate: true,
     // The rules that reach this node live on Alerts ▸ Threshold rules (ADR-230 decision 4);
     // this is the way there, drawn for whoever may read them.
     thresholds: caps.canConfig,

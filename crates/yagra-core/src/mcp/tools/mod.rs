@@ -196,6 +196,7 @@ impl YagraMcp {
                 self.node_availability_in(p!(NodeAvailabilityParams), scope)
                     .await
             }
+            "investigate_node" => self.investigate_in(p!(InvestigateParams), scope).await,
             // The three reads ADR-113 declared undispatchable and ADR-113 Inc.2 decided about.
             // Having an arm is not the same as being offered: the RCA agent takes
             // `list_node_metrics` and deliberately not the other two (see `rca::agent::AGENT_TOOLS`).
@@ -503,6 +504,7 @@ mod tests {
             ("get_dns_chain", "current".to_owned()),
             ("get_dns_chain", "history".to_owned()),
             ("get_node_availability", String::new()),
+            ("investigate_node", String::new()),
             ("get_report_runs", "list".to_owned()),
             ("get_report_runs", "detail".to_owned()),
         ];

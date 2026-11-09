@@ -1483,6 +1483,28 @@ export type PolledBy = components['schemas']['PolledBy'];
  *  folder's, else `default`), its provenance, and the current poller. */
 export type NodeAssignment = components['schemas']['NodeAssignment'];
 export type NodeAvailability = components['schemas']['NodeAvailability'];
+export type InvestigateReport = components['schemas']['InvestigateReport'];
+export type InvestigateEvidence = components['schemas']['Evidence'];
+export type InvestigateHypothesis = InvestigateReport['hypotheses'][number]['hypothesis'];
+export type InvestigateVerdict = InvestigateEvidence['verdict'];
+export type InvestigateReason = InvestigateEvidence['reason'];
+/** What Investigate checks, in the order the report lists them (ADR-251). Iterated by
+ *  `i18nEnumKeys.test.ts`, like every union whose members are label keys. */
+export const INVESTIGATE_HYPOTHESES = [
+  'memory',
+  'disk',
+  'cpu',
+  'link_bandwidth',
+] as const satisfies readonly InvestigateHypothesis[];
+export const INVESTIGATE_VERDICTS = ['hit', 'miss', 'unknown'] as const satisfies readonly InvestigateVerdict[];
+export const INVESTIGATE_REASONS = [
+  'already_over',
+  'reaches',
+  'leak',
+  'not_reaching',
+  'too_few_points',
+  'too_few_days',
+] as const satisfies readonly InvestigateReason[];
 export type AvailabilitySpan = components['schemas']['AvailabilitySpan'];
 
 /** One node in the poller drill-down. */

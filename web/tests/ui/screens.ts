@@ -196,6 +196,10 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
     kind: 'none',
     why: 'The tool catalog comes from the client-side registry, not the API. The only served data on it is the run counters, which are numbers.',
   },
+  '/troubleshoot/investigate': {
+    kind: 'none',
+    why: 'Opened without a node it asks the operator to pick one and reads nothing from the API.',
+  },
   '/troubleshoot/runs': MARKER,
   '/troubleshoot/scheduled': MARKER,
   '/troubleshoot/findings': MARKER,

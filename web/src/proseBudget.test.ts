@@ -72,7 +72,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
-  nav: [2634, 1206], // - the mute list menu item and its description (ADR-234, 2026-11-03)
+  nav: [2658, 1212], // + the Investigate menu item, its description and the Analyses group heading (ADR-251, 2026-11-09)
   nodes: [15789, 9020], // + the Config tab's status card and history labels; the three table headings went (ADR-240, 2026-11-06)
   rca: [1022, 528],
   reports: [643, 402],
@@ -89,7 +89,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   suppression: [514, 333], // - the mute list page and the add-mute dialog (ADR-234, 2026-11-03)
   system: [14178, 7939], // the sweep limit field's out-of-range error (ADR-219, 2026-10-28)
   topology: [1754, 1027], // - the Dependencies screen: its mode card, comparison verdicts and filters (ADR-236, 2026-11-03)
-  troubleshoot: [3370, 1768], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
+  troubleshoot: [3564, 1842], // + Investigate: hypothesis, verdict and reason labels and its two state sentences (ADR-251, 2026-11-09)
 };
 
 /** How far below its ceiling a namespace may sit before the ceiling must come down. */

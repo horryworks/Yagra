@@ -61,6 +61,7 @@ export const TABLE_IDS = [
   // Troubleshoot
   'troubleshoot.findings',
   'troubleshoot.flowScan',
+  'troubleshoot.investigate',
   'troubleshoot.ruleGap',
   'troubleshoot.runs',
   'troubleshoot.scheduled',

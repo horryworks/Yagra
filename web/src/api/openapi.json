@@ -16595,6 +16595,102 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/investigate/running-out": {
+      "get": {
+        "tags": [
+          "analysis"
+        ],
+        "operationId": "running_out",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "description": "How many days back to read, 7 to 90. Defaults to 30.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether the node's memory, disk, CPU or busiest links are running out: per hypothesis a verdict of hit, miss or unknown, and the series behind it. Each series is judged against the warning bound in force for the node and metric, else the critical one, else 100%. Unknown means too little data, never fine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestigateReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`days` outside 7 to 90",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node, or the node is outside the caller's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode: no database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/maintenance-exemption": {
       "put": {
         "tags": [
@@ -34140,6 +34236,80 @@
           }
         }
       },
+      "Evidence": {
+        "type": "object",
+        "description": "One series behind a hypothesis.",
+        "required": [
+          "metric",
+          "verdict",
+          "reason",
+          "target"
+        ],
+        "properties": {
+          "current": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The latest value, in percent."
+          },
+          "days_to_target": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Days until the series reaches the target, when it is climbing."
+          },
+          "ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The port, for a link."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The port's name, for a link."
+          },
+          "metric": {
+            "type": "string",
+            "description": "The metric read (a derived one is computed from its two inputs)."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/Reason"
+          },
+          "row": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The table row (filesystem, memory pool) the series is for, when the metric has rows."
+          },
+          "slope_per_day": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "How fast the series climbs, in percentage points per day."
+          },
+          "target": {
+            "type": "number",
+            "format": "double",
+            "description": "The line the series is judged against, in percent: the warning bound in force for this\nnode and metric, else the critical one, else 100."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        }
+      },
       "Exclusion": {
         "oneOf": [
           {
@@ -35066,6 +35236,26 @@
           }
         }
       },
+      "GapSpan": {
+        "type": "object",
+        "description": "A span in which the node's pool had no live poller, so missing samples are missing collection.",
+        "required": [
+          "from_ms",
+          "to_ms"
+        ],
+        "properties": {
+          "from_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix milliseconds."
+          },
+          "to_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix milliseconds."
+          }
+        }
+      },
       "GeoSource": {
         "type": "string",
         "description": "Where a group's effective map position came from.",
@@ -35888,6 +36078,39 @@
           "HEAD",
           "POST"
         ]
+      },
+      "Hypothesis": {
+        "type": "string",
+        "description": "One thing a question checks.",
+        "enum": [
+          "memory",
+          "disk",
+          "cpu",
+          "link_bandwidth"
+        ]
+      },
+      "HypothesisResult": {
+        "type": "object",
+        "description": "One hypothesis and the series it was judged from. No evidence means the node has no metric for\nit, and the verdict is then unknown.",
+        "required": [
+          "hypothesis",
+          "verdict",
+          "evidence"
+        ],
+        "properties": {
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Evidence"
+            }
+          },
+          "hypothesis": {
+            "$ref": "#/components/schemas/Hypothesis"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          }
+        }
       },
       "IfIndex": {
         "type": "integer",
@@ -36776,6 +36999,50 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "InvestigateReport": {
+        "type": "object",
+        "description": "The answer to one question about one node.",
+        "required": [
+          "question",
+          "node_id",
+          "from",
+          "to",
+          "hypotheses",
+          "monitoring_gaps"
+        ],
+        "properties": {
+          "from": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The window read, Unix seconds."
+          },
+          "hypotheses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HypothesisResult"
+            }
+          },
+          "monitoring_gaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GapSpan"
+            },
+            "description": "Where collection itself stopped inside the window."
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "question": {
+            "$ref": "#/components/schemas/Question"
+          },
+          "to": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds."
           }
         }
       },
@@ -43404,6 +43671,13 @@
           }
         }
       },
+      "Question": {
+        "type": "string",
+        "description": "What is being asked. One question in Inc.1.",
+        "enum": [
+          "running_out"
+        ]
+      },
       "Ranked_AlertNodeCount": {
         "type": "object",
         "description": "A ranked Top-N result.",
@@ -43703,6 +43977,18 @@
           "no_poller",
           "poller_too_old",
           "relay_refused"
+        ]
+      },
+      "Reason": {
+        "type": "string",
+        "description": "Why a series got its verdict.",
+        "enum": [
+          "already_over",
+          "reaches",
+          "leak",
+          "not_reaching",
+          "too_few_points",
+          "too_few_days"
         ]
       },
       "ReclassifyApplied": {
@@ -48780,6 +49066,15 @@
             "type": "string"
           }
         }
+      },
+      "Verdict": {
+        "type": "string",
+        "description": "The answer for one series, and for one hypothesis.",
+        "enum": [
+          "hit",
+          "miss",
+          "unknown"
+        ]
       },
       "VersionInfo": {
         "type": "object",

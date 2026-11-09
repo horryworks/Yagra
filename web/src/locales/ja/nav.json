@@ -50,7 +50,8 @@
     "all": "診断ツール",
     "runs": "分析ジョブ",
     "scheduled": "定期実行",
-    "findings": "すべての検出結果"
+    "findings": "すべての検出結果",
+    "investigate": "調べる"
   },
   "settings": {
     "systemHealth": "Yagra ヘルス",
@@ -77,7 +78,8 @@
     "configure": "設定",
     "system": "システム",
     "access": "アクセス",
-    "comingSoon": "近日公開"
+    "comingSoon": "近日公開",
+    "analyses": "分析"
   },
   "descriptions": {
     "nodesCredentials": "監視対象のノードに接続するための認証情報",
@@ -120,7 +122,8 @@
     "settingsAuth": "サインインの方式 — ローカルパスワード・外部 IdP・LDAP",
     "settingsAudit": "誰が何を変更・ACK したか、その時刻",
     "dashboardPublic": "サインインしなくても見える 1 枚",
-    "alertsAlertRules": "集めた値のしきい値と、届いたイベントの一致条件"
+    "alertsAlertRules": "集めた値のしきい値と、届いたイベントの一致条件",
+    "troubleshootInvestigate": "ノードを選び、足りなくなりそうな物があるかを確かめる"
   },
   "shell": {
     "home": "ホーム",

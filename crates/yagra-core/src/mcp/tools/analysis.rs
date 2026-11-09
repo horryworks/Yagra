@@ -26,6 +26,16 @@ use crate::mcp::dto::{AnalysisFindingDto, AnalysisJobDto};
 use super::*;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(super) struct InvestigateParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// The question: `running_out` (the default, and the only one so far).
+    question: Option<String>,
+    /// How many days back to read, 7 to 90 (default 30).
+    days: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(super) struct RunRcaParams {
     /// The alerting node's UUID.
     node_id: Uuid,
@@ -129,6 +139,61 @@ pub(super) fn analysis_report_body(report: &crate::api::analysis::AnalysisReport
 
 #[tool_router(router = analysis_router, vis = "pub(super)")]
 impl YagraMcp {
+    #[tool(
+        description = "Confirm a hunch about one node (Troubleshoot > Investigate). With \
+                       question `running_out` (the default): is its memory, disk, CPU or one of \
+                       its eight busiest links running out? Each hypothesis answers hit, miss or \
+                       unknown, with the series behind it: `current` and `target` in percent, \
+                       `days_to_target` when it is climbing, and a `reason` - already_over, \
+                       reaches (within 30 days, judged on daily peaks), leak (climbs, falls at a \
+                       restart, climbs again), not_reaching, too_few_points or too_few_days. \
+                       `target` is the warning bound in force for the node and metric, else the \
+                       critical one, else 100. Unknown is never fine: read `monitoring_gaps` for \
+                       spans when collection itself stopped. `days` is 7 to 90 (default 30)."
+    )]
+    async fn investigate_node(
+        &self,
+        Parameters(p): Parameters<InvestigateParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "investigate_node";
+        match self.admit(identity_of(&ctx), TOOL, "").await {
+            Ok(scope) => self.investigate_in(p, &scope).await,
+            Err(refusal) => refusal,
+        }
+    }
+
+    pub(super) async fn investigate_in(
+        &self,
+        p: InvestigateParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "investigate_node";
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
+            return deny;
+        }
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "investigate requires live mode");
+        };
+        match p.question.as_deref() {
+            None | Some("running_out") => {}
+            Some(_) => {
+                let e = crate::api::ApiError::bad_request(
+                    "invalid_question",
+                    "question must be running_out",
+                );
+                return tool_api_error(TOOL, &e);
+            }
+        }
+        let days = match crate::api::investigate::parse_days(p.days) {
+            Ok(d) => d,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
+        match crate::api::investigate::running_out_of(&self.state, admin, p.node_id, days).await {
+            Ok(r) => ok_json(TOOL, &r),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
     #[tool(
         description = "Search Troubleshoot findings across every run — \"has anything been found \
                        about this node / this site / this week\". Distinct from \

@@ -86,6 +86,7 @@ mod testkit;
 mod events;
 mod flow;
 mod incident;
+mod investigate;
 mod metric;
 mod repo;
 mod seams;
@@ -95,6 +96,8 @@ mod types;
 // Re-exported at the visibility each half already had, so `crate::analysis::X` still resolves for
 // the sites outside this module and `use super::*` in a sibling still sees everything the single
 // file used to put in one scope.
+use investigate::Judgement;
+pub use investigate::{InvestigateInput, InvestigateReport, PortInfo, Reason, Verdict};
 pub use repo::*;
 pub use types::*;
 // `stats` is the `self`-free half: everything in it is `pub(super)` because only this module's own
@@ -411,6 +414,12 @@ impl AnalysisRunner {
             recent_starts: Mutex::new(VecDeque::new()),
             max_per_window,
         }
+    }
+
+    /// Investigate: is anything on one node running out? (ADR-251). Answers in the request — no
+    /// job row, no progress, no queue. The caller has checked the node is visible to whoever asks.
+    pub async fn investigate_running_out(&self, input: &InvestigateInput) -> InvestigateReport {
+        self.engine.investigate_running_out(input).await
     }
 
     /// Record a creation against the sliding-window rate limit. `Err(RateLimited)` when the window is

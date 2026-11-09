@@ -55,6 +55,9 @@ import {
   MAP_ROLE_REASONS,
   GROUPING_LEVELS,
   TLS_CERT_SOURCES,
+  INVESTIGATE_HYPOTHESES,
+  INVESTIGATE_VERDICTS,
+  INVESTIGATE_REASONS,
   METRIC_STATUSES,
   METRIC_DIMENSIONS,
   NODE_KINDS,
@@ -904,6 +907,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // so the compiler asks for it and G8 checks its keys exist.)
     const locales = { en: enSettingsTls, ja: jaSettingsTls };
     expectKeys('certificate source', locales, 'source.', TLS_CERT_SOURCES);
+  });
+
+  it('every Investigate hypothesis, verdict and reason has a label (troubleshoot:investigate.*)', () => {
+    const locales = { en: enTroubleshoot, ja: jaTroubleshoot };
+    expectKeys('investigate hypothesis', locales, 'investigate.hypothesis.', INVESTIGATE_HYPOTHESES);
+    expectKeys('investigate verdict', locales, 'investigate.verdict.', INVESTIGATE_VERDICTS);
+    expectKeys('investigate reason', locales, 'investigate.reason.', INVESTIGATE_REASONS);
   });
 
   it('every upgrade run state has a label (settings-upgrade:runState.*)', () => {

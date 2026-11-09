@@ -34,7 +34,8 @@ use crate::events::{
 use crate::passive::flowstore::{FlowStore, InMemoryFlowStore};
 use crate::passive::ipasn;
 use crate::tsdb::store::{
-    DeltaDirection, InterfaceLive, InterfaceTopMetric, MetricPoint, MetricStore, TopAgg,
+    DeltaDirection, InterfaceLive, InterfaceTopMetric, MetricPoint, MetricStore, PortDirection,
+    TopAgg,
 };
 
 use super::seams::{AnalysisEvents, DerivedGraph, FleetInventory, JobProgress};
@@ -80,6 +81,11 @@ pub(super) struct SeededMetrics {
     raw: Mutex<HashMap<(Uuid, String), Vec<MetricPoint>>>,
     agg: Mutex<HashMap<(Uuid, String), Vec<MetricPoint>>>,
     iface: Mutex<HashMap<Uuid, HashMap<i32, InterfaceLive>>>,
+    /// One table row's series, keyed `(node, metric, row)` — what `range` serves for a key that
+    /// names a row, and what `series_rows` enumerates (ADR-251's derived table metrics).
+    rows: Mutex<HashMap<(Uuid, String, u32), Vec<MetricPoint>>>,
+    /// One port's traffic in bits/sec, keyed `(node, ifindex, inbound)`.
+    ports: Mutex<HashMap<(Uuid, i32, bool), Vec<MetricPoint>>>,
 }
 
 impl SeededMetrics {
@@ -107,6 +113,28 @@ impl SeededMetrics {
     pub(super) fn series(&self, node: Uuid, metric: &str, points: Vec<MetricPoint>) {
         self.raw(node, metric, points.clone());
         self.aggregated(node, metric, points);
+    }
+
+    /// Seed one table row of a metric — the series a row-keyed `range` reads.
+    pub(super) fn row_series(&self, node: Uuid, metric: &str, row: u32, points: Vec<MetricPoint>) {
+        self.rows
+            .lock()
+            .expect("rows poisoned")
+            .insert((node, metric.to_owned(), row), points);
+    }
+
+    /// Seed one port's traffic in one direction, in bits/sec.
+    pub(super) fn port_series(
+        &self,
+        node: Uuid,
+        ifindex: i32,
+        dir: PortDirection,
+        points: Vec<MetricPoint>,
+    ) {
+        self.ports
+            .lock()
+            .expect("ports poisoned")
+            .insert((node, ifindex, matches!(dir, PortDirection::In)), points);
     }
 
     pub(super) fn interfaces(&self, node: Uuid, live: HashMap<i32, InterfaceLive>) {
@@ -143,6 +171,17 @@ impl MetricStore for SeededMetrics {
         _to_s: i64,
         _step_s: u64,
     ) -> Vec<MetricPoint> {
+        if let Some(row) = key.ifindex {
+            let seeded = self
+                .rows
+                .lock()
+                .expect("rows poisoned")
+                .get(&(key.node.as_uuid(), key.metric.clone(), row.0))
+                .cloned();
+            if let Some(points) = seeded {
+                return points;
+            }
+        }
         Self::get(&self.raw, key)
     }
 
@@ -238,10 +277,50 @@ impl MetricStore for SeededMetrics {
             .chain(self.agg.lock().expect("agg poisoned").keys())
             .filter(|(n, _)| *n == node)
             .map(|(_, m)| m.clone())
+            .chain(
+                self.rows
+                    .lock()
+                    .expect("rows poisoned")
+                    .keys()
+                    .filter(|(n, _, _)| *n == node)
+                    .map(|(_, m, _)| m.clone()),
+            )
             .collect();
         names.sort();
         names.dedup();
         names
+    }
+
+    async fn series_rows(
+        &self,
+        metric: &str,
+        nodes: Option<&[Uuid]>,
+        _within_secs: u64,
+    ) -> HashMap<(Uuid, i64), f64> {
+        self.rows
+            .lock()
+            .expect("rows poisoned")
+            .iter()
+            .filter(|((n, m, _), _)| m == metric && nodes.is_none_or(|ns| ns.contains(n)))
+            .filter_map(|((n, _, row), pts)| Some(((*n, i64::from(*row)), pts.last()?.v)))
+            .collect()
+    }
+
+    async fn interface_bps_range(
+        &self,
+        port: (Uuid, i32),
+        dir: PortDirection,
+        _from_s: i64,
+        _to_s: i64,
+        _step_s: u64,
+        _lookback_s: u64,
+    ) -> Vec<MetricPoint> {
+        self.ports
+            .lock()
+            .expect("ports poisoned")
+            .get(&(port.0, port.1, matches!(dir, PortDirection::In)))
+            .cloned()
+            .unwrap_or_default()
     }
 
     async fn node_interface_live(

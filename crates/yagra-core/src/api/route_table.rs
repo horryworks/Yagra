@@ -1302,6 +1302,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         Tool("get_node_availability"),
     ),
+    // Investigate (ADR-251): is anything on one node running out?
+    (
+        "GET",
+        "/api/v1/nodes/:node_id/investigate/running-out",
+        NodeScoped,
+        Tool("investigate_node"),
+    ),
     (
         "PUT",
         "/api/v1/nodes/:node_id/bindings",

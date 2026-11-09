@@ -260,14 +260,23 @@ pub(super) struct Projection {
 /// Project when a utilization-percent series reaches 100% by least-squares trend. `None` if it
 /// isn't rising, is already full, or exhaustion is beyond a 1-year horizon.
 pub(super) fn project_exhaustion(pts: &[MetricPoint]) -> Option<Projection> {
+    if pts.last()?.v < 0.0 {
+        return None;
+    }
+    project_to(pts, 100.0)
+}
+
+/// Project when a series reaches `target` by least-squares trend (ADR-251). `None` if it isn't
+/// rising, is already at or above the target, or would take more than a year.
+pub(super) fn project_to(pts: &[MetricPoint], target: f64) -> Option<Projection> {
     let xs: Vec<f64> = pts.iter().map(|p| p.t as f64).collect();
     let ys: Vec<f64> = pts.iter().map(|p| p.v).collect();
     let slope = linreg_slope(&xs, &ys)?;
     let current = *ys.last()?;
-    if slope <= 0.0 || !(0.0..100.0).contains(&current) {
+    if slope <= 0.0 || !current.is_finite() || current >= target {
         return None;
     }
-    let tte = (100.0 - current) / slope;
+    let tte = (target - current) / slope;
     if tte <= 0.0 || tte > 365.0 * 86_400.0 {
         return None;
     }
@@ -276,6 +285,183 @@ pub(super) fn project_exhaustion(pts: &[MetricPoint]) -> Option<Projection> {
         slope_per_s: slope,
         tte_secs: tte as i64,
     })
+}
+
+// ── Investigate: running out (ADR-251) ─────────────────────────────────────────────────────
+
+/// A series reaching its target within this many days is a hit.
+pub(super) const RUNNING_OUT_HORIZON_DAYS: f64 = 30.0;
+/// The fewest daily peaks a trend is drawn from.
+pub(super) const MIN_DAILY_PEAKS: usize = 7;
+
+/// Collapse a series to one point per UTC day holding that day's highest value, so the trend is
+/// drawn through the peaks rather than through the average (ADR-251 Inc.1).
+pub(super) fn daily_peaks(pts: &[MetricPoint]) -> Vec<MetricPoint> {
+    let mut out: Vec<MetricPoint> = Vec::new();
+    for p in pts.iter().filter(|p| p.v.is_finite()) {
+        let day = p.t.div_euclid(86_400) * 86_400;
+        match out.last_mut() {
+            Some(last) if last.t == day => {
+                if p.v > last.v {
+                    last.v = p.v;
+                }
+            }
+            _ => out.push(MetricPoint { t: day, v: p.v }),
+        }
+    }
+    out
+}
+
+/// The times an uptime counter went backwards, i.e. the device restarted.
+pub(super) fn restart_times(uptime: &[MetricPoint]) -> Vec<i64> {
+    uptime
+        .windows(2)
+        .filter(|w| w[1].v < w[0].v)
+        .map(|w| w[1].t)
+        .collect()
+}
+
+/// Indices where a sharp drop lands: the point is lower than its predecessor by at least ten
+/// points or 30% of it, whichever is larger.
+fn drop_indices(pts: &[MetricPoint]) -> Vec<usize> {
+    pts.windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0].v - w[1].v >= (w[0].v * 0.3).max(10.0))
+        .map(|(i, _)| i + 1)
+        .collect()
+}
+
+/// Where the last rise of a leak shape starts, or `None` when the series is not one.
+///
+/// A leak climbs, falls sharply, and climbs again. Two rises are needed, every rise long enough
+/// to fit must climb, and the fall must be explained: either it coincides with a restart (within
+/// two steps), or there are at least two falls. One unexplained fall is an operator clearing a
+/// cache as often as it is a leak.
+pub(super) fn leak_restart_index(
+    pts: &[MetricPoint],
+    restarts: &[i64],
+    step_s: i64,
+) -> Option<usize> {
+    let cuts = drop_indices(pts);
+    if cuts.is_empty() {
+        return None;
+    }
+    let mut bounds = vec![0];
+    bounds.extend(cuts.iter().copied());
+    bounds.push(pts.len());
+    let segments: Vec<&[MetricPoint]> = bounds.windows(2).map(|b| &pts[b[0]..b[1]]).collect();
+    let fitted: Vec<&&[MetricPoint]> = segments.iter().filter(|s| s.len() >= 3).collect();
+    let rising = |s: &[MetricPoint]| {
+        let xs: Vec<f64> = s.iter().map(|p| p.t as f64).collect();
+        let ys: Vec<f64> = s.iter().map(|p| p.v).collect();
+        linreg_slope(&xs, &ys).is_some_and(|m| m > 0.0)
+    };
+    if fitted.len() < 2 || !fitted.iter().all(|s| rising(s)) {
+        return None;
+    }
+    let near = step_s.max(60) * 2;
+    let explained = cuts.len() >= 2
+        || cuts
+            .iter()
+            .any(|&i| restarts.iter().any(|&r| (r - pts[i].t).abs() <= near));
+    explained.then(|| *cuts.last().unwrap_or(&0))
+}
+
+/// One series judged against its target line.
+pub(super) fn judge_running_out(
+    pts: &[MetricPoint],
+    target: f64,
+    restarts: &[i64],
+    step_s: i64,
+) -> Judgement {
+    let clean: Vec<MetricPoint> = pts.iter().filter(|p| p.v.is_finite()).cloned().collect();
+    let current = clean.last().map(|p| p.v);
+    let empty = |reason| Judgement {
+        verdict: Verdict::Unknown,
+        reason,
+        current,
+        slope_per_day: None,
+        days_to_target: None,
+    };
+    if clean.len() < MIN_POINTS {
+        return empty(Reason::TooFewPoints);
+    }
+    let from_projection = |verdict, reason, proj: Option<Projection>| Judgement {
+        verdict,
+        reason,
+        current,
+        slope_per_day: proj.as_ref().map(|p| p.slope_per_s * 86_400.0),
+        days_to_target: proj.map(|p| p.tte_secs as f64 / 86_400.0),
+    };
+    if current.is_some_and(|c| c >= target) {
+        return from_projection(Verdict::Hit, Reason::AlreadyOver, None);
+    }
+    if let Some(start) = leak_restart_index(&clean, restarts, step_s) {
+        return from_projection(
+            Verdict::Hit,
+            Reason::Leak,
+            project_to(&clean[start..], target),
+        );
+    }
+    let peaks = daily_peaks(&clean);
+    if peaks.len() < MIN_DAILY_PEAKS {
+        return empty(Reason::TooFewDays);
+    }
+    let proj = project_to(&peaks, target);
+    let soon = proj
+        .as_ref()
+        .is_some_and(|p| p.tte_secs as f64 / 86_400.0 <= RUNNING_OUT_HORIZON_DAYS);
+    if soon {
+        from_projection(Verdict::Hit, Reason::Reaches, proj)
+    } else {
+        from_projection(Verdict::Miss, Reason::NotReaching, proj)
+    }
+}
+
+/// The verdict a hypothesis takes from its series: any hit, else any miss, else unknown.
+pub(super) fn combine_verdicts(verdicts: impl IntoIterator<Item = Verdict>) -> Verdict {
+    let mut out = Verdict::Unknown;
+    for v in verdicts {
+        match v {
+            Verdict::Hit => return Verdict::Hit,
+            Verdict::Miss => out = Verdict::Miss,
+            Verdict::Unknown => {}
+        }
+    }
+    out
+}
+
+/// Apply a derived formula pointwise to two series sampled on the same grid. A timestamp only
+/// one side has is skipped, as is a point the formula cannot answer.
+pub(super) fn derive_series(
+    formula: &yagra_common::derived_metric::Formula,
+    a: &[MetricPoint],
+    b: &[MetricPoint],
+) -> Vec<MetricPoint> {
+    let other: HashMap<i64, f64> = b.iter().map(|p| (p.t, p.v)).collect();
+    a.iter()
+        .filter_map(|p| {
+            let v = formula.apply(p.v, *other.get(&p.t)?)?;
+            Some(MetricPoint { t: p.t, v })
+        })
+        .collect()
+}
+
+/// The higher of a port's two directions at each shared timestamp, as a percentage of its speed.
+pub(super) fn port_utilisation(
+    in_bps: &[MetricPoint],
+    out_bps: &[MetricPoint],
+    speed_bps: Option<i64>,
+) -> Vec<MetricPoint> {
+    let out: HashMap<i64, f64> = out_bps.iter().map(|p| (p.t, p.v)).collect();
+    in_bps
+        .iter()
+        .filter_map(|p| {
+            let bps = p.v.max(*out.get(&p.t)?);
+            let v = crate::tsdb::interface_util::utilisation_pct(bps, speed_bps)?;
+            Some(MetricPoint { t: p.t, v })
+        })
+        .collect()
 }
 
 /// Urgency score from days-to-exhaustion: ≤7d critical, ≤30d warning, else info.

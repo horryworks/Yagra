@@ -287,7 +287,7 @@ async fn overridden_on_page(
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct MatchingThreshold {
     /// The stored rule, in the same shape the rules list serves.
-    rule: yagra_common::StoredThreshold,
+    pub(crate) rule: yagra_common::StoredThreshold,
     /// Whether this rule sits at the **winning** scope level for its metric — the most specific
     /// level that reaches this port, and among folder-group rules only the nearest group in the
     /// chain (ADR-013 + ADR-075 decision 11).
@@ -295,7 +295,7 @@ pub(crate) struct MatchingThreshold {
     /// Several rules can carry `true` for one metric at once: the engine merges rules at the
     /// winning level by keeping the more restrictive bound of each severity. So this means "this
     /// rule contributes to the effective bound", not "this rule *is* the effective bound".
-    in_force: bool,
+    pub(crate) in_force: bool,
 }
 
 #[utoipa::path(

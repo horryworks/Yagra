@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **Troubleshoot ▸ Investigate answers "is anything on this node running out?".** Pick a node, or choose Investigate from a node's More menu, and the page answers yes, no or can't tell for its memory, disk, CPU and its eight busiest links, with the series behind each answer. A series is judged against the warning bound in force for that node and metric, else the critical one, else 100%, and is a yes when it is already over that line, when its daily peaks reach it within 30 days, or when it climbs and resets at each restart, the shape of a leak. Too few samples, or under seven days of them, is "can't tell", never "no". A table metric such as `hr_storage_used_pct` is divided row by row, so a full small filesystem is not hidden by a large empty one. The Troubleshoot tab now opens on Investigate; the analysis tools moved under an Analyses heading with their addresses unchanged (ADR-251).
+- **`GET /api/v1/nodes/{node_id}/investigate/running-out` and the MCP tool `investigate_node`.** The same answer over REST (View, `?days=` 7 to 90, default 30) and MCP. Each hypothesis carries `verdict`, and each series its `reason`, `current`, `target` and `days_to_target`; `monitoring_gaps` lists where collection itself stopped (ADR-251).
+
 ### Improvements
 
 - **Dashboard widgets open the screen for what you press.** A ranked row opens its node, or its port with the port's charts already open; a donut slice or its legend line opens the list narrowed to that state, severity, event kind or pipeline action; a site tile, region row or map pin opens that folder in All nodes; an hourly bar opens that hour of the event log or alert history; pressing the fleet health timeline opens the alerts that opened in that hour. A card's title opens the whole list the card summarizes, which replaces the View all buttons on Active alerts and Event feed. The public dashboard draws no links, because a visitor without a session cannot open them. The flow widgets and the alert calendar's cells stay as they were (ADR-250).

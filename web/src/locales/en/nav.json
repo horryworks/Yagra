@@ -50,7 +50,8 @@
     "all": "Tools",
     "runs": "Analysis runs",
     "scheduled": "Scheduled",
-    "findings": "All findings"
+    "findings": "All findings",
+    "investigate": "Investigate"
   },
   "settings": {
     "systemHealth": "Yagra health",
@@ -77,7 +78,8 @@
     "configure": "Configure",
     "system": "System",
     "access": "Access",
-    "comingSoon": "Coming soon"
+    "comingSoon": "Coming soon",
+    "analyses": "Analyses"
   },
   "descriptions": {
     "nodesCredentials": "Credentials Yagra uses to reach monitored devices",
@@ -120,7 +122,8 @@
     "settingsAuth": "Sign-in sources — local passwords, an external identity provider, LDAP",
     "settingsAudit": "Who changed or acknowledged what, and when",
     "dashboardPublic": "The one board people can see without signing in",
-    "alertsAlertRules": "Thresholds on polled metrics and patterns on received events"
+    "alertsAlertRules": "Thresholds on polled metrics and patterns on received events",
+    "troubleshootInvestigate": "Pick a node and confirm whether something on it is running out"
   },
   "shell": {
     "home": "Home",

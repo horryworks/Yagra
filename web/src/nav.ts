@@ -290,9 +290,21 @@ export const NAV: NavSection[] = [
   {
     key: 'troubleshoot',
     labelKey: 'sections.troubleshoot',
-    path: '/troubleshoot',
+    // The tab lands on Investigate (ADR-251): confirming a hunch is what most visits are for.
+    path: '/troubleshoot/investigate',
     groups: [
       {
+        items: [
+          {
+            labelKey: 'troubleshoot.investigate',
+            descKey: 'descriptions.troubleshootInvestigate',
+            path: '/troubleshoot/investigate',
+            implemented: true,
+          },
+        ],
+      },
+      {
+        labelKey: 'groups.analyses',
         items: [
           {
             labelKey: 'troubleshoot.all',

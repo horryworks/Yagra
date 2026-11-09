@@ -61,6 +61,7 @@ pub(crate) mod groups;
 #[cfg(test)]
 mod guards;
 pub(crate) mod health;
+pub(crate) mod investigate;
 mod ldap;
 pub(crate) mod maintenance;
 pub(crate) mod meraki;
@@ -447,6 +448,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(prefix_gaps::routes())
         // One node's availability graph (ADR-223): when it was down, in maintenance, not recorded.
         .merge(availability::routes())
+        // Investigate (ADR-251): confirm a hunch about one node, answered in the request.
+        .merge(investigate::routes())
         // Which pool the node effectively belongs to, and which poller currently holds it. Stays
         // with the Pollers view below, whose resolution helpers it shares.
         // URL/HTTP and DNS monitoring (ADR-033) — one node is one kind, see `api/checks.rs`.

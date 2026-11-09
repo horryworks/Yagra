@@ -3339,6 +3339,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/investigate/running-out": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["running_out"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/maintenance-exemption": {
         parameters: {
             query?: never;
@@ -8718,6 +8734,46 @@ export interface components {
             /** Format: int64 */
             ts_unix_ms: number;
         };
+        /** @description One series behind a hypothesis. */
+        Evidence: {
+            /**
+             * Format: double
+             * @description The latest value, in percent.
+             */
+            current?: number | null;
+            /**
+             * Format: double
+             * @description Days until the series reaches the target, when it is climbing.
+             */
+            days_to_target?: number | null;
+            /**
+             * Format: int32
+             * @description The port, for a link.
+             */
+            ifindex?: number | null;
+            /** @description The port's name, for a link. */
+            label?: string | null;
+            /** @description The metric read (a derived one is computed from its two inputs). */
+            metric: string;
+            reason: components["schemas"]["Reason"];
+            /**
+             * Format: int64
+             * @description The table row (filesystem, memory pool) the series is for, when the metric has rows.
+             */
+            row?: number | null;
+            /**
+             * Format: double
+             * @description How fast the series climbs, in percentage points per day.
+             */
+            slope_per_day?: number | null;
+            /**
+             * Format: double
+             * @description The line the series is judged against, in percent: the warning bound in force for this
+             *     node and metric, else the critical one, else 100.
+             */
+            target: number;
+            verdict: components["schemas"]["Verdict"];
+        };
         /** @description What took an overlap out of the open list. */
         Exclusion: {
             /** @enum {string} */
@@ -9169,6 +9225,19 @@ export interface components {
         GapMark: {
             /** @description What the operator wrote when marking it; may be empty. */
             note: string;
+        };
+        /** @description A span in which the node's pool had no live poller, so missing samples are missing collection. */
+        GapSpan: {
+            /**
+             * Format: int64
+             * @description Unix milliseconds.
+             */
+            from_ms: number;
+            /**
+             * Format: int64
+             * @description Unix milliseconds.
+             */
+            to_ms: number;
         };
         /**
          * @description Where a group's effective map position came from.
@@ -9654,6 +9723,20 @@ export interface components {
          */
         HttpMethod: "GET" | "HEAD" | "POST";
         /**
+         * @description One thing a question checks.
+         * @enum {string}
+         */
+        Hypothesis: "memory" | "disk" | "cpu" | "link_bandwidth";
+        /**
+         * @description One hypothesis and the series it was judged from. No evidence means the node has no metric for
+         *     it, and the verdict is then unknown.
+         */
+        HypothesisResult: {
+            evidence: components["schemas"]["Evidence"][];
+            hypothesis: components["schemas"]["Hypothesis"];
+            verdict: components["schemas"]["Verdict"];
+        };
+        /**
          * Format: int32
          * @description SNMP interface index (`ifIndex`).
          *
@@ -10110,6 +10193,25 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        /** @description The answer to one question about one node. */
+        InvestigateReport: {
+            /**
+             * Format: int64
+             * @description The window read, Unix seconds.
+             */
+            from: number;
+            hypotheses: components["schemas"]["HypothesisResult"][];
+            /** @description Where collection itself stopped inside the window. */
+            monitoring_gaps: components["schemas"]["GapSpan"][];
+            /** Format: uuid */
+            node_id: string;
+            question: components["schemas"]["Question"];
+            /**
+             * Format: int64
+             * @description Unix seconds.
+             */
+            to: number;
         };
         /** @description One number to lift out of a JSON response body and record as a metric. */
         JsonExtract: {
@@ -13501,6 +13603,11 @@ export interface components {
             pushed_at?: string | null;
             pushed_commit?: string | null;
         };
+        /**
+         * @description What is being asked. One question in Inc.1.
+         * @enum {string}
+         */
+        Question: "running_out";
         /** @description A ranked Top-N result. */
         Ranked_AlertNodeCount: {
             /** @description The ranked rows, highest first, at most the requested `limit`. */
@@ -13643,6 +13750,11 @@ export interface components {
          * @enum {string}
          */
         Readiness: "ready" | "off" | "no_model" | "no_credential" | "unknown_input" | "address_changed" | "no_poller" | "poller_too_old" | "relay_refused";
+        /**
+         * @description Why a series got its verdict.
+         * @enum {string}
+         */
+        Reason: "already_over" | "reaches" | "leak" | "not_reaching" | "too_few_points" | "too_few_days";
         /** @description What an apply did. The four counts add up to the number of distinct nodes named. */
         ReclassifyApplied: {
             /** @description Nodes moved to the profile the rules choose. */
@@ -16059,6 +16171,11 @@ export interface components {
             scope: components["schemas"]["Scope"];
             username: string;
         };
+        /**
+         * @description The answer for one series, and for one hypothesis.
+         * @enum {string}
+         */
+        Verdict: "hit" | "miss" | "unknown";
         /** @description Build version for Settings ▸ About. */
         VersionInfo: {
             core: string;
@@ -29340,6 +29457,77 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    running_out: {
+        parameters: {
+            query?: {
+                /** @description How many days back to read, 7 to 90. Defaults to 30. */
+                days?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether the node's memory, disk, CPU or busiest links are running out: per hypothesis a verdict of hit, miss or unknown, and the series behind it. Each series is judged against the warning bound in force for the node and metric, else the critical one, else 100%. Unknown means too little data, never fine. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestigateReport"];
+                };
+            };
+            /** @description `days` outside 7 to 90 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not signed in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Missing View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node, or the node is outside the caller's scope */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode: no database */
             503: {
                 headers: {
                     [name: string]: unknown;

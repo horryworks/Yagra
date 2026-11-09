@@ -25,6 +25,7 @@ describe('nodeHeaderActions', () => {
     expect(got.more).toEqual([
       'openDetail',
       'map',
+      'investigate',
       'thresholds',
       'pin',
       'move',
@@ -36,10 +37,10 @@ describe('nodeHeaderActions', () => {
     ]);
   });
 
-  it('draws nothing a viewer cannot use, and keeps the map', () => {
+  it('draws nothing a viewer cannot use, and keeps the map and Investigate', () => {
     const got = nodeHeaderActions(none, device, ranged);
     expect(got.primary).toEqual([]);
-    expect(got.more).toEqual(['map']);
+    expect(got.more).toEqual(['map', 'investigate']);
   });
 
   it('gates maintenance on its own permission, not on editing', () => {

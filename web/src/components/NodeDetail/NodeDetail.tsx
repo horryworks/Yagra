@@ -63,6 +63,7 @@ import {
   type NodeHeaderDialog,
   type NodeHeaderMore,
 } from './nodeHeaderActions';
+import { investigateHref } from '../../troubleshoot/investigate/investigate';
 import { thresholdRulesHref } from '../../pages/thresholdQuery';
 import { nodeSubLineParts } from './nodeIdentity';
 import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
@@ -397,6 +398,13 @@ export function NodeDetail({
             navigate(
               topologyMapHref({ group: node.group_id ?? null, sel: { kind: 'node', id: node.id } }),
             ),
+        };
+      case 'investigate':
+        // Troubleshoot > Investigate, asked about this node (ADR-251).
+        return {
+          key,
+          label: t('nav:troubleshoot.investigate'),
+          onSelect: () => navigate(investigateHref(node.id)),
         };
       case 'thresholds':
         return {
