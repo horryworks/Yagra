@@ -22,7 +22,7 @@ use uuid::Uuid;
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireView, Scoped, VisibleNode};
 use super::scope::NodeScope;
-use super::util::pool_resolver;
+use super::util::pool_resolver_or_error;
 use super::{AdminState, ApiState};
 use crate::analysis::{
     rank_candidates, FolderInvestigateReport, InvestigateInput, InvestigateReport, PortInfo,
@@ -139,7 +139,9 @@ pub(crate) async fn running_out_of(
             speed_bps: i.if_speed,
         })
         .collect();
-    let pool = pool_resolver(admin).await.resolve(&node).pool;
+    // Not the degraded `pool_resolver`: on a failed read it forgets folder inheritance, and the
+    // gaps of the wrong pool would be presented as this node's (ADR-158 B4's reason).
+    let pool = pool_resolver_or_error(admin).await?.resolve(&node).pool;
     let now_ms = now.timestamp_millis();
     let from_ms = now_ms - i64::from(days) * 86_400_000;
     let monitoring_gaps = admin

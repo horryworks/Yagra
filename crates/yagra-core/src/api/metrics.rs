@@ -1345,7 +1345,13 @@ fn build_heatmap(
 ) -> InterfaceHeatmap {
     let mut union: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     let mut per_link: Vec<(String, std::collections::HashMap<i64, f64>)> = Vec::new();
+    // Filled in the same loop as `per_link`, so row `i` of both is always the same interface.
+    let mut link_refs: Vec<HeatmapLink> = Vec::new();
     for (e, pts) in entries.iter().zip(ranges) {
+        link_refs.push(HeatmapLink {
+            node_id: e.node_id,
+            ifindex: e.ifindex,
+        });
         let mut m = std::collections::HashMap::new();
         for p in pts {
             union.insert(p.t);
@@ -1363,14 +1369,7 @@ fn build_heatmap(
     let timestamps: Vec<i64> = union.into_iter().collect();
     InterfaceHeatmap {
         links: per_link.iter().map(|(l, _)| l.clone()).collect(),
-        link_refs: entries
-            .iter()
-            .take(per_link.len())
-            .map(|e| HeatmapLink {
-                node_id: e.node_id,
-                ifindex: e.ifindex,
-            })
-            .collect(),
+        link_refs,
         values: per_link
             .iter()
             .map(|(_, m)| {

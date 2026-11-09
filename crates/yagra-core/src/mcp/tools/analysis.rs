@@ -133,13 +133,6 @@ pub(super) struct SearchFindingsParams {
     limit: Option<i64>,
 }
 
-/// Render a shared [`AnalysisReport`](crate::api::analysis::AnalysisReport) through this surface's
-/// sanitized DTOs.
-///
-/// The *assembly* is shared — which job, whether its findings exist yet — but the *serialization*
-/// is not, and deliberately so: `dto.rs` is the ADR-018 enforcement boundary, and letting an
-/// internal model serialize itself straight to an AI client is exactly the leak that file exists to
-/// prevent. Sharing the query while keeping the projection is the whole point of the split.
 /// The one question either Investigate tool answers so far.
 fn question_is_running_out(q: Option<&str>) -> Result<(), crate::api::ApiError> {
     match q {
@@ -151,6 +144,13 @@ fn question_is_running_out(q: Option<&str>) -> Result<(), crate::api::ApiError> 
     }
 }
 
+/// Render a shared [`AnalysisReport`](crate::api::analysis::AnalysisReport) through this surface's
+/// sanitized DTOs.
+///
+/// The *assembly* is shared — which job, whether its findings exist yet — but the *serialization*
+/// is not, and deliberately so: `dto.rs` is the ADR-018 enforcement boundary, and letting an
+/// internal model serialize itself straight to an AI client is exactly the leak that file exists to
+/// prevent. Sharing the query while keeping the projection is the whole point of the split.
 pub(super) fn analysis_report_body(report: &crate::api::analysis::AnalysisReport) -> Value {
     serde_json::json!({
         "job": AnalysisJobDto::from_job(&report.job),
