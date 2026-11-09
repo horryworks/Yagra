@@ -118,9 +118,13 @@ COPY --from=bundle /app/dist /usr/share/nginx/html
 # it (no healthcheck, no entrypoint script), and nothing else requires it, so `apk del` takes libcurl
 # and its six dependencies with it — a package that is not there has no advisories (ADR-215
 # increment 2, decision 6).
+#
+# libexpat likewise (four High CVEs fixed in 2.10.0-r0, built 2026-11-02). Only fontconfig links
+# it and nothing here hands it outside XML, so it does not reach Yagra: it waited the seven days
+# ADR-211 decision 5 gives a fix that does not.
 USER root
 RUN apk del --no-cache curl \
- && apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' 'zlib>=1.3.2-r1' \
+ && apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' 'zlib>=1.3.2-r1' 'libexpat>=2.10.0-r0' \
  && install -d -o 101 -g 0 -m 0755 /etc/nginx/certs \
  && printf 'listen 8080;\n' > /etc/nginx/yagra-listen.conf \
  && chown 101:0 /etc/nginx/yagra-listen.conf \
