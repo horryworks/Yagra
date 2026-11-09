@@ -196,12 +196,12 @@
   overflow-wrap: anywhere;
 }
 
-/* One row per uplink. The container is the grid and each row is `display: contents`, so the four
+/* One row per uplink. The container is the grid and each row is `display: contents`, so the six
    columns line up across rows without a fixed width: the name takes what is left and truncates,
-   the state and the two rates keep their width. */
+   the state, loss, latency and the two rates keep their width. */
 .nd-mk-uplinks {
   display: grid;
-  grid-template-columns: minmax(3em, 1fr) auto auto auto;
+  grid-template-columns: minmax(3em, 1fr) auto auto auto auto auto;
   font-size: var(--font-sm);
 }
 

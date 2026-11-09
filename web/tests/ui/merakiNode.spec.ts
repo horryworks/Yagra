@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// A Cisco Meraki MX node's Overview card (ADR-164 Inc.13 and 14): the tiles, one row per WAN uplink
-// with its state and rates, and the WAN traffic chart.
+// A Cisco Meraki MX node's Overview card (ADR-164 Inc.13, 14 and 20): the tiles, one row per WAN
+// uplink with its state, loss, latency and rates, and the WAN traffic chart.
 //
 // WHY A BROWSER. `merakiUplinkLines`, `merakiUplinkState` and `merakiTrafficSeries` are
 // unit-tested. What is not: that the card asks for the per-uplink metrics *with their rows*, lays
@@ -72,6 +72,12 @@ const ROWS: Record<string, Row[]> = {
     { row: 2, name: 'WAN2', value: 0 },
     { row: 3, name: 'cellular', value: -1 },
   ],
+  // Loss and latency (ADR-164 decision 42): the Dashboard reports neither for a port with no line.
+  meraki_uplink_loss_pct: [
+    { row: 1, name: 'WAN1', value: 0.5 },
+    { row: 3, name: 'cellular', value: 100 },
+  ],
+  meraki_uplink_latency_ms: [{ row: 1, name: 'WAN1', value: 23.4 }],
 };
 
 /** Every metric read on the page: the three per-uplink ones by row, availability up, the rest as
@@ -213,13 +219,21 @@ test("an MX's card shows its tiles, a row per WAN uplink, and the WAN traffic ch
   await expect(pairSub).toHaveText(['This MX: Primary (configured)', 'Partner: mx-spare-test (Spare)']);
   await expect(pairSub.locator('a')).toHaveAttribute('href', new RegExp(PARTNER_ID));
 
-  // One row per uplink: its name, state and both rates. A port with no line has no rates; a failed
-  // one is drawn as failed, not as "no line" (ADR-164 decision 24).
+  // One row per uplink: its name, state, loss, latency and both rates. A port with no line has no
+  // readings; a failed one is drawn as failed, not as "no line" (ADR-164 decisions 24 and 42).
+  await expect(card.locator('.nd-mk-uplink-head span')).toHaveText([
+    'Uplink',
+    'State',
+    'Loss',
+    'Latency',
+    'Sent',
+    'Received',
+  ]);
   const rows = card.locator('.nd-mk-uplink:not(.nd-mk-uplink-head)');
   await expect(rows).toHaveCount(3);
-  await expect(rows.nth(0).locator('span')).toHaveText(['WAN1', 'Active', '5.0 kbps', '10.0 kbps']);
-  await expect(rows.nth(1).locator('span')).toHaveText(['WAN2', 'No line', '—', '—']);
-  await expect(rows.nth(2).locator('span')).toHaveText(['cellular', 'Failed', '0 bps', '0 bps']);
+  await expect(rows.nth(0).locator('span')).toHaveText(['WAN1', 'Active', '0.5%', '23.4 ms', '5.0 kbps', '10.0 kbps']);
+  await expect(rows.nth(1).locator('span')).toHaveText(['WAN2', 'No line', '—', '—', '—', '—']);
+  await expect(rows.nth(2).locator('span')).toHaveText(['cellular', 'Failed', '100%', '—', '0 bps', '0 bps']);
   await expect(rows.nth(2).locator('span').nth(1)).toHaveAttribute('style', /var\(--status-critical\)/);
 
   // The chart: each uplink that has history is two series, sent above and received below, plus
@@ -280,6 +294,8 @@ test.describe('a primary that is down while its spare carries the site', () => {
     'meraki_uplink_sent_bps',
     'meraki_uplink_recv_bps',
     'meraki_uplink_status',
+    'meraki_uplink_loss_pct',
+    'meraki_uplink_latency_ms',
     'meraki_vpn_spokes_unreachable',
   ];
   const stale: Record<string, number> = { meraki_vpn_hubs_reachable: 2, meraki_vpn_hubs_unreachable: 0 };
@@ -382,6 +398,8 @@ test.describe('a Meraki access point', () => {
     'meraki_uplink_sent_bps',
     'meraki_uplink_recv_bps',
     'meraki_uplink_status',
+    'meraki_uplink_loss_pct',
+    'meraki_uplink_latency_ms',
     'meraki_vpn_hubs_reachable',
     'meraki_vpn_hubs_unreachable',
     'meraki_vpn_spokes_unreachable',
@@ -582,6 +600,8 @@ test.describe('a Meraki access point the Dashboard reports offline', () => {
           'meraki_uplink_sent_bps',
           'meraki_uplink_recv_bps',
           'meraki_uplink_status',
+          'meraki_uplink_loss_pct',
+          'meraki_uplink_latency_ms',
           'meraki_vpn_hubs_reachable',
           'meraki_vpn_hubs_unreachable',
           'meraki_vpn_spokes_unreachable',

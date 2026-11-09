@@ -604,8 +604,8 @@ function UrlHealth({
 const PCT_Y_RANGE: [number, number] = [0, 100];
 
 /** Cisco Meraki device health (ADR-164 Inc.13 and 14): availability (`meraki_device_up`), an MX's Auto
- *  VPN reach and warm-spare pair as tiles, its WAN uplinks as one row each (state, average send and
- *  receive), and the WAN traffic those rows were stored as, charted over the range. Shown only for
+ *  VPN reach and warm-spare pair as tiles, its WAN uplinks as one row each (state, loss, latency,
+ *  average send and receive), and the WAN traffic those rows were stored as, charted over the range. Shown only for
  *  Meraki nodes (the caller guards on `node.meraki_device`). What each line says is decided in
  *  `merakiCard.ts`.
  *
@@ -657,7 +657,9 @@ function MerakiHealth({
         api.getNodeMetric(nodeId, MERAKI_CARD.vpnHubsReachable),
         api.getNodeMetric(nodeId, MERAKI_CARD.vpnHubsUnreachable),
         api.getNodeMetric(nodeId, MERAKI_CARD.vpnSpokesUnreachable),
-      ]).then(([u, s, r, st, hr, hu, su]) => {
+        api.getNodeMetric(nodeId, MERAKI_CARD.lossPct, { agg: 'max', rows: true }),
+        api.getNodeMetric(nodeId, MERAKI_CARD.latencyMs, { agg: 'max', rows: true }),
+      ]).then(([u, s, r, st, hr, hu, su, lo, la]) => {
         if (cancelled) return;
         const value = (p: typeof hr) => (p.status === 'fulfilled' ? p.value.value : null);
         setVpn(merakiVpnLine(value(hr), value(hu), value(su)));
@@ -666,6 +668,8 @@ function MerakiHealth({
           s.status === 'fulfilled' ? (s.value.rows ?? []) : [],
           r.status === 'fulfilled' ? (r.value.rows ?? []) : [],
           st.status === 'fulfilled' ? (st.value.rows ?? []) : [],
+          lo.status === 'fulfilled' ? (lo.value.rows ?? []) : [],
+          la.status === 'fulfilled' ? (la.value.rows ?? []) : [],
         );
         setUplinks(lines);
         // The chart's uplinks are the ones the rows read just named — each uplink's two series,
@@ -903,6 +907,12 @@ function MerakiHealth({
                 <span role="columnheader">{t('overview.uplinkCols.uplink')}</span>
                 <span role="columnheader">{t('overview.uplinkCols.state')}</span>
                 <span role="columnheader" className="nd-mk-num">
+                  {t('overview.uplinkCols.loss')}
+                </span>
+                <span role="columnheader" className="nd-mk-num">
+                  {t('overview.uplinkCols.latency')}
+                </span>
+                <span role="columnheader" className="nd-mk-num">
                   {t('overview.uplinkCols.sent')}
                 </span>
                 <span role="columnheader" className="nd-mk-num">
@@ -919,6 +929,12 @@ function MerakiHealth({
                     style={l.state === 'failed' ? { color: severityColorVar('critical') } : undefined}
                   >
                     {l.state ? t(`overview.uplinkState.${l.state}`) : '—'}
+                  </span>
+                  <span role="cell" className="nd-mk-num">
+                    {formatUtil(l.lossPct)}
+                  </span>
+                  <span role="cell" className="nd-mk-num">
+                    {l.latencyMs == null ? '—' : formatRtt(l.latencyMs)}
                   </span>
                   <span role="cell" className="nd-mk-num">
                     {l.sentBps == null ? '—' : formatBps(l.sentBps)}

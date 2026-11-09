@@ -463,6 +463,8 @@
     "uplinkCols": {
       "uplink": "回線",
       "state": "状態",
+      "loss": "損失",
+      "latency": "遅延",
       "sent": "送信",
       "received": "受信"
     },

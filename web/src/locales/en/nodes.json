@@ -465,6 +465,8 @@
     "uplinkCols": {
       "uplink": "Uplink",
       "state": "State",
+      "loss": "Loss",
+      "latency": "Latency",
       "sent": "Sent",
       "received": "Received"
     },

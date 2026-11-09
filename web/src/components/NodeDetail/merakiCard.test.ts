@@ -26,27 +26,27 @@ describe('merakiUplinkLines', () => {
         [row(1, 10_000, 'WAN1'), row(2, 20, 'WAN2')],
       ),
     ).toEqual([
-      { row: 1, name: 'WAN1', state: null, sentBps: 5_000, recvBps: 10_000 },
-      { row: 2, name: 'WAN2', state: null, sentBps: 10, recvBps: 20 },
+      { row: 1, name: 'WAN1', state: null, lossPct: null, latencyMs: null, sentBps: 5_000, recvBps: 10_000 },
+      { row: 2, name: 'WAN2', state: null, lossPct: null, latencyMs: null, sentBps: 10, recvBps: 20 },
     ]);
   });
 
   it('keeps an uplink that reported only one direction, without shifting its neighbour', () => {
     expect(merakiUplinkLines([row(1, 1, 'WAN1'), row(3, 3, 'cellular')], [row(3, 30, 'cellular')])).toEqual([
-      { row: 1, name: 'WAN1', state: null, sentBps: 1, recvBps: null },
-      { row: 3, name: 'cellular', state: null, sentBps: 3, recvBps: 30 },
+      { row: 1, name: 'WAN1', state: null, lossPct: null, latencyMs: null, sentBps: 1, recvBps: null },
+      { row: 3, name: 'cellular', state: null, lossPct: null, latencyMs: null, sentBps: 3, recvBps: 30 },
     ]);
   });
 
   it('keeps an idle uplink: zero is a reading', () => {
     expect(merakiUplinkLines([row(2, 0, 'WAN2')], [row(2, 0, 'WAN2')])).toEqual([
-      { row: 2, name: 'WAN2', state: null, sentBps: 0, recvBps: 0 },
+      { row: 2, name: 'WAN2', state: null, lossPct: null, latencyMs: null, sentBps: 0, recvBps: 0 },
     ]);
   });
 
   it('calls a row nobody named by its key, and takes a name from any metric', () => {
     expect(merakiUplinkLines([row(4, 1)], [])).toEqual([
-      { row: 4, name: '#4', state: null, sentBps: 1, recvBps: null },
+      { row: 4, name: '#4', state: null, lossPct: null, latencyMs: null, sentBps: 1, recvBps: null },
     ]);
     expect(merakiUplinkLines([row(1, 1)], [row(1, 2, 'WAN1')])[0].name).toBe('WAN1');
     expect(merakiUplinkLines([], [], [row(2, 0, 'WAN2')])[0].name).toBe('WAN2');
@@ -61,9 +61,25 @@ describe('merakiUplinkLines', () => {
         [row(1, 2, 'WAN1'), row(2, 0, 'WAN2'), row(3, -1, 'cellular')],
       ),
     ).toEqual([
-      { row: 1, name: 'WAN1', state: 'active', sentBps: 5, recvBps: 6 },
-      { row: 2, name: 'WAN2', state: 'notConnected', sentBps: null, recvBps: null },
-      { row: 3, name: 'cellular', state: 'failed', sentBps: null, recvBps: null },
+      { row: 1, name: 'WAN1', state: 'active', lossPct: null, latencyMs: null, sentBps: 5, recvBps: 6 },
+      { row: 2, name: 'WAN2', state: 'notConnected', lossPct: null, latencyMs: null, sentBps: null, recvBps: null },
+      { row: 3, name: 'cellular', state: 'failed', lossPct: null, latencyMs: null, sentBps: null, recvBps: null },
+    ]);
+  });
+
+  it('gives each uplink its loss and latency, joined by row, and keeps zero loss as a reading', () => {
+    // ADR-164 decision 42. WAN2 reported loss and latency only: it still gets a line of its own.
+    expect(
+      merakiUplinkLines(
+        [row(1, 5, 'WAN1')],
+        [row(1, 6, 'WAN1')],
+        [row(1, 2, 'WAN1')],
+        [row(2, 12.5, 'WAN2'), row(1, 0, 'WAN1')],
+        [row(1, 23.4, 'WAN1'), row(2, 180, 'WAN2')],
+      ),
+    ).toEqual([
+      { row: 1, name: 'WAN1', state: 'active', lossPct: 0, latencyMs: 23.4, sentBps: 5, recvBps: 6 },
+      { row: 2, name: 'WAN2', state: null, lossPct: 12.5, latencyMs: 180, sentBps: null, recvBps: null },
     ]);
   });
 

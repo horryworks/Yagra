@@ -47,11 +47,16 @@ export function merakiUplinkState(value: number | null | undefined): MerakiUplin
   }
 }
 
-/** One WAN uplink on the card: its row key, what to call it, its state and its average rates. */
+/** One WAN uplink on the card: its row key, what to call it, its state, its loss and latency to
+ *  the Dashboard's test address (ADR-164 decision 42), and its average rates. */
 export interface MerakiUplinkLine {
   row: number;
   name: string;
   state: MerakiUplinkState | null;
+  /** Packet loss in the latest minute the Dashboard reported, percent. */
+  lossPct: number | null;
+  /** Average latency in that minute, milliseconds. */
+  latencyMs: number | null;
   /** Average send rate over the traffic collect's interval, bits per second. */
   sentBps: number | null;
   /** Average receive rate over the same window. */
@@ -70,12 +75,22 @@ export function merakiUplinkLines(
   sent: readonly RowReading[],
   recv: readonly RowReading[],
   status: readonly RowReading[] = [],
+  loss: readonly RowReading[] = [],
+  latency: readonly RowReading[] = [],
 ): MerakiUplinkLine[] {
   const byRow = new Map<number, MerakiUplinkLine>();
   const line = (r: RowReading): MerakiUplinkLine => {
     let l = byRow.get(r.row);
     if (!l) {
-      l = { row: r.row, name: `#${r.row}`, state: null, sentBps: null, recvBps: null };
+      l = {
+        row: r.row,
+        name: `#${r.row}`,
+        state: null,
+        lossPct: null,
+        latencyMs: null,
+        sentBps: null,
+        recvBps: null,
+      };
       byRow.set(r.row, l);
     }
     if (r.name) l.name = r.name;
@@ -84,6 +99,8 @@ export function merakiUplinkLines(
   for (const r of sent) line(r).sentBps = r.value;
   for (const r of recv) line(r).recvBps = r.value;
   for (const r of status) line(r).state = merakiUplinkState(r.value);
+  for (const r of loss) line(r).lossPct = r.value;
+  for (const r of latency) line(r).latencyMs = r.value;
   return [...byRow.values()].sort((a, b) => a.row - b.row);
 }
 

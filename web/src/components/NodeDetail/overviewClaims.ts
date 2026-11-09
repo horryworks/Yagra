@@ -37,14 +37,16 @@ export const URL_CARD = {
  */
 export const DNS_CARD = { up: 'dns_up', resolveMs: 'dns_resolve_ms' } as const;
 
-/** The Meraki card's metrics: the device's availability and, for an MX, each WAN uplink's state and
- *  average rates (ADR-164 Inc.13). Per-uplink loss, latency and the failed flag are not drawn here
- *  — a Meraki node has no Interfaces tab, so they show on the Collection tab. */
+/** The Meraki card's metrics: the device's availability and, for an MX, each WAN uplink's state,
+ *  average rates (ADR-164 Inc.13) and loss and latency (decision 42). The failed flag is not drawn
+ *  here — the state column already says "failed" — so it shows on the Collection tab. */
 export const MERAKI_CARD = {
   up: 'meraki_device_up',
   sentBps: 'meraki_uplink_sent_bps',
   recvBps: 'meraki_uplink_recv_bps',
   status: 'meraki_uplink_status',
+  lossPct: 'meraki_uplink_loss_pct',
+  latencyMs: 'meraki_uplink_latency_ms',
   vpnHubsReachable: 'meraki_vpn_hubs_reachable',
   vpnHubsUnreachable: 'meraki_vpn_hubs_unreachable',
   vpnSpokesUnreachable: 'meraki_vpn_spokes_unreachable',

@@ -14,6 +14,10 @@
 
 - **Alerts ▸ Active alerts and History show each alert's site.** A Site column between Severity and Node names the nearest folder of type *Site* above the node. It is blank when no folder above the node is a Site, and for a poller-pool alert. History shows the site the node is filed under now, not where it was when the alert fired. To list one site's alerts, pick that folder in the scope picker on the left; the column itself has no filter. `POST /api/v1/node-names` now answers a `site_id` beside each node's `group_id` (`null` when there is none), and the MCP tools `get_active_alerts` and `get_alert_history` return a `site_name` (ADR-248).
 
+### Improvements
+
+- **A Meraki MX's card shows each WAN uplink's packet loss and latency.** The uplink table on the node's Overview gains Loss and Latency columns, beside the state and the traffic. They are the values Yagra has collected every five minutes all along (`meraki_uplink_loss_pct`, `meraki_uplink_latency_ms`, to the Dashboard's test address), which until now were visible only on the Collection tab. No extra Dashboard API call (ADR-164).
+
 ## v0.3.73 — Use your own LLM server for AI analysis, match syslog and flows by any interface address, and one layout across every screen
 
 ### New Features
