@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-09
-# counts: MA-L=40347 MA-L-repeats-dropped=3 MA-M=6596 MA-S=7236 withheld=3
+# fetched: 2026-11-10
+# counts: MA-L=40350 MA-L-repeats-dropped=3 MA-M=6599 MA-S=7236 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13537,8 +13537,11 @@
 047A0B	Beijing Xiaomi Electronics Co., Ltd.
 047AAE	Huawei Device Co., Ltd.
 047B43	IEEE Registration Authority
+047B430	JUNGJUN Co., Ltd.
+047B434	Medicop d.o.o.
 047B435	Shenzhen XJ-Micro Technology Co., Ltd.
-047B438	MERAK HVAC
+047B438	MERAK HVAC España S.A.U.
+047B439	Xthings Industry LLC
 047B43A	RUBISEC CORPORATION
 047B43B	ACADEMY FOR FUTURE HEALTH LTD
 047B43C	RR Technologies GmbH
@@ -17561,6 +17564,7 @@
 2098D8	Shenzhen Yingdakang Technology CO., LTD
 2098ED	AltoBeam Inc.
 209952	Xiaomi Communications Co Ltd
+2099EC	1AN Inc.
 209A7D	Sagemcom Broadband SAS
 209AE9	Volacomm Co., Ltd
 209BA5	JIAXING GLEAD Electronics Co.,Ltd
@@ -18316,6 +18320,7 @@
 281D21	IN ONE SMART TECHNOLOGY(H,K,)LIMITED
 281DAA	ASTI India Private Limited
 281DFB	HUAWEI TECHNOLOGIES CO.,LTD
+281F81	SOXAI Inc.
 28221E	HUAWEI TECHNOLOGIES CO.,LTD
 282246	Beijing Sinoix Communication Co., LTD
 282373	Digita
@@ -42147,6 +42152,7 @@ A401DE	SERCOMM PHILIPPINES INC
 A402B7	Amazon Technologies Inc.
 A402B9	Intel Corporate
 A40450	nFore Technology Co., Ltd.
+A4053E	BSH Electrodomésticos España, S.A.
 A4056E	Tiinlab Corporation
 A4059E	STA Infinity LLP
 A405D6	Commscope
