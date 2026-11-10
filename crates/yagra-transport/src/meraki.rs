@@ -12,6 +12,7 @@
 //! Safeguards baked in (never affect the customer's Meraki):
 //! * **GET only.** The only reqwest verb used anywhere in this module is `.get()`; there is no code
 //!   path that writes. Redirects are disabled (the sole "next" is a validated `Link` header).
+//!   `tests::the_meraki_transport_only_ever_sends_a_get` fails the build otherwise.
 //! * **Host allow-list.** Every request URL — the initial one and every pagination `Link: rel=next`
 //!   — is checked with [`is_meraki_api_host`] before it is issued, so no URL a server hands back can
 //!   send the bearer key off-host (credential-exfiltration guard). The one other place a request can
@@ -2691,6 +2692,90 @@ fn parse_device_info(it: &Value) -> Option<MerakiDeviceInfo> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// **Yagra never writes to a customer's Meraki Dashboard** — and until this check, the only
+    /// thing saying so was the module doc's "GET only".
+    ///
+    /// Every byte of Meraki I/O goes through this module, and it holds one `reqwest::Client`, built
+    /// once, read in one place, with `.get(`. The check pins all three, so a write cannot arrive by
+    /// any of the three routes it would take: a write verb on the existing client
+    /// (`.post(`, `.request(Method::…)`, `.execute(` of a hand-built request), a second client built
+    /// beside it, or the client handed out of the module to be used somewhere else.
+    ///
+    /// ⚠️ Text, not behaviour: the fake Dashboard in `meraki_http_tests.rs` sees only the requests
+    /// the tests there make, so it cannot say that no other path sends one. The floors are what tell
+    /// "found nothing wrong" apart from "read nothing".
+    #[test]
+    fn the_meraki_transport_only_ever_sends_a_get() {
+        use crate::module_source::{files_no_comments, roots};
+
+        let mut files = files_no_comments(&roots("src", "meraki"));
+        files.extend(files_no_comments(&roots("src", "meraki_neighbors")));
+        assert!(
+            files.len() >= 2 && files.iter().all(|(_, code)| code.lines().count() > 100),
+            "the Meraki sources read as {} file(s) with almost no code; the checks below would \
+             pass over nothing",
+            files.len()
+        );
+
+        // Every way reqwest offers to send something other than a GET, plus the two ways to build
+        // a request by hand and send it with `execute`.
+        let forbidden = [
+            ".post(",
+            ".put(",
+            ".patch(",
+            ".delete(",
+            ".head(",
+            ".request(",
+            ".execute(",
+            "Method::",
+            "Request::new(",
+            "RequestBuilder::from_parts(",
+        ];
+        for (name, code) in &files {
+            for needle in forbidden {
+                assert!(
+                    !code.contains(needle),
+                    "yagra-transport/src/{name} uses `{needle}`. The Meraki integration is \
+                     read-only: it sends GET and nothing else to a customer's Dashboard"
+                );
+            }
+        }
+
+        let all: String = files.iter().map(|(_, code)| code.as_str()).collect();
+
+        // One client, so there is no second one to send a write with.
+        let built = all.matches("Client::builder()").count() + all.matches("Client::new(").count();
+        assert_eq!(
+            built, 1,
+            "the Meraki sources build {built} HTTP clients; there is one, and it is the one whose \
+             every use is checked below"
+        );
+
+        // Every use of that client is a GET, and there is at least one — the floor that keeps a
+        // renamed field from turning this into a check over nothing.
+        let uses = all.matches("self.client").count();
+        let gets = all.matches("self.client.get(").count();
+        assert!(
+            uses >= 1 && uses == gets,
+            "the Meraki client is used {uses} time(s) and {gets} of them are `.get(`; every use \
+             must be a GET"
+        );
+        // And it cannot be used anywhere but here: a field that is not `pub` and is never returned.
+        assert!(
+            all.contains("    client: reqwest::Client,")
+                && !all.contains("pub client")
+                && !all.contains("pub(crate) client"),
+            "the Meraki client must stay a private field, so that no code outside this module can \
+             send with it"
+        );
+        let sends = all.matches(".send()").count();
+        assert_eq!(
+            sends, gets,
+            "the Meraki sources send {sends} request(s) and only {gets} of them are built with \
+             `.get(`"
+        );
+    }
 
     /// The ports and radios go on the device's own observation when the collect has one, and on a
     /// new one — appended, in serial order — when it does not; an observation of the ports' does not
