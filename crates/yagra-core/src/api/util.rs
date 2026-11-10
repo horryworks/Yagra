@@ -840,4 +840,19 @@ mod tests {
             );
         }
     }
+
+    /// A zone is stored in the spelling it was sent in, as NetBox stores it (ADR-253 decision 1):
+    /// an alias stays an alias, and only the surrounding blanks go.
+    #[test]
+    fn a_stored_zone_keeps_the_spelling_it_was_sent_in() {
+        for name in ["Japan", "US/Eastern", "Asia/Calcutta", "Asia/Tokyo"] {
+            assert!(matches!(parse_time_zone(Some(name)), Ok(Some(_))), "{name}");
+            assert_eq!(stored_time_zone(Some(name)).as_deref(), Some(name));
+        }
+        assert_eq!(stored_time_zone(Some("  Japan ")).as_deref(), Some("Japan"));
+        assert!(
+            parse_time_zone(Some("japan")).is_err(),
+            "names are matched as written"
+        );
+    }
 }

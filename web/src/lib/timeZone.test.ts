@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  checkedZone,
+  knownTimeZones,
+  utcOffsetText,
   browserTimeZone,
   clockText,
   displayTimeZone,
@@ -117,5 +120,33 @@ describe('no screen formats a date or a time by hand', () => {
     expect(files.length).toBeGreaterThan(300);
     const own = files.find(([p]) => p === 'lib/format.ts')?.[1] ?? '';
     expect(own.includes('displayTimeZone()')).toBe(true);
+  });
+});
+
+describe("zone names are NetBox's, kept as written (ADR-253)", () => {
+  it('offers the zone database the server knows, aliases included, each once', () => {
+    const names = knownTimeZones();
+    for (const z of ['Asia/Tokyo', 'Japan', 'US/Eastern', 'Asia/Kolkata', 'UTC']) {
+      expect(names, z).toContain(z);
+    }
+    expect(names).not.toContain('Factory');
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('never renames a zone, and refuses one it cannot show', () => {
+    expect(checkedZone('Asia/Kolkata')).toBe('Asia/Kolkata');
+    expect(checkedZone('Japan')).toBe('Japan');
+    expect(checkedZone(' Asia/Tokyo ')).toBe('Asia/Tokyo');
+    expect(checkedZone('japan')).toBeNull();
+    expect(checkedZone('Mars/Olympus_Mons')).toBeNull();
+    expect(checkedZone(null)).toBeNull();
+  });
+
+  it('writes the offset the way NetBox does', () => {
+    expect(utcOffsetText(at('2026-11-10T05:00:00Z'), 'Asia/Tokyo')).toBe('+0900');
+    expect(utcOffsetText(at('2026-12-07T12:00:00Z'), 'America/New_York')).toBe('-0500');
+    expect(utcOffsetText(at('2026-07-06T12:00:00Z'), 'America/New_York')).toBe('-0400');
+    expect(utcOffsetText(at('2026-11-10T05:00:00Z'), 'Asia/Kolkata')).toBe('+0530');
+    expect(utcOffsetText(at('2026-11-10T05:00:00Z'), 'UTC')).toBe('+0000');
   });
 });

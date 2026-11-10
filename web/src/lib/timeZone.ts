@@ -13,6 +13,13 @@
 // rule is core's (`yagra_base::wall_clock::resolve`), written again here because the screen has to
 // predict what core will do: a wall time inside a gap is the instant the gap ends, and one inside
 // an overlap is its first occurrence.
+//
+// ZONE NAMES (ADR-253). The names a person may choose are core's zone database, generated into
+// `zoneNames.json` - the same set NetBox offers, aliases such as `Japan` included. A name is kept
+// in the spelling it was given: `Intl` is asked to compute a time in it, never to rename it, which
+// is what once turned `Asia/Kolkata` into Chromium's `Asia/Calcutta` (ADR-237).
+
+import ZONE_NAMES from './zoneNames.json';
 
 let chosen: string | null = null;
 
@@ -37,15 +44,38 @@ export function browserTimeZone(): string {
   return browserZone;
 }
 
-/** Whether this runtime knows `name` as a zone. */
-export function isKnownTimeZone(name: string): boolean {
-  if (!name) return false;
+/** Whether this browser can compute a time in `name`. */
+function computable(name: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: name });
     return true;
   } catch {
     return false;
   }
+}
+
+let known: { list: string[]; set: Set<string> } | null = null;
+
+/** The zone names core knows that this browser can also compute, read once. */
+function knownZones(): { list: string[]; set: Set<string> } {
+  if (!known) {
+    const list = (ZONE_NAMES as string[]).filter(computable);
+    known = { list, set: new Set(list) };
+  }
+  return known;
+}
+
+/** Whether `name` is a zone a person may choose: core knows it and this browser can compute it.
+ *  Matched as written, as NetBox matches it. */
+export function isKnownTimeZone(name: string): boolean {
+  return !!name && knownZones().set.has(name);
+}
+
+/** `name` unchanged when it is a zone this screen can show, else `null` (ADR-253 decisions 1, 5).
+ *  Blanks around it are dropped; nothing else about the spelling changes. */
+export function checkedZone(name: string | null | undefined): string | null {
+  const s = name?.trim() ?? '';
+  return isKnownTimeZone(s) ? s : null;
 }
 
 /** Set the operator's choice; `null` (or a name this runtime does not know) follows the browser. */
@@ -63,18 +93,10 @@ export function isZoneChosen(): boolean {
   return chosen != null;
 }
 
-/** Every zone this runtime knows, for the picker. `UTC` is always present. */
+/** Every zone a person may choose, for the picker: core's zone database (the set NetBox offers,
+ *  aliases included), less any name this browser cannot compute. Sorted; `UTC` is in it. */
 export function knownTimeZones(): string[] {
-  let all: string[] = [];
-  try {
-    all =
-      (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.(
-        'timeZone',
-      ) ?? [];
-  } catch {
-    all = [];
-  }
-  return all.includes('UTC') ? all : ['UTC', ...all];
+  return [...knownZones().list];
 }
 
 const partsCache = new Map<string, Intl.DateTimeFormat>();
@@ -202,16 +224,13 @@ export function scheduleZone(stored: string | null | undefined, isNew: boolean):
   return stored || 'UTC';
 }
 
-/** The spelling `Intl` gives `name` (any casing, any alias it accepts), or `null` when this runtime
- *  does not know it. ⚠️ An alias may resolve to an older spelling: Chromium answers
- *  `Asia/Calcutta` for `Asia/Kolkata` (ADR-237). */
-export function canonicalTimeZone(name: string): string | null {
-  if (!name) return null;
-  try {
-    return new Intl.DateTimeFormat('en-US', { timeZone: name }).resolvedOptions().timeZone;
-  } catch {
-    return null;
-  }
+/** The offset from UTC of `tz` at `ms`, as NetBox's `tzoffset` writes it (`%z`): `+0900`,
+ *  `-0500`, `+0530` (ADR-253 decision 4). */
+export function utcOffsetText(ms: number, tz: string): string {
+  const minutes = Math.round((asUtc(wallClock(ms, tz)) - Math.floor(ms / 1000) * 1000) / 60_000);
+  const sign = minutes < 0 ? '-' : '+';
+  const abs = Math.abs(minutes);
+  return `${sign}${pad2(Math.floor(abs / 60))}${pad2(abs % 60)}`;
 }
 
 const shortDateCache = new Map<string, Intl.DateTimeFormat>();

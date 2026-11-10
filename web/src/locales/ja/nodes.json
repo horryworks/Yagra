@@ -742,7 +742,8 @@
     "delivering": "配信中",
     "deliveringUntil": "{{time}} まで配信",
     "held": "保留中",
-    "heldUntil": "{{time}} まで保留"
+    "heldUntil": "{{time}} まで保留",
+    "zone": "{{zone}} (UTC {{offset}})"
   },
   "groupDetail": {
     "health": "ヘルス",

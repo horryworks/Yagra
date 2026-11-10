@@ -39,7 +39,7 @@ export function LocalTimeParts({ zone, delivery, onStale }: Props) {
           <span className="nd-sep">·</span>
           <Inline as="span" gap={6}>
             <span>{line.clock.time}</span>
-            <span>{line.clock.zone}</span>
+            <span>{t('localTime.zone', { zone: line.clock.zone, offset: line.clock.offset })}</span>
           </Inline>
         </>
       )}

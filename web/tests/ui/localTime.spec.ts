@@ -57,7 +57,7 @@ test.use({
 test("a site's pane shows its clock and that notifications are delivered", async ({ page }) => {
   await page.goto(`/nodes?sel=group:${CHILD_ID}`);
   const sub = page.locator('.nd-sub');
-  await expect(sub).toContainText('Asia/Tokyo');
+  await expect(sub).toContainText('Asia/Tokyo (UTC +0900)');
   await expect(sub).toContainText(/\d\d:\d\d/);
   await expect(sub).toContainText(/Delivering until (\S+ )?\d\d:\d\d/);
 });

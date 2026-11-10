@@ -19,7 +19,7 @@ describe("a site's local time on the sub line (ADR-252)", () => {
 
   it('shows the clock alone when no schedule reaches the place', () => {
     const line = localTimeLine('Asia/Tokyo', null, MON_9_TOKYO, t, 'en');
-    expect(line.clock).toEqual({ time: '09:00', zone: 'Asia/Tokyo' });
+    expect(line.clock).toEqual({ time: '09:00', zone: 'Asia/Tokyo', offset: '+0900' });
     expect(line.delivery).toBeNull();
     expect(line.stale).toBe(false);
   });
@@ -76,6 +76,14 @@ describe("a site's local time on the sub line (ADR-252)", () => {
     expect(line.delivery).toBeNull();
     expect(line.stale).toBe(true);
     expect(line.clock?.time).toBe('17:20');
+  });
+
+  it('keeps an alias in the spelling it was given, as NetBox shows it (ADR-253)', () => {
+    const line = localTimeLine('Japan', null, MON_9_TOKYO, t, 'en');
+    expect(line.clock).toEqual({ time: '09:00', zone: 'Japan', offset: '+0900' });
+    expect(localTimeLine('Asia/Kolkata', null, MON_9_TOKYO, t, 'en').clock?.zone).toBe(
+      'Asia/Kolkata',
+    );
   });
 
   it('writes the Japanese forms', async () => {

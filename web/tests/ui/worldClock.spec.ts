@@ -91,6 +91,11 @@ test.describe('placed from the catalogue', () => {
     await box.press('Enter');
     await expect(page.locator('.field-error')).toHaveText('Already on this card');
 
+    // Kept in the spelling it was given (ADR-253): Chromium's Intl would have renamed it Calcutta.
+    await box.fill('asia/kolkata');
+    await box.press('Enter');
+    await expect(cell.locator('.wclock-label')).toHaveText(['Local', 'UTC', 'Tokyo', 'Kolkata']);
+
     expect(errors.uncaught).toEqual([]);
   });
 });

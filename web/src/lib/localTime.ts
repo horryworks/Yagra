@@ -7,9 +7,10 @@
 
 import type { TFunction } from 'i18next';
 import {
-  canonicalTimeZone,
+  checkedZone,
   clockText,
   displayTimeZone,
+  utcOffsetText,
   wallClock,
   zoneWeekdayText,
 } from './timeZone';
@@ -22,8 +23,9 @@ export interface DeliveryNow {
 }
 
 export interface LocalTimeLine {
-  /** `HH:MM` and the zone it is read in; null when no folder above names a zone (decision 4). */
-  clock: { time: string; zone: string } | null;
+  /** `HH:MM`, the zone as it was given, and its offset now (`+0900`, as NetBox writes it); null
+   *  when no folder above names a zone this screen can show (ADR-252 decision 4, ADR-253). */
+  clock: { time: string; zone: string; offset: string } | null;
   /** The delivery state; null when no schedule reaches the place, or when the server's answer has
    *  run past its own boundary (`stale`) and must not be shown as current. */
   delivery: { open: boolean; text: string } | null;
@@ -47,9 +49,11 @@ export function localTimeLine(
   t: TFunction,
   locale: string,
 ): LocalTimeLine {
-  // A name this browser does not know shows no clock rather than throwing on every redraw.
-  const known = zone ? canonicalTimeZone(zone) : null;
-  const clock = known && zone ? { time: clockText(now, known), zone } : null;
+  // Shown in the spelling it was given (ADR-253); a name this screen cannot compute shows no clock.
+  const known = checkedZone(zone);
+  const clock = known
+    ? { time: clockText(now, known), zone: known, offset: utcOffsetText(now, known) }
+    : null;
   if (!delivery) return { clock, delivery: null, stale: false };
   const raw = delivery.open ? delivery.closes_at : delivery.opens_at;
   const boundary = raw ? Date.parse(raw) : null;

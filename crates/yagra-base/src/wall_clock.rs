@@ -69,9 +69,94 @@ fn first_valid(tz: Tz, naive: NaiveDateTime) -> Option<DateTime<Utc>> {
     }
 }
 
+/// Every zone name this build's zone database knows, sorted - the names a person may choose from
+/// anywhere in Yagra (ADR-253 decision 2).
+///
+/// The same set NetBox offers: its `TimeZoneField` lists `zoneinfo.available_timezones()` minus
+/// `Factory`, which keeps the old aliases (`Japan`, `US/Eastern`) beside the current names. A
+/// name is offered, stored and shown in the spelling it arrives in; nothing here maps an alias to
+/// another name (decision 1).
+#[must_use]
+pub fn zone_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = chrono_tz::TZ_VARIANTS
+        .iter()
+        .map(|tz| tz.name())
+        .filter(|name| *name != "Factory")
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// [`zone_names`] as the JSON array the WebUI reads (`web/src/lib/zoneNames.json`), one name a
+/// line so a zone database update reads as a short diff.
+#[must_use]
+pub fn zone_names_json() -> String {
+    let lines: Vec<String> = zone_names()
+        .iter()
+        .map(|name| format!("  {}", serde_json::Value::from(*name)))
+        .collect();
+    format!("[\n{}\n]\n", lines.join(",\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The WebUI's picker is generated from this crate, never transcribed (ADR-253 decision 2).
+    #[test]
+    fn the_committed_zone_names_are_current() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../web/src/lib/zoneNames.json");
+        let generated = zone_names_json();
+        if std::env::var_os("UPDATE_ZONE_NAMES").is_some() {
+            std::fs::write(&path, &generated).expect("write zoneNames.json");
+            return;
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert_eq!(
+            committed, generated,
+            "web/src/lib/zoneNames.json is stale. Regenerate it with:\n    \
+             UPDATE_ZONE_NAMES=1 cargo test -p yagra-base the_committed_zone_names_are_current"
+        );
+    }
+
+    /// NetBox offers the aliases beside the current names and leaves out only `Factory`; so does
+    /// this list. A list holding only current names would refuse a zone NetBox accepted.
+    #[test]
+    fn the_names_are_the_ones_netbox_offers() {
+        let names = zone_names();
+        assert!(
+            names.len() > 500,
+            "the zone database is much larger than this"
+        );
+        for name in [
+            "Asia/Tokyo",
+            "Japan",
+            "US/Eastern",
+            "Asia/Kolkata",
+            "Asia/Calcutta",
+            "UTC",
+        ] {
+            assert!(names.contains(&name), "{name} is missing");
+        }
+        assert!(!names.contains(&"Factory"));
+    }
+
+    /// A name keeps the spelling it arrived in (ADR-253 decision 1): an alias is not turned into
+    /// the zone it links to, though both keep the same time.
+    #[test]
+    fn a_zone_keeps_the_spelling_it_was_given() {
+        for name in ["Japan", "US/Eastern", "Asia/Calcutta", "Asia/Tokyo"] {
+            assert_eq!(parse_zone(name).map(|tz| tz.name()), Some(name));
+        }
+        let now = Utc.with_ymd_and_hms(2026, 11, 10, 5, 0, 0).unwrap();
+        let tokyo = parse_zone("Asia/Tokyo").unwrap();
+        let japan = parse_zone("Japan").unwrap();
+        assert_eq!(
+            now.with_timezone(&tokyo).naive_local(),
+            now.with_timezone(&japan).naive_local()
+        );
+    }
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).expect("date")

@@ -10,7 +10,7 @@
 // judgement left in the `.tsx` is judgement nothing tests.
 
 import {
-  canonicalTimeZone,
+  checkedZone,
   displayTimeZone,
   isKnownTimeZone,
   knownTimeZones,
@@ -75,9 +75,9 @@ export function readClockSettings(s: WidgetSettings = {}): ClockSettings {
 /**
  * Turn what the operator typed into a zone to store, or `null` when nothing matches.
  *
- * The listed names are matched ignoring case first, so `asia/tokyo` stores `Asia/Tokyo`. A name the
- * list lacks but `Intl` accepts (an alias) stores whatever `Intl` resolves it to — ⚠️ which can be
- * the older spelling: Chromium resolves `Asia/Kolkata` to `Asia/Calcutta` (ADR-237, risks).
+ * The listed names are matched ignoring case, so `asia/tokyo` stores `Asia/Tokyo`. The list is
+ * core's zone database, aliases included, and a name is stored in its listed spelling - never the
+ * one `Intl` would rename it to (ADR-253).
  * `localName` is the word the picker offers for {@link LOCAL_ZONE}.
  */
 export function resolveTimeZone(
@@ -91,7 +91,7 @@ export function resolveTimeZone(
   if (lower === LOCAL_ZONE || lower === localName.toLowerCase()) return LOCAL_ZONE;
   const hit = known.find((z) => z.toLowerCase() === lower);
   if (hit) return hit;
-  return canonicalTimeZone(s);
+  return checkedZone(s);
 }
 
 export type AddZoneResult =

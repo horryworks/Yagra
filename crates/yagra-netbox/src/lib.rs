@@ -2885,6 +2885,10 @@ mod tests {
         let s: NetboxSite =
             serde_json::from_str(r#"{"id":1,"name":"a","time_zone":"Asia/Tokyo"}"#).unwrap();
         assert_eq!(s.time_zone.as_deref(), Some("Asia/Tokyo"));
+        // An old alias NetBox accepts arrives, and is kept, as written (ADR-253 decision 1).
+        let s: NetboxSite =
+            serde_json::from_str(r#"{"id":1,"name":"a","time_zone":"Japan"}"#).unwrap();
+        assert_eq!(s.time_zone.as_deref(), Some("Japan"));
         let s: NetboxSite =
             serde_json::from_str(r#"{"id":1,"name":"a","time_zone":null}"#).unwrap();
         assert_eq!(s.time_zone, None);
