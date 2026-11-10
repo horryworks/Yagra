@@ -3,6 +3,7 @@
 // the wrong column still "draws a guide".
 import { describe, expect, it } from 'vitest';
 import {
+  aimAtRow,
   cellTones,
   checkedPerGroup,
   checkedRowIndices,
@@ -306,5 +307,99 @@ describe('stickyParents', () => {
 
   it('pins the Ungrouped header over its nodes', () => {
     expect(stickyParents(TREE, parent, 12 * H, H)).toEqual([11]);
+  });
+});
+
+describe('aimAtRow', () => {
+  const H = 30;
+  /** region > site-a (40 nodes), site-b (2 nodes): the Tier1 fixture in `treeGuides.spec.ts`. */
+  const SITES: FlatRow[] = [g('region', 0), g('site-a', 1)];
+  for (let i = 0; i < 40; i++) SITES.push(n(`a${i}`, 2));
+  SITES.push(g('site-b', 1), n('b0', 2), n('b1', 2));
+  const geo = (rows: readonly FlatRow[], scrollTop: number, viewport = 420, stickyMax = 3) => ({
+    scrollTop,
+    viewport,
+    maxOffset: Math.max(0, rows.length * H - viewport),
+    rowHeight: H,
+    stickyMax,
+  });
+  const band = (rows: readonly FlatRow[], top: number) =>
+    stickyParents(rows, parentRows(rows), top, H).length;
+
+  // The two the browser caught shaking. Before ADR-171 Inc.2 these went 0 ↔ 30 and 30 ↔ 60.
+  it('takes a pinned folder back to a position where nothing moves it again', () => {
+    const at = aimAtRow(SITES, parentRows(SITES), 1, 'start', geo(SITES, 600));
+    expect(at).toBe(0);
+    expect(aimAtRow(SITES, parentRows(SITES), 1, 'start', geo(SITES, at ?? -1))).toBe(at);
+  });
+
+  it('moves an arrow key’s row out from under the band, once', () => {
+    // Top row a0 (2), band of two: a0 and a1 are under it. Up from a2 lands on a1 (3).
+    const at = aimAtRow(SITES, parentRows(SITES), 3, 'auto', geo(SITES, 60));
+    expect(at).toBe(30);
+    // Landed: the row is in the clear, so a second ask leaves the pane alone.
+    expect(aimAtRow(SITES, parentRows(SITES), 3, 'auto', geo(SITES, 30))).toBeNull();
+    expect(3 * H).toBeGreaterThanOrEqual(30 + band(SITES, 30) * H);
+  });
+
+  it('leaves the pane alone for a row already in the clear, and aims a row below to the bottom', () => {
+    expect(aimAtRow(SITES, parentRows(SITES), 10, 'auto', geo(SITES, 60))).toBeNull();
+    expect(aimAtRow(SITES, parentRows(SITES), 30, 'auto', geo(SITES, 60))).toBe(31 * H - 420);
+  });
+
+  it('draws no band while dragging, so a start aim is the row itself', () => {
+    expect(aimAtRow(SITES, parentRows(SITES), 20, 'start', geo(SITES, 0, 420, 0))).toBe(20 * H);
+  });
+
+  // The property that matters, over trees of every shape: wherever the aim lands, asking again
+  // from there gives the same answer (the pane does not move a second time), and the row is not
+  // hidden under the band drawn there.
+  it('is stable where it lands and never parks the row under the band, on any tree', () => {
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    let cycles = 0;
+    let checked = 0;
+    for (let t = 0; t < 40; t++) {
+      const rows: FlatRow[] = [];
+      const walk = (d: number) => {
+        const kids = 1 + Math.floor(rnd() * 4);
+        for (let k = 0; k < kids; k++) {
+          rows.push(g(`g${rows.length}`, d));
+          if (d < 4 && rnd() < 0.6) walk(d + 1);
+          const count = Math.floor(rnd() * 12);
+          for (let j = 0; j < count; j++) rows.push(n(`n${rows.length}`, d + 1));
+        }
+      };
+      walk(0);
+      const parent = parentRows(rows);
+      for (const viewport of [420, 600]) {
+        const max = Math.max(0, rows.length * H - viewport);
+        for (const align of ['start', 'center', 'auto'] as const) {
+          for (let i = 0; i < rows.length; i += 3) {
+            const from = Math.floor(rnd() * max);
+            const at = aimAtRow(rows, parent, i, align, geo(rows, from, viewport)) ?? from;
+            const again = aimAtRow(rows, parent, i, align, geo(rows, at, viewport));
+            // `auto` from where it landed: nothing to do. The others: the same number.
+            expect(again ?? at, `row ${i} ${align} from ${from}`).toBe(at);
+            const clearFrom = at + band(rows, at) * H;
+            expect(i * H, `row ${i} ${align} under the band at ${at}`).toBeGreaterThanOrEqual(clearFrom);
+            expect(i * H + H, `row ${i} ${align} below the pane at ${at}`).toBeLessThanOrEqual(at + viewport);
+            checked++;
+            if (align !== 'auto') {
+              // Count the inputs where the band at the aim and the band aimed with disagree in a
+              // loop — the case the old `scrollToIndex` path shook on.
+              const b0 = band(rows, from);
+              const t0 = Math.max(0, Math.min(max, i * H - b0 * H + (align === 'center' ? (H - viewport) / 2 : 0)));
+              const b1 = band(rows, t0);
+              const t1 = Math.max(0, Math.min(max, i * H - b1 * H + (align === 'center' ? (H - viewport) / 2 : 0)));
+              if (b1 !== b0 && band(rows, t1) === b0 && t1 !== t0) cycles++;
+            }
+          }
+        }
+      }
+    }
+    // The walk was not empty, and it did meet the boundary the old path looped on.
+    expect(checked).toBeGreaterThan(5000);
+    expect(cycles).toBeGreaterThan(50);
   });
 });

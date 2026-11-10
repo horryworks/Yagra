@@ -5,7 +5,7 @@
 // nowhere in `NodeTree.tsx` or `NodesPage.tsx`, and the virtualizer's own scroll-writing paths are
 // unreachable from a press (no `measureElement`, `anchorTo` left at the default `start`).
 // ⚠️ **One path does write it, since ADR-155: the keyboard.** A key that moves the cursor calls
-// `rowVirtualizer.scrollToIndex` so the row it landed on is on screen — the same thing this file
+// `scrollRowIntoView` (`aimAtRow`, ADR-171 Inc.2) so the row it landed on is on screen — the same thing this file
 // already allows a keyboard focus to do (`restoreScroll`'s null pin). A pointer press still moves
 // nothing. What moved the
 // pane was the **browser**: `.ntree-node-name` is a real `<button>` at `flex: 1`, so it covers

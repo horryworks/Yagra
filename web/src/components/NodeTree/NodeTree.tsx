@@ -128,14 +128,18 @@ import {
 } from './nodeTreeKeys';
 import { pinFocusScroll, restoreScroll, type ScrollAt } from './nodeTreeScroll';
 import {
+  aimAtRow,
   cellTones,
   checkedPerGroup,
   checkedRowIndices,
   litGuides,
   parentRows,
+  scrollGeometry,
+  STICKY_MAX,
   stickyParents,
   treeGuides,
   type GuideKind,
+  type RowAlign,
 } from './nodeTreeGuides';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
@@ -633,13 +637,24 @@ export function NodeTree({
   /** The folders pinned at the top (ADR-171 decision 5). None while dragging: a band over the rows would
    *  hide the row a drop is aimed at. The virtualizer re-renders as the scroll crosses rows, which
    *  is the only granularity the band changes at. */
-  const band = drag ? [] : stickyParents(drawn, parents, rowVirtualizer.scrollOffset ?? 0, ROW_H);
-  // 🚨 A row the keyboard moves to must not land UNDER the band. `scrollToIndex` treats a row
-  // within `scrollPaddingStart` of the top as out of view, and the band's height is only known
-  // here, after the virtualizer was built for this render — so it is written onto the options the
-  // virtualizer will read when the next key press scrolls. `useVirtualizer` resets its options on
-  // every render, so this never outlives the render that computed it.
-  rowVirtualizer.options.scrollPaddingStart = band.length * ROW_H;
+  const stickyMax = drag ? 0 : STICKY_MAX;
+  const band = stickyParents(drawn, parents, rowVirtualizer.scrollOffset ?? 0, ROW_H, stickyMax);
+  /**
+   * Scroll so row `index` is shown — every scroll the tree makes by itself goes through here
+   * (ADR-171 Inc.2).
+   *
+   * 🚨 **Never `rowVirtualizer.scrollToIndex`, and never `scrollPaddingStart`.** The virtualizer
+   * re-aims an index for five seconds after the scroll, and the band it would aim below is the band
+   * at the position the pane is IN; moving changes the band, so it re-aimed, moved back, and shook
+   * between two positions for the whole five seconds (`treeGuides.spec.ts`). `aimAtRow` takes the
+   * band at the destination and returns one number, which `scrollToOffset` never re-aims.
+   */
+  const scrollRowIntoView = (index: number, align: RowAlign) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const at = aimAtRow(drawn, parents, index, align, scrollGeometry(el, ROW_H, stickyMax));
+    if (at !== null) rowVirtualizer.scrollToOffset(at);
+  };
 
   /** Apply what a click on a node row decided (ADR-124 decision 2/4 + Inc.1).
    *
@@ -1638,7 +1653,7 @@ export function NodeTree({
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           e.stopPropagation();
-          rowVirtualizer.scrollToIndex(index, { align: 'start' });
+          scrollRowIntoView(index, 'start');
           if (row.kind !== 'group') return;
           if (isSelected('group', row.group.id) && !cursor) return;
           setCursor(null);
@@ -1844,11 +1859,15 @@ export function NodeTree({
       // A reload puts the row back where it sat. Anything else is centred, not `auto`: the operator
       // is looking for the row, and a row at the very edge of the pane — or under the
       // pinned-parents band — is one they would still have to find.
+      // Aimed the way `scrollRowIntoView` aims (ADR-171 Inc.2) — spelled out here because an effect
+      // cannot depend on a function rebuilt every render.
+      const el = scrollRef.current;
       const back = restoring ? restoreOffset(step.index, ROW_H, reveal.top ?? 0) : null;
-      const target = back ?? rowVirtualizer.getOffsetForIndex(step.index, 'center')?.[0];
-      const moves = target !== undefined && Math.abs(target - scrollTop) >= 1;
-      if (back !== null) rowVirtualizer.scrollToOffset(back);
-      else rowVirtualizer.scrollToIndex(step.index, { align: 'center' });
+      const target =
+        back ??
+        (el ? aimAtRow(drawn, parents, step.index, 'center', scrollGeometry(el, ROW_H, stickyMax)) : null);
+      const moves = target !== null && Math.abs(target - scrollTop) >= 1;
+      if (target !== null) rowVirtualizer.scrollToOffset(target);
       if (moves) return;
     }
     if (revealHolds(drawn, step.index, loadingGroups ?? NO_GROUPS, onScreenPending)) return;
@@ -1856,6 +1875,8 @@ export function NodeTree({
   }, [
     reveal,
     drawn,
+    parents,
+    stickyMax,
     filtering,
     collapsed,
     revealFolders,
@@ -1931,7 +1952,7 @@ export function NodeTree({
       if (change) onCheckedChange(change.checked, change.anchorId);
     }
     setCursor(cursorForMove(sel, selected ?? null, committed.current));
-    rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+    scrollRowIntoView(index, 'auto');
   };
 
   /** Set by a menu opened from the keyboard, read when the menu has been placed (focus the first
@@ -1949,7 +1970,7 @@ export function NodeTree({
     const row = drawn[index];
     const sel = rowSelection(row);
     if (!sel) return;
-    rowVirtualizer.scrollToIndex(index, { align: 'auto' });
+    scrollRowIntoView(index, 'auto');
     const open = () => {
       const box = (
         document.getElementById(rowDomId(sel)) ?? scrollRef.current
@@ -1968,7 +1989,7 @@ export function NodeTree({
       menuOpenedByKey.current = true;
       focusMenuOnPlace.current = true;
     };
-    // 🚨 Read the row's box once the row EXISTS. `scrollToIndex` only writes `scrollTop`; the
+    // 🚨 Read the row's box once the row EXISTS. `scrollRowIntoView` only writes `scrollTop`; the
     // virtualizer renders on the scroll event that follows, so a cursor row outside the mounted
     // window is not in the DOM on the next line. Reading at once fell through to the scroll
     // container's box, and the menu — which acts on that row — opened at the corner of the pane

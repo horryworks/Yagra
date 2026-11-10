@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **The inventory tree no longer shakes up and down after it scrolls by itself.** Clearing the search (or Pinned only, or Hide empty folders) with a node selected, opening a folder from the detail pane's breadcrumb, arriving from a node page, moving with the arrow keys, and pressing a folder in the pinned band at the top could leave the tree jumping between two positions for up to five seconds, near the end of a folder. The tree now decides where to stop once, below the pinned folders it will show there, and stays.
+
 ## v0.3.77 — Show a site's local time and whether its notifications are going out, and name time zones the way NetBox does
 
 ### New Features

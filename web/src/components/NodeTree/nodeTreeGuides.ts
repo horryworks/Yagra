@@ -256,3 +256,89 @@ export function stickyParents(
   }
   return [];
 }
+
+/** How a row the tree scrolls to itself should sit: at the top (under the band), in the middle, or
+ *  wherever moves the pane least — nowhere at all when the row is already in the clear. */
+export type RowAlign = 'start' | 'center' | 'auto';
+
+/** The geometry of a live scroller, read at the moment of aiming. */
+export function scrollGeometry(
+  el: { scrollTop: number; clientHeight: number; scrollHeight: number },
+  rowHeight: number,
+  stickyMax: number,
+): ScrollGeometry {
+  return {
+    scrollTop: el.scrollTop,
+    viewport: el.clientHeight,
+    maxOffset: Math.max(0, el.scrollHeight - el.clientHeight),
+    rowHeight,
+    stickyMax,
+  };
+}
+
+/** The scroller's numbers an aim is taken against. */
+export interface ScrollGeometry {
+  scrollTop: number;
+  /** The scroller's visible height. */
+  viewport: number;
+  /** The largest `scrollTop` the scroller accepts. */
+  maxOffset: number;
+  rowHeight: number;
+  /** How many folders the band may pin: `STICKY_MAX`, or 0 while dragging (no band is drawn). */
+  stickyMax: number;
+}
+
+/**
+ * The one `scrollTop` the tree should move to so `index` is shown, or null when it need not move
+ * (ADR-171 Inc.2).
+ *
+ * 🚨 **The band is the one at the DESTINATION, and the answer is a number, not an index.** The
+ * virtualizer's `scrollToIndex` re-aims every frame for five seconds, and the tree used to hand it
+ * the band as `scrollPaddingStart` — the band at the position the pane was in. Moving changed the
+ * band, which changed the aim, which moved the pane back: near a folder boundary it shook between
+ * two positions for the whole five seconds (`treeGuides.spec.ts` caught 0 ↔ 30 and 30 ↔ 60 px). A
+ * number given to `scrollToOffset` is never re-aimed.
+ *
+ * The band at the destination depends on the destination, so this guesses a band height, aims,
+ * reads the band there, and repeats until the two agree. Where they never agree — the same kind of
+ * boundary `stickyParents` documents — it takes the aim made with the TALLEST band in the cycle:
+ * the lowest offset of them, so the row lands that many rows below the top, and the band drawn
+ * there, being one of the cycle's and so no taller, cannot cover it.
+ *
+ * `auto` leaves the pane alone when the row is fully in the clear (below the band as drawn now and
+ * above the bottom edge), aims it to the bottom edge when it is below, and to the top otherwise.
+ */
+export function aimAtRow(
+  rows: readonly FlatRow[],
+  parent: readonly number[],
+  index: number,
+  align: RowAlign,
+  geo: ScrollGeometry,
+): number | null {
+  if (rows.length === 0) return null;
+  const i = Math.max(0, Math.min(index, rows.length - 1));
+  const h = geo.rowHeight;
+  const clamp = (v: number) => Math.max(0, Math.min(geo.maxOffset, v));
+  const bandAt = (top: number) => stickyParents(rows, parent, top, h, geo.stickyMax).length;
+  const rowTop = i * h;
+  let mode: 'start' | 'center' = align === 'center' ? 'center' : 'start';
+  if (align === 'auto') {
+    const clearFrom = geo.scrollTop + bandAt(geo.scrollTop) * h;
+    if (rowTop + h > geo.scrollTop + geo.viewport) return clamp(rowTop + h - geo.viewport);
+    if (rowTop >= clearFrom) return null;
+    mode = 'start';
+  }
+  const aim = (band: number) =>
+    clamp(rowTop - band * h + (mode === 'center' ? (h - geo.viewport) / 2 : 0));
+  const tried: number[] = [];
+  let band = bandAt(geo.scrollTop);
+  while (!tried.includes(band)) {
+    tried.push(band);
+    const next = bandAt(aim(band));
+    if (next === band) return aim(band);
+    band = next;
+  }
+  // A cycle: `band` is where it closed; the bands from there on are the cycle.
+  const cycle = tried.slice(tried.indexOf(band));
+  return aim(Math.max(...cycle));
+}

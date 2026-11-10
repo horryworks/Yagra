@@ -231,3 +231,63 @@ test('scrolled into a long folder, its parents are pinned on top and take you ba
   await expect(page.locator('.ntree-row.sel')).toHaveCount(1);
   await expect(groupRow(page, 'site-a')).toBeInViewport();
 });
+
+/**
+ * The scroller's position on each of the next `frames` animation frames, starting `afterMs` after
+ * the call. A tree that has come to rest gives one value; the defect below gave two, alternating.
+ */
+const scrollTrace = (page: Page, afterMs: number, frames: number) =>
+  page.locator('.ntree-body').evaluate(
+    (el, [wait, n]) =>
+      new Promise<number[]>((resolve) => {
+        const out: number[] = [];
+        const step = () => {
+          out.push(el.scrollTop);
+          if (out.length < n) requestAnimationFrame(step);
+          else resolve(out);
+        };
+        setTimeout(() => requestAnimationFrame(step), wait);
+      }),
+    [afterMs, frames] as const,
+  );
+
+// 🚨 ADR-171 Inc.2. The scroll the tree makes itself used to aim at "the row, below the band as it
+// is HERE" — and moving there changed the band, which changed the aim, which moved it back. The
+// library re-aims every frame for five seconds, so near a folder boundary the pane shook between two
+// positions. The test above stayed green throughout: the row is in the viewport at both of them.
+test('pressing a pinned folder scrolls once and stays put', async ({ page }) => {
+  await open(page);
+  const scroller = page.locator('.ntree-body');
+  await scroller.evaluate((el) => {
+    el.scrollTop = 20 * 30;
+  });
+  await expect(page.locator('.ntree-sticky-row')).toHaveCount(2);
+  await page.locator('.ntree-sticky-row').nth(1).click();
+  const trace = await scrollTrace(page, 300, 40);
+  expect(new Set(trace).size, `the pane kept moving: ${trace.join(' ')}`).toBe(1);
+  await expect(groupRow(page, 'site-a')).toBeInViewport();
+});
+
+test('an arrow key onto a row under the band scrolls once and stays put', async ({ page }) => {
+  await open(page);
+  const scroller = page.locator('.ntree-body');
+  // Two rows down: site-a-00 and site-a-01 sit under the two-row band, site-a-02 is the first in
+  // the clear.
+  await scroller.evaluate((el) => {
+    el.scrollTop = 2 * 30;
+  });
+  await expect(page.locator('.ntree-sticky-row')).toHaveCount(2);
+  await nodeRow(page, aName(2)).click();
+  await expect(nodeRow(page, aName(2))).toHaveClass(/sel/);
+  await page.keyboard.press('ArrowUp');
+  const trace = await scrollTrace(page, 300, 40);
+  expect(new Set(trace).size, `the pane kept moving: ${trace.join(' ')}`).toBe(1);
+  // …and where it stopped, the row the cursor moved to is not hidden under the band.
+  const rowTop = await nodeRow(page, aName(1)).evaluate((el) => el.getBoundingClientRect().top);
+  const bandBottom = await page.evaluate(() => {
+    const band = [...document.querySelectorAll('.ntree-sticky-row')];
+    const last = band[band.length - 1];
+    return last ? last.getBoundingClientRect().bottom : -Infinity;
+  });
+  expect(rowTop).toBeGreaterThanOrEqual(bandBottom - 1);
+});
