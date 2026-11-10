@@ -37,10 +37,9 @@ export function LocalTimeParts({ zone, delivery, onStale }: Props) {
       {line.clock && (
         <>
           <span className="nd-sep">·</span>
-          <Inline as="span" gap={6}>
-            <span>{line.clock.time}</span>
-            <span>{t('localTime.zone', { zone: line.clock.zone, offset: line.clock.offset })}</span>
-          </Inline>
+          {/* Named "Local time", as NetBox's Site page names it, so it is not read as the zone the
+              rest of the screen - charts included - is shown in (ADR-252 decision 10). */}
+          <span>{t('localTime.clock', line.clock)}</span>
         </>
       )}
       {line.delivery && (

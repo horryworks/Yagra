@@ -745,7 +745,7 @@
     "deliveringUntil": "Delivering until {{time}}",
     "held": "Held",
     "heldUntil": "Held until {{time}}",
-    "zone": "{{zone}} (UTC {{offset}})"
+    "clock": "Local time {{time}} {{zone}} (UTC {{offset}})"
   },
   "groupDetail": {
     "health": "Health",
