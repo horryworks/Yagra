@@ -111,6 +111,8 @@ pub const CLASS_PORT: i64 = 10;
 /// What a CloudEngine-branded Huawei calls the slot one member's main board sits in, followed by the
 /// member number — decision 23. A modular chassis's `MPU slot 1/5` is not one.
 const HUAWEI_MEMBER_SLOT: &str = "MPU slot ";
+/// What a CloudEngine-branded Huawei calls its chassis row, followed by the series (Inc.8).
+const HUAWEI_CLOUDENGINE: &str = "CloudEngine ";
 /// Huawei's enterprise number, which a device's `sysObjectID` starts with (Increment 4, decision 17).
 const HUAWEI_ENTERPRISE: &str = "1.3.6.1.4.1.2011";
 /// What a Huawei calls one member's main board, each followed by the member number: `MPU Board` on a
@@ -294,9 +296,13 @@ pub struct EntityRows<'a> {
 #[must_use]
 pub fn resolve_entity(rows: EntityRows<'_>) -> EntityIdentity {
     if let Some(boards) = huawei_board_rows(rows.classes, rows.names, rows.parents, rows.serials) {
+        // A board's model is the device's only on a CloudEngine stack, where each member is a box
+        // of its own (decision 34). A USG files its MPU card in the same `MPU slot 0` shape, and
+        // that card's model (`MPUA-USG6530F-D`) is a part number, not what the firewall is.
+        let models = names_a_cloudengine(rows.classes, rows.names).then_some(rows.models);
         return EntityIdentity {
             from_boards: true,
-            ..members(&boards, rows.serials, Some(rows.models))
+            ..members(&boards, rows.serials, models)
         };
     }
     if rows.classes.is_empty() {
@@ -306,6 +312,16 @@ pub fn resolve_entity(rows: EntityRows<'_>) -> EntityIdentity {
         };
     }
     members(&chassis_rows(rows.classes), rows.serials, Some(rows.models))
+}
+
+/// Whether a chassis row is named for Huawei's CloudEngine brand — `CloudEngine S5735-L-V2`, the
+/// one shape measured whose main boards carry the member's own model (Inc.8 decision 34).
+fn names_a_cloudengine(classes: &BTreeMap<u32, i64>, names: &BTreeMap<u32, String>) -> bool {
+    chassis_rows(classes).iter().any(|index| {
+        names
+            .get(index)
+            .is_some_and(|name| name.trim_start().starts_with(HUAWEI_CLOUDENGINE))
+    })
 }
 
 /// A Huawei's serial number, read from its members' main boards rather than its chassis row
@@ -1295,6 +1311,42 @@ mod tests {
         let ac = HuaweiMaps::flat(&[(3, 3, "AC6508", ""), (9, 9, "SRU Board 0", "SN-AC")]).entity();
         assert_eq!(ac.serial.as_deref(), Some("SN-AC"));
         assert_eq!(ac.model, None);
+    }
+
+    /// Decision 34, the shape of a lab USG6530F-D (2026-11-10): its MPU card sits in `MPU slot 0`
+    /// exactly as a CloudEngine member's board does, but the card's model is a part number. The
+    /// serial still comes off the board; the model is left to `sysDescr`'s `USG6530F-D`.
+    #[test]
+    fn a_usg_card_model_is_not_the_firewalls_model() {
+        let usg = || {
+            HuaweiMaps::new(
+                &[
+                    (16_777_216, 3, "USG6530F-D", "SN-USG"),
+                    (16_777_218, 5, "MPU slot 0", ""),
+                    (16_777_217, 9, "MPUA-USG6530F-D 0", "SN-USG"),
+                ],
+                &[
+                    (16_777_216, 0),
+                    (16_777_218, 16_777_216),
+                    (16_777_217, 16_777_218),
+                ],
+            )
+            .with_models(&[(16_777_216, ""), (16_777_217, "MPUA-USG6530F-D")])
+        };
+        let read = usg().entity();
+        assert!(read.from_boards, "the board shape is still recognised");
+        assert_eq!(read.serial.as_deref(), Some("SN-USG"));
+        assert_eq!(read.model, None);
+
+        // The same rows under a CloudEngine chassis name take the board's model.
+        let mut cloudengine = usg();
+        cloudengine
+            .names
+            .insert(16_777_216, "CloudEngine S5735-L-V2".to_owned());
+        assert_eq!(
+            cloudengine.entity().model.as_deref(),
+            Some("MPUA-USG6530F-D")
+        );
     }
 
     /// No class column: the lone-serial rule still answers the serial, and no row is the device,
