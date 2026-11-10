@@ -299,10 +299,11 @@ pub fn resolve_entity(rows: EntityRows<'_>) -> EntityIdentity {
         // A board's model is the device's only on a CloudEngine stack, where each member is a box
         // of its own (decision 34). A USG files its MPU card in the same `MPU slot 0` shape, and
         // that card's model (`MPUA-USG6530F-D`) is a part number, not what the firewall is.
-        let models = names_a_cloudengine(rows.classes, rows.names).then_some(rows.models);
+        let models = names_a_cloudengine(rows.classes, rows.names)
+            .then(|| cloudengine_board_models(&boards, rows));
         return EntityIdentity {
             from_boards: true,
-            ..members(&boards, rows.serials, models)
+            ..members(&boards, rows.serials, models.as_ref())
         };
     }
     if rows.classes.is_empty() {
@@ -312,6 +313,31 @@ pub fn resolve_entity(rows: EntityRows<'_>) -> EntityIdentity {
         };
     }
     members(&chassis_rows(rows.classes), rows.serials, Some(rows.models))
+}
+
+/// Each CloudEngine main board's model (Inc.9 decision 36): its `entPhysicalModelName` when it
+/// answers one, otherwise its own name with the trailing member number taken off —
+/// `S5735-L24T4XE-A-V2 1` is an `S5735-L24T4XE-A-V2`. A YunShan V600R022 answers No Such Object for
+/// the whole model column, and the name is the only place it says what each member is. Only a
+/// board in the Increment 5 shape gives its name: an `MPU Board N` is named for its slot, not its
+/// model.
+fn cloudengine_board_models(boards: &[u32], rows: EntityRows<'_>) -> BTreeMap<u32, String> {
+    boards
+        .iter()
+        .filter_map(|&index| {
+            if let Some(model) = rows
+                .models
+                .get(&index)
+                .filter(|raw| sanitize_model_item(raw).is_some())
+            {
+                return Some((index, model.clone()));
+            }
+            let name = rows.names.get(&index)?;
+            slot_member(index, name, rows.classes, rows.names, rows.parents)?;
+            let (model, _) = name.rsplit_once(' ')?;
+            Some((index, model.to_owned()))
+        })
+        .collect()
 }
 
 /// Whether a chassis row is named for Huawei's CloudEngine brand — `CloudEngine S5735-L-V2`, the
@@ -1347,6 +1373,80 @@ mod tests {
             cloudengine.entity().model.as_deref(),
             Some("MPUA-USG6530F-D")
         );
+    }
+
+    /// The shape of a PoC two-member CloudEngine S5735-L-V2 stack on YunShan V600R022 (walked
+    /// 2026-11-11): the row indexes and names are the device's, the serials are made up. That
+    /// release answers No Such Object for the whole model column, so `models` is empty.
+    fn r022_stack() -> HuaweiMaps {
+        HuaweiMaps::new(
+            &[
+                (16_777_216, 3, "CloudEngine S5735-L-V2", "SN-M1"),
+                (16_842_752, 5, "MPU slot 1", ""),
+                (16_842_753, 9, "S5735-L24T4XE-A-V2 1", "SN-M1"),
+                (16_908_288, 5, "MPU slot 2", ""),
+                (16_908_289, 9, "S5735-L24T4XE-A-V2 2", "SN-M2"),
+            ],
+            &[
+                (16_777_216, 0),
+                (16_842_752, 16_777_216),
+                (16_842_753, 16_842_752),
+                (16_908_288, 16_777_216),
+                (16_908_289, 16_908_288),
+            ],
+        )
+    }
+
+    /// Inc.9 decision 36: with no model column, each member's model is its board's name with the
+    /// member number taken off, in the serials' order.
+    #[test]
+    fn a_cloudengine_with_no_model_column_takes_each_model_from_its_board_name() {
+        let read = r022_stack().entity();
+        assert!(read.from_boards);
+        assert_eq!(read.serial.as_deref(), Some("SN-M1, SN-M2"));
+        assert_eq!(
+            read.model.as_deref(),
+            Some("S5735-L24T4XE-A-V2, S5735-L24T4XE-A-V2")
+        );
+    }
+
+    /// Decision 36 is decided board by board: a board that answers a model keeps it, and only the
+    /// one that does not falls back to its name.
+    #[test]
+    fn a_board_that_answers_a_model_keeps_it_beside_one_read_from_its_name() {
+        let read = r022_stack()
+            .with_models(&[(16_842_753, "S5735-L24ST4XE-A-V2"), (16_908_289, "  ")])
+            .entity();
+        assert_eq!(
+            read.model.as_deref(),
+            Some("S5735-L24ST4XE-A-V2, S5735-L24T4XE-A-V2")
+        );
+    }
+
+    /// Decision 34 still gates decision 36: the same rows under a USG's chassis name give no model,
+    /// so `sysDescr`'s answer stands.
+    #[test]
+    fn a_board_name_is_not_a_model_off_a_cloudengine() {
+        let mut usg = r022_stack();
+        usg.names.insert(16_777_216, "USG6530F-D".to_owned());
+        let read = usg.entity();
+        assert_eq!(read.serial.as_deref(), Some("SN-M1, SN-M2"));
+        assert_eq!(read.model, None);
+    }
+
+    /// A board named for its slot (`MPU Board N`, decision 18) says nothing about its model, even
+    /// under a CloudEngine chassis name, so no model list is made.
+    #[test]
+    fn an_mpu_board_name_is_never_a_model() {
+        let read = HuaweiMaps::flat(&[
+            (1, 3, "CloudEngine S5735-L-V2", ""),
+            (9, 9, "MPU Board 0", "SN-0"),
+            (10, 9, "MPU Board 1", "SN-1"),
+        ])
+        .entity();
+        assert!(read.from_boards);
+        assert_eq!(read.serial.as_deref(), Some("SN-0, SN-1"));
+        assert_eq!(read.model, None);
     }
 
     /// No class column: the lone-serial rule still answers the serial, and no row is the device,

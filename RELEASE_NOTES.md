@@ -13,6 +13,7 @@
 ### Bug Fixes
 
 - **The inventory tree no longer shakes up and down after it scrolls by itself.** Clearing the search (or Pinned only, or Hide empty folders) with a node selected, opening a folder from the detail pane's breadcrumb, arriving from a node page, moving with the arrow keys, and pressing a folder in the pinned band at the top could leave the tree jumping between two positions for up to five seconds, near the end of a folder. The tree now decides where to stop once, below the pinned folders it will show there, and stays.
+- **A CloudEngine S5735 stack on YunShan V600R022 shows each member's hardware model instead of the series name `S5735-L-V2`.** That release does not answer ENTITY-MIB's model column, so the model is now read from each member board's name (`S5735-L24T4XE-A-V2 1` is an `S5735-L24T4XE-A-V2`), in the same order as the serial numbers. A board that does answer a model keeps it. A model typed by hand is still left alone.
 
 ## v0.3.77 — Show a site's local time and whether its notifications are going out, and name time zones the way NetBox does
 
