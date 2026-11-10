@@ -84,6 +84,14 @@ pub const OID_JNX_BOX_SERIAL: &str = "1.3.6.1.4.1.2636.3.1.3";
 pub const SERIAL_MAX_CHARS: usize = 128;
 /// The most chassis, or Virtual Chassis members, whose serials are listed for one node.
 pub const SERIAL_MAX_CHASSIS: usize = 8;
+/// `entPhysicalModelName` — the vendor's model name for a component (Increment 8).
+pub const OID_ENT_PHYSICAL_MODEL_NAME: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
+/// The longest one member's model is kept at. The longest measured is 20 characters.
+pub const MODEL_ITEM_MAX_CHARS: usize = 64;
+/// The longest a node's model — a stack's whole list — is kept at: every member at its longest,
+/// with the separators between them, so the list never stops before the serial list does.
+pub const MODEL_MAX_CHARS: usize =
+    SERIAL_MAX_CHASSIS * MODEL_ITEM_MAX_CHARS + (SERIAL_MAX_CHASSIS - 1) * SEPARATOR.len();
 /// `entPhysicalName` — the name of an ENTITY-MIB row. Walked beside the class and serial columns on
 /// a Huawei only, where it is what tells a member's main board from every other module (Increment 4).
 pub const OID_ENT_PHYSICAL_NAME: &str = yagra_common::row_names::ENT_PHYSICAL_NAME;
@@ -239,12 +247,65 @@ pub fn resolve(classes: &BTreeMap<u32, i64>, serials: &BTreeMap<u32, String>) ->
         }
         return distinct.pop();
     }
-    join(
-        classes
-            .iter()
-            .filter(|(_, class)| **class == CLASS_CHASSIS)
-            .filter_map(|(index, _)| serials.get(index).map(String::as_str)),
-    )
+    members(&chassis_rows(classes), serials, None).serial
+}
+
+/// The `entPhysicalIndex` of every chassis row, in index order — the rows [`resolve`] reads.
+fn chassis_rows(classes: &BTreeMap<u32, i64>) -> Vec<u32> {
+    classes
+        .iter()
+        .filter(|(_, class)| **class == CLASS_CHASSIS)
+        .map(|(index, _)| *index)
+        .collect()
+}
+
+/// What ENTITY-MIB says the device is (Increment 8): its serial number and its hardware model,
+/// both read off the same rows, so the i-th model belongs to the member whose serial is i-th
+/// (decision 30).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EntityIdentity {
+    /// What [`resolve`] or [`resolve_huawei_boards`] would answer.
+    pub serial: Option<String>,
+    /// Every member's `entPhysicalModelName`, in the serial's order, or `None` when any member
+    /// listed has none — a list that skipped one would pair the rest with the wrong serials.
+    pub model: Option<String>,
+    /// The rows were a Huawei's main boards (Increments 4 and 5) rather than chassis rows.
+    pub from_boards: bool,
+}
+
+/// ENTITY-MIB's columns as the poller walks them, each keyed by `entPhysicalIndex`. `names` and
+/// `parents` are walked on a Huawei only, and `models` on every device (Increment 8).
+#[derive(Debug, Clone, Copy)]
+pub struct EntityRows<'a> {
+    pub classes: &'a BTreeMap<u32, i64>,
+    pub serials: &'a BTreeMap<u32, String>,
+    pub names: &'a BTreeMap<u32, String>,
+    pub parents: &'a BTreeMap<u32, u32>,
+    pub models: &'a BTreeMap<u32, String>,
+}
+
+/// The serial and the model ENTITY-MIB gives (Increment 8): a Huawei's main boards when
+/// [`resolve_huawei_boards`] would take them, otherwise the chassis rows [`resolve`] reads.
+///
+/// The serial is exactly what those two functions answer. The model is listed only from the rows
+/// whose serial was listed, in the same order, so a repeat or an empty serial drops the member from
+/// both lists at once (decision 30). A device whose chassis rows carry a model but no serial still
+/// shows the model. A device with no class column shows none: nothing says which row is the device.
+#[must_use]
+pub fn resolve_entity(rows: EntityRows<'_>) -> EntityIdentity {
+    if let Some(boards) = huawei_board_rows(rows.classes, rows.names, rows.parents, rows.serials) {
+        return EntityIdentity {
+            from_boards: true,
+            ..members(&boards, rows.serials, Some(rows.models))
+        };
+    }
+    if rows.classes.is_empty() {
+        return EntityIdentity {
+            serial: resolve(rows.classes, rows.serials),
+            ..EntityIdentity::default()
+        };
+    }
+    members(&chassis_rows(rows.classes), rows.serials, Some(rows.models))
 }
 
 /// A Huawei's serial number, read from its members' main boards rather than its chassis row
@@ -268,6 +329,18 @@ pub fn resolve_huawei_boards(
     parents: &BTreeMap<u32, u32>,
     serials: &BTreeMap<u32, String>,
 ) -> Option<String> {
+    let boards = huawei_board_rows(classes, names, parents, serials)?;
+    members(&boards, serials, None).serial
+}
+
+/// The rows [`resolve_huawei_boards`] reads, in member order, or `None` when it should not decide —
+/// shared with [`resolve_entity`] so the serial and the model are read off the same boards.
+fn huawei_board_rows(
+    classes: &BTreeMap<u32, i64>,
+    names: &BTreeMap<u32, String>,
+    parents: &BTreeMap<u32, u32>,
+    serials: &BTreeMap<u32, String>,
+) -> Option<Vec<u32>> {
     let mut boards: Vec<(u32, u32, String)> = names
         .iter()
         .filter(|(index, _)| classes.get(index) == Some(&CLASS_MODULE))
@@ -290,7 +363,7 @@ pub fn resolve_huawei_boards(
     if !every_chassis_serial_is_a_board {
         return None;
     }
-    join(boards.iter().map(|(_, _, serial)| serial.as_str()))
+    Some(boards.into_iter().map(|(_, index, _)| index).collect())
 }
 
 /// The member number in a Huawei main board's name — `MPU Board 1` is member 1 — or `None` for any
@@ -340,10 +413,24 @@ fn member_number(digits: &str) -> Option<u32> {
 /// ones skipped, a repeat listed once, at most [`SERIAL_MAX_CHASSIS`], and stopping before a serial
 /// that would take the list past [`SERIAL_MAX_CHARS`]. `None` when nothing is left.
 fn join<'a>(raw: impl IntoIterator<Item = &'a str>) -> Option<String> {
-    let mut listed: Vec<String> = Vec::new();
+    let listed: Vec<String> = kept(raw.into_iter().map(|serial| (serial, ())))
+        .into_iter()
+        .map(|(serial, ())| serial)
+        .collect();
+    (!listed.is_empty()).then(|| listed.join(SEPARATOR))
+}
+
+/// The members [`join`] lists, each with what was carried beside its serial — the one place the
+/// rules for which members are listed live, so a model list built from what this keeps cannot
+/// fall out of step with the serial list (decision 30).
+fn kept<'a, T>(raw: impl IntoIterator<Item = (&'a str, T)>) -> Vec<(String, T)> {
+    let mut listed: Vec<(String, T)> = Vec::new();
     let mut chars = 0usize;
-    for serial in raw.into_iter().filter_map(sanitize) {
-        if listed.contains(&serial) {
+    for (raw, carried) in raw {
+        let Some(serial) = sanitize(raw) else {
+            continue;
+        };
+        if listed.iter().any(|(seen, _)| *seen == serial) {
             continue;
         }
         let width = if listed.is_empty() {
@@ -355,12 +442,74 @@ fn join<'a>(raw: impl IntoIterator<Item = &'a str>) -> Option<String> {
             break;
         }
         chars += width;
-        listed.push(serial);
+        listed.push((serial, carried));
         if listed.len() == SERIAL_MAX_CHASSIS {
             break;
         }
     }
-    (!listed.is_empty()).then(|| listed.join(SEPARATOR))
+    listed
+}
+
+/// The serial and model lists of the members at `rows`, in that order (Increment 8). With no
+/// `models`, only the serial is answered — the serial-only readers.
+///
+/// The model list is built from the members [`kept`] keeps, so it is the serial list's twin, and it
+/// is `None` when one of them has no model. When no member has a serial at all, the model list is
+/// built from every row instead, under the same all-or-nothing rule — a chassis with a model and no
+/// serial is still the model it says it is.
+fn members(
+    rows: &[u32],
+    serials: &BTreeMap<u32, String>,
+    models: Option<&BTreeMap<u32, String>>,
+) -> EntityIdentity {
+    let model_of = |index: u32| {
+        models
+            .and_then(|m| m.get(&index))
+            .and_then(|raw| sanitize_model_item(raw))
+    };
+    let listed = kept(rows.iter().filter_map(|index| {
+        serials
+            .get(index)
+            .map(|serial| (serial.as_str(), model_of(*index)))
+    }));
+    let serial = (!listed.is_empty()).then(|| {
+        listed
+            .iter()
+            .map(|(serial, _)| serial.as_str())
+            .collect::<Vec<_>>()
+            .join(SEPARATOR)
+    });
+    let model_list: Option<Vec<String>> = if models.is_none() {
+        None
+    } else if listed.is_empty() {
+        rows.iter()
+            .take(SERIAL_MAX_CHASSIS)
+            .map(|index| model_of(*index))
+            .collect()
+    } else {
+        listed.into_iter().map(|(_, model)| model).collect()
+    };
+    EntityIdentity {
+        serial,
+        model: model_list
+            .filter(|m| !m.is_empty())
+            .map(|m| m.join(SEPARATOR)),
+        from_boards: false,
+    }
+}
+
+/// One member's model, cleaned the way a serial is and cut at [`MODEL_ITEM_MAX_CHARS`].
+fn sanitize_model_item(raw: &str) -> Option<String> {
+    crate::text::fold_and_cap(raw, MODEL_ITEM_MAX_CHARS)
+}
+
+/// Make a device-supplied model — or a stack's list of them — safe to store and show, cut at
+/// [`MODEL_MAX_CHARS`] (Increment 8). Applied again at ingest, like [`sanitize`]. The cap fits
+/// [`SERIAL_MAX_CHASSIS`] members of [`MODEL_ITEM_MAX_CHARS`] each, so a list is never cut short of
+/// the serial list it pairs with.
+#[must_use]
+pub fn sanitize_model(raw: &str) -> Option<String> {
+    crate::text::fold_and_cap(raw, MODEL_MAX_CHARS)
 }
 
 /// Make a device-supplied serial safe to store and show: control characters and runs of whitespace
@@ -569,9 +718,27 @@ mod tests {
         names: BTreeMap<u32, String>,
         parents: BTreeMap<u32, u32>,
         serials: BTreeMap<u32, String>,
+        /// `entPhysicalModelName`, walked on every device since Increment 8.
+        models: BTreeMap<u32, String>,
     }
 
     impl HuaweiMaps {
+        /// The same rows with `entPhysicalModelName` beside them.
+        fn with_models(mut self, models: &[(u32, &str)]) -> Self {
+            self.models = models.iter().map(|(i, m)| (*i, (*m).to_owned())).collect();
+            self
+        }
+
+        fn entity(&self) -> EntityIdentity {
+            resolve_entity(EntityRows {
+                classes: &self.classes,
+                serials: &self.serials,
+                names: &self.names,
+                parents: &self.parents,
+                models: &self.models,
+            })
+        }
+
         /// `(entPhysicalIndex, entPhysicalClass, entPhysicalName, entPhysicalSerialNum)` rows, with
         /// `(entPhysicalIndex, entPhysicalContainedIn)` pairs beside them — empty where the walk that
         /// recorded the rows did not read where each sits.
@@ -1009,6 +1176,156 @@ mod tests {
             ],
         );
         assert_eq!(maps.boards().as_deref(), Some("SN-M1, SN-M2, SN-M3, SN-M4"));
+        // Increment 8: the boards carry their model, the chassis row does not, and the model list
+        // follows the serial list member for member — two of each model, never merged.
+        let read = maps
+            .with_models(&[
+                (16_777_216, ""),
+                (16_842_753, "S5735-L24T4XE-A-V2"),
+                (16_908_289, "S5735-L24T4XE-A-V2"),
+                (16_973_825, "S5735-L24ST4XE-A-V2"),
+                (17_039_361, "S5735-L24ST4XE-A-V2"),
+            ])
+            .entity();
+        assert_eq!(read.serial.as_deref(), Some("SN-M1, SN-M2, SN-M3, SN-M4"));
+        assert_eq!(
+            read.model.as_deref(),
+            Some(
+                "S5735-L24T4XE-A-V2, S5735-L24T4XE-A-V2, S5735-L24ST4XE-A-V2, S5735-L24ST4XE-A-V2"
+            )
+        );
+        assert!(read.from_boards);
+    }
+
+    /// `(entPhysicalIndex, entPhysicalClass, entPhysicalSerialNum, entPhysicalModelName)` rows read
+    /// through [`resolve_entity`], for a device that is not a Huawei (no names, no parents).
+    fn entity_of(entries: &[(u32, i64, &str, &str)]) -> EntityIdentity {
+        let classes = entries.iter().map(|(i, c, _, _)| (*i, *c)).collect();
+        let serials = entries
+            .iter()
+            .map(|(i, _, s, _)| (*i, (*s).to_owned()))
+            .collect();
+        let models = entries
+            .iter()
+            .map(|(i, _, _, m)| (*i, (*m).to_owned()))
+            .collect();
+        resolve_entity(EntityRows {
+            classes: &classes,
+            serials: &serials,
+            names: &BTreeMap::new(),
+            parents: &BTreeMap::new(),
+            models: &models,
+        })
+    }
+
+    /// The shape measured on a C2960X (2026-11-10): one chassis row at 1001 carries the hardware
+    /// model, while `sysDescr` only names the software family `C2960X`.
+    #[test]
+    fn a_cisco_chassis_row_gives_its_hardware_model() {
+        let read = entity_of(&[
+            (1001, 3, "FOC0000A1AA", "WS-C2960X-24TS-LL"),
+            (1002, 9, "", ""),
+            (1003, 10, "", ""),
+        ]);
+        assert_eq!(read.serial.as_deref(), Some("FOC0000A1AA"));
+        assert_eq!(read.model.as_deref(), Some("WS-C2960X-24TS-LL"));
+        assert!(!read.from_boards);
+    }
+
+    /// The C3750E stack measured: a stack row at 1 with no model, a chassis row per member. Two
+    /// members of the same model are listed twice, so the i-th model is the i-th serial's.
+    #[test]
+    fn a_cisco_stack_lists_each_members_model_in_the_serials_order() {
+        let read = entity_of(&[
+            (1, 11, "", ""),
+            (2001, 3, "FDO0000B2BB", "WS-C3750X-24T-E"),
+            (1001, 3, "FDO0000A1AA", "WS-C3750X-24T-E"),
+        ]);
+        assert_eq!(read.serial.as_deref(), Some("FDO0000A1AA, FDO0000B2BB"));
+        assert_eq!(
+            read.model.as_deref(),
+            Some("WS-C3750X-24T-E, WS-C3750X-24T-E")
+        );
+    }
+
+    /// Decision 30: a member whose serial is empty, or repeats one already listed, is dropped from
+    /// both lists at the same position — the model list never slides one member along.
+    #[test]
+    fn a_member_dropped_from_the_serials_is_dropped_from_the_models() {
+        let read = entity_of(&[
+            (1001, 3, "SN-A", "MODEL-A"),
+            (2001, 3, "", "MODEL-B"),
+            (3001, 3, "SN-A", "MODEL-C"),
+            (4001, 3, "SN-D", "MODEL-D"),
+        ]);
+        assert_eq!(read.serial.as_deref(), Some("SN-A, SN-D"));
+        assert_eq!(read.model.as_deref(), Some("MODEL-A, MODEL-D"));
+    }
+
+    /// A listed member with no model makes the whole list unknown rather than a shorter list that
+    /// would pair the remaining models with the wrong serials.
+    #[test]
+    fn one_member_without_a_model_gives_no_model_list() {
+        let read = entity_of(&[(1001, 3, "SN-A", "MODEL-A"), (2001, 3, "SN-B", "  ")]);
+        assert_eq!(read.serial.as_deref(), Some("SN-A, SN-B"));
+        assert_eq!(read.model, None);
+    }
+
+    /// A chassis row with a model and no serial still says what the device is.
+    #[test]
+    fn a_chassis_model_without_a_serial_is_still_shown() {
+        let read = entity_of(&[(1, 3, "", "ASAv"), (2, 9, "", "")]);
+        assert_eq!(read.serial, None);
+        assert_eq!(read.model.as_deref(), Some("ASAv"));
+    }
+
+    /// A Huawei VRP stack (S6730 measured) and an AC6508 answer no `entPhysicalModelName`, so
+    /// there is no model here and the caller falls back to `sysDescr`. The VRP chassis name is not
+    /// a model and is not taken.
+    #[test]
+    fn a_huawei_without_the_model_column_gives_no_model() {
+        let read = HuaweiMaps::flat(&[
+            (67_108_867, 3, "HUAWEI S6730 Routing Switch", "SN-0"),
+            (67_108_873, 9, "MPU Board 0", "SN-0"),
+            (68_157_449, 9, "MPU Board 1", "SN-1"),
+        ])
+        .entity();
+        assert_eq!(read.serial.as_deref(), Some("SN-0, SN-1"));
+        assert_eq!(read.model, None);
+        let ac = HuaweiMaps::flat(&[(3, 3, "AC6508", ""), (9, 9, "SRU Board 0", "SN-AC")]).entity();
+        assert_eq!(ac.serial.as_deref(), Some("SN-AC"));
+        assert_eq!(ac.model, None);
+    }
+
+    /// No class column: the lone-serial rule still answers the serial, and no row is the device,
+    /// so no model is guessed.
+    #[test]
+    fn with_no_class_column_there_is_no_model() {
+        let serials = BTreeMap::from([(1, "SN-A".to_owned())]);
+        let models = BTreeMap::from([(1, "AIR-CT3504-K9".to_owned())]);
+        let read = resolve_entity(EntityRows {
+            classes: &BTreeMap::new(),
+            serials: &serials,
+            names: &BTreeMap::new(),
+            parents: &BTreeMap::new(),
+            models: &models,
+        });
+        assert_eq!(read.serial.as_deref(), Some("SN-A"));
+        assert_eq!(read.model, None);
+    }
+
+    /// The model cap fits the most members listed at the longest model each, so a stack's model
+    /// list is never cut while its serial list is not.
+    #[test]
+    fn the_longest_model_list_fits_the_model_cap() {
+        let item = "M".repeat(MODEL_ITEM_MAX_CHARS);
+        let list = [item.as_str(); SERIAL_MAX_CHASSIS].join(SEPARATOR);
+        assert_eq!(sanitize_model(&list).as_deref(), Some(list.as_str()));
+        let long = "M".repeat(MODEL_ITEM_MAX_CHARS + 10);
+        assert_eq!(
+            sanitize_model_item(&long).map(|m| m.chars().count()),
+            Some(MODEL_ITEM_MAX_CHARS)
+        );
     }
 
     #[test]

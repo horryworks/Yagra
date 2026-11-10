@@ -47,13 +47,19 @@ pub struct DeviceIdentity {
 /// keyword match; model extraction only fires for a token that begins with a known vendor prefix
 /// immediately followed by a digit (so a wrong model is never invented from arbitrary words).
 /// Everything here is editable by the operator on import.
+/// The tokens a Huawei model starts with. A constant so the `identify` branch stays on one line,
+/// which `classification.rs::every_vendor_identify_can_name_is_a_vendor_a_rule_can_name` reads.
+const HUAWEI_MODEL_PREFIXES: &[&str] = &["usg", "ar", "ne", "ce", "s", "ac", "airengine"];
+
 #[must_use]
 pub fn identify(sysdescr: &str) -> DeviceIdentity {
     let d = sysdescr.to_ascii_lowercase();
     // (vendor, model-token prefixes to look for).
     let (vendor, prefixes): (Option<&str>, &[&str]) =
         if d.contains("huawei") || d.contains("vrp") || d.contains("usg") {
-            (Some("Huawei"), &["usg", "ar", "ne", "ce", "s"])
+            // `ac` and `airengine` are its wireless controllers (`Huawei AC6508`), which no other
+            // prefix matched, so they stored no model at all (ADR-147 Inc.8 decision 33).
+            (Some("Huawei"), HUAWEI_MODEL_PREFIXES)
         } else if d.contains("cisco") || d.contains("ios") {
             (Some("Cisco"), &["ws-c", "isr", "asr", "nexus", "c"])
         } else if d.contains("juniper") || d.contains("junos") {
@@ -286,6 +292,19 @@ mod tests {
             Some(longest.as_str())
         );
         assert_eq!(sanitize_sys_name(&format!("{longest}x")), None);
+    }
+
+    /// ADR-147 Inc.8 decision 33: a Huawei wireless controller's `sysDescr` is its model and
+    /// nothing else, and no prefix matched it, so the model stayed empty.
+    #[test]
+    fn a_huawei_wireless_controller_names_its_model() {
+        assert_eq!(identify("Huawei AC6508").model.as_deref(), Some("AC6508"));
+        assert_eq!(
+            identify("Huawei AirEngine9700-M").model.as_deref(),
+            Some("AIRENGINE9700-M")
+        );
+        // A word that merely starts with the letters is not a model: a digit must follow.
+        assert_eq!(identify("Huawei access controller").model, None);
     }
 
     #[test]

@@ -96,8 +96,8 @@ pub use migrate::embedded_migrations;
 #[cfg(any(test, feature = "test-util"))]
 pub use migrate::MIGRATIONS;
 pub use nodes::{
-    DuplicateInput, InventoryRow, NameFollowed, NameFromDevice, NodeBindingUpdate, NodeWithNotes,
-    ReclassifyInput, ReclassifyWrite, RediscoverWrite, SHARED_VALUE_MAX,
+    DuplicateInput, IdentityFill, InventoryRow, NameFollowed, NameFromDevice, NodeBindingUpdate,
+    NodeWithNotes, ReclassifyInput, ReclassifyWrite, RediscoverWrite, SHARED_VALUE_MAX,
 };
 // Re-exported for `InterfaceIdent`'s reason above, not by oversight: both are the return type of a
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping

@@ -1,0 +1,13 @@
+-- 0176_node_device_model - the hardware model the device itself last reported (ADR-147 Inc.8).
+--
+-- reversible: additive only - one nullable column on `nodes`, nothing narrowed and nothing
+-- rewritten. An older core reads nodes through an explicit column list (`NODE_COLUMNS`), so it never
+-- selects this column, and its identity fill writes `model` only when it is empty, as before: rolling
+-- the binary back leaves the value in place, unread, and rolling forward again finds it. No
+-- `schema_compat` floor, for the reason 0108 records.
+--
+-- Written by core's identity fill alone, never by an operator and never through the API. It is what
+-- lets a later report replace `model` when `model` still holds what the device said last time (a
+-- hardware swap), while a model an operator typed - which matches neither this nor the `sysDescr`
+-- guess - is left alone (decision 32).
+ALTER TABLE nodes ADD COLUMN device_model TEXT;

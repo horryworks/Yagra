@@ -159,6 +159,22 @@ pub struct RediscoverWrite {
 /// their rows by it, and this layer may not reach up into the module that judges them (ADR-202).
 pub const SHARED_VALUE_MAX: usize = 8;
 
+/// What one identity read says about a node, for [`NodeRepo::fill_node_identity_batch`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IdentityFill {
+    pub node: Uuid,
+    /// The maker, written only into a node that has none.
+    pub vendor: Option<String>,
+    /// The model to fill an empty `model` with: a rule's, else the device's, else the guess.
+    pub model: Option<String>,
+    /// The model the device itself reported (ADR-147 Inc.8), `None` when a classification rule
+    /// names a model — the rule wins, so the device's report must not replace it.
+    pub device_model: Option<String>,
+    /// What `sysDescr` alone would make the model — a stored `model` equal to it is a guess, which
+    /// a device report replaces (decision 32).
+    pub guess: Option<String>,
+}
+
 /// One device node as Nodes ▸ Duplicates compares it (ADR-148) — see [`NodeRepo::duplicate_inputs`].
 #[derive(Debug, Clone)]
 pub struct DuplicateInput {
@@ -1333,33 +1349,53 @@ impl NodeRepo {
     /// `updated_at` has no reader — it is not in [`NodeRepo::NODE_COLUMNS`], so `node_from_row`
     /// never selects it and no API or UI surface carries it — which is why not advancing it changes
     /// nothing observable.
-    pub async fn fill_node_identity_batch(
-        &self,
-        rows: &[(Uuid, Option<String>, Option<String>)],
-    ) -> anyhow::Result<()> {
+    ///
+    /// **One exception to "fill", since ADR-147 Inc.8 decision 32: a model the device reported
+    /// replaces the stored one** when the stored one is the `sysDescr` guess (`guess`) or what the
+    /// device reported last time (`nodes.device_model`). A model an operator typed is neither, so it
+    /// stays; a classification rule's model never arrives as `device_model`, so it stays too. The
+    /// row is still written only when something changes — the predicate grew by those two cases.
+    pub async fn fill_node_identity_batch(&self, rows: &[IdentityFill]) -> anyhow::Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut by_node: BTreeMap<Uuid, (Option<String>, Option<String>)> = BTreeMap::new();
-        for (node, vendor, model) in rows {
-            by_node.insert(*node, (vendor.clone(), model.clone()));
+        let mut by_node: BTreeMap<Uuid, &IdentityFill> = BTreeMap::new();
+        for row in rows {
+            by_node.insert(row.node, row);
         }
         let ids: Vec<Uuid> = by_node.keys().copied().collect();
-        let vendors: Vec<Option<String>> = by_node.values().map(|v| v.0.clone()).collect();
-        let models: Vec<Option<String>> = by_node.values().map(|v| v.1.clone()).collect();
+        let column = |pick: fn(&IdentityFill) -> &Option<String>| -> Vec<Option<String>> {
+            by_node.values().map(|row| pick(row).clone()).collect()
+        };
+        // Every `nodes.*` below reads the row as it was before this statement, so the CASE compares
+        // against the previous `device_model` while the SET replaces it.
         sqlx::query(
             "UPDATE nodes SET \
                 vendor = COALESCE(nodes.vendor, t.vendor), \
-                model = COALESCE(nodes.model, t.model), \
+                model = CASE \
+                    WHEN nodes.model IS NULL THEN t.model \
+                    WHEN t.device_model IS NOT NULL \
+                     AND (nodes.model = t.guess OR nodes.model = nodes.device_model) \
+                        THEN t.device_model \
+                    ELSE nodes.model END, \
+                device_model = COALESCE(t.device_model, nodes.device_model), \
                 updated_at = now() \
-             FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, vendor, model) \
+             FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[]) \
+                  AS t(id, vendor, model, device_model, guess) \
              WHERE nodes.id = t.id \
                AND ((nodes.vendor IS NULL AND t.vendor IS NOT NULL) \
-                 OR (nodes.model IS NULL AND t.model IS NOT NULL))",
+                 OR (nodes.model IS NULL AND t.model IS NOT NULL) \
+                 OR (t.device_model IS NOT NULL \
+                     AND nodes.device_model IS DISTINCT FROM t.device_model) \
+                 OR (t.device_model IS NOT NULL \
+                     AND nodes.model IS DISTINCT FROM t.device_model \
+                     AND (nodes.model = t.guess OR nodes.model = nodes.device_model)))",
         )
         .bind(&ids)
-        .bind(&vendors)
-        .bind(&models)
+        .bind(column(|r| &r.vendor))
+        .bind(column(|r| &r.model))
+        .bind(column(|r| &r.device_model))
+        .bind(column(|r| &r.guess))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -2237,6 +2273,93 @@ fn last_version_per_node(rows: &[(Uuid, String)]) -> (Vec<Uuid>, Vec<String>) {
 mod tests {
     use super::*;
     use crate::pgtest;
+
+    /// ADR-147 Inc.8 decision 32. A device's own model replaces a stored `sysDescr` guess, and
+    /// later replaces its own earlier report (a hardware swap); a model an operator typed and a
+    /// rule's model are neither, so they stay. An empty model is filled as before.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_device_reported_model_replaces_a_guess_but_not_an_operators_model(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = pgtest::repo(pool.clone());
+        let node = |name: &'static str, model: Option<&'static str>| {
+            let repo = &repo;
+            async move {
+                repo.create_node(
+                    name,
+                    "192.0.2.1".parse().expect("address"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("Cisco"),
+                    model,
+                )
+                .await
+                .expect("create")
+            }
+        };
+        let guessed = node("guessed", Some("C3750E")).await;
+        let typed = node("typed", Some("Core switch A")).await;
+        let empty = node("empty", None).await;
+        let ruled = node("ruled", Some("Core stack")).await;
+        let stack = "WS-C3750X-24T-E, WS-C3750X-24T-E";
+        let report = |node: Uuid, device: Option<&str>, model: &str| IdentityFill {
+            node,
+            vendor: Some("Cisco".to_owned()),
+            model: Some(model.to_owned()),
+            device_model: device.map(str::to_owned),
+            guess: Some("C3750E".to_owned()),
+        };
+        repo.fill_node_identity_batch(&[
+            report(guessed, Some(stack), stack),
+            report(typed, Some(stack), stack),
+            report(empty, Some(stack), stack),
+            // A rule named the model, so the writer is handed no device model.
+            report(ruled, None, "Core stack"),
+        ])
+        .await
+        .expect("fill");
+        let stored = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_as::<_, (Option<String>, Option<String>)>(
+                    "SELECT model, device_model FROM nodes WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("read")
+            }
+        };
+        assert_eq!(
+            stored(guessed).await,
+            (Some(stack.to_owned()), Some(stack.to_owned()))
+        );
+        assert_eq!(
+            stored(typed).await,
+            (Some("Core switch A".to_owned()), Some(stack.to_owned())),
+            "the operator's model stays; the report is still remembered"
+        );
+        assert_eq!(stored(empty).await.0.as_deref(), Some(stack));
+        assert_eq!(stored(ruled).await, (Some("Core stack".to_owned()), None));
+
+        // The stack's members are replaced: the stored model is the device's last report, so the
+        // new report replaces it. The operator's model still does not move.
+        let swapped = "WS-C3750X-48P-S, WS-C3750X-24T-E";
+        repo.fill_node_identity_batch(&[
+            report(guessed, Some(swapped), swapped),
+            report(typed, Some(swapped), swapped),
+        ])
+        .await
+        .expect("fill");
+        assert_eq!(stored(guessed).await.0.as_deref(), Some(swapped));
+        assert_eq!(
+            stored(typed).await,
+            (Some("Core switch A".to_owned()), Some(swapped.to_owned()))
+        );
+    }
 
     /// A node written through the production writer comes back with every column it was given.
     ///

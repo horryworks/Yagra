@@ -219,14 +219,38 @@ pub(crate) fn identity_of(
     sys_object_id: Option<&str>,
     sys_descr: Option<&str>,
 ) -> (Option<String>, Option<String>) {
+    let parts = identity_parts(classifier, sys_object_id, sys_descr);
+    (parts.vendor, parts.rule_model.or(parts.guess))
+}
+
+/// [`identity_of`] with its model left in two halves, for the identity fill that has to tell them
+/// apart (ADR-147 Inc.8): a device's own model beats the guess but never a rule's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct IdentityParts {
+    pub(crate) vendor: Option<String>,
+    /// The model a matching classification rule names, which wins over everything (decision 31).
+    pub(crate) rule_model: Option<String>,
+    /// The best-effort `sysDescr` parse, which loses to everything.
+    pub(crate) guess: Option<String>,
+}
+
+/// The one place the rules and the `sysDescr` parse are asked — see [`identity_of`].
+pub(crate) fn identity_parts(
+    classifier: &Classifier,
+    sys_object_id: Option<&str>,
+    sys_descr: Option<&str>,
+) -> IdentityParts {
     let matched = classifier.classify(sys_object_id, sys_descr);
     let parsed = sys_descr.map(yagra_discovery::identify).unwrap_or_default();
     let vendor = matched
         .as_ref()
         .and_then(|m| m.vendor.clone())
         .or(parsed.vendor);
-    let model = matched.and_then(|m| m.model).or(parsed.model);
-    (vendor, model)
+    IdentityParts {
+        vendor,
+        rule_model: matched.and_then(|m| m.model),
+        guess: parsed.model,
+    }
 }
 
 /// PostgreSQL-backed store for the operator-editable classification rules.

@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A node's model is the hardware model the device reports, not the software family in its `sysDescr`.** The hourly identity read now also reads ENTITY-MIB's `entPhysicalModelName`: a Cisco IOS switch shows `WS-C2960X-24TS-LL` instead of `C2960X`, and a router `C891FJ-K9` instead of `C800`. A Huawei YunShan stack reads it from each member's main board. A stack lists every member's model in the same order as `serial_number`, so the i-th model belongs to the i-th serial; two members of the same model are listed twice. Where the device reports no model (Huawei VRP switches, the AC6508, a C3550), the `sysDescr` model is used as before, and a Huawei AC or AirEngine controller now gets one from it instead of none. A stored model is replaced only when it is the `sysDescr` guess or what the device reported last time, so a model typed on the node and one a classification rule names stay. Existing nodes change on their next full identity read, within about an hour of upgrading. `model` in `GET /api/v1/nodes/inventory` and `GET /api/v1/nodes/{id}` carries the new value; the shape does not change (ADR-147 Inc.8, Issue #68).
+
 ## v0.3.75 — Ask whether anything is running out on a node or a whole site, and open a narrowed screen from any dashboard widget
 
 ### New Features

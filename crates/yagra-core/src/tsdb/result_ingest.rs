@@ -735,12 +735,12 @@ fn persist_metrics_and_meta(
         })
         .collect();
     // The model the device named at its OS row's OID beats one read out of `sysDescr` — an AireOS
-    // controller's `sysDescr` is only `Cisco Controller` (ADR-147 Increment 6). Either way the PG
-    // fill writes a model only into a node that has none, so an operator's own value stays.
+    // controller's `sysDescr` is only `Cisco Controller` (ADR-147 Increment 6) - or the members'
+    // models out of ENTITY-MIB (Inc.8), whose list needs the model cap rather than the version's.
     let hardware_model = result
         .hardware_model
         .as_deref()
-        .and_then(yagra_discovery::os_version::sanitize);
+        .and_then(yagra_discovery::serial::sanitize_model);
     let os_version = result
         .os_version
         .as_deref()
@@ -1184,24 +1184,47 @@ pub(crate) struct MetaStores {
 /// `hardware_model`, and this tier sheds: were the full read's record dropped, a model guessed here
 /// would fill the empty column first and the device's own would never replace it. So the model
 /// comes from a full read only, and a dropped one costs an hour's wait rather than a wrong model.
+///
+/// **Since ADR-147 Inc.8 the order is: a rule's model, then the device's, then the guess** (decision
+/// 31), and the record also carries the device's model and the guess apart, because the writer
+/// replaces a stored guess with what the device reports (decision 32). A rule's model wins, so when
+/// one exists no device model is passed on at all.
 fn record_identity(
     classifier: &crate::discover::classification::Classifier,
     rec: &MetaRecord,
-) -> Option<(Option<String>, Option<String>)> {
+) -> Option<repo::IdentityFill> {
     if rec.sys_descr.is_none() && rec.sys_object_id.is_none() {
         return None;
     }
-    let (vendor, model) = crate::discover::classification::identity_of(
+    let parts = crate::discover::classification::identity_parts(
         classifier,
         rec.sys_object_id.as_deref(),
         rec.sys_descr.as_deref(),
     );
-    let model = if rec.identity_partial {
-        None
+    let fill = if rec.identity_partial {
+        repo::IdentityFill {
+            node: rec.node_id,
+            vendor: parts.vendor,
+            ..repo::IdentityFill::default()
+        }
     } else {
-        rec.hardware_model.clone().or(model)
+        let device_model = parts
+            .rule_model
+            .is_none()
+            .then(|| rec.hardware_model.clone())
+            .flatten();
+        repo::IdentityFill {
+            node: rec.node_id,
+            vendor: parts.vendor,
+            model: parts
+                .rule_model
+                .or_else(|| device_model.clone())
+                .or_else(|| parts.guess.clone()),
+            device_model,
+            guess: parts.guess,
+        }
     };
-    (vendor.is_some() || model.is_some()).then_some((vendor, model))
+    (fill.vendor.is_some() || fill.model.is_some()).then_some(fill)
 }
 
 pub(crate) async fn run_pg_writer(
@@ -1340,7 +1363,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     }
     let count = buf.len() as u64;
     let mut iface_rows: Vec<repo::InterfaceBatchRow> = Vec::new();
-    let mut ident_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
+    let mut ident_rows: Vec<repo::IdentityFill> = Vec::new();
     let mut os_version_rows: Vec<(Uuid, String)> = Vec::new();
     let mut os_version_without_patch_rows: Vec<(Uuid, String)> = Vec::new();
     let mut snmp_identity_rows: Vec<(Uuid, Option<String>, Option<String>)> = Vec::new();
@@ -1364,8 +1387,8 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         for iface in rec.interfaces {
             iface_rows.push((rec.node_id, iface));
         }
-        if let Some((vendor, model)) = identity {
-            ident_rows.push((rec.node_id, vendor, model));
+        if let Some(fill) = identity {
+            ident_rows.push(fill);
         }
         if let Some(version) = rec.os_version {
             os_version_rows.push((rec.node_id, version));
@@ -1430,7 +1453,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
     };
     if !held.is_empty() {
-        ident_rows.retain(|r| !held.contains(&r.0));
+        ident_rows.retain(|r| !held.contains(&r.node));
         os_version_rows.retain(|r| !held.contains(&r.0));
         os_version_without_patch_rows.retain(|r| !held.contains(&r.0));
         snmp_identity_rows.retain(|r| !held.contains(&r.0));
@@ -1814,6 +1837,7 @@ mod tests {
                 .try_recv()
                 .expect("the record reaches the PG writer");
             record_identity(&crate::discover::classification::Classifier::empty(), &rec)
+                .map(|f| (f.vendor, f.model))
         };
         let (full_vendor, full_model) = record(false).expect("a full read decides");
         assert!(full_model.is_some(), "the full read guesses a model");
@@ -1846,6 +1870,7 @@ mod tests {
                 .try_recv()
                 .expect("the record reaches the PG writer");
             record_identity(&crate::discover::classification::Classifier::empty(), &rec)
+                .map(|f| (f.vendor, f.model))
         };
         assert_eq!(
             record("Cisco Controller", Some(" AIR-CT3504-K9\r\n")),
@@ -1863,6 +1888,54 @@ mod tests {
             record(ios, Some("WS-C2960X-48FPD-L")).and_then(|(_, model)| model),
             Some("WS-C2960X-48FPD-L".to_owned())
         );
+    }
+
+    /// ADR-147 Inc.8 decisions 31 and 32: the writer gets the device's model and the guess apart, so
+    /// it can replace a stored guess — and a classification rule that names a model keeps the
+    /// device's report from reaching the writer at all. A stack's list survives this edge whole.
+    #[test]
+    fn the_identity_fill_carries_the_device_model_and_the_guess_apart() {
+        use crate::discover::classification::Classifier;
+        let fill = |classifier: &Classifier, hardware_model: Option<&str>| {
+            let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(8);
+            let vm = VmWriters::from_senders(vec![metrics_tx]);
+            let (meta_tx, mut meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(8);
+            let mut result: PollResult = serde_json::from_str(
+                r#"{"job_id":"00000000-0000-0000-0000-000000000000",
+                    "node_id":"00000000-0000-0000-0000-000000000000",
+                    "at_unix_ms":0,"outcome":"reachable"}"#,
+            )
+            .expect("a result");
+            result.sys_descr = Some(
+                "Cisco IOS Software, C3750E Software (C3750E-UNIVERSALK9-M), Version 15.0(2)SE5"
+                    .to_owned(),
+            );
+            result.hardware_model = hardware_model.map(str::to_owned);
+            persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
+            let rec = meta_rx
+                .try_recv()
+                .expect("the record reaches the PG writer");
+            record_identity(classifier, &rec).expect("a full read decides")
+        };
+        let stack = "WS-C3750X-24T-E, WS-C3750X-24T-E";
+        let read = fill(&Classifier::empty(), Some(stack));
+        assert_eq!(read.model.as_deref(), Some(stack));
+        assert_eq!(read.device_model.as_deref(), Some(stack));
+        assert_eq!(read.guess.as_deref(), Some("C3750E"));
+
+        let rule = yagra_common::ClassificationRule {
+            id: Uuid::from_u128(1),
+            priority: 1,
+            sysobjectid_prefix: None,
+            sysdescr_regex: Some("(?i)cisco".to_owned()),
+            profile_id: Uuid::from_u128(2).into(),
+            vendor: None,
+            model: Some("Core stack".to_owned()),
+            enabled: true,
+        };
+        let ruled = fill(&Classifier::from_rules(vec![rule], None), Some(stack));
+        assert_eq!(ruled.model.as_deref(), Some("Core stack"), "the rule wins");
+        assert_eq!(ruled.device_model, None, "so no report may replace it");
     }
 
     /// One result through `ingest_result`, returning everything the alert engine produced.

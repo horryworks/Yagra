@@ -48,6 +48,12 @@ pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 /// stops sends no serial rather than a partial list (ADR-147 decision 4).
 pub(crate) const SERIAL_ENTITY_ROWS: usize = 4096;
 
+/// The row budget for the ENTITY-MIB walk once the model column joins `columns` others (ADR-147
+/// Inc.8): `max_rows` grown by one column's share, so each column keeps the rows it had before.
+pub(crate) fn entity_row_budget(max_rows: usize, columns: usize) -> usize {
+    max_rows.saturating_add(max_rows / columns.max(1))
+}
+
 /// The most rows the serial read takes from a vendor's own MIB (ADR-147 Increment 2). A Juniper
 /// Virtual Chassis has at most ten members and the box serial is one row, so this is room to spare,
 /// not a limit a real device reaches. A walk it stops sends nothing, as the ENTITY-MIB one does.
@@ -139,6 +145,9 @@ pub(crate) enum SnmpWalker {
 /// What [`SnmpWalker::read_serial_number`] found, and which read decided it.
 pub(crate) struct SerialRead {
     pub(crate) serial: Option<String>,
+    /// The hardware model ENTITY-MIB gives beside the serial, a stack's members in the serial's
+    /// order (ADR-147 Inc.8). `None` from a vendor's own MIB, which names no model.
+    pub(crate) model: Option<String>,
     source: &'static str,
     result: &'static str,
 }
@@ -292,7 +301,7 @@ impl SnmpWalker {
         let chassis = os_version::resolve_chassis(sys_object_id, sys_descr.as_deref(), &answers);
         // Only a device that answered `sysDescr` is walked for a serial: one that did not is not
         // going to answer a table, and the walk would spend the probe's time waiting on silence.
-        let serial_number = if sys_descr.is_some() {
+        let serial_read = if sys_descr.is_some() {
             let read = self
                 .read_serial_number(
                     transport,
@@ -304,9 +313,14 @@ impl SnmpWalker {
                 )
                 .await;
             read.count();
-            read.serial
+            read
         } else {
-            None
+            SerialRead {
+                serial: None,
+                model: None,
+                source: "entity",
+                result: "none",
+            }
         };
         IdentityProbe {
             os_version,
@@ -314,8 +328,10 @@ impl SnmpWalker {
             sys_object_id: sys_object_id.and_then(yagra_discovery::normalize_sys_object_id),
             sys_descr,
             sys_name,
-            serial_number,
-            hardware_model: chassis.model,
+            serial_number: serial_read.serial,
+            // What ENTITY-MIB says first, then the OS row (AireOS has no class column), then core's
+            // guess from `sysDescr` (ADR-147 Inc.8 decision 31).
+            hardware_model: serial_read.model.or(chassis.model),
             unread,
         }
     }
@@ -356,6 +372,7 @@ impl SnmpWalker {
         let read =
             |source: &'static str, result: &'static str, serial: Option<String>| SerialRead {
                 serial,
+                model: None,
                 source,
                 result,
             };
@@ -396,8 +413,13 @@ impl SnmpWalker {
             columns.push(serial::OID_ENT_PHYSICAL_NAME.to_owned());
             columns.push(serial::OID_ENT_PHYSICAL_CONTAINED_IN.to_owned());
         }
+        // The model rides the same walk (Inc.8), and the budget grows by its share: a device that
+        // was heard out before the column was added must not now be stopped short and lose its
+        // serial. An agent that does not implement the column still counts as heard out.
+        let budget = entity_row_budget(max_entity_rows, columns.len());
+        columns.push(serial::OID_ENT_PHYSICAL_MODEL_NAME.to_owned());
         let walk = match self
-            .walk_instance_columns(transport, target, &columns, timeout, max_entity_rows)
+            .walk_instance_columns(transport, target, &columns, timeout, budget)
             .await
         {
             Ok(walk) if walk.every_column_answered => walk,
@@ -407,6 +429,7 @@ impl SnmpWalker {
         let mut serials = std::collections::BTreeMap::new();
         let mut names = std::collections::BTreeMap::new();
         let mut parents = std::collections::BTreeMap::new();
+        let mut models = std::collections::BTreeMap::new();
         for row in walk.rows {
             // Every column is indexed by `entPhysicalIndex` alone; a longer index is not a row of
             // this table.
@@ -430,6 +453,11 @@ impl SnmpWalker {
                 {
                     names.insert(index, String::from_utf8_lossy(&bytes).into_owned());
                 }
+                yagra_transport::SnmpValue::Bytes(bytes)
+                    if row.oid_base == serial::OID_ENT_PHYSICAL_MODEL_NAME =>
+                {
+                    models.insert(index, String::from_utf8_lossy(&bytes).into_owned());
+                }
                 // A parent index outside `u32` is not an `entPhysicalIndex`, so it names no row.
                 yagra_transport::SnmpValue::Int(parent)
                     if row.oid_base == serial::OID_ENT_PHYSICAL_CONTAINED_IN =>
@@ -445,16 +473,30 @@ impl SnmpWalker {
         // Only a Huawei was walked for names and parents, so for every other device there are none
         // and this is `None` (Increments 4 and 5). Out of the same walk as the chassis rows, so
         // decision 4 still holds.
-        if let Some(found) = serial::resolve_huawei_boards(&classes, &names, &parents, &serials) {
-            return read("huawei", "serial", Some(found));
-        }
-        if let Some(found) = serial::resolve(&classes, &serials) {
-            return read("entity", "serial", Some(found));
+        let entity = serial::resolve_entity(serial::EntityRows {
+            classes: &classes,
+            serials: &serials,
+            names: &names,
+            parents: &parents,
+            models: &models,
+        });
+        let model = entity.model;
+        let with_model = |read: SerialRead| SerialRead {
+            model: model.clone(),
+            ..read
+        };
+        if let Some(found) = entity.serial {
+            let source = if entity.from_boards {
+                "huawei"
+            } else {
+                "entity"
+            };
+            return with_model(read(source, "serial", Some(found)));
         }
         if let Some(found) = row_serial {
-            return read("os_row", "serial", Some(found));
+            return with_model(read("os_row", "serial", Some(found)));
         }
-        read("entity", "none", None)
+        with_model(read("entity", "none", None))
     }
 
     /// Read integer-valued instance OIDs, keyed by the instance OID — the scalar GET, which both
@@ -1439,6 +1481,58 @@ mod tests {
             Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
         );
         assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+    }
+
+    /// ADR-147 Inc.8: the serial walk also reads `entPhysicalModelName`, and the model the result
+    /// carries lists each member's chassis model in the serial's order — ahead of `sysDescr`'s
+    /// `C2960X`, which is only the software family.
+    #[tokio::test]
+    async fn the_identity_probe_sends_each_members_hardware_model() {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let mut t = catalyst_stack();
+        for (index, model) in [
+            (1, ""),
+            (1001, "WS-C2960X-48FPD-L"),
+            (2001, "WS-C2960X-48FPD-L"),
+            (3001, "WS-C2960X-24TS-L"),
+        ] {
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_MODEL_NAME.to_owned(),
+                instance: vec![index],
+                value: SnmpValue::Bytes(model.as_bytes().to_vec()),
+            });
+        }
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
+        );
+        assert_eq!(
+            r.hardware_model.as_deref(),
+            Some("WS-C2960X-48FPD-L, WS-C2960X-48FPD-L, WS-C2960X-24TS-L")
+        );
+        assert!(
+            t.asked().iter().any(|call| call
+                .iter()
+                .any(|o| o == serial::OID_ENT_PHYSICAL_MODEL_NAME)
+                && call
+                    .iter()
+                    .any(|o| o == serial::OID_ENT_PHYSICAL_SERIAL_NUM)),
+            "the model rides the serial's walk: {:?}",
+            t.asked()
+        );
+    }
+
+    /// The model column joining the walk must not shrink what each of the other columns may take:
+    /// the budget grows by exactly one column's share.
+    #[test]
+    fn the_entity_budget_grows_by_the_model_columns_share() {
+        assert_eq!(entity_row_budget(SERIAL_ENTITY_ROWS, 2), 6144);
+        assert_eq!(entity_row_budget(SERIAL_ENTITY_ROWS, 4), 5120);
+        assert_eq!(entity_row_budget(100, 2), 150);
+        assert_eq!(entity_row_budget(100, 0), 200, "never divides by zero");
     }
 
     /// ADR-138 Increment 6. The classify read is what an unknown-maker node gets on every poll
