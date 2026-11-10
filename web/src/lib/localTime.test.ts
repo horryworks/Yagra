@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, describe, expect, it } from 'vitest';
 import i18n from '../i18n';
-import { localTimeLine } from './localTime';
+import { deliveryKey, localTimeLine } from './localTime';
 import { setDisplayTimeZone } from './timeZone';
 
 const t = i18n.getFixedT('en', 'nodes');
@@ -76,6 +76,14 @@ describe("a site's local time on the sub line (ADR-252)", () => {
     expect(line.delivery).toBeNull();
     expect(line.stale).toBe(true);
     expect(line.clock?.time).toBe('17:20');
+  });
+
+  it('knows a re-read that brings the same answer, so a stale one is asked for once', () => {
+    const a = { open: true, closes_at: '2026-11-02T08:20:00Z', opens_at: null };
+    expect(deliveryKey({ ...a })).toBe(deliveryKey({ ...a }));
+    expect(deliveryKey(a)).not.toBe(deliveryKey({ ...a, closes_at: '2026-11-02T08:21:00Z' }));
+    expect(deliveryKey(a)).not.toBe(deliveryKey({ ...a, open: false }));
+    expect(deliveryKey(null)).toBe('');
   });
 
   it('keeps an alias in the spelling it was given, as NetBox shows it (ADR-253)', () => {

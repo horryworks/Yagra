@@ -56,7 +56,7 @@ pub struct ScheduleFields<'a> {
 }
 
 /// A schedule's span, ready to be asked about one local time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Window {
     /// Bit `d - 1` is ISO weekday `d`.
     days: u8,
@@ -99,7 +99,7 @@ impl Window {
 }
 
 /// The hours one node keeps: its zone and every window a schedule gives it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NodeHours {
     pub zone: Tz,
     pub windows: Vec<Window>,
@@ -176,6 +176,28 @@ impl NodeHours {
             }
         }
     }
+}
+
+/// [`NodeHours::delivery_now`] for every folder in `hours`, judged once per distinct set of hours.
+///
+/// The judgement steps a minute at a time for up to [`LOOKAHEAD_MINUTES`], and a folder list holds
+/// as many folders as a deployment has sites, while the distinct sets of hours number about as many
+/// as schedules times zones. Folders that keep the same hours share one answer.
+#[must_use]
+pub fn delivery_by_folder(
+    hours: &HashMap<Uuid, NodeHours>,
+    now: DateTime<Utc>,
+) -> HashMap<Uuid, DeliveryNow> {
+    let mut judged: HashMap<&NodeHours, DeliveryNow> = HashMap::new();
+    hours
+        .iter()
+        .map(|(group, h)| {
+            (
+                *group,
+                *judged.entry(h).or_insert_with(|| h.delivery_now(now)),
+            )
+        })
+        .collect()
 }
 
 /// Every node some schedule covers, with the hours it keeps. A node that is absent is open.
@@ -857,6 +879,34 @@ mod tests {
         }
         assert_eq!(by_folder.get(&floor).map(|h| h.windows.len()), Some(2));
         assert!(!by_folder.contains_key(&other));
+    }
+
+    #[test]
+    fn folders_keeping_the_same_hours_share_one_answer() {
+        let day = NodeHours {
+            zone: tokyo(),
+            windows: vec![Window::of(&schedule(WEEKDAYS, OPEN, CLOSE))],
+        };
+        let always = NodeHours {
+            zone: Tz::UTC,
+            windows: vec![Window::of(&schedule(&[1, 2, 3, 4, 5, 6, 7], 0, 0))],
+        };
+        let hours: HashMap<Uuid, NodeHours> = (0..50u128)
+            .map(|i| {
+                let h = if i % 2 == 0 {
+                    day.clone()
+                } else {
+                    always.clone()
+                };
+                (Uuid::from_u128(i), h)
+            })
+            .collect();
+        let now = Utc.with_ymd_and_hms(2026, 11, 2, 0, 0, 30).unwrap();
+        let judged = delivery_by_folder(&hours, now);
+        assert_eq!(judged.len(), hours.len());
+        for (group, h) in &hours {
+            assert_eq!(judged.get(group), Some(&h.delivery_now(now)), "{group}");
+        }
     }
 
     #[test]

@@ -2,9 +2,9 @@
 // The site's local time and delivery state at the end of a header's sub line (ADR-252): the folder
 // pane and the node pane draw the same parts. What to show is `lib/localTime.ts`'s to decide.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { localTimeLine, type DeliveryNow } from '../../lib/localTime';
+import { deliveryKey, localTimeLine, type DeliveryNow } from '../../lib/localTime';
 // The screen's refresh cadence, as the top-bar clock uses: a minute display redrawn at it is never
 // more than that late.
 import { POLL_INTERVAL_MS } from '../../lib/sharedPoll';
@@ -27,10 +27,14 @@ export function LocalTimeParts({ zone, delivery, onStale }: Props) {
   }, []);
   const line = localTimeLine(zone, delivery, now, t, i18n.language);
   // Once per answer that went out of date; a re-read that brings the same answer asks no more.
+  const key = deliveryKey(delivery);
+  const asked = useRef<string | null>(null);
   useEffect(() => {
-    if (line.stale) onStale?.();
+    if (!line.stale || asked.current === key) return;
+    asked.current = key;
+    onStale?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- on the transition only
-  }, [line.stale, delivery]);
+  }, [line.stale, key]);
 
   return (
     <>

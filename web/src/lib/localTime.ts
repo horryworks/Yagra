@@ -33,6 +33,14 @@ export interface LocalTimeLine {
   stale: boolean;
 }
 
+/** The server's answer by value, so a re-read that brings the same answer is recognised as the
+ *  same one: each read is a new object, and asking again per object re-reads in a loop for as long
+ *  as this browser's clock runs ahead of the server's. */
+export function deliveryKey(delivery: DeliveryNow | null | undefined): string {
+  if (!delivery) return '';
+  return `${delivery.open}|${delivery.closes_at ?? ''}|${delivery.opens_at ?? ''}`;
+}
+
 /** `HH:MM` at `at` in `tz`, with the weekday in front when it is not the same day as `now` there. */
 function boundaryText(at: number, now: number, tz: string, locale: string): string {
   const a = wallClock(at, tz);

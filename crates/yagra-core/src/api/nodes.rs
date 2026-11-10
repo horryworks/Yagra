@@ -1471,6 +1471,10 @@ pub(crate) async fn local_time_of(
     admin: &super::AdminState,
     group: Option<Uuid>,
 ) -> (Option<String>, Option<yagra_base::groups::DeliveryNow>) {
+    // A node filed nowhere has no site: nothing to read.
+    let Some(group) = group else {
+        return (None, None);
+    };
     let (hours, rows) =
         match crate::alerts::delivery_hours::read_hours(&admin.delivery_hours, &admin.groups, true)
             .await
@@ -1481,9 +1485,6 @@ pub(crate) async fn local_time_of(
                 return (None, None);
             }
         };
-    let Some(group) = group else {
-        return (None, None);
-    };
     let zone = yagra_base::groups::resolve_nearest_ancestor(rows)
         .remove(&group)
         .map(|(zone, _)| zone);

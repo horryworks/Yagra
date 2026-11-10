@@ -552,7 +552,7 @@ pub(crate) async fn topology_map_level(
         }
     }
     let folders: Vec<super::topology_level::FolderRow> =
-        super::groups::visible_groups(admin, scope)
+        super::groups::visible_groups_without_delivery(admin, scope)
             .await?
             .iter()
             .map(Into::into)
