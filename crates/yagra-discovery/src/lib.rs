@@ -42,15 +42,15 @@ pub struct DeviceIdentity {
     pub model: Option<String>,
 }
 
+/// The tokens a Huawei model starts with. A constant so the `identify` branch stays on one line,
+/// which `classification.rs::every_vendor_identify_can_name_is_a_vendor_a_rule_can_name` reads.
+const HUAWEI_MODEL_PREFIXES: &[&str] = &["usg", "ar", "ne", "ce", "s", "ac", "airengine"];
+
 /// Identify a device from its SNMP `sysDescr`: maker + a best-effort model token (vendor/model
 /// only — profile suggestion is the core `Classifier`'s job). Vendor detection is a conservative
 /// keyword match; model extraction only fires for a token that begins with a known vendor prefix
 /// immediately followed by a digit (so a wrong model is never invented from arbitrary words).
 /// Everything here is editable by the operator on import.
-/// The tokens a Huawei model starts with. A constant so the `identify` branch stays on one line,
-/// which `classification.rs::every_vendor_identify_can_name_is_a_vendor_a_rule_can_name` reads.
-const HUAWEI_MODEL_PREFIXES: &[&str] = &["usg", "ar", "ne", "ce", "s", "ac", "airengine"];
-
 #[must_use]
 pub fn identify(sysdescr: &str) -> DeviceIdentity {
     let d = sysdescr.to_ascii_lowercase();

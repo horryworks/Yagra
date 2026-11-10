@@ -48,10 +48,11 @@ pub(super) const SERIAL_PROBES_METRIC: &str = "yagra_poll_serial_probes_total";
 /// stops sends no serial rather than a partial list (ADR-147 decision 4).
 pub(crate) const SERIAL_ENTITY_ROWS: usize = 4096;
 
-/// The row budget for the ENTITY-MIB walk once the model column joins `columns` others (ADR-147
-/// Inc.8): `max_rows` grown by one column's share, so each column keeps the rows it had before.
-pub(crate) fn entity_row_budget(max_rows: usize, columns: usize) -> usize {
-    max_rows.saturating_add(max_rows / columns.max(1))
+/// The row budget for the model column's own walk (ADR-147 Inc.8): one column's share of what the
+/// serial walk over `columns` columns may take, so the model column reaches as many rows as each of
+/// those columns could.
+pub(crate) fn model_row_budget(max_rows: usize, columns: usize) -> usize {
+    max_rows / columns.max(1)
 }
 
 /// The most rows the serial read takes from a vendor's own MIB (ADR-147 Increment 2). A Juniper
@@ -413,24 +414,37 @@ impl SnmpWalker {
             columns.push(serial::OID_ENT_PHYSICAL_NAME.to_owned());
             columns.push(serial::OID_ENT_PHYSICAL_CONTAINED_IN.to_owned());
         }
-        // The model rides the same walk (Inc.8), and the budget grows by its share: a device that
-        // was heard out before the column was added must not now be stopped short and lose its
-        // serial. An agent that does not implement the column still counts as heard out.
-        let budget = entity_row_budget(max_entity_rows, columns.len());
-        columns.push(serial::OID_ENT_PHYSICAL_MODEL_NAME.to_owned());
         let walk = match self
-            .walk_instance_columns(transport, target, &columns, timeout, budget)
+            .walk_instance_columns(transport, target, &columns, timeout, max_entity_rows)
             .await
         {
             Ok(walk) if walk.every_column_answered => walk,
             Ok(_) | Err(_) => return read("entity", "unread", None),
+        };
+        // The model is walked on its own, after the serial walk was heard out (Inc.8). Riding the
+        // same call would put one more column under that call's deadline, which is checked before
+        // each column: a slow device that used to finish would then be stopped short, and the
+        // serial it had would be lost with the model. A model walk that does not finish costs the
+        // model only - an empty map, so no member has one and no list is made.
+        let model_rows = match self
+            .walk_instance_columns(
+                transport,
+                target,
+                &[serial::OID_ENT_PHYSICAL_MODEL_NAME.to_owned()],
+                timeout,
+                model_row_budget(max_entity_rows, columns.len()),
+            )
+            .await
+        {
+            Ok(walk) if walk.every_column_answered => walk.rows,
+            Ok(_) | Err(_) => Vec::new(),
         };
         let mut classes = std::collections::BTreeMap::new();
         let mut serials = std::collections::BTreeMap::new();
         let mut names = std::collections::BTreeMap::new();
         let mut parents = std::collections::BTreeMap::new();
         let mut models = std::collections::BTreeMap::new();
-        for row in walk.rows {
+        for row in walk.rows.into_iter().chain(model_rows) {
             // Every column is indexed by `entPhysicalIndex` alone; a longer index is not a row of
             // this table.
             let [index] = row.instance.as_slice() else {
@@ -1178,8 +1192,9 @@ mod tests {
         let r = execute(&job, &t, 1_000).await;
         assert_eq!(r.os_version, None);
         assert_eq!(r.sys_descr.as_deref(), Some("Acme Widget Controller rev B"));
-        // The scalar GET, one identity walk and the serial walk (ADR-147) — no version read.
-        assert_eq!(t.asked().len(), 3, "{:?}", t.asked());
+        // The scalar GET, one identity walk, the serial walk (ADR-147) and the model walk beside it
+        // (Inc.8) — no version read.
+        assert_eq!(t.asked().len(), 4, "{:?}", t.asked());
     }
 
     /// A Huawei on YunShan OS keeps its version in `sysDescr` and its running patch in
@@ -1365,11 +1380,9 @@ mod tests {
             .fetch_identity(&t, target, Duration::from_secs(2))
             .await;
         assert!(walked_the_patch_table(&t), "{:?}", t.asked());
-        // The patch table, then the serial read (ADR-147), which takes the same wait.
-        assert_eq!(
-            t.instance_walk_timeouts(),
-            vec![IDENTITY_COLUMN_TIMEOUT, IDENTITY_COLUMN_TIMEOUT]
-        );
+        // The patch table, then the serial read (ADR-147) and its model walk (Inc.8), which take
+        // the same wait.
+        assert_eq!(t.instance_walk_timeouts(), vec![IDENTITY_COLUMN_TIMEOUT; 3]);
 
         let patient = huawei_usg(true);
         walker
@@ -1377,7 +1390,7 @@ mod tests {
             .await;
         assert_eq!(
             patient.instance_walk_timeouts(),
-            vec![Duration::from_secs(8), Duration::from_secs(8)]
+            vec![Duration::from_secs(8); 3]
         );
     }
 
@@ -1514,25 +1527,40 @@ mod tests {
             Some("WS-C2960X-48FPD-L, WS-C2960X-48FPD-L, WS-C2960X-24TS-L")
         );
         assert!(
-            t.asked().iter().any(|call| call
+            !t.asked().iter().any(|call| call
                 .iter()
                 .any(|o| o == serial::OID_ENT_PHYSICAL_MODEL_NAME)
                 && call
                     .iter()
                     .any(|o| o == serial::OID_ENT_PHYSICAL_SERIAL_NUM)),
-            "the model rides the serial's walk: {:?}",
+            "the model is walked apart from the serial, so it cannot hold the serial up: {:?}",
             t.asked()
         );
     }
 
-    /// The model column joining the walk must not shrink what each of the other columns may take:
-    /// the budget grows by exactly one column's share.
+    /// A model column that does not finish costs the model and nothing else: the serial the device
+    /// gave before Inc.8 still arrives, and no partial model list is sent.
+    #[tokio::test]
+    async fn a_model_walk_that_does_not_finish_keeps_the_serial() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let mut t = catalyst_stack();
+        t.unanswered_instance_columns
+            .push(serial::OID_ENT_PHYSICAL_MODEL_NAME.to_owned());
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
+        );
+        assert_eq!(r.hardware_model, None);
+    }
+
+    /// The model column's own walk may take one column's share of the serial walk's rows.
     #[test]
-    fn the_entity_budget_grows_by_the_model_columns_share() {
-        assert_eq!(entity_row_budget(SERIAL_ENTITY_ROWS, 2), 6144);
-        assert_eq!(entity_row_budget(SERIAL_ENTITY_ROWS, 4), 5120);
-        assert_eq!(entity_row_budget(100, 2), 150);
-        assert_eq!(entity_row_budget(100, 0), 200, "never divides by zero");
+    fn the_model_walk_gets_one_columns_share_of_the_rows() {
+        assert_eq!(model_row_budget(SERIAL_ENTITY_ROWS, 2), 2048);
+        assert_eq!(model_row_budget(SERIAL_ENTITY_ROWS, 4), 1024);
+        assert_eq!(model_row_budget(100, 0), 100, "never divides by zero");
     }
 
     /// ADR-138 Increment 6. The classify read is what an unknown-maker node gets on every poll
