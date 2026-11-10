@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.77 — Show a site's local time and whether its notifications are going out, and name time zones the way NetBox does
+
 ### New Features
 
 - **A site's local time, and whether its notifications are going out, on its header.** Selecting a site folder or a node in it adds the site's clock and time zone to the line under its name (`Local time 14:32 Asia/Tokyo (UTC +0900)`, as NetBox's Site page writes it), taken from the NetBox Site's time zone or the one set on the folder, inherited from the folder above when the site has none. Where a delivery-hours schedule reaches the site it adds `Delivering until 17:20` or `Held until Mon 08:30`, in the site's local time. A place no folder gives a zone shows no clock.
