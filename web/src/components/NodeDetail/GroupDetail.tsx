@@ -45,6 +45,7 @@ import { InlineNotes } from '../ui/InlineNotes';
 import { SectionHead } from '../ui/Section';
 import { Stack } from '../ui/Page';
 import { membersTrailer, type MemberFetch } from './groupMembers';
+import { LocalTimeParts } from './LocalTimeParts';
 import './NodeDetail.css';
 import './GroupDetail.css';
 
@@ -76,6 +77,8 @@ interface Props {
   onSortChildren?: (direction: 'asc' | 'desc') => void;
   /** After the folder's note was saved in place (ADR-239): re-read the folder list. */
   onNotesSaved?: () => void;
+  /** Re-read the folder list: its delivery answer has run past its own boundary (ADR-252). */
+  onReload?: () => void;
 }
 
 export function GroupDetail({
@@ -95,6 +98,7 @@ export function GroupDetail({
   onRunDiscovery,
   onSortChildren,
   onNotesSaved,
+  onReload,
 }: Props) {
   const { t } = useTranslation('nodes');
   // How many rules name this folder. Asked only of a caller who may read the ruleset; the link is
@@ -251,6 +255,11 @@ export function GroupDetail({
           <span className={tally.needAttention ? 'nd-attention' : undefined}>
             {t('inventory.needAttention', { count: tally.needAttention })}
           </span>
+          <LocalTimeParts
+            zone={group.effective_time_zone}
+            delivery={group.delivery}
+            onStale={onReload}
+          />
         </div>
       </div>
 

@@ -738,6 +738,12 @@
       "allStatuses": "すべての状態"
     }
   },
+  "localTime": {
+    "delivering": "配信中",
+    "deliveringUntil": "{{time}} まで配信",
+    "held": "保留中",
+    "heldUntil": "{{time}} まで保留"
+  },
   "groupDetail": {
     "health": "ヘルス",
     "members": "メンバー",

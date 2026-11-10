@@ -506,6 +506,14 @@ pub struct NodeStatusDto {
     /// carries no credential field at all. `PollDispatcher::snmp_configured_for` is the one place
     /// the rule lives; it over-reports rather than under-reports.
     pub snmp_configured: bool,
+    /// The IANA zone this node's site keeps time in, after inheritance; `null` ⇒ no folder above
+    /// it names one (ADR-252). Mirrors `NodeDetail.time_zone`, from the same function.
+    pub time_zone: Option<String>,
+    /// Whether notifications about this node are delivered right now, and until when; `null` ⇒ no
+    /// delivery-hours schedule reaches it, so they always are (ADR-226, ADR-252). Mirrors
+    /// `NodeDetail.delivery`, from the same function. A held notification is not lost: it goes
+    /// out when the hours open if its alert is still open.
+    pub delivery: Option<yagra_base::groups::DeliveryNow>,
     /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
     ///
     /// Mirrors `NodeDetail.notes` on `GET /api/v1/nodes/{node_id}`, the route this tool folds —
@@ -685,6 +693,19 @@ pub struct NodeGroupDto {
     /// back by the next sync.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<yagra_base::groups::GroupOrigin>,
+    /// The IANA zone a person set on this folder, or null (ADR-226 decision 5).
+    pub time_zone: Option<String>,
+    /// The zone the NetBox Site this folder mirrors names, or null. It wins over `time_zone`
+    /// whenever it is set (ADR-226 decision 6).
+    pub netbox_time_zone: Option<String>,
+    /// The zone this folder's nodes keep time in after inheritance: its own (NetBox's first), else
+    /// the nearest ancestor's; null when no folder above names one. The WebUI shows the site's
+    /// local clock from it (ADR-252).
+    pub effective_time_zone: Option<String>,
+    /// Whether notifications about this folder's nodes are delivered right now, and until when;
+    /// null when no delivery-hours schedule reaches it, which means always (ADR-252). Mirrors the
+    /// same field on `GET /api/v1/node-groups`, cleared for a breadcrumb ancestor as `prefixes` is.
+    pub delivery: Option<yagra_base::groups::DeliveryNow>,
 }
 
 impl NodeGroupDto {
@@ -708,6 +729,10 @@ impl NodeGroupDto {
             effective_tags: g.effective_tags.clone(),
             notes: g.notes.clone(),
             origin: g.origin,
+            time_zone: g.time_zone.clone(),
+            netbox_time_zone: g.netbox_time_zone.clone(),
+            effective_time_zone: g.effective_time_zone.clone(),
+            delivery: g.delivery,
             state_counts: None,
         }
     }
@@ -1193,6 +1218,12 @@ mod tests {
                 since_unix_ms: 1,
             }),
             snmp_configured: true,
+            time_zone: Some("Asia/Tokyo".to_owned()),
+            delivery: Some(yagra_base::groups::DeliveryNow {
+                open: false,
+                closes_at: None,
+                opens_at: Some(chrono::Utc::now()),
+            }),
             notes: Some("reachable only from the jump host".to_owned()),
             os_version: Some("15.0(2a)EX5".to_owned()),
             serial_number: Some("FCW1929B68S, FCW1931A06Z".to_owned()),
@@ -1492,8 +1523,13 @@ mod tests {
             notes: Some("key at reception".to_owned()),
             origin: Some(yagra_base::groups::GroupOrigin::Meraki),
             time_zone: None,
-            netbox_time_zone: None,
-            effective_time_zone: None,
+            netbox_time_zone: Some("Asia/Tokyo".to_owned()),
+            effective_time_zone: Some("Asia/Tokyo".to_owned()),
+            delivery: Some(yagra_base::groups::DeliveryNow {
+                open: true,
+                closes_at: Some(chrono::Utc::now()),
+                opens_at: None,
+            }),
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();
         assert!(

@@ -1607,6 +1607,7 @@ export function NodesPage() {
               // The tree's folder menu, as buttons (ADR-209 decision 9): the same handlers.
               onAddSubgroup={() => setGroupModal({ mode: 'add', parentId: selectedGroup.id })}
               onNotesSaved={() => void reload()}
+              onReload={() => void reload()}
               onRunDiscovery={() =>
                 navigate(`/nodes/discovery?group=${encodeURIComponent(selectedGroup.id)}`)
               }

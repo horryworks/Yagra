@@ -526,6 +526,105 @@ mod tests {
         assert_eq!(body["error"]["code"], "time_zone_from_netbox", "{body}");
     }
 
+    /// A site's zone and delivery state reach both the folder list and the node detail (ADR-252),
+    /// and a caller scoped below a folder gets its row by name only, with no delivery state.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_sites_local_time_reaches_the_folder_list_and_the_node(pool: sqlx::PgPool) {
+        let st = live_state(pool.clone()).await;
+        let admin = token(&st, Role::Admin);
+        let group = |name: &str, parent: Option<&str>| serde_json::json!({ "name": name, "group_type": "site", "parent_id": parent });
+        let (status, region) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(group("region", None)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{region}");
+        let region = region["id"].as_str().unwrap().to_owned();
+        let (status, site) = send(
+            &st,
+            "POST",
+            "/api/v1/node-groups",
+            &admin,
+            Some(group("site", Some(&region))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{site}");
+        let site = site["id"].as_str().unwrap().to_owned();
+        sqlx::query("UPDATE node_groups SET netbox_time_zone = 'Asia/Tokyo' WHERE id = $1")
+            .bind(Uuid::parse_str(&site).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Before any schedule: a clock, and no delivery state.
+        let row = |groups: &serde_json::Value, id: &str| {
+            groups
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["id"] == id)
+                .cloned()
+                .unwrap()
+        };
+        let (_, groups) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        assert_eq!(row(&groups, &site)["effective_time_zone"], "Asia/Tokyo");
+        assert!(row(&groups, &site)["delivery"].is_null());
+
+        // Every day, all day, on the region: everything beneath it is inside its hours for good.
+        let (status, _) = send(
+            &st,
+            "POST",
+            "/api/v1/delivery-hours",
+            &admin,
+            Some(serde_json::json!({
+                "name": "always", "days": [1, 2, 3, 4, 5, 6, 7],
+                "start_minute": 0, "end_minute": 0, "group_ids": [region]
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (_, groups) = send(&st, "GET", "/api/v1/node-groups", &admin, None).await;
+        let always_open = serde_json::json!({ "open": true, "closes_at": null, "opens_at": null });
+        assert_eq!(row(&groups, &site)["delivery"], always_open);
+        assert_eq!(row(&groups, &region)["delivery"], always_open);
+
+        let scoped =
+            crate::api::tests_support::scoped_token(&st, &[Uuid::parse_str(&site).unwrap()]);
+        let (_, groups) = send(&st, "GET", "/api/v1/node-groups", &scoped, None).await;
+        assert_eq!(row(&groups, &site)["delivery"], always_open);
+        assert!(
+            row(&groups, &region)["delivery"].is_null(),
+            "an ancestor named for the breadcrumb only"
+        );
+
+        let (status, node) = send(
+            &st,
+            "POST",
+            "/api/v1/nodes",
+            &admin,
+            Some(serde_json::json!({ "name": "sw-01", "address": "192.0.2.1" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{node}");
+        let node = node["id"].as_str().unwrap().to_owned();
+        // Creating a node files it nowhere; the move is its own route, and not what this tests.
+        sqlx::query("UPDATE nodes SET group_id = $1 WHERE id = $2")
+            .bind(Uuid::parse_str(&site).unwrap())
+            .bind(Uuid::parse_str(&node).unwrap())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, detail) =
+            send(&st, "GET", &format!("/api/v1/nodes/{node}"), &admin, None).await;
+        assert_eq!(status, StatusCode::OK, "{detail}");
+        assert_eq!(detail["time_zone"], "Asia/Tokyo");
+        assert_eq!(detail["delivery"], always_open);
+    }
+
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn an_unknown_zone_is_refused(pool: sqlx::PgPool) {

@@ -1289,6 +1289,14 @@ pub(crate) struct NodeDetail {
     /// ⚠️ Over-reports rather than under-reports — see
     /// `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
     snmp_configured: bool,
+    /// The IANA zone this node's site keeps time in (ADR-252): its folder's own, else the nearest
+    /// ancestor's, NetBox's winning over a person's on each folder (ADR-226 decision 6). `null` ⇒
+    /// no folder above it names one; the screen then shows no local clock.
+    time_zone: Option<String>,
+    /// Whether notifications about this node are delivered right now, under the delivery-hours
+    /// schedules that reach its folder (ADR-226), and until when; `null` ⇒ no schedule does, so
+    /// they always are (ADR-252).
+    delivery: Option<yagra_base::groups::DeliveryNow>,
     /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
     ///
     /// ⚠️ **Detail only — deliberately not on `NodeSummary`.** The inventory tree fetches one
@@ -1412,6 +1420,7 @@ async fn get_node(
     // One whole-table read of `node_groups` per detail GET — the same profile the pool fact beside
     // it already accepts, against a table of hundreds of rows.
     let inherited_tags = super::util::tag_resolver(admin).await.inherited(&node);
+    let (time_zone, delivery) = local_time_of(admin, node.group.map(|g| g.as_uuid())).await;
     // Taken before the literal below moves the node's fields out.
     let tags = std::mem::take(&mut node.tags);
     let tags_excluded = std::mem::take(&mut node.tags_excluded);
@@ -1443,11 +1452,45 @@ async fn get_node(
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
         snmp_configured,
+        time_zone,
+        delivery,
         notes,
         tags,
         inherited_tags,
         tags_excluded,
     }))
+}
+
+/// A node's site zone and its delivery state now (ADR-252), for the REST detail and
+/// `get_node_status` alike, so the two cannot answer differently.
+///
+/// Best effort like the other detail facts: a failed read answers "no zone, no schedule", which
+/// hides the clock rather than failing the whole detail. Logged, because a hidden clock is
+/// otherwise indistinguishable from a site with no zone.
+pub(crate) async fn local_time_of(
+    admin: &super::AdminState,
+    group: Option<Uuid>,
+) -> (Option<String>, Option<yagra_base::groups::DeliveryNow>) {
+    let (hours, rows) =
+        match crate::alerts::delivery_hours::read_hours(&admin.delivery_hours, &admin.groups, true)
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to read a node's local time");
+                return (None, None);
+            }
+        };
+    let Some(group) = group else {
+        return (None, None);
+    };
+    let zone = yagra_base::groups::resolve_nearest_ancestor(rows)
+        .remove(&group)
+        .map(|(zone, _)| zone);
+    let delivery = hours
+        .get(&group)
+        .map(|h| h.delivery_now(chrono::Utc::now()));
+    (zone, delivery)
 }
 
 /// One node's live status: its display state plus the alerts currently attributed to it, so node

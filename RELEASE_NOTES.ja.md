@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **拠点の現地時刻と、通知が届く時間かどうかを、見出しに出すようになりました。** 拠点のフォルダか、その中のノードを選ぶと、名前の下の行に拠点の時計とタイムゾーン（`14:32 Asia/Tokyo`）が出ます。ゾーンは NetBox の Site のタイムゾーンか、フォルダに設定したものです。拠点に無ければ上のフォルダから継ぎます。配信時間の時間割が当たっている拠点では、拠点の現地時刻で「17:20 まで配信」か「月 08:30 まで保留」も出ます。どのフォルダもゾーンを持たない場所には時計を出しません。
+- **`GET /api/v1/node-groups` の各行に `delivery` を、`GET /api/v1/nodes/{node_id}` に `time_zone` と `delivery` を足しました。** `delivery` は、そのフォルダに当たる配信時間の時間割での `{open, closes_at, opens_at}` です。当たる時間割が無ければ `null`（通知はいつでも届く）です。フォルダの範囲を絞ったトークンが名前だけ見られる上のフォルダでは `null` です。MCP の `list_node_groups` は各フォルダの `time_zone`・`netbox_time_zone`・`effective_time_zone`・`delivery` を、`get_node_status` は `time_zone` と `delivery` を返すようになりました。
+
 ## v0.3.76 — 機器が答えるハードウェアの型番を出す。スタックはシリアルと同じ順に並べる
 
 ### 改善

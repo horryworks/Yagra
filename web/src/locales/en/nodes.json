@@ -740,6 +740,12 @@
       "allStatuses": "Any status"
     }
   },
+  "localTime": {
+    "delivering": "Delivering",
+    "deliveringUntil": "Delivering until {{time}}",
+    "held": "Held",
+    "heldUntil": "Held until {{time}}"
+  },
   "groupDetail": {
     "health": "Health",
     "members": "Members",

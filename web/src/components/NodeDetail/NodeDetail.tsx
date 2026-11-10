@@ -71,6 +71,7 @@ import { NODE_KIND_SPEC, nodeBadges } from '../../lib/nodeKind';
 import { NodeBadgeTag } from '../ui/NodeBadgeTag';
 import type { MoveTarget } from '../MoveNodeModal/MoveNodeModal';
 import { Tabs } from '../ui/Tabs';
+import { LocalTimeParts } from './LocalTimeParts';
 import './NodeDetail.css';
 
 const RTT_WINDOW_SECS = 30 * 60;
@@ -591,6 +592,11 @@ export function NodeDetail({
               </span>
             </>
           )}
+          <LocalTimeParts
+            zone={node.time_zone}
+            delivery={node.delivery}
+            onStale={() => setQuietNonce((v) => v + 1)}
+          />
         </div>
       </div>
 

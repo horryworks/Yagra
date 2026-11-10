@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### New Features
+
+- **A site's local time, and whether its notifications are going out, on its header.** Selecting a site folder or a node in it adds the site's clock and time zone to the line under its name (`14:32 Asia/Tokyo`), taken from the NetBox Site's time zone or the one set on the folder, inherited from the folder above when the site has none. Where a delivery-hours schedule reaches the site it adds `Delivering until 17:20` or `Held until Mon 08:30`, in the site's local time. A place no folder gives a zone shows no clock.
+- **`GET /api/v1/node-groups` rows carry `delivery`, and `GET /api/v1/nodes/{node_id}` carries `time_zone` and `delivery`.** `delivery` is `{open, closes_at, opens_at}` under the delivery-hours schedules that reach the folder, or `null` when none does (notifications then always go out). It is `null` on an ancestor a folder-scoped caller sees by name only. The MCP tool `list_node_groups` now returns each folder's `time_zone`, `netbox_time_zone`, `effective_time_zone` and `delivery`, and `get_node_status` returns `time_zone` and `delivery`.
+
 ## v0.3.76 — Show the hardware model each device reports, a stack's members in its serials' order
 
 ### Improvements

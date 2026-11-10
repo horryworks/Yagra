@@ -7949,6 +7949,26 @@ export interface components {
             schedules: components["schemas"]["DeliverySchedule"][];
         };
         /**
+         * @description Whether notifications about a node are delivered right now, and until when (ADR-252).
+         *
+         *     Only the server judges it: the WebUI lays the instants out in the site's zone and never reads a
+         *     schedule itself, so the screen and the notifier cannot disagree.
+         */
+        DeliveryNow: {
+            /**
+             * Format: date-time
+             * @description While open, the instant the hours close; null when they do not close within a week.
+             */
+            closes_at?: string | null;
+            /** @description True inside the hours: a notification goes out now. False: it is held. */
+            open: boolean;
+            /**
+             * Format: date-time
+             * @description While held, the instant the hours open again; null while open.
+             */
+            opens_at?: string | null;
+        };
+        /**
          * @description Whether a delivery arrived.
          * @enum {string}
          */
@@ -9439,6 +9459,7 @@ export interface components {
         };
         /** @description One group row returned by the API. `group_type` is the snake_case key. */
         GroupSummary: {
+            delivery?: null | components["schemas"]["DeliveryNow"];
             /**
              * Format: double
              * @description Where this group sits on the map after inheritance: its own coordinates, else the nearest
@@ -12095,6 +12116,7 @@ export interface components {
             address: string;
             /** Format: uuid */
             credential_id?: string | null;
+            delivery?: null | components["schemas"]["DeliveryNow"];
             dns_check?: null | components["schemas"]["DnsCheckConfig"];
             /**
              * Format: uuid
@@ -12214,6 +12236,12 @@ export interface components {
              *     re-add that label later.
              */
             tags_excluded: string[];
+            /**
+             * @description The IANA zone this node's site keeps time in (ADR-252): its folder's own, else the nearest
+             *     ancestor's, NetBox's winning over a person's on each folder (ADR-226 decision 6). `null` ⇒
+             *     no folder above it names one; the screen then shows no local clock.
+             */
+            time_zone?: string | null;
             url_check?: null | components["schemas"]["UrlCheckConfig"];
             /** @description Descriptive maker/model, editable from the node detail. */
             vendor?: string | null;

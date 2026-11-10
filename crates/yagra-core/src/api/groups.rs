@@ -124,14 +124,30 @@ pub(crate) async fn visible_groups(
     let list = admin.groups.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
     })?;
+    // Each folder's delivery hours, judged here by the function the notifier's policy is built
+    // from (ADR-252 decision 6). One query when no schedule is enabled, which is most deployments.
+    let (hours, _) =
+        crate::alerts::delivery_hours::read_hours(&admin.delivery_hours, &admin.groups, false)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "read delivery hours",
+                    "failed to list node groups",
+                )
+            })?;
+    let now = chrono::Utc::now();
     Ok(list
         .into_iter()
         .filter(|g| scope.allows_group_row(g.id))
         .map(|mut g| {
-            if !scope.allows_group(Some(g.id)) {
+            if scope.allows_group(Some(g.id)) {
+                g.delivery = hours.get(&g.id).map(|h| h.delivery_now(now));
+            } else {
                 g.prefixes.clear();
                 // A note is what a person wrote about the site — door codes, who holds the key —
-                // not a name, so it goes with the prefixes (ADR-239).
+                // not a name, so it goes with the prefixes (ADR-239). So does whether the site is
+                // inside its delivery hours (ADR-252 decision 7).
                 g.notes = None;
             }
             g

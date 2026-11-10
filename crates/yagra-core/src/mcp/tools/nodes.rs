@@ -568,6 +568,9 @@ impl YagraMcp {
                 .remove(&p.node_id),
             None => None,
         };
+        // The site's zone and delivery state, from the function the REST detail calls (ADR-252).
+        let local_time =
+            crate::api::nodes::local_time_of(admin, node.group.map(|g| g.as_uuid())).await;
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(
                 &node,
@@ -580,6 +583,8 @@ impl YagraMcp {
             // The same one rule the REST detail view reads, from the same holder — never
             // `node.credential`, which misses the deployment-wide community fallback (ADR-119).
             snmp_configured: admin.dispatcher.snmp_configured_for(&node),
+            time_zone: local_time.0,
+            delivery: local_time.1,
             notes,
             os_version,
             serial_number,

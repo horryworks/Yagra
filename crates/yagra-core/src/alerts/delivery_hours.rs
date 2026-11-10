@@ -22,6 +22,7 @@ use sqlx::{PgPool, Row};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use uuid::Uuid;
 use yagra_alert::{Alert, Subject};
+use yagra_base::groups::DeliveryNow;
 use yagra_base::wall_clock::Tz;
 use yagra_common::{CheckId, NodeId};
 
@@ -137,6 +138,44 @@ impl NodeHours {
             .map(|m| start + Duration::minutes(m))
             .find(|t| self.is_open(*t))
     }
+
+    /// The first minute after `now` this node is closed, or `None` if it is closed now or stays
+    /// open for the whole look-ahead (a window on every day, all day).
+    ///
+    /// The mirror of [`Self::next_open`]: a minute at a time through the zone, display only
+    /// (ADR-252).
+    #[must_use]
+    pub fn next_close(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        if !self.is_open(now) {
+            return None;
+        }
+        let start = now
+            .with_second(0)
+            .and_then(|t| t.with_nanosecond(0))
+            .unwrap_or(now);
+        (1..=LOOKAHEAD_MINUTES)
+            .map(|m| start + Duration::minutes(m))
+            .find(|t| !self.is_open(*t))
+    }
+
+    /// What a screen shows about these hours at `now` (ADR-252): open until when, or held until
+    /// when. The same judgement the notifier makes, so the two cannot disagree.
+    #[must_use]
+    pub fn delivery_now(&self, now: DateTime<Utc>) -> DeliveryNow {
+        if self.is_open(now) {
+            DeliveryNow {
+                open: true,
+                closes_at: self.next_close(now),
+                opens_at: None,
+            }
+        } else {
+            DeliveryNow {
+                open: false,
+                closes_at: None,
+                opens_at: self.next_open(now),
+            }
+        }
+    }
 }
 
 /// Every node some schedule covers, with the hours it keeps. A node that is absent is open.
@@ -189,12 +228,37 @@ pub fn build_policy(
     folders: &[(Uuid, Option<Uuid>, Option<String>)],
     default_zone: Tz,
 ) -> HoursPolicy {
+    let by_folder = folder_hours(schedules, folders, default_zone);
+    if by_folder.is_empty() {
+        return HoursPolicy::default();
+    }
+    let nodes = nodes
+        .iter()
+        .filter_map(|n| Some((n.id, by_folder.get(&n.group?)?.clone())))
+        .collect();
+    HoursPolicy { nodes }
+}
+
+/// The hours each folder some enabled schedule reaches keeps: every window that reaches it, read
+/// in its nearest zone, else `default_zone`. A folder no schedule reaches is absent, and is open.
+///
+/// A node's hours are its folder's, so [`build_policy`] is this plus a lookup - and the folder
+/// screen (ADR-252) asks this directly rather than a second judgement of its own.
+///
+/// `folders` is `(group, parent, own zone)` for every folder (`GroupRepo::time_zone_rows`). A zone
+/// name this build does not know falls to `default_zone` rather than leaving the folder always open.
+#[must_use]
+pub fn folder_hours(
+    schedules: &[DeliverySchedule],
+    folders: &[(Uuid, Option<Uuid>, Option<String>)],
+    default_zone: Tz,
+) -> HashMap<Uuid, NodeHours> {
     let enabled: Vec<&DeliverySchedule> = schedules
         .iter()
         .filter(|s| s.enabled && !s.days.is_empty())
         .collect();
     if enabled.is_empty() {
-        return HoursPolicy::default();
+        return HashMap::new();
     }
     let edges: Vec<(Uuid, Option<Uuid>)> = folders.iter().map(|(id, p, _)| (*id, *p)).collect();
     // Per schedule, every folder it reaches: the named ones and everything beneath them.
@@ -211,23 +275,49 @@ pub fn build_policy(
         .collect();
     let zones = yagra_base::groups::resolve_nearest_ancestor(folders.iter().cloned());
     let mut out = HashMap::new();
-    for node in nodes {
+    for (group, _, _) in folders {
         let windows: Vec<Window> = reach
             .iter()
-            .filter(|(_, folders)| node.group.is_some_and(|g| folders.contains(&g)))
+            .filter(|(_, reached)| reached.contains(group))
             .map(|(w, _)| *w)
             .collect();
         if windows.is_empty() {
             continue;
         }
-        let zone = node
-            .group
-            .and_then(|g| zones.get(&g))
+        let zone = zones
+            .get(group)
             .and_then(|(name, _)| yagra_base::wall_clock::parse_zone(name))
             .unwrap_or(default_zone);
-        out.insert(node.id, NodeHours { zone, windows });
+        out.insert(*group, NodeHours { zone, windows });
     }
-    HoursPolicy { nodes: out }
+    out
+}
+
+/// Every folder's zone row: `(group, parent, own zone)`.
+pub(crate) type ZoneRows = Vec<(Uuid, Option<Uuid>, Option<String>)>;
+
+/// What the screens read about place and time (ADR-252): each folder's hours under the enabled
+/// schedules, and every folder's zone row. Read on every call, never cached.
+///
+/// With no enabled schedule the hours are empty after one query; the zone rows are then read only
+/// when `with_zones` asks for them (a node's detail does, the folder list resolves its own).
+pub(crate) async fn read_hours(
+    store: &DeliveryHoursRepo,
+    groups: &yagra_base::groups::GroupRepo,
+    with_zones: bool,
+) -> anyhow::Result<(HashMap<Uuid, NodeHours>, ZoneRows)> {
+    let schedules = store.list().await?;
+    let any = schedules.iter().any(|s| s.enabled);
+    let folders = if any || with_zones {
+        groups.time_zone_rows().await?
+    } else {
+        Vec::new()
+    };
+    if !any {
+        return Ok((HashMap::new(), folders));
+    }
+    let zone = yagra_base::wall_clock::zone_or_utc(store.default_zone().await?.as_deref());
+    Ok((folder_hours(&schedules, &folders, zone), folders))
 }
 
 /// What the notifier was handed when it held a notification.
@@ -734,6 +824,88 @@ mod tests {
         assert!(policy.is_open(Some(NodeId::from(Uuid::from_u128(1))), saturday_3am));
         let monday_3am = Utc.with_ymd_and_hms(2026, 11, 9, 3, 0, 0).unwrap();
         assert!(!policy.is_open(Some(NodeId::from(Uuid::from_u128(1))), monday_3am));
+    }
+
+    #[test]
+    fn a_folder_keeps_the_hours_its_nodes_keep() {
+        // The folder screen asks `folder_hours`, the notifier asks `build_policy`: for every node
+        // the two must give the same hours, or the screen would say "delivering" while a page is
+        // held (ADR-252 decision 6).
+        let site = Uuid::from_u128(10);
+        let floor = Uuid::from_u128(11);
+        let other = Uuid::from_u128(12);
+        let folders = vec![
+            (site, None, Some("Asia/Tokyo".to_owned())),
+            (floor, Some(site), None),
+            (other, None, None),
+        ];
+        let mut day = schedule(WEEKDAYS, OPEN, CLOSE);
+        day.group_ids = vec![site];
+        let mut weekend = schedule(&[6, 7], 0, 0);
+        weekend.group_ids = vec![floor];
+        let schedules = [day, weekend];
+        let nodes = vec![node(1, Some(10)), node(2, Some(11)), node(3, Some(12))];
+        let policy = build_policy(&schedules, &nodes, &folders, Tz::UTC);
+        let by_folder = folder_hours(&schedules, &folders, Tz::UTC);
+        for n in &nodes {
+            assert_eq!(
+                policy.nodes.get(&n.id),
+                n.group.and_then(|g| by_folder.get(&g)),
+                "node {:?}",
+                n.id
+            );
+        }
+        assert_eq!(by_folder.get(&floor).map(|h| h.windows.len()), Some(2));
+        assert!(!by_folder.contains_key(&other));
+    }
+
+    #[test]
+    fn delivery_now_says_until_when_on_both_sides() {
+        let hours = NodeHours {
+            zone: tokyo(),
+            windows: vec![Window::of(&schedule(WEEKDAYS, OPEN, CLOSE))],
+        };
+        // Monday 09:00:30 Tokyo: open until 17:20 Tokyo = 08:20 UTC.
+        let open = hours.delivery_now(Utc.with_ymd_and_hms(2026, 11, 2, 0, 0, 30).unwrap());
+        assert_eq!(
+            open,
+            DeliveryNow {
+                open: true,
+                closes_at: Some(Utc.with_ymd_and_hms(2026, 11, 2, 8, 20, 0).unwrap()),
+                opens_at: None,
+            }
+        );
+        // Friday 20:00 Tokyo: held until Monday 08:30 Tokyo.
+        let held = hours.delivery_now(Utc.with_ymd_and_hms(2026, 11, 6, 11, 0, 0).unwrap());
+        assert_eq!(
+            held,
+            DeliveryNow {
+                open: false,
+                closes_at: None,
+                opens_at: Some(Utc.with_ymd_and_hms(2026, 11, 8, 23, 30, 0).unwrap()),
+            }
+        );
+    }
+
+    #[test]
+    fn next_close_follows_a_window_past_midnight_and_never_comes_for_all_day_every_day() {
+        let night = NodeHours {
+            zone: Tz::UTC,
+            windows: vec![Window::of(&schedule(WEEKDAYS, 22 * 60, 6 * 60))],
+        };
+        // Monday 23:00 UTC: the window that opened at 22:00 closes Tuesday 06:00.
+        assert_eq!(
+            night.next_close(Utc.with_ymd_and_hms(2026, 11, 2, 23, 0, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 11, 3, 6, 0, 0).unwrap())
+        );
+        let always = NodeHours {
+            zone: Tz::UTC,
+            windows: vec![Window::of(&schedule(&[1, 2, 3, 4, 5, 6, 7], 0, 0))],
+        };
+        assert_eq!(
+            always.next_close(Utc.with_ymd_and_hms(2026, 11, 2, 23, 0, 0).unwrap()),
+            None
+        );
     }
 
     #[test]

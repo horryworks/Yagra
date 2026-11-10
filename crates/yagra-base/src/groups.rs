@@ -206,6 +206,25 @@ pub struct GroupSummary {
     /// then a person's), else the nearest ancestor's, else null for the deployment's default.
     /// Resolved on every read, never stored - the same call the effective position makes.
     pub effective_time_zone: Option<String>,
+    /// Whether notifications about this folder's nodes are delivered right now, under the
+    /// delivery-hours schedules that reach it (ADR-226), or null when none does (ADR-252). Judged
+    /// by core on every read; this crate only carries it. Null on an ancestor a scoped caller
+    /// receives only by name.
+    pub delivery: Option<DeliveryNow>,
+}
+
+/// Whether notifications about a node are delivered right now, and until when (ADR-252).
+///
+/// Only the server judges it: the WebUI lays the instants out in the site's zone and never reads a
+/// schedule itself, so the screen and the notifier cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct DeliveryNow {
+    /// True inside the hours: a notification goes out now. False: it is held.
+    pub open: bool,
+    /// While open, the instant the hours close; null when they do not close within a week.
+    pub closes_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// While held, the instant the hours open again; null while open.
+    pub opens_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A folder's own zone: NetBox's when it names one, else the one a person set (ADR-226 decision 6).
@@ -966,6 +985,8 @@ impl GroupRepo {
                     netbox_time_zone: row.try_get("netbox_time_zone")?,
                     // Overwritten wholesale by `resolve_group_time_zone` below.
                     effective_time_zone: None,
+                    // Core's to fill (ADR-252): the schedules are not this crate's.
+                    delivery: None,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
@@ -1999,6 +2020,7 @@ mod tests {
             time_zone: None,
             netbox_time_zone: None,
             effective_time_zone: None,
+            delivery: None,
         }
     }
 

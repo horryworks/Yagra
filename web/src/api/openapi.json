@@ -32423,6 +32423,35 @@
           }
         }
       },
+      "DeliveryNow": {
+        "type": "object",
+        "description": "Whether notifications about a node are delivered right now, and until when (ADR-252).\n\nOnly the server judges it: the WebUI lays the instants out in the site's zone and never reads a\nschedule itself, so the screen and the notifier cannot disagree.",
+        "required": [
+          "open"
+        ],
+        "properties": {
+          "closes_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "While open, the instant the hours close; null when they do not close within a week."
+          },
+          "open": {
+            "type": "boolean",
+            "description": "True inside the hours: a notification goes out now. False: it is held."
+          },
+          "opens_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "While held, the instant the hours open again; null while open."
+          }
+        }
+      },
       "DeliveryResult": {
         "type": "string",
         "description": "Whether a delivery arrived.",
@@ -35665,6 +35694,17 @@
           "prefixes"
         ],
         "properties": {
+          "delivery": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeliveryNow",
+                "description": "Whether notifications about this folder's nodes are delivered right now, under the\ndelivery-hours schedules that reach it (ADR-226), or null when none does (ADR-252). Judged\nby core on every read; this crate only carries it. Null on an ancestor a scoped caller\nreceives only by name."
+              }
+            ]
+          },
           "effective_latitude": {
             "type": [
               "number",
@@ -40766,6 +40806,17 @@
             ],
             "format": "uuid"
           },
+          "delivery": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeliveryNow",
+                "description": "Whether notifications about this node are delivered right now, under the delivery-hours\nschedules that reach its folder (ADR-226), and until when; `null` ⇒ no schedule does, so\nthey always are (ADR-252)."
+              }
+            ]
+          },
           "dns_check": {
             "oneOf": [
               {
@@ -40908,6 +40959,13 @@
               "type": "string"
             },
             "description": "Labels this node refuses to inherit (ADR-135 inc. 2). Sorted.\n\nShown in full, including entries naming a label nothing currently supplies: an exclusion\nthat cannot be seen cannot be undone, and it stays meaningful because an ancestor may\nre-add that label later."
+          },
+          "time_zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The IANA zone this node's site keeps time in (ADR-252): its folder's own, else the nearest\nancestor's, NetBox's winning over a person's on each folder (ADR-226 decision 6). `null` ⇒\nno folder above it names one; the screen then shows no local clock."
           },
           "url_check": {
             "oneOf": [

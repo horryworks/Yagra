@@ -232,3 +232,17 @@ export function zoneDateText(ms: number, tz: string, locale: string): string {
   }
   return f.format(new Date(ms));
 }
+
+const weekdayCache = new Map<string, Intl.DateTimeFormat>();
+
+/** The short weekday of `ms` in `tz`, in `locale` (`Mon` in English) - when a site's delivery
+ *  hours open again, if not today (ADR-252). */
+export function zoneWeekdayText(ms: number, tz: string, locale: string): string {
+  const key = `${locale}|${tz}`;
+  let f = weekdayCache.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(locale, { timeZone: tz, weekday: 'short' });
+    weekdayCache.set(key, f);
+  }
+  return f.format(new Date(ms));
+}
