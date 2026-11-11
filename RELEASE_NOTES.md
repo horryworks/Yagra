@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.78 — Stop drawing switches heard through a hub as cabled to each other, and read each CloudEngine member's model from its board name
+
 ### Improvements
 
 - **The maker behind a MAC address knows the newest registrations.** The IEEE registry compiled into Yagra was refreshed (19 more assignments).
