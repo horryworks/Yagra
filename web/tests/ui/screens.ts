@@ -132,7 +132,8 @@ export const PROSE_CEILING: Record<string, number> = {
   '/settings/pollers': 113,
   '/settings/relocation': 1393,
   '/settings/upgrade': 300,
-  '/topology/map': 103,
+  // The unresolved count names ports shared through a hub, which it now counts (ADR-043 Inc.5).
+  '/topology/map': 131,
   '/troubleshoot': 1319,
   // One line per question card, the kind ADR-200 allows on a pick list (ADR-251 decision 10).
   '/troubleshoot/investigate': 60,
