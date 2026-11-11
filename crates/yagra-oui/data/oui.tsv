@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-10
-# counts: MA-L=40350 MA-L-repeats-dropped=3 MA-M=6599 MA-S=7236 withheld=3
+# fetched: 2026-11-11
+# counts: MA-L=40360 MA-L-repeats-dropped=3 MA-M=6604 MA-S=7240 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13538,8 +13538,13 @@
 047AAE	Huawei Device Co., Ltd.
 047B43	IEEE Registration Authority
 047B430	JUNGJUN Co., Ltd.
+047B431	EVERBLESSED TECHNOLOGY INC
+047B432	PEAK International
+047B433	ShenZhen MINIOLT Technology Co., Ltd.
 047B434	Medicop d.o.o.
 047B435	Shenzhen XJ-Micro Technology Co., Ltd.
+047B436	CZUR TECH CO., LTD
+047B437	ICsec S.A.
 047B438	MERAK HVAC España S.A.U.
 047B439	Xthings Industry LLC
 047B43A	RUBISEC CORPORATION
@@ -16145,6 +16150,7 @@
 18204C	Kummler+Matter AG
 1820A6	Sage Co., Ltd.
 1820D5	Commscope
+182162	New H3C Technologies Co., Ltd
 182195	Samsung Electronics Co.,Ltd
 18227E	Samsung Electronics Co.,Ltd
 182439	YIPPEE ELECTRONICS CP.,LIMITED
@@ -23537,6 +23543,7 @@
 4CA3A7	TECNO MOBILE LIMITED
 4CA515	Baikal Electronics JSC
 4CA56D	Samsung Electronics Co.,Ltd
+4CA637	Hisense Home Appliances Group Co.,Ltd.Qingdao Branch
 4CA64D	Cisco Systems, Inc
 4CA74B	Alcatel Lucent
 4CA919	Tuya Smart Inc.
@@ -23679,6 +23686,7 @@
 4CE176	Cisco Systems, Inc
 4CE19E	TECNO MOBILE LIMITED
 4CE1BB	Zhuhai HiFocus Technology Co., Ltd.
+4CE20C	New H3C Technologies Co., Ltd
 4CE20F	Xiaomi Communications Co Ltd
 4CE2F1	Udino srl
 4CE4B6	Motorola Mobility LLC, a Lenovo Company
@@ -34970,6 +34978,7 @@
 843E92	HUAWEI TECHNOLOGIES CO.,LTD
 843F4E	Tri-Tech Manufacturing, Inc.
 844076	Drivenets
+84413C	New H3C Technologies Co., Ltd
 844167	Apple, Inc.
 844464	ServerU Inc
 8444AF	Zhejiang Tmall Technology Co., Ltd.
@@ -35027,6 +35036,7 @@
 846A66	Sumitomo Kizai Co.,Ltd.
 846AED	Wireless Tsukamoto.,co.LTD
 846B48	ShenZhen EepuLink Co., Ltd.
+846E2F	OHSUNG
 846EB1	Park Assist LLC
 846EBC	Nokia Solutions and Networks India Private Limited
 846FCE	GUANGDONG OPPO MOBILE TELECOMMUNICATIONS CORP.,LTD
@@ -36570,6 +36580,7 @@
 8C1F64338	Rheingold Heavy LLC
 8C1F6433C	HUBRIS TECHNOLOGIES PRIVATE LIMITED
 8C1F6433D	ARROW (CHINA) ELECTRONICS TRADING CO., LTD.
+8C1F6433E	SCANMEG
 8C1F6433F	Lotec Teknoloji Limited Sirketi
 8C1F64340	BRS Sistemas Eletrônicos
 8C1F64342	TimeMachines Inc.
@@ -36673,6 +36684,7 @@
 8C1F643BB	Clausal Computing Oy
 8C1F643BD	Oriux
 8C1F643BE	Adit Innovation Private Limited
+8C1F643BF	KanexPro
 8C1F643C0	SNEK
 8C1F643C1	Suzhou Lianshichuangzhi Technology Co., Ltd
 8C1F643C2	Samuel Cosgrove
@@ -36864,6 +36876,7 @@
 8C1F644C1	Clock-O-Matic
 8C1F644C2	Laser Imagineering Vertriebs GmbH
 8C1F644C4	Innovative Industries
+8C1F644C6	Shengli Technologies
 8C1F644C7	SBS SpA
 8C1F644C9	Apantac LLC
 8C1F644CA	North Building Technologies Limited
@@ -37551,6 +37564,7 @@
 8C1F64870	Chengdu Xiuwei TechnologyDevelopment Co., Ltd
 8C1F64871	ENTE Sp. z o.o.
 8C1F64873	Nav Wireless Technologies Pvt. Ltd.
+8C1F64874	Gentec inc.
 8C1F64875	EPC Power Corporation
 8C1F64876	fmad engineering
 8C1F64878	Green Access Ltd
@@ -39842,6 +39856,7 @@
 90BA09	HUAWEI TECHNOLOGIES CO.,LTD
 90BDE6	Quectel Wireless Solutions Co.,Ltd.
 90BFD9	Smart Innovation LLC
+90C046	Hon Hai Precision Industry Co., Ltd.
 90C115	Sony Corporation
 90C119	Nokia
 90C1C6	Apple, Inc.
@@ -40828,6 +40843,7 @@
 98818A	Huawei Device Co., Ltd.
 988217	Disruptive Ltd
 988389	Samsung Electronics Co.,Ltd
+9884C1	New H3C Technologies Co., Ltd
 9884E3	Texas Instruments
 98865D	Nokia Shanghai Bell Co., Ltd.
 98868B	Juniper Networks
@@ -43685,6 +43701,7 @@ B00B22	Huawei Device Co., Ltd.
 B00BE2	Xiaomi Communications Co Ltd
 B00C9D	Quectel Wireless Solutions Co.,Ltd.
 B00CD1	Hewlett Packard
+B00DA8	Sagemcom Broadband SAS
 B01041	Hon Hai Precision Ind. Co.,Ltd.
 B0104B	Fiberhome Telecommunication Technologies Co.,LTD
 B010A0	Texas Instruments
@@ -45325,6 +45342,7 @@ BC458C	Shenzhen Topwise Communication Co.,Ltd
 BC4632	Fiberhome Telecommunication Technologies Co.,LTD
 BC4699	TP-LINK TECHNOLOGIES CO.,LTD.
 BC4760	Samsung Electronics Co.,Ltd
+BC47D6	Sagemcom Broadband SAS
 BC49B2	SHENZHEN ALONG COMMUNICATION TECH CO., LTD
 BC4A56	Cisco Systems, Inc
 BC4B79	SensingTek
@@ -50582,6 +50600,7 @@ E41F13	IBM Corp
 E41F7B	Cisco Systems, Inc
 E41FD5	Intel Corporate
 E41FE9	Dunkermotoren GmbH
+E4200B	Polystack Technologies Private Limited
 E42150	Shanghai Chint low voltage electrical technology Co.,Ltd.
 E42224	Motorola Mobility LLC, a Lenovo Company
 E422A5	PLANTRONICS, INC.

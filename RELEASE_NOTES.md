@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The maker behind a MAC address knows the newest registrations.** The IEEE registry compiled into Yagra was refreshed (19 more assignments).
+
 ### Bug Fixes
 
 - **The inventory tree no longer shakes up and down after it scrolls by itself.** Clearing the search (or Pinned only, or Hide empty folders) with a node selected, opening a folder from the detail pane's breadcrumb, arriving from a node page, moving with the arrow keys, and pressing a folder in the pinned band at the top could leave the tree jumping between two positions for up to five seconds, near the end of a folder. The tree now decides where to stop once, below the pinned folders it will show there, and stays.

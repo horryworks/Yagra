@@ -129,7 +129,9 @@ impl YagraMcp {
                        id) — the maker of the network interface, which is not \
                        necessarily who made the device or its software. \
                        `current.shared_ports` lists the local ports that hear two or more \
-                       switches or routers over one protocol — a hub or a switch that does not \
+                       pieces of network equipment over one protocol (a peer that states only \
+                       phone or host roles is not counted; one that states none is) — a hub or \
+                       a switch that does not \
                        speak CDP/LLDP sits in between, so those rows are not direct links and \
                        the network map draws none from them."
     )]
