@@ -32,8 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{
-    ArpSummary, Neighbor, NeighborCapability, NeighborProto, NeighborSet, NodeId, RoutingProto,
-    RoutingSnapshot,
+    ArpSummary, Neighbor, NeighborProto, NeighborSet, NodeId, RoutingProto, RoutingSnapshot,
 };
 
 /// Fleet-wide ceiling on stored endpoints.
@@ -310,7 +309,7 @@ pub(crate) fn identifies_a_device(ip: IpAddr) -> bool {
 /// the same reason as [`identifies_a_device`].
 pub(crate) fn only_an_end_station(nb: &Neighbor) -> bool {
     !nb.capabilities.is_empty()
-        && nb.capabilities.iter().all(|c| is_end_station(*c))
+        && nb.capabilities.iter().all(|c| c.is_end_station())
         && !is_network_platform(nb.remote_platform.as_deref())
 }
 
@@ -331,21 +330,6 @@ fn is_network_platform(platform: Option<&str>) -> bool {
     NOT_AN_END_STATION_PLATFORMS
         .iter()
         .any(|prefix| p.starts_with(prefix))
-}
-
-/// Whether a neighbour capability describes an end station rather than network equipment.
-fn is_end_station(c: NeighborCapability) -> bool {
-    match c {
-        NeighborCapability::Phone | NeighborCapability::Host => true,
-        NeighborCapability::Router
-        | NeighborCapability::Bridge
-        | NeighborCapability::Switch
-        | NeighborCapability::WlanAp
-        | NeighborCapability::Repeater
-        | NeighborCapability::CableDevice
-        | NeighborCapability::Igmp
-        | NeighborCapability::Other => false,
-    }
 }
 
 /// Device text trimmed, bounded, and dropped when empty.
@@ -1066,7 +1050,7 @@ fn endpoint_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DiscoveredEn
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yagra_common::ArpEntry;
+    use yagra_common::{ArpEntry, NeighborCapability};
 
     /// This module's code, with its test items and comments dropped — the reader every
     /// SQL-shape assertion below uses. The upsert's `first_seen` rule, the scope predicate and

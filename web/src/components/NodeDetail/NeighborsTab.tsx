@@ -66,6 +66,7 @@ import {
   peerMatch,
   peerOf,
   setupBlockedReason,
+  sharedPeersOf,
   peerSecondary,
   platformCell,
   type NeighborDiffRow,
@@ -77,6 +78,7 @@ import {
 } from './neighbors';
 import { merakiOrgPath, nodeHref } from '../../lib/entityHref';
 import { ScreenLink } from '../ui/ScreenLink';
+import { InfoPress } from '../ui/InfoTip';
 import { Facts } from '../ui/Facts';
 import { SectionHead } from '../ui/Section';
 import { Stack } from '../ui/Page';
@@ -263,8 +265,11 @@ export function NeighborsTab({ node }: Props) {
       header: t('neighbors.colLocalPort'),
       width: '1fr',
       render: (n) => (
-        <span className="mono nd-nb-line" title={n.local_port}>
-          {n.local_port}
+        <span className="nd-nb-peerline">
+          <span className="mono nd-nb-line" title={n.local_port}>
+            {n.local_port}
+          </span>
+          <SharedMark neighbor={n} lookups={lookups} />
         </span>
       ),
     },
@@ -502,6 +507,27 @@ function PeerCell({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: Neigh
   );
 }
 
+/** "Shared" beside a local port on which the node hears several switches or routers (ADR-043
+ *  Inc.5): a hub or a switch that does not speak CDP/LLDP sits in between, so the map draws no
+ *  link from it. Pressing it says so. */
+function SharedMark({ neighbor: n, lookups }: { neighbor: Neighbor; lookups: NeighborLookups }) {
+  const { t } = useTranslation('nodes');
+  const peers = sharedPeersOf(n, lookups);
+  if (peers == null) return null;
+  return (
+    // The press must not also open or close the row.
+    <span className="nd-nb-shared" onClick={(e) => e.stopPropagation()}>
+      <InfoPress
+        infoKey="nodes:neighbors.shared.info"
+        values={{ count: peers }}
+        className="badge badge-warning"
+      >
+        {t('neighbors.shared.chip')}
+      </InfoPress>
+    </span>
+  );
+}
+
 /** Why a "Not monitored" row has no setup button — said where the button would be. */
 function SetupBlocked({ reason }: { reason: SetupBlockedReason }) {
   const { t } = useTranslation('nodes');
@@ -646,8 +672,11 @@ function NeighborCard({
   return (
     <div className="nd-nb-card">
       <PeerCell neighbor={n} lookups={lookups} />
-      <span className="mono nd-nb-card-ports">
-        {n.local_port} → {n.remote_port || '—'}
+      <span className="nd-nb-peerline">
+        <span className="mono nd-nb-card-ports">
+          {n.local_port} → {n.remote_port || '—'}
+        </span>
+        <SharedMark neighbor={n} lookups={lookups} />
       </span>
       {n.remote_mgmt_addr && <span className="mono nd-nb-line">{n.remote_mgmt_addr}</span>}
       {canSetUp && <SetupButton onOpen={() => setOpen(true)} />}

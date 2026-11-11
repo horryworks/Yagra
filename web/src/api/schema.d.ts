@@ -7906,6 +7906,13 @@ export interface components {
              *     and only to choose among those nodes (ADR-180 Inc.4); a name alone never matches.
              */
             peers: components["schemas"]["NeighborPeer"][];
+            /**
+             * @description The ports on which this node hears two or more pieces of network equipment over one
+             *     protocol: something in between does not speak CDP/LLDP — a hub, or a switch that floods
+             *     CDP — so the network map draws no link from them. A peer that says it is a phone or only a
+             *     host is not counted; one that states no capabilities is.
+             */
+            shared_ports: components["schemas"]["SharedPort"][];
         };
         /** @description A save's acknowledgement. The layout is not echoed back — the client already has it. */
         DashboardSaved: {
@@ -14973,6 +14980,25 @@ export interface components {
          */
         Severity: "info" | "warning" | "critical";
         /**
+         * @description One local port on which a node hears two or more pieces of network equipment over one protocol
+         *     (ADR-043 Inc.5).
+         *
+         *     A cable reaches one device. Several on one port means something in between that does not speak
+         *     the protocol — a hub, or a switch that floods CDP as ordinary multicast — so no row on this port
+         *     is evidence of a direct link.
+         */
+        SharedPort: {
+            /** @description The local port, as the rows name it. */
+            local_port: string;
+            /**
+             * Format: int32
+             * @description How many distinct peers on this port may be network equipment.
+             */
+            peers: number;
+            /** @description The protocol the peers were heard over. */
+            proto: components["schemas"]["NeighborProto"];
+        };
+        /**
          * @description Where one site stands - the screen's four tabs, in their order.
          * @enum {string}
          */
@@ -15913,6 +15939,13 @@ export interface components {
              * @description Links produced from a connected host route — the point-to-point links that share no subnet.
              */
             route_links?: number;
+            /**
+             * Format: int32
+             * @description Local ports on which a node heard two or more pieces of network equipment over one
+             *     protocol — something in between that does not speak CDP/LLDP, such as a hub — so no link
+             *     was drawn from them.
+             */
+            shared_ports?: number;
             /**
              * Format: int32
              * @description Addresses sharing network bits but disagreeing on prefix length.

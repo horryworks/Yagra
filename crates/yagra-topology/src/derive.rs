@@ -273,8 +273,28 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     // to nodes. That is not a guess — the listing states which device owns the MAC — and it is the
     // only way an MX, which advertises no management address over LLDP, gets a link at all. Only
     // the octets are compared, never a name, and a MAC bound to two nodes names neither.
+    //
+    // A port on which the node hears several pieces of network equipment is a shared segment
+    // (ADR-043 Inc.5): a hub or a switch that floods CDP sits in between, so none of its rows is a
+    // direct link. Like a segment with no router, it produces no edge and is counted instead, and
+    // the node is unsure because the device in between is a link nobody can see. A link between
+    // the same two nodes stays when another row, on a port that is not shared, also names it.
     for (id, set) in input.neighbors {
+        let shared: BTreeSet<(NeighborProto, String)> = set
+            .shared_ports()
+            .into_iter()
+            .map(|p| (p.proto, p.local_port))
+            .collect();
+        if !shared.is_empty() {
+            summary.shared_ports = summary
+                .shared_ports
+                .saturating_add(u32::try_from(shared.len()).unwrap_or(u32::MAX));
+            unsure.insert(*id);
+        }
         for nb in &set.neighbors {
+            if !shared.is_empty() && shared.contains(&(nb.proto, nb.local_port.clone())) {
+                continue;
+            }
             let source = match nb.proto {
                 NeighborProto::Lldp => LinkSource::Lldp,
                 NeighborProto::Cdp => LinkSource::Cdp,
@@ -472,7 +492,7 @@ fn apply_overrides(links: &mut BTreeMap<String, DerivedLink>, overrides: &[LinkO
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yagra_common::{L3Address, Neighbor, RoutingProto};
+    use yagra_common::{L3Address, Neighbor, NeighborCapability, RoutingProto};
 
     #[test]
     fn one_claimant_identifies_it_and_two_or_none_identify_nobody() {
@@ -771,6 +791,165 @@ mod tests {
         assert_eq!(side.as_deref(), Some("Gi0/1"));
     }
 
+    /// A CDP row naming the switch at `addr`, heard on `port`, advertising `caps`.
+    fn cdp_row(port: &str, chassis: &str, addr: &str, caps: &[NeighborCapability]) -> Neighbor {
+        let mut nb = Neighbor::new(NeighborProto::Cdp, port, chassis, "Gi0/1");
+        nb.remote_mgmt_addr = Some(addr.into());
+        nb.capabilities = caps.to_vec();
+        nb
+    }
+
+    const SWITCH: &[NeighborCapability] = &[NeighborCapability::Switch];
+
+    /// Three switches on a hub (or a switch that floods CDP): each hears the other two on its one
+    /// uplink (Issue #69).
+    fn behind_a_hub(n: &[NodeId]) -> Vec<(NodeId, NeighborSet)> {
+        let addr = ["10.0.0.1", "10.0.0.2", "10.0.0.3"];
+        let name = ["sw-01", "sw-02", "sw-03"];
+        (0..3)
+            .map(|me| {
+                let rows = (0..3)
+                    .filter(|peer| *peer != me)
+                    .map(|peer| cdp_row("Gi0/48", name[peer], addr[peer], SWITCH))
+                    .collect();
+                (n[me], NeighborSet::new(rows, 0))
+            })
+            .collect()
+    }
+
+    fn three_nodes(n: &[NodeId]) -> Vec<(NodeId, IpAddr)> {
+        vec![
+            (n[0], ip("10.0.0.1")),
+            (n[1], ip("10.0.0.2")),
+            (n[2], ip("10.0.0.3")),
+        ]
+    }
+
+    #[test]
+    fn switches_heard_through_a_hub_are_not_a_full_mesh() {
+        let n = ids(3);
+        let neighbors = behind_a_hub(&n);
+        let out = derive_links(DeriveInput {
+            nodes: &three_nodes(&n),
+            l3: &[],
+            neighbors: &neighbors,
+            routing: &[],
+            overrides: &[],
+            chassis_macs: &[],
+        });
+        assert!(
+            out.links.is_empty(),
+            "no row on a shared port is a direct link"
+        );
+        assert_eq!(out.summary.shared_ports, 3, "one shared port per reporter");
+        assert_eq!(out.summary.cdp_links, 0);
+        assert_eq!(out.summary.unmatched_cdp_rows, 0, "skipped, not unmatched");
+        assert_eq!(
+            out.unsure,
+            n.iter().copied().collect::<BTreeSet<_>>(),
+            "the device in between is a link nobody can see"
+        );
+    }
+
+    #[test]
+    fn a_pinned_link_survives_a_shared_port() {
+        let n = ids(3);
+        let neighbors = behind_a_hub(&n);
+        let out = derive_links(DeriveInput {
+            nodes: &three_nodes(&n),
+            l3: &[],
+            neighbors: &neighbors,
+            routing: &[],
+            overrides: &[LinkOverride {
+                a_node: n[0],
+                b_node: n[1],
+                action: LinkOverrideAction::Pin,
+                direction: None,
+            }],
+            chassis_macs: &[],
+        });
+        assert_eq!(out.links.len(), 1, "manual always wins");
+        assert_eq!(out.links[0].sources, vec![LinkSource::Manual]);
+    }
+
+    #[test]
+    fn a_direct_cable_beside_the_hub_still_draws_its_link() {
+        let n = ids(3);
+        let mut neighbors = behind_a_hub(&n);
+        // The first two switches also have a cable of their own between them.
+        neighbors[0].1 = NeighborSet::new(
+            neighbors[0]
+                .1
+                .neighbors
+                .iter()
+                .cloned()
+                .chain([cdp_row("Gi0/1", "sw-02", "10.0.0.2", SWITCH)])
+                .collect(),
+            0,
+        );
+        let out = derive_links(DeriveInput {
+            nodes: &three_nodes(&n),
+            l3: &[],
+            neighbors: &neighbors,
+            routing: &[],
+            overrides: &[],
+            chassis_macs: &[],
+        });
+        assert_eq!(out.links.len(), 1);
+        let l = &out.links[0];
+        assert_eq!(
+            BTreeSet::from([l.a_node, l.b_node]),
+            BTreeSet::from([n[0], n[1]])
+        );
+        assert_eq!(out.summary.shared_ports, 3);
+    }
+
+    #[test]
+    fn a_switch_with_a_phone_behind_it_on_one_port_is_still_a_link() {
+        // An LLDP-MED phone claims Bridge as well as Telephone; it is an end station all the same.
+        let n = ids(3);
+        let rows = vec![
+            cdp_row("Gi0/1", "sw-02", "10.0.0.2", SWITCH),
+            cdp_row(
+                "Gi0/1",
+                "SEP0011",
+                "10.0.0.3",
+                &[NeighborCapability::Phone, NeighborCapability::Bridge],
+            ),
+        ];
+        let out = derive_links(DeriveInput {
+            nodes: &three_nodes(&n),
+            l3: &[],
+            neighbors: &[(n[0], NeighborSet::new(rows, 0))],
+            routing: &[],
+            overrides: &[],
+            chassis_macs: &[],
+        });
+        assert_eq!(out.summary.shared_ports, 0);
+        assert_eq!(out.links.len(), 2, "both rows draw as they did before");
+        assert!(out.unsure.is_empty());
+    }
+
+    #[test]
+    fn one_switch_heard_over_cdp_and_lldp_is_one_peer() {
+        // The same switch is spelled by hostname over CDP and by MAC over LLDP.
+        let n = ids(2);
+        let mut lldp = Neighbor::new(NeighborProto::Lldp, "Gi0/1", "aa:bb:cc:dd:ee:02", "Gi0/1");
+        lldp.remote_mgmt_addr = Some("10.0.0.2".into());
+        lldp.capabilities = vec![NeighborCapability::Bridge];
+        let rows = vec![cdp_row("Gi0/1", "sw-02", "10.0.0.2", SWITCH), lldp];
+        let out = derive_links(DeriveInput {
+            nodes: &[(n[0], ip("10.0.0.1")), (n[1], ip("10.0.0.2"))],
+            l3: &[],
+            neighbors: &[(n[0], NeighborSet::new(rows, 0))],
+            routing: &[],
+            overrides: &[],
+            chassis_macs: &[],
+        });
+        assert_eq!(out.summary.shared_ports, 0);
+        assert_eq!(out.links.len(), 1);
+    }
+
     #[test]
     fn an_ambiguous_management_address_produces_no_link() {
         // Two nodes claim the address the peer advertised. Choosing one would be a guess.
@@ -999,9 +1178,12 @@ mod tests {
     #[test]
     fn the_mac_match_does_not_depend_on_the_listing_order() {
         let n = ids(4);
+        // Two ports: two devices on one port would be a shared segment (ADR-043 Inc.5).
+        let mut second = unaddressed("02:00:00:00:00:02", Some(NeighborIdKind::Mac), None);
+        second.local_port = "Port 21".into();
         let rows = vec![
             unaddressed("02:00:00:00:00:01", Some(NeighborIdKind::Mac), None),
-            unaddressed("02:00:00:00:00:02", Some(NeighborIdKind::Mac), None),
+            second,
         ];
         let macs = vec![
             ("02:00:00:00:00:01".to_owned(), Some(n[1])),

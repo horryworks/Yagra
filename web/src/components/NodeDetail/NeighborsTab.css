@@ -331,7 +331,7 @@ html[data-viewport='mobile'] .nd-nb-table {
   min-width: 0;
 }
 
-.nd-nb-peerline .nd-nb-state {
+.nd-nb-peerline .nd-nb-state, .nd-nb-peerline .nd-nb-shared {
   flex-shrink: 0;
 }
 

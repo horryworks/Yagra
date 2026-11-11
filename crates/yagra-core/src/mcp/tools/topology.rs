@@ -127,7 +127,11 @@ impl YagraMcp {
                        labelled a MAC address (on a Meraki switch, MX or MR, which report no label, each id \
                        shaped like one — six octets, or twelve bare hex digits for a CDP device \
                        id) — the maker of the network interface, which is not \
-                       necessarily who made the device or its software."
+                       necessarily who made the device or its software. \
+                       `current.shared_ports` lists the local ports that hear two or more \
+                       switches or routers over one protocol — a hub or a switch that does not \
+                       speak CDP/LLDP sits in between, so those rows are not direct links and \
+                       the network map draws none from them."
     )]
     async fn get_neighbors(
         &self,

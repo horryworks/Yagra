@@ -176,7 +176,8 @@ export function unresolvedCount(level: MapLevel): number {
     (s.unmatched_lldp_rows ?? 0) +
     (s.unmatched_cdp_rows ?? 0) +
     (s.ambiguous_mgmt_addrs ?? 0) +
-    (s.oversized_segments ?? 0)
+    (s.oversized_segments ?? 0) +
+    (s.shared_ports ?? 0)
   );
 }
 

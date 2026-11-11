@@ -213,20 +213,35 @@ export interface NeighborLookups {
   vendors: ReadonlyMap<string, string>;
   /** By chassis MAC, for rows with no management address (ADR-180 Inc.3). */
   chassis: ReadonlyMap<string, NeighborChassisPeer>;
+  /** How many pieces of network equipment the node hears on a shared port, by protocol and local
+   *  port (ADR-043 Inc.5). The server decides which ports are shared; this only looks them up. */
+  shared: ReadonlyMap<string, number>;
 }
 
 export const NO_LOOKUPS: NeighborLookups = {
   peers: new Map(),
   vendors: new Map(),
   chassis: new Map(),
+  shared: new Map(),
 };
+
+/** The key `NeighborLookups.shared` is indexed by. */
+function sharedPortKey(proto: string, localPort: string): string {
+  return [proto, localPort].join(KEY_SEP);
+}
+
+/** How many pieces of network equipment share this row's local port, or `null` when the port is
+ *  not shared (ADR-043 Inc.5). */
+export function sharedPeersOf(n: Neighbor, lookups: NeighborLookups): number | null {
+  return lookups.shared.get(sharedPortKey(n.proto, n.local_port)) ?? null;
+}
 
 /** Index the two per-response lists. Absent lists (an older core) read as "nothing known", which
  *  shows every row exactly as it looked before this was added. */
 export function neighborLookups(
   current:
     | (Pick<CurrentNeighbors, 'peers' | 'mac_vendors'> &
-        Partial<Pick<CurrentNeighbors, 'chassis_peers'>>)
+        Partial<Pick<CurrentNeighbors, 'chassis_peers' | 'shared_ports'>>)
     | null
     | undefined,
 ): NeighborLookups {
@@ -235,6 +250,9 @@ export function neighborLookups(
     peers: new Map((current.peers ?? []).map((p) => [p.address, p])),
     vendors: new Map((current.mac_vendors ?? []).map((v) => [v.mac, v.vendor])),
     chassis: new Map((current.chassis_peers ?? []).map((c) => [c.chassis, c])),
+    shared: new Map(
+      (current.shared_ports ?? []).map((p) => [sharedPortKey(p.proto, p.local_port), p.peers]),
+    ),
   };
 }
 

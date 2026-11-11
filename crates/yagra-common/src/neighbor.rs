@@ -215,6 +215,40 @@ impl NeighborCapability {
             .into_iter()
             .find(|c| c.as_str() == s)
     }
+
+    /// Whether the capability describes an end station rather than network equipment.
+    #[must_use]
+    pub const fn is_end_station(self) -> bool {
+        match self {
+            NeighborCapability::Phone | NeighborCapability::Host => true,
+            NeighborCapability::Router
+            | NeighborCapability::Bridge
+            | NeighborCapability::Switch
+            | NeighborCapability::WlanAp
+            | NeighborCapability::Repeater
+            | NeighborCapability::CableDevice
+            | NeighborCapability::Igmp
+            | NeighborCapability::Other => false,
+        }
+    }
+}
+
+/// One local port on which a node hears two or more pieces of network equipment over one protocol
+/// (ADR-043 Inc.5).
+///
+/// A cable reaches one device. Several on one port means something in between that does not speak
+/// the protocol — a hub, or a switch that floods CDP as ordinary multicast — so no row on this port
+/// is evidence of a direct link.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, utoipa::ToSchema,
+)]
+pub struct SharedPort {
+    /// The protocol the peers were heard over.
+    pub proto: NeighborProto,
+    /// The local port, as the rows name it.
+    pub local_port: String,
+    /// How many distinct peers on this port may be network equipment.
+    pub peers: u32,
 }
 
 /// One observed adjacency.
@@ -336,6 +370,21 @@ impl Neighbor {
         let ifindex = self.local_ifindex?;
         (self.proto == NeighborProto::Cdp && self.local_port == cdp_unnamed_port(ifindex))
             .then_some(ifindex)
+    }
+
+    /// Whether the peer may be a piece of network equipment rather than an end station — the rows
+    /// [`NeighborSet::shared_ports`] counts (ADR-043 Inc.5).
+    ///
+    /// A peer that claims `Phone` is an end station even when it also claims `Bridge`: an LLDP-MED
+    /// phone sets both, because it forwards for the PC behind it. A peer that claims only end-station
+    /// roles is one too. A peer that claims nothing counts as equipment — silence is not a claim, the
+    /// same stance `only_an_end_station` takes in core's discovery list.
+    #[must_use]
+    pub fn may_be_network_equipment(&self) -> bool {
+        if self.capabilities.contains(&NeighborCapability::Phone) {
+            return false;
+        }
+        self.capabilities.is_empty() || !self.capabilities.iter().all(|c| c.is_end_station())
     }
 
     /// The identity tuple: what makes two observations "the same link".
@@ -537,6 +586,38 @@ impl NeighborSet {
         }
         self.neighbors
             .sort_by(|a, b| a.identity().cmp(&b.identity()));
+    }
+
+    /// The ports on which this node hears two or more pieces of network equipment over one protocol
+    /// (ADR-043 Inc.5) — the one rule the map's link derivation and the Neighbors tab both read.
+    ///
+    /// Peers are told apart by `remote_chassis`, and counted per protocol: the same switch heard
+    /// over CDP and LLDP is spelled once by hostname and once by MAC, and mixing the two would
+    /// count it twice. Only [`Neighbor::may_be_network_equipment`] rows are counted, so a switch
+    /// with a phone behind it on the same port is still one peer. Ordered by protocol, then port.
+    #[must_use]
+    pub fn shared_ports(&self) -> Vec<SharedPort> {
+        use std::collections::{BTreeMap, BTreeSet};
+        let mut peers: BTreeMap<(NeighborProto, &str), BTreeSet<&str>> = BTreeMap::new();
+        for n in self
+            .neighbors
+            .iter()
+            .filter(|n| n.may_be_network_equipment())
+        {
+            peers
+                .entry((n.proto, n.local_port.as_str()))
+                .or_default()
+                .insert(n.remote_chassis.as_str());
+        }
+        peers
+            .into_iter()
+            .filter(|(_, chassis)| chassis.len() >= 2)
+            .map(|((proto, local_port), chassis)| SharedPort {
+                proto,
+                local_port: local_port.to_owned(),
+                peers: u32::try_from(chassis.len()).unwrap_or(u32::MAX),
+            })
+            .collect()
     }
 
     /// How many adjacencies the set holds.
@@ -1701,5 +1782,72 @@ mod tests {
         .unwrap();
         assert_eq!(n.remote_chassis_kind, Some(NeighborIdKind::Mac));
         assert_eq!(n.remote_port_kind, Some(NeighborIdKind::Unknown));
+    }
+
+    fn equipment(
+        proto: NeighborProto,
+        port: &str,
+        chassis: &str,
+        caps: &[NeighborCapability],
+    ) -> Neighbor {
+        let mut n = Neighbor::new(proto, port, chassis, "p");
+        n.capabilities = caps.to_vec();
+        n
+    }
+
+    #[test]
+    fn a_phone_is_an_end_station_even_when_it_claims_bridge() {
+        use NeighborCapability as C;
+        let cases: [(&[C], bool); 6] = [
+            (&[C::Switch], true),
+            (&[C::Router, C::Bridge], true),
+            (&[], true),
+            (&[C::Phone, C::Bridge], false),
+            (&[C::Host], false),
+            (&[C::Host, C::Igmp], true),
+        ];
+        for (caps, expected) in cases {
+            let n = equipment(NeighborProto::Cdp, "Gi0/1", "x", caps);
+            assert_eq!(n.may_be_network_equipment(), expected, "{caps:?}");
+        }
+    }
+
+    #[test]
+    fn a_port_with_two_switches_is_shared_and_one_with_a_switch_and_a_phone_is_not() {
+        use NeighborCapability as C;
+        let set = NeighborSet::new(
+            vec![
+                equipment(NeighborProto::Cdp, "Gi0/48", "sw-02", &[C::Switch]),
+                equipment(NeighborProto::Cdp, "Gi0/48", "sw-03", &[C::Router]),
+                equipment(NeighborProto::Cdp, "Gi0/1", "sw-04", &[C::Switch]),
+                equipment(NeighborProto::Cdp, "Gi0/1", "SEP01", &[C::Phone, C::Bridge]),
+                // The same switch over LLDP on Gi0/1 is counted under LLDP, so not twice.
+                equipment(
+                    NeighborProto::Lldp,
+                    "Gi0/1",
+                    "aa:bb:cc:dd:ee:04",
+                    &[C::Bridge],
+                ),
+            ],
+            0,
+        );
+        assert_eq!(
+            set.shared_ports(),
+            vec![SharedPort {
+                proto: NeighborProto::Cdp,
+                local_port: "Gi0/48".into(),
+                peers: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn two_rows_from_one_chassis_are_one_peer() {
+        // A peer seen on two of its own ports through one hub port is still one device.
+        let mut a = equipment(NeighborProto::Lldp, "1", "aa:bb:cc:dd:ee:01", &[]);
+        let mut b = a.clone();
+        a.remote_port = "Gi0/1".into();
+        b.remote_port = "Gi0/2".into();
+        assert!(NeighborSet::new(vec![a, b], 0).shared_ports().is_empty());
     }
 }

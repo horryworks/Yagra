@@ -25,6 +25,7 @@ import {
   shouldLoadSetupCatalog,
   portVendor,
   setupBlockedReason,
+  sharedPeersOf,
   SETUP_BLOCKED_REASONS,
   setupMode,
   setupName,
@@ -269,6 +270,7 @@ describe('the lookups built from one response', () => {
     const old = neighborLookups({} as Parameters<typeof neighborLookups>[0]);
     expect(old.peers.size).toBe(0);
     expect(old.vendors.size).toBe(0);
+    expect(old.shared.size).toBe(0);
   });
 
   it('finds the verdict for a row by the address text it carries', () => {
@@ -659,5 +661,24 @@ describe('what the opened row says a peer was matched on (ADR-200 Inc.20)', () =
 
   it('has a value for every match it can answer', () => {
     expect([...PEER_MATCHES].sort()).toEqual(['address', 'mac', 'name']);
+  });
+});
+
+describe('sharedPeersOf', () => {
+  // The server names the shared ports (ADR-043 Inc.5); the tab only looks a row's port up.
+  const lookups = neighborLookups({
+    peers: [],
+    mac_vendors: [],
+    shared_ports: [{ proto: 'cdp', local_port: 'Gi0/48', peers: 3 }],
+  });
+
+  it('answers the count for a row on a shared port, matched by protocol and port', () => {
+    expect(sharedPeersOf(n({ proto: 'cdp', local_port: 'Gi0/48' }), lookups)).toBe(3);
+  });
+
+  it('answers nothing for another port, or the same port over the other protocol', () => {
+    expect(sharedPeersOf(n({ proto: 'cdp', local_port: 'Gi0/1' }), lookups)).toBeNull();
+    expect(sharedPeersOf(n({ proto: 'lldp', local_port: 'Gi0/48' }), lookups)).toBeNull();
+    expect(sharedPeersOf(n({ proto: 'cdp', local_port: 'Gi0/48' }), NO_LOOKUPS)).toBeNull();
   });
 });

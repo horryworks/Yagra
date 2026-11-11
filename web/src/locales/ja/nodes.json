@@ -1052,6 +1052,10 @@
     "colMonitoring": "監視",
     "colPlatform": "機種 / OS",
     "rowHint": "行をクリックすると、対向ノードが送ってきた内容をすべて表示します。",
+    "shared": {
+      "chip": "共有",
+      "info": "このポートの先に CDP/LLDP を話す機器が {{count}} 台見えています。間に CDP/LLDP を話さないハブかスイッチがあるとみて、このポートからは直結の線を引きません。"
+    },
     "peer": {
       "state": {
         "node": "監視中",

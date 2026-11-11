@@ -457,6 +457,11 @@ pub struct TopologyLinkSummary {
     /// others, so no link was drawn.
     #[serde(default)]
     pub oversized_segments: u32,
+    /// Local ports on which a node heard two or more pieces of network equipment over one
+    /// protocol — something in between that does not speak CDP/LLDP, such as a hub — so no link
+    /// was drawn from them.
+    #[serde(default)]
+    pub shared_ports: u32,
     /// Addresses sharing network bits but disagreeing on prefix length.
     #[serde(default)]
     pub subnet_prefix_mismatch: u32,

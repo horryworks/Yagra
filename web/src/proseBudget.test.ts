@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
   nav: [2660, 1210], // + the Investigate menu item, its description and the Analyses group heading; the description now names a site too (ADR-251 Inc.2, 2026-11-09)
-  nodes: [15789, 9020], // + the Config tab's status card and history labels; the three table headings went (ADR-240, 2026-11-06)
+  nodes: [15962, 9113], // + the Neighbors tab's shared-port press (ADR-043 Inc.5, 2026-11-11)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],
@@ -162,7 +162,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 // press 16 (ADR-228): the Interfaces headers sort when pressed, so their three ⓘ went.
 // tip 26, press 15 (ADR-236): the set-parent dialog, the poller anchor and the two comparison
 // verdicts went with the dependency screen; the grouping level gained one ⓘ.
-const INFO_COUNT = { tip: 26, press: 15 };
+const INFO_COUNT = { tip: 26, press: 16 };
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked

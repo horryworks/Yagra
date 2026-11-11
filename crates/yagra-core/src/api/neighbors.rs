@@ -30,7 +30,7 @@ use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_base::repo::adjacency_settings::{self, AdjacencySettings};
 use yagra_base::repo::{self, AddressClaim};
-use yagra_common::{Neighbor, NeighborCapability, NeighborIdKind, NeighborSet};
+use yagra_common::{Neighbor, NeighborCapability, NeighborIdKind, NeighborSet, SharedPort};
 
 /// Default page size for the change history.
 const HISTORY_DEFAULT_LIMIT: i64 = 50;
@@ -90,6 +90,11 @@ pub(crate) struct CurrentNeighbors {
     /// for a CDP device id). This names who made the network
     /// interface, which is not necessarily who made the device or its software.
     mac_vendors: Vec<MacVendor>,
+    /// The ports on which this node hears two or more pieces of network equipment over one
+    /// protocol: something in between does not speak CDP/LLDP — a hub, or a switch that floods
+    /// CDP — so the network map draws no link from them. A peer that says it is a phone or only a
+    /// host is not counted; one that states no capabilities is.
+    shared_ports: Vec<SharedPort>,
 }
 
 /// What a neighbour's management address is to this deployment.
@@ -513,6 +518,7 @@ pub(crate) async fn current_neighbors(
             },
         ),
         mac_vendors: mac_vendors(&set),
+        shared_ports: set.shared_ports(),
         neighbors: set,
         first_seen: current.first_seen.to_rfc3339(),
         last_seen: current.last_seen.to_rfc3339(),

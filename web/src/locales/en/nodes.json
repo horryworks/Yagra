@@ -1056,6 +1056,10 @@
     "colMonitoring": "Monitoring",
     "colPlatform": "Model / OS",
     "rowHint": "Click a row to see everything the neighbor sent.",
+    "shared": {
+      "chip": "Shared",
+      "info": "{{count}} devices speaking CDP/LLDP are seen on this port, so something that does not speak it — a hub or a switch — sits in between. No direct link is drawn from this port."
+    },
     "peer": {
       "state": {
         "node": "Monitored",

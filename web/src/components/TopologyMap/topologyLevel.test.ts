@@ -373,7 +373,7 @@ describe('wheelZooms', () => {
 });
 
 describe('unresolvedCount', () => {
-  // The four counters the derivation declined to turn into links; the link counts are not in it.
+  // The five counters the derivation declined to turn into links; the link counts are not in it.
   it('adds what could not be resolved and nothing else', () => {
     const l = level();
     expect(unresolvedCount(l)).toBe(0);
@@ -382,9 +382,10 @@ describe('unresolvedCount', () => {
       unmatched_cdp_rows: 1,
       ambiguous_mgmt_addrs: 3,
       oversized_segments: 4,
+      shared_ports: 5,
       lldp_links: 50,
       unmatched_routing_peers: 7,
     };
-    expect(unresolvedCount(l)).toBe(10);
+    expect(unresolvedCount(l)).toBe(15);
   });
 });
