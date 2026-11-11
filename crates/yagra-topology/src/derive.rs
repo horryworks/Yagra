@@ -280,10 +280,10 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
     // the node is unsure because the device in between is a link nobody can see. A link between
     // the same two nodes stays when another row, on a port that is not shared, also names it.
     for (id, set) in input.neighbors {
-        let shared: BTreeSet<(NeighborProto, String)> = set
-            .shared_ports()
-            .into_iter()
-            .map(|p| (p.proto, p.local_port))
+        let shared_ports = set.shared_ports();
+        let shared: BTreeSet<(NeighborProto, &str)> = shared_ports
+            .iter()
+            .map(|p| (p.proto, p.local_port.as_str()))
             .collect();
         if !shared.is_empty() {
             summary.shared_ports = summary
@@ -292,7 +292,7 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
             unsure.insert(*id);
         }
         for nb in &set.neighbors {
-            if !shared.is_empty() && shared.contains(&(nb.proto, nb.local_port.clone())) {
+            if !shared.is_empty() && shared.contains(&(nb.proto, nb.local_port.as_str())) {
                 continue;
             }
             let source = match nb.proto {

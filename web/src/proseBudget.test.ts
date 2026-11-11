@@ -88,7 +88,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
   suppression: [514, 333], // - the mute list page and the add-mute dialog (ADR-234, 2026-11-03)
   system: [14178, 7939], // the sweep limit field's out-of-range error (ADR-219, 2026-10-28)
-  topology: [1754, 1027], // - the Dependencies screen: its mode card, comparison verdicts and filters (ADR-236, 2026-11-03)
+  topology: [1811, 1051], // + the unresolved count names ports shared through a hub, which it now counts (ADR-043 Inc.5, 2026-11-11)
   troubleshoot: [4017, 2067], // + Investigate: question cards, the four ways to pick a target and the folder answer's counts and three state sentences (ADR-251 Inc.2, 2026-11-09)
 };
 
