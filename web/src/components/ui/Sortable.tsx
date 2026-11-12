@@ -20,8 +20,11 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   type CSSProperties,
   type ElementType,
   type ReactNode,
@@ -48,25 +51,30 @@ interface SortableListProps {
 export function SortableList({ ids, onReorder, nameOf, children }: SortableListProps) {
   const { t } = useTranslation();
   const sensors = useSortableSensors();
-  const say = (a: Announcement) => t(`sortable.${a.key}`, { name: a.name, n: a.place, total: a.total });
-  const accessibility = useMemo(
-    () => ({
+  // Callers build `ids` and `nameOf` inline, so they are new every render; the announcements read
+  // the latest through a ref and are built once per language instead of on every render.
+  const latest = useRef({ ids, nameOf });
+  useEffect(() => {
+    latest.current = { ids, nameOf };
+  });
+  const accessibility = useMemo(() => {
+    const say = (key: Announcement['key'], active: string, over: string | null) => {
+      const a = announce(key, latest.current.ids, active, over, latest.current.nameOf);
+      return t(`sortable.${a.key}`, { name: a.name, n: a.place, total: a.total });
+    };
+    type Id = { id: string | number };
+    return {
       screenReaderInstructions: { draggable: t('sortable.instructions') },
       announcements: {
-        onDragStart: ({ active }: { active: { id: string | number } }) =>
-          say(announce('picked', ids, String(active.id), null, nameOf)),
-        onDragOver: ({ active, over }: { active: { id: string | number }; over: { id: string | number } | null }) =>
-          say(announce('over', ids, String(active.id), over ? String(over.id) : null, nameOf)),
-        onDragEnd: ({ active, over }: { active: { id: string | number }; over: { id: string | number } | null }) =>
-          say(announce('dropped', ids, String(active.id), over ? String(over.id) : null, nameOf)),
-        onDragCancel: ({ active }: { active: { id: string | number } }) =>
-          say(announce('cancelled', ids, String(active.id), null, nameOf)),
+        onDragStart: ({ active }: { active: Id }) => say('picked', String(active.id), null),
+        onDragOver: ({ active, over }: { active: Id; over: Id | null }) =>
+          say('over', String(active.id), over ? String(over.id) : null),
+        onDragEnd: ({ active, over }: { active: Id; over: Id | null }) =>
+          say('dropped', String(active.id), over ? String(over.id) : null),
+        onDragCancel: ({ active }: { active: Id }) => say('cancelled', String(active.id), null),
       },
-    }),
-    // `say` closes over `t`, which is listed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ids, nameOf, t],
-  );
+    };
+  }, [t]);
   return (
     <DndContext
       sensors={sensors}
@@ -137,11 +145,17 @@ export function SortableItem({
     transform: dragY !== 0 ? `translateY(${dragY}px)` : undefined,
     transition,
   };
-  const ref = (el: HTMLElement | null) => {
-    setNodeRef(el);
-    if (typeof extraRef === 'function') extraRef(el);
-    else if (extraRef && 'current' in extraRef) (extraRef as { current: HTMLElement | null }).current = el;
-  };
+  // Stable, so React does not detach and re-attach the row on every render: during a drag every row
+  // re-renders each frame, and a fresh callback made dnd-kit and the virtualizer drop and re-register
+  // each one every time.
+  const ref = useCallback(
+    (el: HTMLElement | null) => {
+      setNodeRef(el);
+      if (typeof extraRef === 'function') extraRef(el);
+      else if (extraRef && 'current' in extraRef) (extraRef as { current: HTMLElement | null }).current = el;
+    },
+    [setNodeRef, extraRef],
+  );
   const wiring = useMemo(
     () => ({ attributes, listeners, setActivatorNodeRef, disabled }),
     [attributes, listeners, setActivatorNodeRef, disabled],

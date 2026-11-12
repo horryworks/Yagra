@@ -63,4 +63,19 @@ describe('sanitizeSpec', () => {
     expect(clean.sections[1].kind).toBe('top-rtt');
     expect(typeof clean.sections[1].id).toBe('string');
   });
+
+  // A drag in the builder names sections by id: two with one id were each moved twice per drop.
+  it('gives a repeated section id a fresh one, keeping the first', () => {
+    const dup = {
+      sections: [
+        { id: 'a', kind: 'top-cpu' },
+        { id: 'a', kind: 'top-rtt' },
+        { id: 'b', kind: 'top-cpu' },
+      ],
+    } as unknown as ReportSpec;
+    const ids = sanitizeSpec(dup).sections.map((s) => s.id);
+    expect(ids[0]).toBe('a');
+    expect(ids[2]).toBe('b');
+    expect(new Set(ids).size).toBe(3);
+  });
 });

@@ -18,6 +18,7 @@ import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 import { useLoad } from '../lib/useLoad';
 import { isCliCredentialKind } from '../lib/credentialKinds';
+import { loginsEmptyText } from '../components/NodeDetail/configBackupForm';
 
 interface Props {
   ids: string[];
@@ -35,7 +36,10 @@ export function ConfigBackupSwitchOnModal({ ids, skipped, keeping, onClose, onSa
   // `null` is every CLI login in the try order, sent as such so a login added later is tried too.
   const [order, setOrder] = useState<string[] | null>([]);
   const form = useSubmit({ errorFallback: t('config.err.save'), onDone: onSaved });
-  const creds = useLoad(() => api.listCredentials(), [], { initial: [] });
+  const creds = useLoad(() => api.listCredentials(), [], {
+    initial: [],
+    errorFallback: t('config.err.logins'),
+  });
   const logins = useMemo(() => creds.data.filter((c) => isCliCredentialKind(c.kind)), [creds.data]);
   const picked = order ?? logins.map((c) => c.id);
 
@@ -76,7 +80,7 @@ export function ConfigBackupSwitchOnModal({ ids, skipped, keeping, onClose, onSa
             selected={picked}
             onChange={setOrder}
             disabled={form.busy}
-            emptyText={t('config.noLogins')}
+            emptyText={loginsEmptyText(creds, t)}
           />
         </FieldGroup>
         {keeping > 0 && <p className="form-status">{t('config.list.switchOn.keeping', { count: keeping })}</p>}

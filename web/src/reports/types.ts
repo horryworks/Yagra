@@ -48,11 +48,19 @@ export function sanitizeSpec(spec: ReportSpec | undefined | null): ReportSpec {
     typeof spec.params?.range_secs === 'number' && spec.params.range_secs > 0
       ? spec.params.range_secs
       : DEFAULT_RANGE_SECS;
+  // A section's id names it to the builder's drag (ADR-255), so each must be unique: a repeated or
+  // missing one gets a fresh id. The spec is stored as the client sent it, so a repeat can arrive.
+  const seen = new Set<string>();
+  const freshId = (id: unknown): string => {
+    const own = typeof id === 'string' && !seen.has(id) ? id : sectionId();
+    seen.add(own);
+    return own;
+  };
   const sections = Array.isArray(spec.sections)
     ? spec.sections
         .filter((s) => s && typeof s.kind === 'string')
         .map((s) => ({
-          id: typeof s.id === 'string' ? s.id : sectionId(),
+          id: freshId(s.id),
           kind: s.kind,
           settings: s.settings && typeof s.settings === 'object' ? s.settings : {},
         }))

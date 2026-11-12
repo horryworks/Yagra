@@ -103,6 +103,17 @@ export function openingFormOf(view: ConfigBackupView): ConfigBackupForm {
   return !view.enabled && form.order === null ? { ...form, order: [] } : form;
 }
 
+/** The line the login picker shows while it lists nothing: still reading, the read failed, or there
+ *  really is no CLI login. Without it a failed or slow read looked like an empty store, and the
+ *  Start or Switch on button it disables gave no reason. */
+export function loginsEmptyText(
+  load: { loading: boolean; error: string | null },
+  t: (key: string) => string,
+): string {
+  if (load.loading) return t('common:loading');
+  return load.error ?? t('config.noLogins');
+}
+
 /** Whether the backup can be started from this form: something is ticked to try. */
 export function canStartWith(form: ConfigBackupForm, view: ConfigBackupView): boolean {
   return pickedLogins(form, view).length > 0;

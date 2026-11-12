@@ -1376,6 +1376,7 @@
       "fetch": "Could not ask for a fetch.",
       "text": "Could not read the version.",
       "list": "Could not list config backups.",
+      "logins": "Logins could not load",
       "cancel": "Could not cancel the fetch.",
       "rescan": "Could not start the search again."
     },

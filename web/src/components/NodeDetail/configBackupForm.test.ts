@@ -17,6 +17,7 @@ import {
   isQuietFetchRefusal,
   loginLabel,
   loginMark,
+  loginsEmptyText,
   openingFormOf,
   pickedLogins,
   previousOf,
@@ -215,6 +216,17 @@ describe('starting from picked logins (ADR-240 Inc.2)', () => {
   it('says nothing while off, or for a login the node does not try', () => {
     expect(loginMark(view({ attempts: [attempt({ credential_id: 'a' })] }), 'a')).toBeNull();
     expect(loginMark(view({ enabled: true }), 'z')).toBeNull();
+  });
+});
+
+describe('an empty login picker', () => {
+  const t = (key: string) => `<${key}>`;
+  it('says it is reading, that the read failed, or that there is no login', () => {
+    expect(loginsEmptyText({ loading: true, error: null }, t)).toBe('<common:loading>');
+    expect(loginsEmptyText({ loading: false, error: 'Logins could not load' }, t)).toBe(
+      'Logins could not load',
+    );
+    expect(loginsEmptyText({ loading: false, error: null }, t)).toBe('<config.noLogins>');
   });
 });
 

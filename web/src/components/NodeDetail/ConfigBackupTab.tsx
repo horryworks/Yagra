@@ -50,6 +50,7 @@ import {
   formOf,
   historyRows,
   loginMark,
+  loginsEmptyText,
   openingFormOf,
   sshOnly,
   withSshOnly,
@@ -111,6 +112,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const creds = useLoad(() => api.listCredentials(), [], {
     initial: [],
     enabled: canCreds,
+    errorFallback: t('config.err.logins'),
   });
   const logins = useMemo(() => creds.data.filter((c) => isCliCredentialKind(c.kind)), [creds.data]);
   const names = useMemo(() => new Map(logins.map((c) => [c.id, c.name])), [logins]);
@@ -501,7 +503,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                       selected={pickedLogins(form, v)}
                       onChange={(ids) => setForm({ ...form, order: ids })}
                       disabled={busy}
-                      emptyText={t('config.noLogins')}
+                      emptyText={loginsEmptyText(creds, t)}
                       rowStatus={(id) => {
                         const m = loginMark(v, id);
                         return m && <span className={`cfgb-tone-${m.tone}`}>{t(m.key)}</span>;
