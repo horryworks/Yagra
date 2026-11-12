@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.79 — Start config backup with the CLI logins you pick, and put lists in order by dragging the grip at their left
+
 ### Improvements
 
 - **Config backup starts only with the CLI logins you pick.** In a node's Config tab the backup switch is gone. While the backup is off, the connection settings are open with no login ticked, and **Start backup** saves them and asks for the first fetch once at least one login is picked. **Select all** keeps the old behaviour of trying every CLI login. While it is on, **Stop backup** switches it off. Each picked login shows how its last try went (refused, trying, waiting, fetched), and the card says which login of how many it is on while it is still looking. The **Turn on N** dialog on Config backups asks for the logins too; nodes already set up keep their own. While the logins are being read, the list says so, and a read that fails says that instead of showing an empty list. `POST /api/v1/config-backups/switch` accepts an optional `login_order`, used for nodes with no settings yet; leaving it out tries every CLI login, as before. An empty list, a login that is not a CLI login, or one named twice answers 400 `invalid_config_backup` (ADR-240 Inc.2, Issue #70).
