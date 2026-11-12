@@ -439,12 +439,38 @@ impl SnmpWalker {
             Ok(walk) if walk.every_column_answered => walk.rows,
             Ok(_) | Err(_) => Vec::new(),
         };
+        // NX-OS only (Inc.11): a FEX chassis row answers a description for its model, and the
+        // vendor type is what names the part. On its own walk for the model walk's reason - one
+        // that does not finish costs the FEX part numbers only, never the serial or the model.
+        let vendor_type_rows = if serial::reads_vendor_types(sys_object_id) {
+            match self
+                .walk_instance_columns(
+                    transport,
+                    target,
+                    &[serial::OID_ENT_PHYSICAL_VENDOR_TYPE.to_owned()],
+                    timeout,
+                    model_row_budget(max_entity_rows, columns.len()),
+                )
+                .await
+            {
+                Ok(walk) if walk.every_column_answered => walk.rows,
+                Ok(_) | Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         let mut classes = std::collections::BTreeMap::new();
         let mut serials = std::collections::BTreeMap::new();
         let mut names = std::collections::BTreeMap::new();
         let mut parents = std::collections::BTreeMap::new();
         let mut models = std::collections::BTreeMap::new();
-        for row in walk.rows.into_iter().chain(model_rows) {
+        let mut vendor_types = std::collections::BTreeMap::new();
+        for row in walk
+            .rows
+            .into_iter()
+            .chain(model_rows)
+            .chain(vendor_type_rows)
+        {
             // Every column is indexed by `entPhysicalIndex` alone; a longer index is not a row of
             // this table.
             let [index] = row.instance.as_slice() else {
@@ -472,6 +498,11 @@ impl SnmpWalker {
                 {
                     models.insert(index, String::from_utf8_lossy(&bytes).into_owned());
                 }
+                yagra_transport::SnmpValue::Oid(vendor_type)
+                    if row.oid_base == serial::OID_ENT_PHYSICAL_VENDOR_TYPE =>
+                {
+                    vendor_types.insert(index, vendor_type);
+                }
                 // A parent index outside `u32` is not an `entPhysicalIndex`, so it names no row.
                 yagra_transport::SnmpValue::Int(parent)
                     if row.oid_base == serial::OID_ENT_PHYSICAL_CONTAINED_IN =>
@@ -493,6 +524,7 @@ impl SnmpWalker {
             names: &names,
             parents: &parents,
             models: &models,
+            vendor_types: &vendor_types,
         });
         let model = entity.model;
         let with_model = |read: SerialRead| SerialRead {
@@ -1553,6 +1585,118 @@ mod tests {
             Some("FCW1929B68S, FCW1931A06Z, FCW1929B6BP")
         );
         assert_eq!(r.hardware_model, None);
+    }
+
+    fn walked_for_vendor_types(t: &FakeTransport) -> bool {
+        t.asked().iter().any(|call| {
+            call.iter()
+                .any(|o| o == serial::OID_ENT_PHYSICAL_VENDOR_TYPE)
+        })
+    }
+
+    /// A Nexus 5010 with two FEX, in the shape measured on NX-OS 5.0(2)N2(1): each FEX chassis
+    /// row answers a description for its model and `cevChassis 914` for its vendor type.
+    fn nexus_with_fex() -> FakeTransport {
+        use yagra_transport::{SnmpInstanceRow, SnmpValue};
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp(vec![SnmpSample {
+                oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                value: 1.0,
+            }])
+            .with_snmp_table_strings(vec![
+                string_row(
+                    "1.3.6.1.2.1.1.1",
+                    0,
+                    "Cisco NX-OS(tm) n5000, Software (n5000-uk9), Version 5.0(2)N2(1), RELEASE SOFTWARE",
+                ),
+                string_row("1.3.6.1.2.1.1.2", 0, "1.3.6.1.4.1.9.12.3.1.3.798"),
+            ]);
+        let mut t = with_entity_rows(
+            t,
+            &[
+                (149, 3, "SSI0000A000"),
+                (998_101, 3, "SSI0000A001"),
+                (998_102, 3, "SSI0000A002"),
+            ],
+        );
+        for (index, model, vendor_type) in [
+            (149, "N5K-C5010P-BF", "1.3.6.1.4.1.9.12.3.1.3.798"),
+            (
+                998_101,
+                "Fabric Extender Module: 48x1GE, 4x10GE",
+                "1.3.6.1.4.1.9.12.3.1.3.914",
+            ),
+            (
+                998_102,
+                "Fabric Extender Module: 48x1GE, 4x10GE",
+                "1.3.6.1.4.1.9.12.3.1.3.914",
+            ),
+        ] {
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_MODEL_NAME.to_owned(),
+                instance: vec![index],
+                value: SnmpValue::Bytes(model.as_bytes().to_vec()),
+            });
+            t.snmp_instances.push(SnmpInstanceRow {
+                oid_base: serial::OID_ENT_PHYSICAL_VENDOR_TYPE.to_owned(),
+                instance: vec![index],
+                value: SnmpValue::Oid(vendor_type.to_owned()),
+            });
+        }
+        t
+    }
+
+    /// ADR-147 Inc.11: on NX-OS the probe walks the vendor type too, and each FEX is sent as the
+    /// part its vendor type names rather than the description its model column answers.
+    #[tokio::test]
+    async fn a_nexus_sends_each_fex_by_its_part_number() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = nexus_with_fex();
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("SSI0000A000, SSI0000A001, SSI0000A002")
+        );
+        assert_eq!(
+            r.hardware_model.as_deref(),
+            Some("N5K-C5010P-BF, N2K-C2248TP-1GE, N2K-C2248TP-1GE")
+        );
+        assert!(walked_for_vendor_types(&t), "{:?}", t.asked());
+    }
+
+    /// A vendor-type walk that does not finish costs the FEX part numbers only: the serials and
+    /// the model column's own answers still arrive.
+    #[tokio::test]
+    async fn a_vendor_type_walk_that_does_not_finish_keeps_the_rest() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let mut t = nexus_with_fex();
+        t.unanswered_instance_columns
+            .push(serial::OID_ENT_PHYSICAL_VENDOR_TYPE.to_owned());
+        let r = execute(&job, &t, 1_000).await;
+        assert_eq!(
+            r.serial_number.as_deref(),
+            Some("SSI0000A000, SSI0000A001, SSI0000A002")
+        );
+        assert_eq!(
+            r.hardware_model.as_deref(),
+            Some(
+                "N5K-C5010P-BF, Fabric Extender Module: 48x1GE, 4x10GE, \
+                 Fabric Extender Module: 48x1GE, 4x10GE"
+            )
+        );
+    }
+
+    /// Only NX-OS pays for the vendor-type walk: an IOS stack is not asked for it.
+    #[tokio::test]
+    async fn an_ios_stack_is_not_walked_for_vendor_types() {
+        let mut job = snmp_job();
+        job.probe_identity = true;
+        let t = catalyst_stack();
+        let _ = execute(&job, &t, 1_000).await;
+        assert!(walked_for_a_serial(&t), "{:?}", t.asked());
+        assert!(!walked_for_vendor_types(&t), "{:?}", t.asked());
     }
 
     /// The model column's own walk may take one column's share of the serial walk's rows.

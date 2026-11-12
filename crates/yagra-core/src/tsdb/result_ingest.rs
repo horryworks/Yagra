@@ -1796,7 +1796,7 @@ mod tests {
         result.serial_number = Some(format!(
             "FCW1929B68S,{}FCW1931A06Z{}",
             char::from(9),
-            "x".repeat(300)
+            "x".repeat(yagra_discovery::serial::SERIAL_MAX_CHARS + 100)
         ));
         persist_metrics_and_meta(&NoReadingHandle::default().admit(result), &vm, &meta_tx);
         let rec = meta_rx

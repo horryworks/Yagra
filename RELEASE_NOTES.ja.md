@@ -10,6 +10,11 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **FEX をつないだ Nexus で、FEX ごとの品番が並び、筐体が 16 台まで切れずに並ぶようになりました。** NX-OS は FEX の筐体の行の `entPhysicalModelName` に説明文（`Fabric Extender Module: 48x1GE, 4x10GE`）を返します。NX-OS では identity の読み取りで `entPhysicalVendorType` も walk し、FEX をその部品種別が表す品番で呼びます（`cevChassis 914` なら `N2K-C2248TP-1GE`。FEX 10 台の Nexus 5010 で実測）。ほかの Nexus 2000 の品番 12 種は Cisco の公開 MIB から載せたもので、実機では見ていません。1 台のノードに並べる筐体は 8 台から 16 台に、シリアルの欄は 128 文字から 384 文字に増えました。FEX 10 台の Nexus 5010 なら、11 台分のシリアルと型番が同じ順で並びます。既存のノードは、アップグレード後の次の identity の読み取り（1 時間以内）で変わります。`GET /api/v1/nodes/inventory` と `GET /api/v1/nodes/{id}` の `serial_number` と `model` は長くなることがあります。形は変わりません（ADR-147 増分 11）。
+- **ENTITY-MIB の筐体の行がシリアルを答えて型番を空で返すスイッチでも、型番が出るようになりました。** Catalyst 4948E（IOS 12.2(54)SG）で実測しました。筐体の行の `entPhysicalModelName` は空で、同じシリアル番号を持つスーパーバイザーのモジュールの行が `WS-C4948E` を答えます。型番はそのモジュールから取ります。使うのは筐体と同じシリアルのモジュールだけです。そうしたモジュールが 2 つあって型番が食い違うときは、推測せず空のままにします。筐体が自分の型番を答えるときは、その値を使います。既存のノードは、アップグレード後の次の identity の読み取り（1 時間以内）で変わります。`GET /api/v1/nodes/inventory` と `GET /api/v1/nodes/{id}` の `model` に新しい値が入ります。形は変わりません（ADR-147 増分 10）。
+
 ## v0.3.78 — ハブ越しに聞こえるスイッチ同士を直結として描かない。CloudEngine の各メンバーの型番をボードの名前から読む
 
 ### 改善

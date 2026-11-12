@@ -67,6 +67,7 @@
 //! directly in a whole-numbered `MPU slot N` of a chassis, whose own name ends in that `N`, is
 //! member `N`'s main board (decision 23).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 /// `entPhysicalClass` — what kind of component an ENTITY-MIB row is.
@@ -81,9 +82,13 @@ pub const OID_JNX_VC_MEMBER_SERIAL: &str = "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.2";
 /// `jnxBoxSerialNo` — the Juniper box's own serial, at instance `.0` (JUNIPER-MIB).
 pub const OID_JNX_BOX_SERIAL: &str = "1.3.6.1.4.1.2636.3.1.3";
 /// The longest serial — or list of a stack's serials — a node keeps. Longer is cut, never refused.
-pub const SERIAL_MAX_CHARS: usize = 128;
-/// The most chassis, or Virtual Chassis members, whose serials are listed for one node.
-pub const SERIAL_MAX_CHASSIS: usize = 8;
+/// Sized for [`SERIAL_MAX_CHASSIS`] serials of 22 characters with their separators (Inc.11
+/// decision 38); the longest measured is 20.
+pub const SERIAL_MAX_CHARS: usize = 384;
+/// The most chassis, or Virtual Chassis members, whose serials are listed for one node. Sixteen
+/// since Inc.11 decision 38: a Nexus 5010 with ten FEX is eleven chassis rows, and eight cut three
+/// of them off.
+pub const SERIAL_MAX_CHASSIS: usize = 16;
 /// `entPhysicalModelName` — the vendor's model name for a component (Increment 8).
 pub const OID_ENT_PHYSICAL_MODEL_NAME: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
 /// The longest one member's model is kept at. The longest measured is 20 characters.
@@ -189,6 +194,61 @@ pub fn reads_board_names(sys_object_id: Option<&str>) -> bool {
     names_enterprise(sys_object_id, HUAWEI_ENTERPRISE)
 }
 
+/// `entPhysicalVendorType` — what kind of component an ENTITY-MIB row is, as an OID the vendor
+/// registers. Walked on NX-OS only, where a FEX chassis row's model column is a description and
+/// this column is what names the part (Inc.11 decision 39).
+pub const OID_ENT_PHYSICAL_VENDOR_TYPE: &str = yagra_common::OID_ENT_PHYSICAL_VENDOR_TYPE;
+
+/// `cevChassis` in CISCO-ENTITY-VENDORTYPE-OID-MIB: Cisco's chassis vendor types, and the arc an
+/// NX-OS switch's own `sysObjectID` sits under.
+const CEV_CHASSIS: &str = "1.3.6.1.4.1.9.12.3.1.3";
+
+/// The Nexus 2000 Fabric Extenders whose part number a FEX chassis row's vendor type names, by
+/// their arc under [`CEV_CHASSIS`] (Inc.11 decision 39).
+///
+/// NX-OS answers a FEX chassis row's `entPhysicalModelName` with a description (`Fabric Extender
+/// Module: 48x1GE, 4x10GE`) and puts the part nowhere in ENTITY-MIB, so the vendor type is the only
+/// thing that says which FEX it is. `914` was measured on a Nexus 5010 running 5.0(2)N2(1) with ten
+/// FEX; the other rows are read from the public MIB's names and comments, taking only those whose
+/// part number they spell unambiguously.
+const FEX_PARTS: &[(u32, &str)] = &[
+    (820, "N2K-C2148T-1GE"),
+    (913, "N2K-C2232PP-10GE"),
+    (914, "N2K-C2248TP-1GE"),
+    (1006, "N2K-C2224TP-1GE"),
+    (1046, "N2K-C2248TP-E-1GE"),
+    (1058, "N2K-B22HP-P"),
+    (1061, "N2K-C2232TM-10GE"),
+    (1190, "N2K-C2232TM-E-10GE"),
+    (1205, "N2K-C2248PQ-10GE"),
+    (1210, "N2K-B22FTS-P"),
+    (1211, "N2K-B22DELL-P"),
+    (1339, "N2K-B22IBM-P"),
+    (1541, "N2K-C2348UPQ"),
+];
+
+/// Whether this device's ENTITY-MIB is walked for `entPhysicalVendorType` too: an NX-OS switch,
+/// by its `sysObjectID` sitting under [`CEV_CHASSIS`] (Inc.11 decision 39).
+#[must_use]
+pub fn reads_vendor_types(sys_object_id: Option<&str>) -> bool {
+    names_enterprise(sys_object_id, CEV_CHASSIS)
+}
+
+/// The FEX part number a vendor type names, or `None` when it is not a FEX in [`FEX_PARTS`].
+fn fex_part(vendor_type: &str) -> Option<&'static str> {
+    let oid = vendor_type.trim();
+    let oid = oid.strip_prefix('.').unwrap_or(oid);
+    let arc: u32 = oid
+        .strip_prefix(CEV_CHASSIS)?
+        .strip_prefix('.')?
+        .parse()
+        .ok()?;
+    FEX_PARTS
+        .iter()
+        .find(|(listed, _)| *listed == arc)
+        .map(|(_, part)| *part)
+}
+
 /// Whether `sys_object_id` sits under `enterprise`. The match must end on an arc boundary —
 /// `1.3.6.1.4.1.26360` is not Juniper — and net-snmp's leading-dot spelling is accepted.
 fn names_enterprise(sys_object_id: Option<&str>, enterprise: &str) -> bool {
@@ -284,6 +344,8 @@ pub struct EntityRows<'a> {
     pub names: &'a BTreeMap<u32, String>,
     pub parents: &'a BTreeMap<u32, u32>,
     pub models: &'a BTreeMap<u32, String>,
+    /// `entPhysicalVendorType`, dotted, walked on NX-OS only (Inc.11) — empty everywhere else.
+    pub vendor_types: &'a BTreeMap<u32, String>,
 }
 
 /// The serial and the model ENTITY-MIB gives (Increment 8): a Huawei's main boards when
@@ -312,7 +374,80 @@ pub fn resolve_entity(rows: EntityRows<'_>) -> EntityIdentity {
             ..EntityIdentity::default()
         };
     }
-    members(&chassis_rows(rows.classes), rows.serials, Some(rows.models))
+    let models = chassis_models(rows);
+    members(&chassis_rows(rows.classes), rows.serials, Some(&models))
+}
+
+/// The model column as the chassis rows should read it.
+///
+/// - A chassis row whose vendor type names a Nexus FEX takes that FEX's part number (Inc.11
+///   decision 39): NX-OS answers the model column of a FEX chassis row with a description.
+/// - Otherwise a chassis row whose own `entPhysicalModelName` is empty takes the model of the
+///   module row carrying the same serial (Inc.10 decision 37). Measured on a Catalyst 4948E
+///   (IOS 12.2(54)SG): the chassis row at 1 answers its serial and an empty model, while the
+///   supervisor module at 1000 answers the same serial and `WS-C4948E`. A matching serial is what
+///   makes the two rows one physical thing, so no other part's model can be borrowed. A chassis
+///   with a model of its own keeps it, one with no serial borrows nothing, and two matching
+///   modules that disagree give nothing rather than a guess.
+fn chassis_models(rows: EntityRows<'_>) -> Cow<'_, BTreeMap<u32, String>> {
+    let mut filled: Option<BTreeMap<u32, String>> = None;
+    for index in chassis_rows(rows.classes) {
+        if let Some(part) = rows.vendor_types.get(&index).and_then(|vt| fex_part(vt)) {
+            filled
+                .get_or_insert_with(|| rows.models.clone())
+                .insert(index, part.to_owned());
+            continue;
+        }
+        let has_own = rows
+            .models
+            .get(&index)
+            .and_then(|raw| sanitize_model_item(raw))
+            .is_some();
+        if has_own {
+            continue;
+        }
+        let Some(serial) = rows.serials.get(&index).and_then(|raw| sanitize(raw)) else {
+            continue;
+        };
+        if let Some(model) = module_model_with_serial(rows, &serial) {
+            filled
+                .get_or_insert_with(|| rows.models.clone())
+                .insert(index, model);
+        }
+    }
+    filled.map_or(Cow::Borrowed(rows.models), Cow::Owned)
+}
+
+/// The one model the module rows carrying `serial` agree on, or `None` when none answers a model
+/// or two answer different ones.
+fn module_model_with_serial(rows: EntityRows<'_>, serial: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    for (index, class) in rows.classes {
+        if *class != CLASS_MODULE {
+            continue;
+        }
+        let same_serial = rows
+            .serials
+            .get(index)
+            .and_then(|raw| sanitize(raw))
+            .is_some_and(|candidate| candidate == serial);
+        if !same_serial {
+            continue;
+        }
+        let Some(model) = rows
+            .models
+            .get(index)
+            .and_then(|raw| sanitize_model_item(raw))
+        else {
+            continue;
+        };
+        match &found {
+            None => found = Some(model),
+            Some(seen) if *seen == model => {}
+            Some(_) => return None,
+        }
+    }
+    found
 }
 
 /// Each CloudEngine main board's model (Inc.9 decision 36): its `entPhysicalModelName` when it
@@ -696,31 +831,33 @@ mod tests {
         assert_eq!(resolve(&none, &two), None);
     }
 
+    /// Sixteen since Inc.11 decision 38 — a Nexus 5010 with ten FEX is eleven chassis rows.
     #[test]
-    fn at_most_eight_chassis_are_listed() {
+    fn at_most_sixteen_chassis_are_listed() {
         let entries: Vec<(u32, i64, String)> =
-            (1..=10).map(|i| (i, 3, format!("SN{i:02}"))).collect();
+            (1..=20).map(|i| (i, 3, format!("SN{i:02}"))).collect();
         let borrowed: Vec<(u32, i64, &str)> = entries
             .iter()
             .map(|(i, c, s)| (*i, *c, s.as_str()))
             .collect();
         let list = resolved(&borrowed).expect("a list");
-        assert_eq!(list, "SN01, SN02, SN03, SN04, SN05, SN06, SN07, SN08");
+        let expected: Vec<String> = (1..=16).map(|i| format!("SN{i:02}")).collect();
+        assert_eq!(list, expected.join(SEPARATOR));
     }
 
-    /// Three 40-character serials and their separators take 124 characters; a fourth would take
-    /// 166. The list stops between serials, so no member is shown cut in half.
+    /// Nine 40-character serials and their separators take 376 characters; a tenth would take
+    /// 418. The list stops between serials, so no member is shown cut in half.
     #[test]
     fn the_list_stops_before_a_serial_that_would_not_fit() {
-        let long: Vec<String> = (0..5).map(|i| format!("{i}").repeat(40)).collect();
+        let long: Vec<String> = (0..12).map(|i| format!("{}", i % 10).repeat(40)).collect();
         let entries: Vec<(u32, i64, &str)> = long
             .iter()
             .enumerate()
             .map(|(i, s)| (i as u32 + 1, 3, s.as_str()))
             .collect();
         let list = resolved(&entries).expect("a list");
-        assert_eq!(list.split(SEPARATOR).count(), 3, "{list}");
-        assert_eq!(list.chars().count(), 124);
+        assert_eq!(list.split(SEPARATOR).count(), 9, "{list}");
+        assert_eq!(list.chars().count(), 376);
         assert!(list.chars().count() <= SERIAL_MAX_CHARS);
     }
 
@@ -745,7 +882,7 @@ mod tests {
 
     #[test]
     fn sanitize_cuts_at_the_cap_and_leaves_a_joined_list_alone() {
-        let cut = sanitize(&"x".repeat(300)).expect("a value");
+        let cut = sanitize(&"x".repeat(SERIAL_MAX_CHARS + 100)).expect("a value");
         assert_eq!(cut.chars().count(), SERIAL_MAX_CHARS);
         assert_eq!(
             sanitize("FCW1929B68S, FCW1931A06Z").as_deref(),
@@ -778,6 +915,7 @@ mod tests {
                 names: &self.names,
                 parents: &self.parents,
                 models: &self.models,
+                vendor_types: &BTreeMap::new(),
             })
         }
 
@@ -1257,6 +1395,7 @@ mod tests {
             names: &BTreeMap::new(),
             parents: &BTreeMap::new(),
             models: &models,
+            vendor_types: &BTreeMap::new(),
         })
     }
 
@@ -1310,6 +1449,198 @@ mod tests {
     fn one_member_without_a_model_gives_no_model_list() {
         let read = entity_of(&[(1001, 3, "SN-A", "MODEL-A"), (2001, 3, "SN-B", "  ")]);
         assert_eq!(read.serial.as_deref(), Some("SN-A, SN-B"));
+        assert_eq!(read.model, None);
+    }
+
+    /// Inc.10 decision 37, the shape measured on a Catalyst 4948E (IOS 12.2(54)SG): the chassis
+    /// row answers its serial and an empty model; the supervisor module carries the same serial
+    /// and the model. Power supplies and transceivers carry models and serials of their own.
+    #[test]
+    fn an_empty_chassis_model_is_taken_from_the_module_with_its_serial() {
+        let read = entity_of(&[
+            (1, 3, "CAT0000A1AA", ""),
+            (2, 5, "", ""),
+            (7, 6, "PAC0000B2BB", "PWR-C49E-300AC-R"),
+            (1000, 9, "CAT0000A1AA", "WS-C4948E"),
+            (1001, 10, "", ""),
+            (1053, 10, "AVD0000C3CC", "SFP-10G-SR"),
+        ]);
+        assert_eq!(read.serial.as_deref(), Some("CAT0000A1AA"));
+        assert_eq!(read.model.as_deref(), Some("WS-C4948E"));
+    }
+
+    /// Only a module with the chassis's own serial lends its model — a line card with a serial of
+    /// its own is another part, and a power supply is not a module at all.
+    #[test]
+    fn a_module_with_another_serial_lends_no_model() {
+        let read = entity_of(&[
+            (1, 3, "SN-CHASSIS", ""),
+            (7, 6, "SN-CHASSIS", "PWR-C49E-300AC-R"),
+            (1000, 9, "SN-CARD", "WS-X4548"),
+        ]);
+        assert_eq!(read.serial.as_deref(), Some("SN-CHASSIS"));
+        assert_eq!(read.model, None);
+    }
+
+    /// Two modules with the chassis's serial that name different models are not chosen between.
+    #[test]
+    fn modules_that_disagree_lend_no_model() {
+        let read = entity_of(&[
+            (1, 3, "SN-A", ""),
+            (1000, 9, "SN-A", "MODEL-X"),
+            (2000, 9, "SN-A", "MODEL-Y"),
+        ]);
+        assert_eq!(read.model, None);
+        let agreeing = entity_of(&[
+            (1, 3, "SN-A", ""),
+            (1000, 9, "SN-A", "MODEL-X"),
+            (2000, 9, "SN-A", " MODEL-X "),
+        ]);
+        assert_eq!(agreeing.model.as_deref(), Some("MODEL-X"));
+    }
+
+    /// A chassis that answers a model keeps it, and a stack fills only the member that needs it —
+    /// the list stays in the serials' order.
+    #[test]
+    fn a_chassis_model_of_its_own_wins_and_each_member_is_filled_alone() {
+        let read = entity_of(&[
+            (1, 3, "SN-A", "OWN-MODEL"),
+            (2, 3, "SN-B", ""),
+            (1000, 9, "SN-A", "MODULE-MODEL-A"),
+            (2000, 9, "SN-B", "MODULE-MODEL-B"),
+        ]);
+        assert_eq!(read.serial.as_deref(), Some("SN-A, SN-B"));
+        assert_eq!(read.model.as_deref(), Some("OWN-MODEL, MODULE-MODEL-B"));
+    }
+
+    /// `entity_of`'s rows with `entPhysicalVendorType` beside them, as the poller walks it on NX-OS.
+    fn entity_with_vendor_types(
+        entries: &[(u32, i64, &str, &str)],
+        vendor_types: &[(u32, &str)],
+    ) -> EntityIdentity {
+        let classes = entries.iter().map(|(i, c, _, _)| (*i, *c)).collect();
+        let serials = entries
+            .iter()
+            .map(|(i, _, s, _)| (*i, (*s).to_owned()))
+            .collect();
+        let models = entries
+            .iter()
+            .map(|(i, _, _, m)| (*i, (*m).to_owned()))
+            .collect();
+        let vendor_types = vendor_types
+            .iter()
+            .map(|(i, v)| (*i, (*v).to_owned()))
+            .collect();
+        resolve_entity(EntityRows {
+            classes: &classes,
+            serials: &serials,
+            names: &BTreeMap::new(),
+            parents: &BTreeMap::new(),
+            models: &models,
+            vendor_types: &vendor_types,
+        })
+    }
+
+    /// Inc.11, the shape measured on a Nexus 5010 (NX-OS 5.0(2)N2(1)) with ten FEX: the switch's
+    /// chassis row at 149 and one per FEX at 998101.., each FEX row answering a description for its
+    /// model and `cevChassis 914` for its vendor type. Every chassis is listed, the switch first.
+    #[test]
+    fn a_nexus_lists_each_fex_by_the_part_its_vendor_type_names() {
+        const FEX_DESCRIPTION: &str = "Fabric Extender Module: 48x1GE, 4x10GE";
+        let serials: Vec<String> = (0..=10).map(|i| format!("SSI0000A{i:03}")).collect();
+        let mut rows = vec![
+            (10, 11, "", ""),
+            (22, 9, "JAF0000B1BB", "N5K-C5010P-BF"),
+            (149, 3, serials[0].as_str(), "N5K-C5010P-BF"),
+        ];
+        let mut vendor_types = vec![
+            (22, "1.3.6.1.4.1.9.12.3.1.9.72.6"),
+            (149, "1.3.6.1.4.1.9.12.3.1.3.798"),
+        ];
+        for (n, serial) in serials.iter().enumerate().skip(1) {
+            let index = 998_100 + u32::try_from(n).expect("small");
+            rows.push((index, 3, serial.as_str(), FEX_DESCRIPTION));
+            vendor_types.push((index, ".1.3.6.1.4.1.9.12.3.1.3.914"));
+        }
+        let read = entity_with_vendor_types(&rows, &vendor_types);
+        assert_eq!(
+            read.serial.as_deref(),
+            Some(serials.join(SEPARATOR).as_str())
+        );
+        let mut expected = vec!["N5K-C5010P-BF"];
+        expected.extend(std::iter::repeat_n("N2K-C2248TP-1GE", 10));
+        assert_eq!(
+            read.model.as_deref(),
+            Some(expected.join(SEPARATOR).as_str())
+        );
+        assert!(read
+            .model
+            .as_deref()
+            .is_some_and(|m| m.len() <= MODEL_MAX_CHARS));
+    }
+
+    /// A vendor type the FEX table does not list changes nothing — the model column decides.
+    #[test]
+    fn a_vendor_type_off_the_fex_table_leaves_the_model_column_alone() {
+        let read = entity_with_vendor_types(
+            &[
+                (149, 3, "SN-A", "N5K-C5010P-BF"),
+                (998_101, 3, "SN-B", "Some FEX"),
+            ],
+            &[
+                (149, "1.3.6.1.4.1.9.12.3.1.3.798"),
+                (998_101, "1.3.6.1.4.1.9.12.3.1.3.99999"),
+            ],
+        );
+        assert_eq!(read.model.as_deref(), Some("N5K-C5010P-BF, Some FEX"));
+    }
+
+    /// The table is read by the arc under `cevChassis`, never by a suffix: the same number under
+    /// another branch of the vendor-type tree is another part.
+    #[test]
+    fn a_fex_part_is_named_only_under_cev_chassis() {
+        assert_eq!(
+            fex_part("1.3.6.1.4.1.9.12.3.1.3.914"),
+            Some("N2K-C2248TP-1GE")
+        );
+        assert_eq!(
+            fex_part(" .1.3.6.1.4.1.9.12.3.1.3.914 "),
+            Some("N2K-C2248TP-1GE")
+        );
+        assert_eq!(fex_part("1.3.6.1.4.1.9.12.3.1.9.914"), None);
+        assert_eq!(fex_part("1.3.6.1.4.1.9.12.3.1.3.9140"), None);
+        assert_eq!(fex_part("1.3.6.1.4.1.9.12.3.1.3.914.1"), None);
+        assert_eq!(fex_part("1.3.6.1.4.1.9.12.3.1.3"), None);
+        assert_eq!(fex_part(""), None);
+    }
+
+    /// Every part is listed once, by an arc listed once, and each looks like a Nexus 2000 part.
+    #[test]
+    fn the_fex_table_names_each_arc_and_part_once() {
+        for (n, (arc, part)) in FEX_PARTS.iter().enumerate() {
+            assert!(part.starts_with("N2K-"), "{part}");
+            assert!(part.len() <= MODEL_ITEM_MAX_CHARS, "{part}");
+            for (other_arc, other_part) in &FEX_PARTS[n + 1..] {
+                assert_ne!(arc, other_arc);
+                assert_ne!(part, other_part);
+            }
+        }
+    }
+
+    #[test]
+    fn only_nx_os_is_walked_for_vendor_types() {
+        assert!(reads_vendor_types(Some("1.3.6.1.4.1.9.12.3.1.3.798")));
+        assert!(reads_vendor_types(Some(".1.3.6.1.4.1.9.12.3.1.3.1084")));
+        assert!(!reads_vendor_types(Some("1.3.6.1.4.1.9.1.1178")), "IOS");
+        assert!(!reads_vendor_types(Some("1.3.6.1.4.1.9.12.3.1.30")));
+        assert!(!reads_vendor_types(Some("1.3.6.1.4.1.2011.2.23.291")));
+        assert!(!reads_vendor_types(None));
+    }
+
+    /// A chassis with no serial borrows nothing: there is nothing to match a module by.
+    #[test]
+    fn a_chassis_without_a_serial_borrows_no_model() {
+        let read = entity_of(&[(1, 3, "", ""), (1000, 9, "", "WS-C4948E")]);
         assert_eq!(read.model, None);
     }
 
@@ -1461,6 +1792,7 @@ mod tests {
             names: &BTreeMap::new(),
             parents: &BTreeMap::new(),
             models: &models,
+            vendor_types: &BTreeMap::new(),
         });
         assert_eq!(read.serial.as_deref(), Some("SN-A"));
         assert_eq!(read.model, None);
