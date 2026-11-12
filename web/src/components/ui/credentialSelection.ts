@@ -5,6 +5,12 @@
 // ⚠️ Named `credentialSelection`, not `credentialPicker`: a module differing from its component
 // only in the case of its first letter resolves to whichever the filesystem feels like on
 // Windows, and `tsc` refuses it outright (TS1261).
+//
+// Since ADR-205 Inc.7 the picker draws every offered credential as ONE list whose rows stay where
+// they are: ticking or unticking a row never moves it, and every row can be moved. The selection —
+// what is sent, and the order the poller tries it in (ADR-161) — is the ticked rows read top to
+// bottom. Before, ticked rows were drawn above the rest, so unticking one sent it to the bottom,
+// and only ticked rows had arrows, so a screen that starts with nothing ticked could order nothing.
 
 import { moveBy } from '../../lib/reorder';
 
@@ -13,54 +19,51 @@ export interface Selectable {
   id: string;
 }
 
+/** `ids` with repeats dropped, first place kept. */
+const unique = (ids: readonly string[]): string[] => [...new Set(ids)];
+
 /**
- * Add or remove `id`. **The selection is an order, not a set** — it is the order the poller tries
- * the credentials in (ADR-161), and since ADR-205 Inc.2 the operator arranges it. An added
- * credential goes to the end; a removed one closes the gap.
+ * The rows the picker draws, top to bottom: every offered credential exactly once.
  *
- * 🚨 What the picker draws is this array, in this order, numbered. ADR-161 found the chips drawn in
- * one order while the request carried another; what keeps the two from disagreeing is that the
- * picker renders `selected` itself, never the options filtered by it.
- *
- * Ids no longer offered are dropped whenever anything is ticked — a stale remembered id would fail
- * the whole scan with a 400 rather than costing one credential.
+ * - The first draw (`previous` is null) puts the selection first, in its order, and the rest
+ *   after it in the order offered — so what is tried reads from the top.
+ * - After that the rows keep their places. The ticked rows' places are filled with `selected` in
+ *   its order, which changes nothing when `selected` is the ticked rows read top to bottom (every
+ *   change the picker makes itself) and puts an order set from outside ("Select all", a save read
+ *   back) where it belongs without moving an unticked row.
+ * - A credential newly offered is added at the end; one no longer offered is dropped, and so is a
+ *   selected id that is not offered — it could not be sent either.
  */
-export function toggleSelection(
+export function arrangeRows(
   options: readonly Selectable[],
   selected: readonly string[],
-  id: string,
+  previous: readonly string[] | null,
 ): string[] {
-  if (selected.includes(id)) return selected.filter((x) => x !== id);
-  const offered = new Set(options.map((o) => o.id));
-  if (!offered.has(id)) return [...selected];
-  return [...selected.filter((x) => offered.has(x)), id];
+  const offered = options.map((o) => o.id);
+  const offeredSet = new Set(offered);
+  const ticked = unique(selected).filter((id) => offeredSet.has(id));
+  const tickedSet = new Set(ticked);
+  if (previous === null) return [...ticked, ...offered.filter((id) => !tickedSet.has(id))];
+  const kept = unique(previous).filter((id) => offeredSet.has(id));
+  const keptSet = new Set(kept);
+  const rows = [...kept, ...offered.filter((id) => !keptSet.has(id))];
+  let next = 0;
+  return rows.map((id) => (tickedSet.has(id) ? ticked[next++] : id));
 }
 
-/**
- * What the picker draws (ADR-205 Inc.3): every offered credential, split in two.
- *
- * `used` is the selection in its try order — the order it is sent in, so it is the order it is
- * numbered in. `unused` is every other offered credential, in the order offered. An id selected but
- * no longer offered appears in neither: it cannot be sent either (`toggleSelection` drops it).
- */
-export function splitSelection<T extends Selectable>(
-  options: readonly T[],
-  selected: readonly string[],
-): { used: T[]; unused: T[] } {
-  const byId = new Map(options.map((o) => [o.id, o]));
-  const seen = new Set<string>();
-  const used: T[] = [];
-  for (const id of selected) {
-    const o = byId.get(id);
-    if (o && !seen.has(id)) {
-      seen.add(id);
-      used.push(o);
-    }
-  }
-  return { used, unused: options.filter((o) => !seen.has(o.id)) };
+/** What is selected, given the rows and which are ticked: the ticked rows read top to bottom. */
+export function selectionOf(rows: readonly string[], ticked: ReadonlySet<string>): string[] {
+  return rows.filter((id) => ticked.has(id));
 }
 
-/** The selection with `id` moved one place earlier (`-1`) or later (`1`) in the try order. */
-export function moveSelected(selected: readonly string[], id: string, delta: -1 | 1): string[] {
-  return moveBy(selected, selected.indexOf(id), delta);
+/** The selection with `id` ticked or unticked. Its row does not move, so neither does any other. */
+export function toggleRow(rows: readonly string[], selected: readonly string[], id: string): string[] {
+  const ticked = new Set(selected);
+  if (!ticked.delete(id)) ticked.add(id);
+  return selectionOf(rows, ticked);
+}
+
+/** The rows with `id` moved one place up (`-1`) or down (`1`), ticked or not. */
+export function moveRow(rows: readonly string[], id: string, delta: -1 | 1): string[] {
+  return moveBy(rows, rows.indexOf(id), delta);
 }

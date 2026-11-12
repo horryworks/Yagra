@@ -161,6 +161,23 @@ test.describe('a node not backed up yet', () => {
     expect(errors.uncaught).toEqual([]);
   });
 
+  test('the logins can be put in order before any is ticked, and start in that order', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    const picker = page.locator('.cfgb-settings .cred-picker');
+    const names = picker.locator('.cred-picker-row-name');
+    await expect(names).toHaveText(['ymock-ops-login', 'ymock-second-login']);
+    // Nothing is ticked, and every row can still be moved (ADR-205 Inc.7).
+    await picker.getByRole('button', { name: 'Move ymock-second-login up' }).click();
+    await expect(names).toHaveText(['ymock-second-login', 'ymock-ops-login']);
+    await picker.getByRole('checkbox', { name: /ymock-ops-login/ }).check();
+    await picker.getByRole('checkbox', { name: /ymock-second-login/ }).check();
+    // Ticking moved nothing: the order tried is the rows top to bottom.
+    await expect(names).toHaveText(['ymock-second-login', 'ymock-ops-login']);
+    const put = page.waitForRequest(isPut('/config-backup'));
+    await page.getByRole('button', { name: 'Start backup' }).click();
+    expect((await put).postDataJSON()).toMatchObject({ login_order: [SECOND, LOGIN] });
+  });
+
   test('Select all starts with every CLI login, sent as the default, and SSH only goes with it', async ({
     page,
   }) => {

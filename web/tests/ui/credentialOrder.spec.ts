@@ -136,8 +136,9 @@ test('a scan sends the credentials in the order the picker shows them', async ({
   expect(errors.uncaught).toEqual([]);
 });
 
-// ADR-205 Inc.3: every credential is on screen, and the checkbox is how one is used or not.
-test('unticking moves a credential down, and ticking it puts it last in the order', async ({
+// ADR-205 Inc.7: every credential is one row that stays where it is. The checkbox says whether it
+// is tried; the arrows, on every row, say in what order.
+test('unticking leaves a credential in its place, and ticking it again keeps the place', async ({
   page,
   errors,
 }) => {
@@ -147,18 +148,23 @@ test('unticking moves a credential down, and ticking it puts it last in the orde
   await page.locator('.disco-how').evaluate((d) => {
     (d as HTMLDetailsElement).open = true;
   });
+  const names = page.locator('.cred-picker-row .cred-picker-row-name');
   const used = page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name');
-  const unused = page.locator('.cred-picker-row.unused .cred-picker-row-name');
-  await expect(used).toHaveText(['ymock-first', 'ymock-second']);
+  await expect(names).toHaveText(['ymock-first', 'ymock-second']);
 
   await page.getByRole('checkbox', { name: 'Use ymock-first' }).uncheck();
+  await expect(names).toHaveText(['ymock-first', 'ymock-second']);
   await expect(used).toHaveText(['ymock-second']);
-  await expect(unused).toHaveText(['ymock-first']);
   await expect(page.locator('.cred-picker-row:not(.unused) .cred-picker-row-n')).toHaveText(['1']);
+  // An unticked row can still be moved.
+  await page.getByRole('button', { name: 'Move ymock-first down' }).click();
+  await expect(names).toHaveText(['ymock-second', 'ymock-first']);
+  await page.getByRole('button', { name: 'Move ymock-first up' }).click();
+  await expect(names).toHaveText(['ymock-first', 'ymock-second']);
 
   await page.getByRole('checkbox', { name: 'Use ymock-first' }).check();
-  await expect(used).toHaveText(['ymock-second', 'ymock-first']);
-  await expect(unused).toHaveCount(0);
+  await expect(names).toHaveText(['ymock-first', 'ymock-second']);
+  await expect(used).toHaveText(['ymock-first', 'ymock-second']);
 
   await page.locator('textarea.disco-range').fill('192.0.2.1');
   const post = page.waitForRequest(
@@ -166,7 +172,7 @@ test('unticking moves a credential down, and ticking it puts it last in the orde
   );
   await page.getByRole('button', { name: 'Scan', exact: true }).click();
   const body = (await post).postDataJSON() as { credential_ids: string[] };
-  expect(body.credential_ids).toEqual([S2, S1]);
+  expect(body.credential_ids).toEqual([S1, S2]);
   expect(errors.uncaught).toEqual([]);
 });
 
