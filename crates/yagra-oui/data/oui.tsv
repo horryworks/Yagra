@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-11
-# counts: MA-L=40360 MA-L-repeats-dropped=3 MA-M=6604 MA-S=7240 withheld=3
+# fetched: 2026-11-12
+# counts: MA-L=40370 MA-L-repeats-dropped=3 MA-M=6606 MA-S=7243 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -13551,6 +13551,7 @@
 047B43B	ACADEMY FOR FUTURE HEALTH LTD
 047B43C	RR Technologies GmbH
 047B43D	ZEBO PTE LTD
+047B43E	SDT Inc.
 047BCB	Universal Global Scientific Industrial., Ltd
 047C16	Micro-Star INTL CO., LTD.
 047D50	Shenzhen Kang Ying Technology Co.Ltd.
@@ -15938,6 +15939,7 @@
 149F43	Cisco Meraki
 149FB6	GUANGDONG GENIUS TECHNOLOGY CO., LTD.
 149FE8	Lenovo Mobile Communication Technology Ltd.
+14A07D	Microchip Technology Inc.
 14A0F8	HUAWEI TECHNOLOGIES CO.,LTD
 14A1BF	ASSA ABLOY Korea Co., Ltd Unilock
 14A1DF	China Mobile Group Device Co.,Ltd.
@@ -18886,6 +18888,7 @@
 2C1CF6	Alien Green LLC
 2C1CF7	Apple, Inc.
 2C1DB8	Commscope
+2C1DBB	Tuya Smart Inc.
 2C1E4F	Chengdu Qianli Network Technology Co., Ltd.
 2C1EEA	AERODEV
 2C1F23	Apple, Inc.
@@ -22280,6 +22283,7 @@
 443E07	Electrolux
 443E8A	Texas Instruments
 443EB2	DEOTRON Co., LTD.
+4440AB	ASUSTek COMPUTER INC.
 4441F0	zte corporation
 444201	Amazon Technologies Inc.
 44422F	TESTOP CO.,LTD.
@@ -25578,6 +25582,8 @@
 5C6B32	Texas Instruments
 5C6B4F	Hello Inc.
 5C6BD7	Foshan VIOMI Electric Appliance Technology Co. Ltd.
+5C6CBB	IEEE Registration Authority
+5C6CBBD	Vasco Electronics S.A.
 5C6D20	Hon Hai Precision Ind. Co.,Ltd.
 5C6F4F	S.A. SISTEL
 5C6F69	Broadcom Limited
@@ -33677,6 +33683,7 @@
 78DDD9	Guangzhou Shiyuan Electronics Co., Ltd.
 78DEE4	Texas Instruments
 78DF72	Shanghai Imilab Technology Co.Ltd
+78E04D	Sony Interactive Entertainment Inc.
 78E0C5	Samsung Electronics Co.,Ltd
 78E103	Amazon Technologies Inc.
 78E167	Launch Tech Co., Ltd.
@@ -37701,6 +37708,7 @@
 8C1F64939	SPIT Technology, Inc
 8C1F6493A	Rejås of Sweden AB
 8C1F6493B	Computer Express LLC
+8C1F6493C	Konzept Informationssysteme GmbH
 8C1F6493F	TEMCOLINE
 8C1F64941	Lorenz GmbH & Co. KG
 8C1F64943	Autark GmbH
@@ -38202,6 +38210,7 @@
 8C1F64BE1	Geolux
 8C1F64BE3	REO AG
 8C1F64BE5	Blackline Systems Corp.
+8C1F64BE7	Nokia
 8C1F64BE8	TECHNOLOGIES BACMOVE INC.
 8C1F64BEA	Microchip Technologies Inc
 8C1F64BEB	aelettronica group srl
@@ -38747,6 +38756,7 @@
 8C1F64EE1	PuS GmbH und Co. KG
 8C1F64EE3	SICHUAN HUACUN ZHIGU TECHNOLOGY CO.,LTD
 8C1F64EE6	LYNKX
+8C1F64EE7	CIAB Tech, LLC
 8C1F64EE8	Global Organ Group B.V.
 8C1F64EE9	Intect AG
 8C1F64EEA	AMESS
@@ -43036,6 +43046,7 @@ A8A668	zte corporation
 A8A795	Hon Hai Precision Ind. Co.,Ltd.
 A8A913	GN Hearing A/S
 A8AA7C	Huawei Device Co., Ltd.
+A8AB18	Tuya Smart Inc.
 A8ABB5	Apple, Inc.
 A8AD3D	Alcatel-Lucent Shanghai Bell Co., Ltd
 A8B028	CubePilot Pty Ltd
@@ -43363,6 +43374,7 @@ AC620D	Jabil Circuit(Wuxi) Co.,Ltd
 AC62FF	Vantiva USA LLC
 AC63BE	Amazon Technologies Inc.
 AC6417	Siemens AG
+AC6460	Nokia Solutions and Networks India Private Limited
 AC6462	zte corporation
 AC6490	HUAWEI TECHNOLOGIES CO.,LTD
 AC64CF	FN-LINK TECHNOLOGY LIMITED
@@ -43382,6 +43394,7 @@ AC64DDB	Groupe Citypassenger Inc
 AC64DDC	Beijing Hamigua Technology Co., Ltd.
 AC64DDD	HMicro Inc
 AC64DDE	DIGIBIRD TECHNOLOGY CO., LTD.
+AC66B3	BUFFALO.INC
 AC6706	Ruckus Wireless
 AC675D	Intel Corporate
 AC676F	Electrocompaniet A.S.
@@ -45048,6 +45061,7 @@ B8CB29	Dell Inc.
 B8CB93	IC BOSS.COM TECH INC
 B8CC38	Shenzhen Yinwang Intelligent Technologies Co., Ltd.
 B8CC5F	Shenzhen iComm Semiconductor CO.,LTD
+B8CD2B	eero inc.
 B8CD58	Shenzhen SuperElectron Technology Co.,Ltd.
 B8CD93	Penetek, Inc
 B8CDA7	Maxeler Technologies Ltd.
@@ -49521,6 +49535,7 @@ D8E374	Xiaomi Communications Co Ltd
 D8E3AE	CIRTEC MEDICAL SYSTEMS
 D8E56D	TCT mobile ltd
 D8E593	Apple, Inc.
+D8E6AB	eero inc.
 D8E72B	NETSCOUT SYSTEMS INC
 D8E72F	Chipsea Technologies (Shenzhen) Corp.
 D8E743	Wush, Inc

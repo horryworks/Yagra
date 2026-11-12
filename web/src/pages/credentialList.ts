@@ -85,10 +85,10 @@ export function credentialSortIn(group: CredentialGroup, sort: SortState): SortS
   return !hasTryOrder(group) && sort.by === 'order' ? { by: 'name', dir: 'asc' } : sort;
 }
 
-/** Whether a tab's rows can be moved with up and down (ADR-205 Inc.2, Inc.5): only a tab with a
- *  try order, and only while the table shows that order whole — sorted on
- *  it ascending and narrowed by nothing. "Up" in a list sorted by name, or with rows hidden between
- *  two neighbours, would move a credential somewhere other than where the operator sees it go. */
+/** Whether a tab's rows can be dragged into a new order (ADR-205 Inc.2, Inc.5, ADR-255): only a tab
+ *  with a try order, and only while the table shows that order whole — sorted on it ascending and
+ *  narrowed by nothing. A drop in a list sorted by name, or with rows hidden between two neighbours,
+ *  would move a credential somewhere other than where the operator sees it go. */
 export function canReorderCredentials(
   group: CredentialGroup,
   sort: SortState,
