@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Discovery's Scan a range card (ADR-244): the IP range | Site toggle, the target and Scan on one
-// row, and the folded settings.
+// Discovery's Scan a range card (ADR-244): the IP range | Site toggle, the target, the folded
+// settings, and Scan under them at the left (Inc.2).
 //
 // WHY A BROWSER. The layout is the whole change. The first build drew the toggle across the full
 // width of the card because the shared segmented control stretches its buttons, and nothing but a
@@ -35,7 +35,7 @@ test.use({
   },
 });
 
-test('the toggle is as wide as its two words, and Scan sits beside the target', async ({
+test('the toggle is as wide as its two words, and Scan sits under the settings at the left', async ({
   page,
   errors,
 }) => {
@@ -50,10 +50,13 @@ test('the toggle is as wide as its two words, and Scan sits beside the target', 
   expect(width).toBeLessThan(260);
 
   const field = await page.locator('textarea.disco-range').boundingBox();
+  const settings = await page.locator('.disco-how').boundingBox();
   const scan = await page.getByRole('button', { name: 'Scan', exact: true }).boundingBox();
-  expect(field && scan).toBeTruthy();
-  // Same row: the button's top is within the field's height of the field's top.
-  expect(Math.abs((scan?.y ?? 0) - (field?.y ?? 0))).toBeLessThan(field?.height ?? 0);
+  expect(field && settings && scan).toBeTruthy();
+  // Read top to bottom, pressed at the end (ADR-244 Inc.2): below the folded settings, and at the
+  // left edge the range field starts at rather than out at the right.
+  expect(scan?.y ?? 0).toBeGreaterThanOrEqual((settings?.y ?? 0) + (settings?.height ?? 0));
+  expect(Math.abs((scan?.x ?? 0) - (field?.x ?? 0))).toBeLessThan(4);
 
   // Site swaps the range field for the site picker and its ranges, and keeps the toggle's width.
   await toggle.getByRole('button', { name: 'Site' }).click();

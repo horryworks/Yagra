@@ -992,13 +992,6 @@ export function DiscoveryPage() {
                   </>
                 )}
               </div>
-              <Button variant="primary" onClick={startScan} disabled={inFlight}>
-                {inFlight ? t('discovery.scanning') : t('discovery.scan')}
-              </Button>
-              {/* Drawn only while there is something to stop, never disabled (ADR-056). */}
-              {canRequestStop(shown?.state) && (
-                <Button onClick={requestStop}>{t('discovery.scans.stop')}</Button>
-              )}
             </div>
 
             {/* Ticks rather than a comma-separated string, because the limit is reached by
@@ -1146,6 +1139,19 @@ export function DiscoveryPage() {
                 </Fields>
               </div>
             </Disclosure>
+
+            {/* Last, at the left: the target and the settings are read top to bottom and the
+                sweep is started under them (ADR-244 Inc.2 decision 5), as the Config tab starts a
+                backup (ADR-240 decision 14). */}
+            <Inline gap={8} className="disco-run">
+              <Button variant="primary" onClick={startScan} disabled={inFlight}>
+                {inFlight ? t('discovery.scanning') : t('discovery.scan')}
+              </Button>
+              {/* Drawn only while there is something to stop, never disabled (ADR-056). */}
+              {canRequestStop(shown?.state) && (
+                <Button onClick={requestStop}>{t('discovery.scans.stop')}</Button>
+              )}
+            </Inline>
           </>
         ) : (
           <PermissionHint permission="manage_config" />

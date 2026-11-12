@@ -141,6 +141,12 @@ test.describe('a node not backed up yet', () => {
 
     await picker.getByRole('checkbox', { name: /ymock-second-login/ }).check();
     await expect(page.locator('.cfgb-picked')).toHaveText('1 selected');
+    // Under the settings and at their left edge, not out at the right (ADR-240 decision 14).
+    const box = await start.boundingBox();
+    const list = await picker.boundingBox();
+    expect(box && list).toBeTruthy();
+    expect(box?.y ?? 0).toBeGreaterThan((list?.y ?? 0) + (list?.height ?? 0));
+    expect(Math.abs((box?.x ?? 0) - (list?.x ?? 0))).toBeLessThan(4);
     const put = page.waitForRequest(isPut('/config-backup'));
     const fetched = page.waitForRequest(isPost('/config-backup/fetch'));
     await start.click();

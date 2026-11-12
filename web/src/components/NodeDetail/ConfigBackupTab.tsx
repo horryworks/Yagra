@@ -513,27 +513,29 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                   </FieldGroup>
                 </div>
               )}
+              {/* Under the settings, at the left, the main button first: read top to bottom and
+                  press at the end (ADR-240 decision 14), as Discovery's Scan (ADR-244 Inc.2). */}
               {canStart && !v.enabled && (
-                <Inline gap={8} justify="end">
-                  <p className="form-status cfgb-picked">
-                    {t('config.picked', { count: pickedLogins(form, v).length })}
-                  </p>
+                <Inline gap={8}>
                   <Button variant="primary" onClick={() => start(form)} disabled={busy || !canStartWith(form, v)}>
                     {t('config.start')}
                   </Button>
+                  <p className="form-status cfgb-picked">
+                    {t('config.picked', { count: pickedLogins(form, v).length })}
+                  </p>
                 </Inline>
               )}
               {canStart && v.enabled && (
-                <Inline gap={8} justify="end">
-                  <Button onClick={rescan} disabled={busy}>
-                    {t('config.rescan')}
-                  </Button>
+                <Inline gap={8}>
                   <Button
                     variant="primary"
                     onClick={save}
                     disabled={busy || !isDirty(form, v) || !canStartWith(form, v)}
                   >
                     {t('common:actions.save')}
+                  </Button>
+                  <Button onClick={rescan} disabled={busy}>
+                    {t('config.rescan')}
                   </Button>
                 </Inline>
               )}

@@ -203,9 +203,9 @@
   gap: var(--space-2);
 }
 
-/* How many logins are ticked, at the left of the row that holds "Start backup" (ADR-240 Inc.2). */
+/* How many logins are ticked, beside "Start backup" (ADR-240 Inc.2 and decision 14). */
 .cfgb-picked {
-  margin: 0 auto 0 0;
+  margin: 0;
 }
 
 /* The fix sits under the sentence that names the problem, not under the mark. */
