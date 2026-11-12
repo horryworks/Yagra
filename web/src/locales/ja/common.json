@@ -52,9 +52,7 @@
   },
   "credPicker": {
     "use": "{{name}} を使う",
-    "empty": "保存済みの SNMP 認証情報がありません。",
-    "moveUp": "{{name}} を上へ",
-    "moveDown": "{{name}} を下へ"
+    "empty": "保存済みの SNMP 認証情報がありません。"
   },
   "actions": {
     "save": "保存",
@@ -169,5 +167,13 @@
   },
   "watch": {
     "nothingPolled": "動いているポーラーがありません。どの機器も監視されていません。<lnk/>"
+  },
+  "sortable": {
+    "grip": "{{name}} を並べ替える",
+    "instructions": "Space でつかみ、矢印キーで動かし、Space で置きます。Esc でやめます。",
+    "picked": "{{name}} をつかみました（{{total}} 個中 {{n}} 番目）。",
+    "over": "{{name}}: {{total}} 個中 {{n}} 番目。",
+    "dropped": "{{name}} を {{total}} 個中 {{n}} 番目に置きました。",
+    "cancelled": "やめました。{{name}} は {{total}} 個中 {{n}} 番目です。"
   }
 }

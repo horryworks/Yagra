@@ -4,13 +4,14 @@
 // "Add section" reveals the section catalog (grouped), mirroring the dashboard widget picker. Local
 // form state (save-on-submit), not an autosave store — a template is committed explicitly.
 
+import { DragGrip, SortableItem, SortableList } from '../components/ui/Sortable';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '../components/ui/Modal';
 import { Button } from '../components/ui/Button';
 import { Field, TextInput, Select } from '../components/ui/Field';
 import { FieldRow, Fields } from '../components/ui/FormLayout';
-import { Stack } from '../components/ui/Page';
+import { Inline, Stack } from '../components/ui/Page';
 import { SectionHead } from '../components/ui/Section';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
@@ -77,14 +78,9 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
   function removeSection(i: number) {
     setSections((s) => s.filter((_, idx) => idx !== i));
   }
-  function moveSection(i: number, dir: -1 | 1) {
-    setSections((s) => {
-      const j = i + dir;
-      if (j < 0 || j >= s.length) return s;
-      const next = [...s];
-      [next[i], next[j]] = [next[j], next[i]];
-      return next;
-    });
+  /** Put the sections in the order the drag left them (ADR-255). */
+  function reorderSections(ids: string[]) {
+    setSections((s) => ids.flatMap((id) => s.filter((sec) => sec.id === id)));
   }
   function setSetting(i: number, key: string, value: unknown) {
     setSections((s) =>
@@ -195,29 +191,25 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
           {sections.length === 0 && (
             <div className="rb-empty">{t('builder.noSections')}</div>
           )}
+          <SortableList
+            ids={sections.map((sec) => sec.id)}
+            onReorder={reorderSections}
+            nameOf={(id) => {
+              const sec = sections.find((x) => x.id === id);
+              return sec ? (defByKind.get(sec.kind)?.title ?? sec.kind) : id;
+            }}
+          >
           {sections.map((sec, i) => {
             const def = defByKind.get(sec.kind);
             return (
-              <Stack key={sec.id} gap={8} className="rb-section">
+              <SortableItem key={sec.id} id={sec.id} className="rb-section">
+              <Stack gap={8}>
                 <div className="rb-section-top">
-                  <span className="rb-section-title">{def?.title ?? sec.kind}</span>
+                  <Inline gap={4}>
+                    <DragGrip name={def?.title ?? sec.kind} />
+                    <span className="rb-section-title">{def?.title ?? sec.kind}</span>
+                  </Inline>
                   <div className="rp-actions">
-                    <button
-                      className="rb-icon"
-                      aria-label={t('builder.moveUp')}
-                      disabled={i === 0}
-                      onClick={() => moveSection(i, -1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      className="rb-icon"
-                      aria-label={t('builder.moveDown')}
-                      disabled={i === sections.length - 1}
-                      onClick={() => moveSection(i, 1)}
-                    >
-                      ↓
-                    </button>
                     <button
                       className="rb-icon"
                       aria-label={t('builder.removeSection')}
@@ -259,8 +251,10 @@ export function ReportBuilder({ catalog, definition, onClose, onSaved }: Props) 
                   </FieldRow>
                 )}
               </Stack>
+              </SortableItem>
             );
           })}
+          </SortableList>
         </div>
 
         <FormError form={form} />

@@ -10,6 +10,7 @@ import type { components } from '../../src/api/schema';
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
+import { dragByKeys, dragByMouse, grip } from '../support/sortable';
 
 type Schemas = components['schemas'];
 
@@ -41,7 +42,7 @@ test.use({
   },
 });
 
-test('moving an SNMP credential up saves the whole order, the HTTP row where it stood', async ({
+test('dragging an SNMP credential up saves the whole order, the HTTP row where it stood', async ({
   page,
   errors,
 }) => {
@@ -49,15 +50,16 @@ test('moving an SNMP credential up saves the whole order, the HTTP row where it 
   const put = page.waitForRequest(
     (r) => r.method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/credentials/order',
   );
-  await page.getByRole('button', { name: 'Move ymock-second up' }).click();
+  // With the mouse, by the grip (ADR-255): the one test that proves a pointer drag works here.
+  await dragByMouse(page, page, 'ymock-second', page.locator('.dt-row', { hasText: 'ymock-first' }));
   const body = (await put).postDataJSON() as { ids: string[] };
   expect(body.ids).toEqual([S2, H1, S1]);
   expect(errors.uncaught).toEqual([]);
 });
 
-// The arrows come back as soon as a save returns, before the re-read that shows the new order. A
-// second press in that gap used to be computed from the list on screen and repeat the first move.
-test('a second press before the list is re-read moves on from the order just saved', async ({
+// The grips work again as soon as a save returns, before the re-read that shows the new order. A
+// second drop in that gap must build on the order just saved, not on the list the server last sent.
+test('a second drag before the list is re-read moves on from the order just saved', async ({
   page,
 }) => {
   const [first] = defaultBodyFor('/api/v1/credentials') as unknown as Schemas['CredentialSummary'][];
@@ -86,16 +88,18 @@ test('a second press before the list is re-read moves on from the order just sav
   });
 
   await page.goto('/nodes/credentials');
-  const up = page.getByRole('button', { name: 'Move ymock-c up' });
   const answered = () =>
     page.waitForResponse(
       (r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/credentials/order',
     );
   let done = answered();
-  await up.click();
+  await dragByKeys(page, page, 'ymock-c', -1);
   await done;
+  // The dropped order stays on screen while the re-read is held (ADR-255), so the next drag starts
+  // from it.
+  await expect(page.locator('.dt-row .cred-order-n')).toHaveText(['1', '2', '3']);
   done = answered();
-  await up.click();
+  await dragByKeys(page, page, 'ymock-c', -1);
   await done;
   release();
   expect(puts).toEqual([
@@ -104,10 +108,10 @@ test('a second press before the list is re-read moves on from the order just sav
   ]);
 });
 
-test('the arrows go while the table is sorted by something else', async ({ page }) => {
+test('the grips go while the table is sorted by something else', async ({ page }) => {
   await page.goto('/nodes/credentials?sort=name');
   await expect(page.locator('.dt-row', { hasText: 'ymock-first' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /^Move ymock-/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Reorder ymock-/ })).toHaveCount(0);
 });
 
 test('a scan sends the credentials in the order the picker shows them', async ({
@@ -123,7 +127,7 @@ test('a scan sends the credentials in the order the picker shows them', async ({
   // A fresh browser remembers no scan, so every SNMP credential is ticked, in the server's order.
   const used = page.locator('.cred-picker-row:not(.unused) .cred-picker-row-name');
   await expect(used).toHaveText(['ymock-first', 'ymock-second']);
-  await page.getByRole('button', { name: 'Move ymock-second up' }).click();
+  await dragByKeys(page, page, 'ymock-second', -1);
   await expect(used).toHaveText(['ymock-second', 'ymock-first']);
 
   await page.locator('textarea.disco-range').fill('192.0.2.1');
@@ -156,10 +160,10 @@ test('unticking leaves a credential in its place, and ticking it again keeps the
   await expect(names).toHaveText(['ymock-first', 'ymock-second']);
   await expect(used).toHaveText(['ymock-second']);
   await expect(page.locator('.cred-picker-row:not(.unused) .cred-picker-row-n')).toHaveText(['1']);
-  // An unticked row can still be moved.
-  await page.getByRole('button', { name: 'Move ymock-first down' }).click();
+  // An unticked row can still be moved, by its grip.
+  await dragByKeys(page, page, 'ymock-first', 1);
   await expect(names).toHaveText(['ymock-second', 'ymock-first']);
-  await page.getByRole('button', { name: 'Move ymock-first up' }).click();
+  await dragByKeys(page, page, 'ymock-first', -1);
   await expect(names).toHaveText(['ymock-first', 'ymock-second']);
 
   await page.getByRole('checkbox', { name: 'Use ymock-first' }).check();
@@ -257,12 +261,12 @@ test('moving a CLI login up saves the whole order, the SNMP rows where they stoo
     await route.fulfill({ json: mixed });
   });
   await page.goto('/nodes/credentials?tab=cli');
-  // The first login has nowhere higher to go.
-  await expect(page.getByRole('button', { name: 'Move ymock-ops-login up' })).toHaveCount(0);
+  // Every CLI login has its grip.
+  await expect(grip(page, 'ymock-ops-login')).toBeVisible();
   const put = page.waitForRequest(
     (r) => r.method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/credentials/order',
   );
-  await page.getByRole('button', { name: 'Move ymock-admin-login up' }).click();
+  await dragByKeys(page, page, 'ymock-admin-login', -1);
   const body = (await put).postDataJSON() as { ids: string[] };
   expect(body.ids).toEqual([S1, C2, S2, C1]);
   expect(errors.uncaught).toEqual([]);

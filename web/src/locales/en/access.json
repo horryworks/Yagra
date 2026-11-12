@@ -48,10 +48,6 @@
       "credentialId": "Credential ID",
       "actions": "Actions"
     },
-    "order": {
-      "up": "Move {{name}} up",
-      "down": "Move {{name}} down"
-    },
     "usage": {
       "unused": "Unused",
       "count_one": "{{count}} node",

@@ -16,7 +16,8 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCopy } from '../lib/useCopy';
 import { rowActionsWidth } from '../lib/rowActions';
-import { moveWithinGroup } from '../lib/reorder';
+import { placeWithinGroup } from '../lib/reorder';
+import { DragGrip } from '../components/ui/Sortable';
 import { useCan } from '../store';
 import type { CredentialSummary, RevealedCredential } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -793,26 +794,34 @@ function CredentialGroupTable({
   const addTitleKey = CREDENTIAL_ADD_TITLE_KEYS[group];
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
-  // A row's place in this tab's try order, 1-based, as the server listed it.
-  const place = useMemo(() => new Map(rows.map((c, i) => [c.id, i + 1])), [rows]);
+  // The order just dropped, shown until the re-read that confirms it arrives, so the row stays
+  // where it was dropped instead of springing back while the save is in flight (ADR-255).
+  const [dropped, setDropped] = useState<string[] | null>(null);
+  useEffect(() => setDropped(null), [allIds]);
+  // A row's place in this tab's try order, 1-based: as dropped, else as the server listed it.
+  const place = useMemo(
+    () => new Map((dropped ?? rows.map((c) => c.id)).map((id, i) => [id, i + 1])),
+    [rows, dropped],
+  );
 
   // Whether this tab's rows can be moved. Whether the list is narrowed is only known once the
   // columns exist (`useClientFilters` takes them), so it is mirrored into state by an effect after
-  // that call; the arrows follow a filter one render late, which nothing can click in between.
+  // that call; the grips follow a filter one render late, which nothing can drag in between.
   const [filteredNow, setFilteredNow] = useState(false);
   const reorderable = canCredentials && canReorderCredentials(group, applied, filteredNow);
-  // The order just saved, until the re-read that shows it arrives. The arrows are pressable again
-  // as soon as the save returns, and a second press in that gap must move on from the saved order —
-  // computed from the list on screen, it repeated the first move and the second press was lost.
+  // The order just saved, until the re-read that shows it arrives. The grips work again as soon as
+  // the save returns, and a second drop in that gap must build on the saved order — computed from
+  // the list the server last sent, the first drop would be undone.
   const saved = useRef<string[] | null>(null);
   useEffect(() => {
     saved.current = null;
   }, [allIds]);
-  const move = useCallback(
-    (id: string, delta: -1 | 1) => {
+  const reorder = useCallback(
+    (tabOrder: string[]) => {
       setMoving(true);
       setMoveError(null);
-      const next = moveWithinGroup(saved.current ?? allIds, rows.map((c) => c.id), id, delta);
+      setDropped(tabOrder);
+      const next = placeWithinGroup(saved.current ?? allIds, tabOrder);
       api
         .setCredentialOrder(next)
         .then(() => {
@@ -820,15 +829,16 @@ function CredentialGroupTable({
         })
         .catch((e: unknown) => {
           saved.current = null;
+          setDropped(null);
           setMoveError(errMsg(e, t('cred.err.order')));
         })
-        // Re-read either way: on a 409 the list the arrows were drawn from is the stale one.
+        // Re-read either way: on a 409 the list the grips were drawn from is the stale one.
         .finally(() => {
           setMoving(false);
           onChanged();
         });
     },
-    [allIds, rows, t, onChanged],
+    [allIds, t, onChanged],
   );
 
   const columns = useMemo<Column<CredentialSummary>[]>(() => {
@@ -845,33 +855,12 @@ function CredentialGroupTable({
               sortable: true,
               render: (c: CredentialSummary) => {
                 const n = place.get(c.id) ?? 0;
+                // The grip only while the whole tab is shown in its try order (ADR-255): it is
+                // what starts a drag, and the table is sortable exactly then.
                 return (
                   <span className="cred-order">
+                    {reorderable && <DragGrip name={c.name} />}
                     <span className="cred-order-n mono">{n}</span>
-                    {reorderable && (
-                      <>
-                        <button
-                          type="button"
-                          className="cred-order-btn"
-                          aria-label={t('cred.order.up', { name: c.name })}
-                          disabled={moving}
-                          style={n === 1 ? { visibility: 'hidden' } : undefined}
-                          onClick={() => move(c.id, -1)}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="cred-order-btn"
-                          aria-label={t('cred.order.down', { name: c.name })}
-                          disabled={moving}
-                          style={n === rows.length ? { visibility: 'hidden' } : undefined}
-                          onClick={() => move(c.id, 1)}
-                        >
-                          ↓
-                        </button>
-                      </>
-                    )}
                   </span>
                 );
               },
@@ -982,7 +971,7 @@ function CredentialGroupTable({
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, canCredentials, canReveal, rows, group, place, reorderable, moving, move]);
+  }, [t, canCredentials, canReveal, rows, group, place, reorderable]);
 
   // URL-backed, one table per tab, each under its own key prefix (ADR-153 decision 3).
   const filtering = useClientFilters(columns, rows, { prefix: CREDENTIAL_TABLE_PREFIX[group] });
@@ -1027,6 +1016,9 @@ function CredentialGroupTable({
     filterCounts: counts,
     loading,
     empty,
+    sortable: reorderable
+      ? { onReorder: reorder, nameOf: (c: CredentialSummary) => c.name, disabled: moving }
+      : undefined,
   };
 
   return (

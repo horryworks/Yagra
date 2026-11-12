@@ -52,9 +52,7 @@
   },
   "credPicker": {
     "use": "Use {{name}}",
-    "empty": "No stored SNMP credentials yet.",
-    "moveUp": "Move {{name}} up",
-    "moveDown": "Move {{name}} down"
+    "empty": "No stored SNMP credentials yet."
   },
   "actions": {
     "save": "Save",
@@ -178,5 +176,13 @@
   },
   "watch": {
     "nothingPolled": "No poller is running. Nothing is being monitored — <lnk/>"
+  },
+  "sortable": {
+    "grip": "Reorder {{name}}",
+    "instructions": "Press Space to pick up, the arrow keys to move, Space to drop, Escape to cancel.",
+    "picked": "Picked up {{name}}, {{n}} of {{total}}.",
+    "over": "{{name}}: {{n}} of {{total}}.",
+    "dropped": "Dropped {{name}} at {{n}} of {{total}}.",
+    "cancelled": "Cancelled. {{name}} is back at {{n}} of {{total}}."
   }
 }

@@ -1,0 +1,60 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The grip that puts a list in order (ADR-255): at the left of the row, in the middle of it
+   whatever else the row holds, and the only place a drag starts. */
+
+.drag-grip {
+  flex: none;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  line-height: 1;
+  cursor: grab;
+  /* The browser must not scroll the page instead of dragging once the press has armed. */
+  touch-action: none;
+}
+
+.drag-grip:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+/* Focus is a border colour, never an outline (ui-conventions). */
+.drag-grip:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.drag-grip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The row being moved rides above the others. */
+.is-dragging {
+  position: relative;
+  z-index: 2;
+  /* The same lift a popover has (AnchoredPopover.css). */
+  box-shadow: 0 8px 24px var(--overlay);
+}
+
+.is-dragging .drag-grip {
+  cursor: grabbing;
+  color: var(--text-primary);
+}
+
+/* A finger needs a wider target than a pointer (ADR-074's rule for resize grips). */
+@media (hover: none) {
+  .drag-grip {
+    min-width: var(--touch-target);
+  }
+}

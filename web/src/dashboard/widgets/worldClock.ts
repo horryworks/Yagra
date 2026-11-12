@@ -112,13 +112,17 @@ export function addZone(
   return { ok: true, zones: [...zones, { tz, label: '' }] };
 }
 
-/** Swap zone `i` with its neighbour `delta` places away; out of range is a no-op. */
-export function moveZone(zones: readonly ClockZone[], i: number, delta: -1 | 1): ClockZone[] {
-  const j = i + delta;
-  const out = [...zones];
-  if (i < 0 || i >= out.length || j < 0 || j >= out.length) return out;
-  [out[i], out[j]] = [out[j], out[i]];
-  return out;
+/** The zones in the order the drag left their names (ADR-255): `order` is the zones' `tz` in the
+ *  new order. A zone `order` does not name keeps its place after the named ones; a name with no
+ *  zone is ignored. */
+export function reorderZones(zones: readonly ClockZone[], order: readonly string[]): ClockZone[] {
+  const byTz = new Map(zones.map((z) => [z.tz, z]));
+  const named = order.flatMap((tz) => {
+    const z = byTz.get(tz);
+    return z ? [z] : [];
+  });
+  const seen = new Set(named.map((z) => z.tz));
+  return [...named, ...zones.filter((z) => !seen.has(z.tz))];
 }
 
 /** The city part of an IANA name, for a zone with no label: `America/New_York` → `New York`.

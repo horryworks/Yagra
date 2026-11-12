@@ -9,6 +9,7 @@ import { Button } from '../../components/ui/Button';
 import { FieldError, TextInput } from '../../components/ui/Field';
 import { IconButton } from '../../components/ui/IconButton';
 import { Segmented } from '../../components/ui/Segmented';
+import { DragGrip, SortableItem, SortableList } from '../../components/ui/Sortable';
 import { isImeComposing } from '../../lib/ime';
 import { intlLocale } from '../../lib/locale';
 import { knownTimeZones, zoneDateText } from '../../lib/timeZone';
@@ -18,7 +19,7 @@ import {
   MAX_ZONES,
   addZone,
   cityName,
-  moveZone,
+  reorderZones,
   readClockSettings,
   readZone,
   realTimeZone,
@@ -230,9 +231,15 @@ export function WorldClockSettings({ instance, setSettings }: WidgetProps) {
         </span>
       </div>
       {zones.length > 0 && (
+        <SortableList
+          ids={zones.map((z) => z.tz)}
+          onReorder={(order) => save(reorderZones(zones, order))}
+          nameOf={(tz) => zones.find((z) => z.tz === tz)?.label || (cityName(tz) ?? t('widgets.worldClock.local'))}
+        >
         <ul className="wclock-zonelist">
           {zones.map((z, i) => (
-            <li key={z.tz} className="wclock-zonerow">
+            <SortableItem key={z.tz} id={z.tz} as="li" className="wclock-zonerow">
+              <DragGrip name={z.label || (cityName(z.tz) ?? t('widgets.worldClock.local'))} />
               <LabelInput
                 zone={z}
                 onCommit={(label) => save(zones.map((x, j) => (j === i ? { ...x, label } : x)))}
@@ -241,29 +248,16 @@ export function WorldClockSettings({ instance, setSettings }: WidgetProps) {
                 {realTimeZone(z.tz, viewerTimeZone())}
               </span>
               <IconButton
-                title={t('widgets.worldClock.moveUp')}
-                disabled={i === 0}
-                onClick={() => save(moveZone(zones, i, -1))}
-              >
-                ↑
-              </IconButton>
-              <IconButton
-                title={t('widgets.worldClock.moveDown')}
-                disabled={i === zones.length - 1}
-                onClick={() => save(moveZone(zones, i, 1))}
-              >
-                ↓
-              </IconButton>
-              <IconButton
                 title={t('widgets.worldClock.remove')}
                 danger
                 onClick={() => save(zones.filter((_, j) => j !== i))}
               >
                 ✕
               </IconButton>
-            </li>
+            </SortableItem>
           ))}
         </ul>
+        </SortableList>
       )}
       {zones.length < MAX_ZONES && (
         <div className="wclock-add">

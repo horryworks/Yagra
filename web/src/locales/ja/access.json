@@ -48,10 +48,6 @@
       "credentialId": "認証情報 ID",
       "actions": "操作"
     },
-    "order": {
-      "up": "{{name}} を上へ",
-      "down": "{{name}} を下へ"
-    },
     "usage": {
       "unused": "未使用",
       "count_other": "ノード {{count}} 台",

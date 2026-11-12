@@ -95,8 +95,6 @@
     "addSection": "Add section",
     "hideCatalog": "Hide catalog",
     "noSections": "No sections yet — add one from the catalog above.",
-    "moveUp": "Move up",
-    "moveDown": "Move down",
     "removeSection": "Remove section",
     "range": {
       "h24": "Last 24 hours",

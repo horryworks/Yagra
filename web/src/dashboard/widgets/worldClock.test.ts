@@ -6,7 +6,7 @@ import {
   MAX_ZONES,
   addZone,
   cityName,
-  moveZone,
+  reorderZones,
   readClockSettings,
   readZone,
   realTimeZone,
@@ -91,13 +91,12 @@ describe('resolveTimeZone and addZone', () => {
   });
 });
 
-describe('moveZone and cityName', () => {
-  it('swaps neighbours and ignores a move off either end', () => {
-    const zs = [z('A'), z('B'), z('C')];
-    expect(moveZone(zs, 1, -1).map((x) => x.tz)).toEqual(['B', 'A', 'C']);
-    expect(moveZone(zs, 1, 1).map((x) => x.tz)).toEqual(['A', 'C', 'B']);
-    expect(moveZone(zs, 0, -1)).toEqual(zs);
-    expect(moveZone(zs, 2, 1)).toEqual(zs);
+describe('reorderZones and cityName', () => {
+  it('puts the zones in the dragged order, keeping each zone whole', () => {
+    const zs = [z('A', 'a'), z('B'), z('C')];
+    expect(reorderZones(zs, ['C', 'A', 'B'])).toEqual([z('C'), z('A', 'a'), z('B')]);
+    // An unknown name is ignored; a zone left out keeps its place after the named ones.
+    expect(reorderZones(zs, ['B', 'zz'])).toEqual([z('B'), z('A', 'a'), z('C')]);
   });
 
   it('names a zone by its city, and leaves the local one to the caller', () => {

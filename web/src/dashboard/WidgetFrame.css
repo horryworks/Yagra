@@ -66,8 +66,7 @@
 /* Match the shared IconButton chrome (borderless, transparent until hover) so edit-mode controls
    read as the same "icon button" as the rest of the app; kept at a dense 24px for the card header. */
 .widgetframe-gear,
-.widgetframe-remove,
-.widgetframe-handle {
+.widgetframe-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -87,8 +86,7 @@
 /* Keyboard focus: the app-standard accent border, same as `.icon-btn:focus-visible` and the
    sibling resize grip. Without it these two fall back to the UA focus ring. */
 .widgetframe-gear:focus-visible,
-.widgetframe-remove:focus-visible,
-.widgetframe-handle:focus-visible {
+.widgetframe-remove:focus-visible {
   outline: none;
   border-color: var(--accent-color);
 }
@@ -104,16 +102,9 @@
   color: var(--text-primary);
 }
 
+/* The grip is the shared `.drag-grip` (ADR-255); in the card heading it keeps the row's height. */
 .widgetframe-handle {
-  cursor: grab;
-  /* The dnd-kit TouchSensor drives the reorder off this handle; claim the touch so the browser
-     doesn't scroll instead. No-op for mouse — desktop drag is unchanged. */
-  touch-action: none;
-}
-
-.widgetframe-handle:hover {
-  background: var(--bg-tertiary);
-  color: var(--text-primary);
+  align-self: center;
 }
 
 /* While editing, dim slightly and outline so the board reads as "in customize mode". */
@@ -218,7 +209,6 @@
 @media (hover: none) {
   .widgetframe-gear,
   .widgetframe-remove,
-  .widgetframe-handle,
   .widgetframe-resize {
     width: var(--touch-target);
     height: var(--touch-target);

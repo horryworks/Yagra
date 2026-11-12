@@ -11,19 +11,14 @@ import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
   DndContext,
-  KeyboardSensor,
-  MouseSensor,
-  TouchSensor,
   closestCenter,
-  useSensor,
-  useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core';
 import {
   SortableContext,
   rectSortingStrategy,
-  sortableKeyboardCoordinates,
 } from '@dnd-kit/sortable';
+import { useSortableSensors } from '../components/ui/useSortableSensors';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { Page, Inline } from '../components/ui/Page';
@@ -79,11 +74,8 @@ export function SharedDashboardPage() {
 
   // Mouse: 4px drag starts a reorder (unchanged). Touch: 250ms press-and-hold arms it so a normal
   // swipe still scrolls the board rather than dragging a tile. Keyboard reordering is unchanged.
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 5 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
+  // The same sensors as every reorderable list (ADR-255 decision 3).
+  const sensors = useSortableSensors();
 
   const onDragEnd = (e: DragEndEvent) => {
     setReordering(false);

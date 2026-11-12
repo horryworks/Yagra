@@ -19,6 +19,7 @@ import { resolveWidths } from '../../lib/columnWidths';
 import type { TableId } from '../../lib/tableIds';
 import { ColumnResizeHandles, ColumnWidthReset } from './ColumnResizeHandles';
 import { useColumnWidths } from './useColumnWidths';
+import { SortableItem, SortableList } from './Sortable';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -130,6 +131,20 @@ interface Props<T> {
    *  the pre-measurement estimate. Do not pass it to a table whose rows are uniform — the fixed
    *  path is cheaper, and it is what the data-table standard asks for (design-system §4.1). */
   autoRowHeight?: boolean;
+  /** Let the operator put the rows in order by dragging (ADR-255). A column then draws
+   *  `<DragGrip>` from `Sortable.tsx` at the row's left; nothing else on the row starts a drag.
+   *
+   *  ⚠️ Like `sort`, this component does not reorder `rows`: it reports the new order of the row
+   *  keys and the caller saves it. Pass it only while the whole list is on screen in the order
+   *  being edited — not narrowed by a filter, not sorted by another column — or a drag would move
+   *  a row somewhere other than where the operator saw it go. Not with `expanded`. */
+  sortable?: {
+    onReorder: (keys: string[]) => void;
+    /** What a screen reader calls a row while it is moved. */
+    nameOf: (row: T) => string;
+    /** While a save is in flight: the grips stay drawn but do not start a drag. */
+    disabled?: boolean;
+  };
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -156,6 +171,7 @@ export function DataTable<T>({
   expanded,
   expandedKey,
   autoRowHeight,
+  sortable,
 }: Props<T>) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -330,21 +346,13 @@ export function DataTable<T>({
         {rows.length === 0 ? (
           <div className="dt-empty">{loading ? t('loading') : (empty ?? t('noRows'))}</div>
         ) : (
+          <SortableBody sortable={sortable} rows={rows} rowKey={rowKey}>
           <div className="dt-body" style={{ height: virtualizer.getTotalSize() }}>
             {items.map((vi) => {
               const row = rows[vi.index];
               if (cardMode) {
                 // Variable-height card: measured by the virtualizer (data-index + measureElement).
-                return (
-                  <div
-                    key={rowKey(row)}
-                    data-index={vi.index}
-                    ref={virtualizer.measureElement}
-                    className={onRowClick ? 'dt-card clickable' : 'dt-card'}
-                    style={{ transform: `translateY(${vi.start}px)` }}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
-                  >
-                    {renderCard ? (
+                const cardBody = renderCard ? (
                       renderCard(row)
                     ) : (
                       // Generic fallback card: each column as a labeled key→value pair.
@@ -356,7 +364,33 @@ export function DataTable<T>({
                           </div>
                         ))}
                       </dl>
-                    )}
+                    );
+                if (sortable) {
+                  return (
+                    <SortableItem
+                      key={rowKey(row)}
+                      id={rowKey(row)}
+                      data-index={vi.index}
+                      extraRef={virtualizer.measureElement}
+                      className={onRowClick ? 'dt-card clickable' : 'dt-card'}
+                      offsetY={vi.start}
+                      disabled={sortable.disabled}
+                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    >
+                      {cardBody}
+                    </SortableItem>
+                  );
+                }
+                return (
+                  <div
+                    key={rowKey(row)}
+                    data-index={vi.index}
+                    ref={virtualizer.measureElement}
+                    className={onRowClick ? 'dt-card clickable' : 'dt-card'}
+                    style={{ transform: `translateY(${vi.start}px)` }}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  >
+                    {cardBody}
                   </div>
                 );
               }
@@ -376,6 +410,23 @@ export function DataTable<T>({
               ]
                 .filter(Boolean)
                 .join(' ');
+              if (!expanded && sortable) {
+                return (
+                  <SortableItem
+                    key={rowKey(row)}
+                    id={rowKey(row)}
+                    data-index={autoRowHeight ? vi.index : undefined}
+                    extraRef={autoRowHeight ? virtualizer.measureElement : undefined}
+                    className={rowCls}
+                    style={{ gridTemplateColumns: template }}
+                    offsetY={vi.start}
+                    disabled={sortable.disabled}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  >
+                    {cells}
+                  </SortableItem>
+                );
+              }
               if (!expanded) {
                 // `data-index` + the measuring ref only when the caller asked for auto heights:
                 // react-virtual reads the attribute to know which index it just measured, and a
@@ -423,8 +474,39 @@ export function DataTable<T>({
               );
             })}
           </div>
+          </SortableBody>
         )}
       </div>
     </div>
+  );
+}
+
+/** The drag context around the body when the table is sortable (ADR-255); the body as it is
+ *  otherwise, so every table that does not ask renders exactly what it did. */
+function SortableBody<T>({
+  sortable,
+  rows,
+  rowKey,
+  children,
+}: {
+  sortable: Props<T>['sortable'];
+  rows: T[];
+  rowKey: (row: T) => string;
+  children: ReactNode;
+}) {
+  const ids = useMemo(() => rows.map(rowKey), [rows, rowKey]);
+  const byKey = useMemo(() => new Map(rows.map((r) => [rowKey(r), r])), [rows, rowKey]);
+  if (!sortable) return <>{children}</>;
+  return (
+    <SortableList
+      ids={ids}
+      onReorder={sortable.onReorder}
+      nameOf={(id) => {
+        const row = byKey.get(id);
+        return row === undefined ? id : sortable.nameOf(row);
+      }}
+    >
+      {children}
+    </SortableList>
   );
 }

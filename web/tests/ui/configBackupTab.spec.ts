@@ -12,6 +12,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES, deviceNode } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
+import { dragByKeys } from '../support/sortable';
 
 type Schemas = components['schemas'];
 
@@ -167,7 +168,7 @@ test.describe('a node not backed up yet', () => {
     const names = picker.locator('.cred-picker-row-name');
     await expect(names).toHaveText(['ymock-ops-login', 'ymock-second-login']);
     // Nothing is ticked, and every row can still be moved (ADR-205 Inc.7).
-    await picker.getByRole('button', { name: 'Move ymock-second-login up' }).click();
+    await dragByKeys(page, picker, 'ymock-second-login', -1);
     await expect(names).toHaveText(['ymock-second-login', 'ymock-ops-login']);
     await picker.getByRole('checkbox', { name: /ymock-ops-login/ }).check();
     await picker.getByRole('checkbox', { name: /ymock-second-login/ }).check();

@@ -20,6 +20,7 @@ import { getDefinition } from './registry';
 import { useResizeHandle } from './useResizeHandle';
 import type { WidgetDefinition, WidgetInstance, WidgetSettings } from './types';
 import { isImeComposing } from '../lib/ime';
+import '../components/ui/Sortable.css';
 import './WidgetFrame.css';
 
 // Placeholder definition so `useResizeHandle` can be called before the (rare) unknown-type early
@@ -33,7 +34,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
   const removeWidget = useStore((s) => s.removeWidget);
   const setSettingsAction = useStore((s) => s.setSettings);
   const renameWidget = useStore((s) => s.renameWidget);
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
     id: instance.instanceId,
     disabled: !editing,
   });
@@ -113,16 +114,6 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       >
         ×
       </button>
-      <button
-        type="button"
-        className="widgetframe-handle"
-        aria-label={t('widgetFrame.drag', { name })}
-        title={t('widgetFrame.dragTitle')}
-        {...attributes}
-        {...listeners}
-      >
-        ⠿
-      </button>
     </span>
   ) : Actions ? (
     <Actions instance={instance} setSettings={setSettings} />
@@ -146,6 +137,20 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       <Card
         title={
           <span className="widgetframe-title">
+            {/* The grip leads the heading, as on every reorderable list (ADR-255 decision 5): the
+                same look and the same sensors, while the move itself stays the grid's. */}
+            {editing && (
+              <button
+                type="button"
+                className="drag-grip widgetframe-handle"
+                ref={setActivatorNodeRef}
+                {...attributes}
+                {...listeners}
+                aria-label={t('widgetFrame.drag', { name })}
+              >
+                <span aria-hidden="true">⠿</span>
+              </button>
+            )}
             {/* Outside Customize the type's name opens the list the card summarizes (ADR-250). In
                 Customize it stays text: the card is being arranged, not read. */}
             <DrillLink

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import { arrangeRows, moveRow, selectionOf, toggleRow } from './credentialSelection';
+import { moveOnto } from '../../lib/reorder';
+import { arrangeRows, selectionOf, toggleRow } from './credentialSelection';
 
 const OPTIONS = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
 
@@ -38,7 +39,7 @@ describe('arrangeRows (ADR-205 Inc.7)', () => {
   });
 });
 
-describe('toggleRow and moveRow (ADR-205 Inc.7)', () => {
+describe('toggleRow and a dragged row (ADR-205 Inc.7, ADR-255)', () => {
   const rows = ['a', 'b', 'c', 'd'];
 
   it('ticks and unticks in place: the selection is the ticked rows top to bottom', () => {
@@ -49,18 +50,9 @@ describe('toggleRow and moveRow (ADR-205 Inc.7)', () => {
     expect(toggleRow(rows, toggleRow(rows, ['b'], 'd'), 'd')).toEqual(['b']);
   });
 
-  it('moves any row, ticked or not, by one place', () => {
-    expect(moveRow(rows, 'c', -1)).toEqual(['a', 'c', 'b', 'd']);
-    expect(moveRow(rows, 'a', 1)).toEqual(['b', 'a', 'c', 'd']);
-    // Nowhere to go, or not a row: unchanged.
-    expect(moveRow(rows, 'a', -1)).toEqual(rows);
-    expect(moveRow(rows, 'd', 1)).toEqual(rows);
-    expect(moveRow(rows, 'zz', 1)).toEqual(rows);
-  });
-
-  it('moving a ticked row past another ticked one changes the try order, past an unticked one does not', () => {
+  it('dragging a ticked row past another ticked one changes the try order, past an unticked one does not', () => {
     const ticked = new Set(['a', 'c']);
-    expect(selectionOf(moveRow(['a', 'c', 'b'], 'c', -1), ticked)).toEqual(['c', 'a']);
-    expect(selectionOf(moveRow(['a', 'b', 'c'], 'c', -1), ticked)).toEqual(['a', 'c']);
+    expect(selectionOf(moveOnto(['a', 'c', 'b'], 'c', 'a') ?? [], ticked)).toEqual(['c', 'a']);
+    expect(selectionOf(moveOnto(['a', 'b', 'c'], 'c', 'b') ?? [], ticked)).toEqual(['a', 'c']);
   });
 });

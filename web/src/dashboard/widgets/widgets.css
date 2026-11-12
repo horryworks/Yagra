@@ -731,7 +731,7 @@ html[data-viewport='mobile'] .vpnsess-rm {
 
 .wclock-zonerow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) 96px auto;
   align-items: center;
   gap: var(--space-0-5);
 }

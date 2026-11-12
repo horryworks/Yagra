@@ -92,8 +92,6 @@
     "addSection": "セクションを追加",
     "hideCatalog": "カタログを隠す",
     "noSections": "セクションがまだありません — 上のカタログから追加してください。",
-    "moveUp": "上へ移動",
-    "moveDown": "下へ移動",
     "removeSection": "セクションを削除",
     "range": {
       "h24": "過去 24 時間",

@@ -56,7 +56,6 @@
   },
   "widgetFrame": {
     "remove": "{{name}} を削除",
-    "dragTitle": "ドラッグして並べ替え",
     "drag": "{{name}} をドラッグして並べ替え",
     "resize": "{{name}} のサイズを変更",
     "resizeHint": "ドラッグでサイズ変更（矢印キーも可）",
@@ -536,8 +535,6 @@
       "h24": "24 時間",
       "h12": "12 時間",
       "seconds": "秒",
-      "moveUp": "上へ",
-      "moveDown": "下へ",
       "remove": "削除",
       "yesterday": "前日",
       "tomorrow": "翌日",

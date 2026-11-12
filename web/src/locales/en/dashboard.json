@@ -56,7 +56,6 @@
   },
   "widgetFrame": {
     "remove": "Remove {{name}}",
-    "dragTitle": "Drag to reorder",
     "drag": "Drag {{name}} to reorder",
     "resize": "Resize {{name}}",
     "resizeHint": "Drag to resize (arrow keys also work)",
@@ -540,8 +539,6 @@
       "h24": "24-hour",
       "h12": "12-hour",
       "seconds": "Seconds",
-      "moveUp": "Move up",
-      "moveDown": "Move down",
       "remove": "Remove",
       "yesterday": "Yesterday",
       "tomorrow": "Tomorrow",

@@ -7,12 +7,10 @@
 // Windows, and `tsc` refuses it outright (TS1261).
 //
 // Since ADR-205 Inc.7 the picker draws every offered credential as ONE list whose rows stay where
-// they are: ticking or unticking a row never moves it, and every row can be moved. The selection —
+// they are: ticking or unticking a row never moves it, and every row can be dragged (ADR-255). The selection —
 // what is sent, and the order the poller tries it in (ADR-161) — is the ticked rows read top to
 // bottom. Before, ticked rows were drawn above the rest, so unticking one sent it to the bottom,
 // and only ticked rows had arrows, so a screen that starts with nothing ticked could order nothing.
-
-import { moveBy } from '../../lib/reorder';
 
 /** The shape the rule needs: anything with an id, in the order the picker offers them. */
 export interface Selectable {
@@ -61,9 +59,4 @@ export function toggleRow(rows: readonly string[], selected: readonly string[], 
   const ticked = new Set(selected);
   if (!ticked.delete(id)) ticked.add(id);
   return selectionOf(rows, ticked);
-}
-
-/** The rows with `id` moved one place up (`-1`) or down (`1`), ticked or not. */
-export function moveRow(rows: readonly string[], id: string, delta: -1 | 1): string[] {
-  return moveBy(rows, rows.indexOf(id), delta);
 }
