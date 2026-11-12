@@ -1267,7 +1267,10 @@
       "relay_refused": "バスがこのポーラーに中継を許していません。バス（nats）を再起動してください。"
     },
     "logins": "試すログインと順番",
-    "defaultOrder": "既定の順に戻す",
+    "noLogins": "保存済みの CLI ログインがありません。",
+    "picked_one": "{{count}} 個を選択",
+    "picked_other": "{{count}} 個を選択",
+    "selectAll": "すべて選ぶ",
     "loginIndex": "ログイン {{n}}",
     "loginGone": "削除されたログイン",
     "state": {
@@ -1290,6 +1293,17 @@
       "lost": "取得の結果が返ってきませんでした",
       "unknown": "{{login}} で失敗しました",
       "cancelled": "取得をやめました"
+    },
+    "loginMark": {
+      "trying": "試しています",
+      "waiting": "順番待ち",
+      "success": "取得しました",
+      "auth_failed": "拒否",
+      "unreachable": "応答なし",
+      "other": "失敗",
+      "lost": "結果なし",
+      "unknown": "失敗",
+      "cancelled": "中止"
     },
     "list": {
       "cols": {
@@ -1336,7 +1350,9 @@
         "submit_one": "{{count}} 台をオンにする",
         "submit_other": "{{count}} 台をオンにする",
         "skipped_one": "機種が無いので外す: {{names}}",
-        "skipped_other": "機種が無い {{count}} 台を外す: {{names}}"
+        "skipped_other": "機種が無い {{count}} 台を外す: {{names}}",
+        "keeping_one": "設定済みの {{count}} 台は今のログインのまま",
+        "keeping_other": "設定済みの {{count}} 台は今のログインのまま"
       }
     },
     "unavailable": "この環境には config バックアップがありません。",
@@ -1358,6 +1374,8 @@
       "on": "オン",
       "off": "オフ"
     },
+    "start": "バックアップを始める",
+    "stop": "バックアップを止める",
     "rescan": "ログインを探し直す",
     "addLogin": "CLI ログインを追加",
     "cancelFetch": "取得をやめる",
@@ -1426,6 +1444,7 @@
     "card": {
       "off": "バックアップしていません",
       "searching": "使えるログインを探しています",
+      "searchingN": "使えるログインを探しています（{{total}} 個中 {{n}} 個目）",
       "stale": "2 日以上取れていません",
       "ok": "バックアップできています",
       "last": "最後の取得 {{ago}}",

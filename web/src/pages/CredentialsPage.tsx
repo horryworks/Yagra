@@ -68,6 +68,7 @@ import {
 } from './cliLoginCredential';
 import {
   canReorderCredentials,
+  hasTryOrder,
   credentialFilters,
   credentialSortIn,
   credentialSortValues,
@@ -835,7 +836,7 @@ function CredentialGroupTable({
     const kinds = [...new Set(rows.map((c) => c.kind))].sort();
     const specs = credentialFilters(t, kinds, (k) => kindLabel(k, t));
     const cols: Column<CredentialSummary>[] = [
-      ...(group === 'snmp'
+      ...(hasTryOrder(group)
         ? [
             {
               key: 'order',

@@ -15402,6 +15402,12 @@ export interface components {
         SwitchBody: {
             enabled: boolean;
             input?: null | components["schemas"]["BackupInput"];
+            /**
+             * @description The CLI logins a node that has no settings yet tries, in order (ADR-240 Inc.2 decision
+             *     12). Omitted or `null`: every CLI login, in the try order of Credentials & secrets. A node
+             *     with settings keeps its own order; switching off ignores it.
+             */
+            login_order?: string[] | null;
             node_ids: string[];
         };
         /** @description What a switch did. */
@@ -19536,7 +19542,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Switched in one transaction. A node with settings keeps them; one with none gets `input`, every CLI login and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list */
+            /** @description Switched in one transaction. A node with settings keeps them; one with none gets `input`, `login_order` (every CLI login when it is left out) and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -19545,7 +19551,7 @@ export interface operations {
                     "application/json": components["schemas"]["SwitchResult"];
                 };
             };
-            /** @description No node, more than 5,000, an unknown input, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`) */
+            /** @description No node, more than 5,000, an unknown input, an empty `login_order` or one naming a login that is not a CLI login or naming one twice, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;

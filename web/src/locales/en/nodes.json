@@ -1277,7 +1277,10 @@
       "relay_refused": "The bus refuses this poller the relay. Restart the bus (nats)."
     },
     "logins": "Logins, in the order tried",
-    "defaultOrder": "Use the default order",
+    "noLogins": "No stored CLI logins yet.",
+    "picked_one": "{{count}} selected",
+    "picked_other": "{{count}} selected",
+    "selectAll": "Select all",
     "loginIndex": "Login {{n}}",
     "loginGone": "A deleted login",
     "state": {
@@ -1300,6 +1303,17 @@
       "lost": "The fetch did not report back",
       "unknown": "{{login}} failed",
       "cancelled": "Fetch cancelled"
+    },
+    "loginMark": {
+      "trying": "Trying",
+      "waiting": "Waiting",
+      "success": "Fetched",
+      "auth_failed": "Refused",
+      "unreachable": "No answer",
+      "other": "Failed",
+      "lost": "No report",
+      "unknown": "Failed",
+      "cancelled": "Cancelled"
     },
     "list": {
       "cols": {
@@ -1346,7 +1360,9 @@
         "submit_one": "Turn on {{count}}",
         "submit_other": "Turn on {{count}}",
         "skipped_one": "Left out, no model: {{names}}",
-        "skipped_other": "Left out, no model ({{count}}): {{names}}"
+        "skipped_other": "Left out, no model ({{count}}): {{names}}",
+        "keeping_one": "{{count}} already set up keeps its own logins",
+        "keeping_other": "{{count}} already set up keep their own logins"
       }
     },
     "unavailable": "This deployment has no config backup service.",
@@ -1368,6 +1384,8 @@
       "on": "On",
       "off": "Off"
     },
+    "start": "Start backup",
+    "stop": "Stop backup",
     "rescan": "Search logins again",
     "addLogin": "Add a CLI login",
     "cancelFetch": "Cancel fetch",
@@ -1436,6 +1454,7 @@
     "card": {
       "off": "Not backed up",
       "searching": "Looking for a login that works",
+      "searchingN": "Looking for a login that works ({{n}} of {{total}})",
       "stale": "Not fetched for over 2 days",
       "ok": "Backed up",
       "last": "Last fetched {{ago}}",

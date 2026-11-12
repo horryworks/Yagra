@@ -7,6 +7,7 @@
 // any more — "press the field to add one" was the step nobody could see. Each caller puts its own
 // link to Credentials & secrets under the picker, where a new credential is added.
 
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CredentialSummary } from '../../types/api';
 import { moveSelected, splitSelection, toggleSelection } from './credentialSelection';
@@ -19,9 +20,21 @@ interface CredentialPickerProps {
   selected: string[];
   onChange: (ids: string[]) => void;
   disabled?: boolean;
+  /** What happened when a selected credential was last tried, drawn at the right of its row
+   *  (ADR-240 Inc.2 decision 10). Nothing is drawn where it answers null. */
+  rowStatus?: (id: string) => ReactNode;
+  /** The line shown when nothing is offered. Omitted: the SNMP one, for the sweeps. */
+  emptyText?: string;
 }
 
-export function CredentialPicker({ options, selected, onChange, disabled }: CredentialPickerProps) {
+export function CredentialPicker({
+  options,
+  selected,
+  onChange,
+  disabled,
+  rowStatus,
+  emptyText,
+}: CredentialPickerProps) {
   const { t } = useTranslation();
   const toggle = (id: string) => onChange(toggleSelection(options, selected, id));
   const move = (id: string, delta: -1 | 1) => onChange(moveSelected(selected, id, delta));
@@ -32,7 +45,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
   return (
     <div className="cred-picker">
       {options.length === 0 ? (
-        <p className="cred-picker-empty">{t('credPicker.empty')}</p>
+        <p className="cred-picker-empty">{emptyText ?? t('credPicker.empty')}</p>
       ) : (
         <ul className="cred-picker-list">
           {used.map((c, i) => (
@@ -51,6 +64,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
                 </span>
                 <span className="cred-picker-row-kind mono">{c.kind}</span>
               </label>
+              {rowStatus && <span className="cred-picker-row-status">{rowStatus(c.id)}</span>}
               {/* An arrow with nowhere to go is not drawn, but keeps its place so the column of
                   arrows stays aligned. */}
               <button

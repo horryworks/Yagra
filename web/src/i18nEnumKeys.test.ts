@@ -389,6 +389,8 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('config backup readiness', locales, 'config.readiness.', BACKUP_READINESS);
     // Stage 3: how each login attempt ended, and the tree's mark for a backed-up node.
     expectKeys('config backup outcome', locales, 'config.outcome.', ATTEMPT_OUTCOMES);
+    // ADR-240 Inc.2: the same outcomes as the short mark beside each picked login.
+    expectKeys('config backup login mark', locales, 'config.loginMark.', ATTEMPT_OUTCOMES);
     expectKeys('config backup mark', locales, 'tree.backupMark.', BACKUP_MARKS);
     expectKeys('config backup list state', locales, 'config.list.mark.', BACKUP_MARKS);
     expectKeys('config backup scan mode', locales, 'config.scanModes.', SCAN_MODES);

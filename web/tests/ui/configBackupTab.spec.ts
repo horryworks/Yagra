@@ -127,19 +127,26 @@ const configTabDot = (page: Page) => page.getByRole('tab', { name: /^Config/ }).
 test.describe('a node not backed up yet', () => {
   test.use({ mockConfig: { overrides: overrides(off) } });
 
-  test('the switch turns it on as it is and asks for the first fetch', async ({ page, errors }) => {
+  test('opens its settings with no login ticked, and starts with the one picked', async ({ page, errors }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
     await expect(page.locator('.cfgb-card-off .cfgb-state')).toHaveText('Not backed up');
-    // The settings wait for it to be on; only SSH only is offered before (the next test).
-    await expect(page.locator('.cfgb-settings')).toHaveCount(0);
+    // Nothing starts from the card any more: the settings are open and Start is their own button
+    // (ADR-240 Inc.2 decisions 8 and 9).
+    await expect(page.getByRole('switch')).toHaveCount(0);
+    const picker = page.locator('.cfgb-settings .cred-picker');
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole('checkbox', { checked: true })).toHaveCount(0);
+    const start = page.getByRole('button', { name: 'Start backup' });
+    await expect(start).toBeDisabled();
+
+    await picker.getByRole('checkbox', { name: /ymock-second-login/ }).check();
+    await expect(page.locator('.cfgb-picked')).toHaveText('1 selected');
     const put = page.waitForRequest(isPut('/config-backup'));
     const fetched = page.waitForRequest(isPost('/config-backup/fetch'));
-    // `click`, not `check`: the switch shows what the server stored, and this mock keeps answering
-    // "off", so the box is not left ticked; what matters is what the press sent.
-    await page.getByRole('switch', { name: 'Backup' }).click();
+    await start.click();
     expect((await put).postDataJSON()).toEqual({
       enabled: true,
-      login_order: null,
+      login_order: [SECOND],
       input: 'ssh_then_telnet',
       model_override: null,
       scan_mode: 'normal',
@@ -148,15 +155,16 @@ test.describe('a node not backed up yet', () => {
     expect(errors.uncaught).toEqual([]);
   });
 
-  test('SSH only can be ticked before switching on, and the switch-on carries it', async ({ page }) => {
+  test('Select all starts with every CLI login, sent as the default, and SSH only goes with it', async ({
+    page,
+  }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    // The first fetch runs as soon as it is on, so the choice has to be offered before it (ADR-242).
-    const sshOnly = page.locator('.cfgb-card').getByRole('checkbox', { name: 'SSH only' });
-    await expect(sshOnly).not.toBeChecked();
-    await sshOnly.check();
+    await page.getByRole('button', { name: 'Select all' }).click();
+    await expect(page.locator('.cfgb-picked')).toHaveText('2 selected');
+    await page.locator('.cfgb-settings').getByRole('checkbox', { name: 'SSH only' }).check();
     const put = page.waitForRequest(isPut('/config-backup'));
-    await page.getByRole('switch', { name: 'Backup' }).click();
-    expect((await put).postDataJSON()).toMatchObject({ enabled: true, input: 'ssh' });
+    await page.getByRole('button', { name: 'Start backup' }).click();
+    expect((await put).postDataJSON()).toMatchObject({ enabled: true, login_order: null, input: 'ssh' });
   });
 });
 
@@ -168,13 +176,36 @@ test.describe('a node still looking for its login', () => {
   }) => {
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
     const card = page.locator('.cfgb-card-busy');
-    await expect(card.locator('.cfgb-state')).toHaveText('Looking for a login that works');
+    await expect(card.locator('.cfgb-state')).toHaveText('Looking for a login that works (1 of 2)');
     await expect(card.locator('.cfgb-facts')).toContainText('next try at');
     await expect(page.locator('.cfgb-h')).toContainText('ymock-ops-login was refused');
     await expect(page.locator('.cfgb-h .cfgb-h-proto').first()).toHaveText('SSH');
-    await expect(page.getByRole('switch', { name: 'Backup' })).toBeChecked();
+    // While a login is still being looked for, the settings stay open and each login says where
+    // it stands (ADR-240 Inc.2 decision 10).
+    const rows = page.locator('.cfgb-settings .cred-picker-row');
+    await expect(rows.filter({ hasText: 'ymock-ops-login' }).locator('.cred-picker-row-status')).toHaveText(
+      'Refused',
+    );
+    await expect(rows.filter({ hasText: 'ymock-second-login' }).locator('.cred-picker-row-status')).toHaveText(
+      'Waiting',
+    );
     // Looking is not a problem: no dot on the tab.
     await expect(configTabDot(page)).toHaveCount(0);
+  });
+
+  test('Stop backup switches it off with the settings as stored', async ({ page }) => {
+    await page.goto(`/nodes/${NODE_ID}?tab=config`);
+    // An edit not saved is not saved by stopping.
+    await page.locator('.cfgb-settings').getByRole('checkbox', { name: 'SSH only' }).check();
+    const put = page.waitForRequest(isPut('/config-backup'));
+    await page.getByRole('button', { name: 'Stop backup' }).click();
+    expect((await put).postDataJSON()).toEqual({
+      enabled: false,
+      login_order: null,
+      input: 'ssh_then_telnet',
+      model_override: null,
+      scan_mode: 'normal',
+    });
   });
 
   test('a version opens as text under its row, and Compare pairs it with the one before', async ({

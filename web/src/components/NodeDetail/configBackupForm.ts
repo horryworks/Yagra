@@ -95,6 +95,46 @@ export function pickedLogins(form: ConfigBackupForm, view: ConfigBackupView): st
   return form.order ?? view.candidates;
 }
 
+/** The form the tab opens with. A node switched off that never had its own order opens with no
+ *  login ticked: starting it tries only the logins a person picked (ADR-240 Inc.2 decision 9).
+ *  "Every CLI login" stays one press away, and is still sent as `null`. */
+export function openingFormOf(view: ConfigBackupView): ConfigBackupForm {
+  const form = formOf(view);
+  return !view.enabled && form.order === null ? { ...form, order: [] } : form;
+}
+
+/** Whether the backup can be started from this form: something is ticked to try. */
+export function canStartWith(form: ConfigBackupForm, view: ConfigBackupView): boolean {
+  return pickedLogins(form, view).length > 0;
+}
+
+/** What a picked login shows at the right of its row (ADR-240 Inc.2 decision 10): being tried,
+ *  waiting its turn in this pass, or how its newest attempt ended. Null for a login with nothing
+ *  to say — never tried, or tried longer ago than the attempts the view carries. */
+export function loginMark(view: ConfigBackupView, id: string): Line | null {
+  if (!view.enabled) return null;
+  const i = view.candidates.indexOf(id);
+  if (i < 0) return null;
+  const at = view.credential_id ? view.candidates.indexOf(view.credential_id) : -1;
+  if (i === at && view.pending) return { key: 'config.loginMark.trying', tone: 'busy' };
+  const last = view.attempts.find((a) => a.credential_id === id);
+  // The login just refused stays the one handed out until the rotation moves on: it says how it
+  // ended, not that it is waiting.
+  const justTried = i === at && last !== undefined && view.attempts[0] === last;
+  const searching = !view.login_confirmed && !view.exhausted;
+  if (searching && at >= 0 && i >= at && !justTried) return { key: 'config.loginMark.waiting', tone: 'none' };
+  if (!last) return null;
+  return {
+    key: `config.loginMark.${last.outcome}`,
+    tone:
+      last.outcome === 'success'
+        ? 'ok'
+        : last.outcome === 'unreachable' || last.outcome === 'cancelled'
+          ? 'none'
+          : 'bad',
+  };
+}
+
 /** How a login is named on this screen: its name when the caller may list credentials, otherwise
  *  its place in the node's order ("Login 2"), or "a deleted login" for one no longer there. */
 export type LoginLabel =
@@ -282,7 +322,13 @@ export function cardOf(view: ConfigBackupView): Card {
     return { kind: 'fix', line: { key: 'config.card.stale', tone: 'bad' }, fixes };
   }
   if (!view.login_confirmed) {
-    return { kind: 'busy', line: { key: 'config.card.searching', tone: 'busy' }, fixes: [] };
+    // Between two tries the card still says which login is next (ADR-240 Inc.2 decision 11).
+    const n = view.credential_id ? view.candidates.indexOf(view.credential_id) + 1 : 0;
+    const line: Line =
+      n > 0
+        ? { key: 'config.card.searchingN', params: { n, total: view.candidates.length }, tone: 'busy' }
+        : { key: 'config.card.searching', tone: 'busy' };
+    return { kind: 'busy', line, fixes: [] };
   }
   return { kind: 'ok', line: { key: 'config.card.ok', tone: 'ok' }, fixes: [] };
 }

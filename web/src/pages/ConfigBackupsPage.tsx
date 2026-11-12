@@ -91,7 +91,7 @@ export function ConfigBackupsPage() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [switching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
-  const [asking, setAsking] = useState<{ ids: string[]; skipped: string[] } | null>(null);
+  const [asking, setAsking] = useState<{ ids: string[]; skipped: string[]; keeping: number } | null>(null);
   const counts = useMemo(() => countsOf(list.data), [list.data]);
   const filter: ListFilter = picking ?? defaultFilter(counts);
   const shown = useMemo(() => rowsIn(list.data, filter), [list.data, filter]);
@@ -112,7 +112,7 @@ export function ConfigBackupsPage() {
       if (plan.ids.length === 0) return;
       if (enabled && plan.needsInput) {
         setFilter((p) => p ?? filter);
-        setAsking({ ids: plan.ids, skipped: plan.skipped.map((r) => nodeName(r.node_id)) });
+        setAsking({ ids: plan.ids, skipped: plan.skipped.map((r) => nodeName(r.node_id)), keeping: plan.keeping });
         return;
       }
       // Keep the view the operator is working in: the reload changes the counts the unpicked
@@ -391,6 +391,7 @@ export function ConfigBackupsPage() {
         <ConfigBackupSwitchOnModal
           ids={asking.ids}
           skipped={asking.skipped}
+          keeping={asking.keeping}
           onClose={() => setAsking(null)}
           onSaved={() => {
             setAsking(null);

@@ -22,7 +22,6 @@ import { useLoad } from '../../lib/useLoad';
 import { LoadGate } from '../ui/LoadGate';
 import { Button } from '../ui/Button';
 import { Segmented } from '../ui/Segmented';
-import { Switch } from '../ui/Switch';
 import { Field, Select } from '../ui/Field';
 import { CheckField, FieldGroup } from '../ui/FormLayout';
 import { EmptyState } from '../ui/EmptyState';
@@ -46,9 +45,12 @@ import {
   attemptLine,
   bodyOf,
   canOfferSave,
+  canStartWith,
   cardOf,
   formOf,
   historyRows,
+  loginMark,
+  openingFormOf,
   sshOnly,
   withSshOnly,
   isDirty,
@@ -115,13 +117,15 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
 
   const [form, setForm] = useState<ConfigBackupForm | null>(null);
   useEffect(() => {
-    if (view.data) setForm(formOf(view.data));
+    if (view.data) setForm(openingFormOf(view.data));
   }, [view.data]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState<Shown | null>(null);
   const [filter, setFilter] = useState<HistoryFilter>('changes');
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Null until a person folds or opens it: then the settings are open while the backup is off or
+  // still looking for a login, and folded once one works (ADR-240 Inc.2 decision 10).
+  const [settingsOpen, setSettingsOpen] = useState<boolean | null>(null);
   const [pickedModel, setPickedModel] = useState('');
   // Which unsaved spell the comparison was opened for: a node saved and then changed again starts
   // a new one, so the panel does not reopen on its own.
@@ -161,8 +165,10 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
       await api.putConfigBackup(node.id, bodyOf(f, true));
       await fetchQuietly();
     }, t('config.err.save'));
+  /** Switch off with the settings as stored: an unsaved edit in the form is not saved by stopping. */
   const stop = () => {
-    if (form) act(() => api.putConfigBackup(node.id, bodyOf(form, false)), t('config.err.save'));
+    const stored = view.data;
+    if (stored) act(() => api.putConfigBackup(node.id, bodyOf(formOf(stored), false)), t('config.err.save'));
   };
   const save = () => {
     if (form) act(() => api.putConfigBackup(node.id, bodyOf(form, enabled)), t('config.err.save'));
@@ -374,27 +380,12 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                     {t('config.fetchNow')}
                   </Button>
                 )}
-                {/* While off, the one connection choice that must hold from the first fetch: the
-                    settings appear only once it is on, and SSH that does not connect on that fetch
-                    is followed by telnet straight away (ADR-242 decision 8). */}
-                {canStart && !v.enabled && (
-                  <span className="cfgb-card-ssh">
-                    <CheckField
-                      checked={sshOnly(form)}
-                      disabled={busy}
-                      onChange={(on) => setForm(withSshOnly(form, on))}
-                      label={t('config.input.ssh')}
-                    />
-                  </span>
-                )}
-                {canStart && (
-                  <Switch
-                    label={t('config.switch.label')}
-                    ariaLabel={t('config.switch.label')}
-                    checked={v.enabled}
-                    disabled={busy}
-                    onChange={(on) => (on ? start(form) : stop())}
-                  />
+                {/* Starting is the settings' own button, below them (ADR-240 Inc.2 decision 8);
+                    stopping hands nothing out, so it takes what editing the node takes. */}
+                {canConfig && v.enabled && (
+                  <Button variant="ghost" onClick={stop} disabled={busy}>
+                    {t('config.stop')}
+                  </Button>
                 )}
               </div>
               {card.kind === 'fix' && card.fixes.length > 0 && (
@@ -433,10 +424,10 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
             </p>
           )}
 
-          {v.available && v.enabled && (
+          {v.available && (
             <Disclosure
               className="cfgb-settings"
-              open={settingsOpen}
+              open={settingsOpen ?? (!v.enabled || !v.login_confirmed)}
               onToggle={setSettingsOpen}
               summary={
                 <>
@@ -499,8 +490,9 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                   <FieldGroup
                     label={t('config.logins')}
                     action={
+                      // `null` is every CLI login in the try order, which also takes in one added later.
                       form.order !== null && (
-                        <Button onClick={() => setForm({ ...form, order: null })}>{t('config.defaultOrder')}</Button>
+                        <Button onClick={() => setForm({ ...form, order: null })}>{t('config.selectAll')}</Button>
                       )
                     }
                   >
@@ -509,6 +501,11 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                       selected={pickedLogins(form, v)}
                       onChange={(ids) => setForm({ ...form, order: ids })}
                       disabled={busy}
+                      emptyText={t('config.noLogins')}
+                      rowStatus={(id) => {
+                        const m = loginMark(v, id);
+                        return m && <span className={`cfgb-tone-${m.tone}`}>{t(m.key)}</span>;
+                      }}
                     />
                     <Link className="cfgb-add-login" to="/nodes/credentials?tab=cli">
                       {t('config.addLogin')}
@@ -516,12 +513,26 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                   </FieldGroup>
                 </div>
               )}
-              {canStart && (
+              {canStart && !v.enabled && (
+                <Inline gap={8} justify="end">
+                  <p className="form-status cfgb-picked">
+                    {t('config.picked', { count: pickedLogins(form, v).length })}
+                  </p>
+                  <Button variant="primary" onClick={() => start(form)} disabled={busy || !canStartWith(form, v)}>
+                    {t('config.start')}
+                  </Button>
+                </Inline>
+              )}
+              {canStart && v.enabled && (
                 <Inline gap={8} justify="end">
                   <Button onClick={rescan} disabled={busy}>
                     {t('config.rescan')}
                   </Button>
-                  <Button variant="primary" onClick={save} disabled={busy || !isDirty(form, v)}>
+                  <Button
+                    variant="primary"
+                    onClick={save}
+                    disabled={busy || !isDirty(form, v) || !canStartWith(form, v)}
+                  >
                     {t('common:actions.save')}
                   </Button>
                 </Inline>

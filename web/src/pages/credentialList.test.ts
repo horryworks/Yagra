@@ -275,6 +275,9 @@ describe('when a credential can be moved (ADR-205 Inc.2)', () => {
 
   it('only on the SNMP tab, sorted by the try order ascending, with nothing filtered', () => {
     expect(canReorderCredentials('snmp', order, false)).toBe(true);
+    // A config backup with no order of its own tries the CLI logins in this order (ADR-205 Inc.5).
+    expect(canReorderCredentials('cli', order, false)).toBe(true);
+    expect(canReorderCredentials('cli', order, true)).toBe(false);
     expect(canReorderCredentials('http', order, false)).toBe(false);
     expect(canReorderCredentials('integration', order, false)).toBe(false);
     expect(canReorderCredentials('snmp', { by: 'name', dir: 'asc' }, false)).toBe(false);
@@ -290,6 +293,7 @@ describe('the sort a tab applies (ADR-205 Inc.2)', () => {
   // means nothing for those kinds and no header carries the arrow.
   it('reads the try order as name ascending on a tab without the # column', () => {
     expect(credentialSortIn('snmp', order)).toEqual(order);
+    expect(credentialSortIn('cli', order)).toEqual(order);
     for (const g of ['http', 'integration', 'other'] as const) {
       expect(credentialSortIn(g, order)).toEqual({ by: 'name', dir: 'asc' });
       expect(credentialSortIn(g, { by: 'order', dir: 'desc' })).toEqual({ by: 'name', dir: 'asc' });

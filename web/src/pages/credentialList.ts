@@ -67,16 +67,26 @@ export function credentialSortValues<T extends CredentialRow>(
   };
 }
 
-/** The sort a tab actually applies. The tabs share one `?sort=`, and only the SNMP tab draws the
- *  `#` column: on the others the try order means nothing, and a sort on a column that is not drawn
- *  shows no arrow anywhere. So there the default, and any `order` sort, reads as name ascending —
- *  the order those tabs opened in before the try order existed. */
-export function credentialSortIn(group: CredentialGroup, sort: SortState): SortState {
-  return group !== 'snmp' && sort.by === 'order' ? { by: 'name', dir: 'asc' } : sort;
+/** The tabs whose rows carry a try order a person sets: SNMP, which Discovery tries in that order
+ *  (ADR-205 Inc.2), and CLI, which a config backup with no order of its own tries in that order
+ *  (Inc.5). The other tabs try nothing in order. */
+export const ORDERED_CREDENTIAL_GROUPS = ['snmp', 'cli'] as const satisfies readonly CredentialGroup[];
+
+/** Whether a tab draws the `#` column and can be put in its try order. */
+export function hasTryOrder(group: CredentialGroup): boolean {
+  return (ORDERED_CREDENTIAL_GROUPS as readonly CredentialGroup[]).includes(group);
 }
 
-/** Whether a tab's rows can be moved with up and down (ADR-205 Inc.2): only the SNMP tab, whose
- *  order is the one Discovery tries, and only while the table shows that order whole — sorted on
+/** The sort a tab actually applies. The tabs share one `?sort=`, and only a tab with a try order
+ *  draws the `#` column: on the others the try order means nothing, and a sort on a column that is
+ *  not drawn shows no arrow anywhere. So there the default, and any `order` sort, reads as name
+ *  ascending — the order those tabs opened in before the try order existed. */
+export function credentialSortIn(group: CredentialGroup, sort: SortState): SortState {
+  return !hasTryOrder(group) && sort.by === 'order' ? { by: 'name', dir: 'asc' } : sort;
+}
+
+/** Whether a tab's rows can be moved with up and down (ADR-205 Inc.2, Inc.5): only a tab with a
+ *  try order, and only while the table shows that order whole — sorted on
  *  it ascending and narrowed by nothing. "Up" in a list sorted by name, or with rows hidden between
  *  two neighbours, would move a credential somewhere other than where the operator sees it go. */
 export function canReorderCredentials(
@@ -84,7 +94,7 @@ export function canReorderCredentials(
   sort: SortState,
   filtered: boolean,
 ): boolean {
-  return group === 'snmp' && sort.by === 'order' && sort.dir === 'asc' && !filtered;
+  return hasTryOrder(group) && sort.by === 'order' && sort.dir === 'asc' && !filtered;
 }
 
 /**

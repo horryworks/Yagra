@@ -1314,6 +1314,7 @@ export const api = {
     node_ids: string[];
     enabled: boolean;
     input?: BackupInput;
+    login_order?: string[] | null;
   }): Promise<ConfigBackupSwitchResult> => apiPost('/api/v1/config-backups/switch', { body }),
 
   /** When config backups are fetched, and where the latest run stands (ADR-210 stage 6). */

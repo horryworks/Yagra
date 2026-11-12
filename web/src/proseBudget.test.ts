@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
   nav: [2660, 1210], // + the Investigate menu item, its description and the Analyses group heading; the description now names a site too (ADR-251 Inc.2, 2026-11-09)
-  nodes: [15962, 9113], // + the Neighbors tab's shared-port press (ADR-043 Inc.5, 2026-11-11)
+  nodes: [16120, 9218], // + the Config tab's "N of M" search line, no-login line and keep count (ADR-240 Inc.2, 2026-11-12)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

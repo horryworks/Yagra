@@ -832,15 +832,17 @@ impl ConfigBackupRepo {
     /// `groups` lets the caller see are touched. A node with settings keeps them and changes only
     /// whether it is fetched; switching one on keeps a login that worked and otherwise starts its
     /// logins afresh, as a PUT does (decision 8). A node with
-    /// none is given `input`, every CLI login and the normal pace — and when `input` is `None` and
-    /// such a node is named, nothing is written and the outcome lists them in `needs_input`. A node
-    /// whose model is not known is never switched on.
+    /// none is given `input`, `login_order` (`None` is every CLI login, ADR-240 Inc.2 decision 12)
+    /// and the normal pace — and when `input` is `None` and such a node is named, nothing is
+    /// written and the outcome lists them in `needs_input`. A node whose model is not known is
+    /// never switched on. `login_order` is the caller's to check: this writes what it is handed.
     pub async fn switch(
         &self,
         nodes: &[Uuid],
         groups: Option<&[Uuid]>,
         enabled: bool,
         input: Option<BackupInput>,
+        login_order: Option<&[Uuid]>,
     ) -> anyhow::Result<SwitchOutcome> {
         let scope = crate::repo::scope_predicate(2, "n.group_id");
         let mut tx = self.pool.begin().await?;
@@ -900,12 +902,13 @@ impl ConfigBackupRepo {
             "INSERT INTO node_config_backup \
                (node_id, enabled, login_order, input, model_override, bound_address, \
                 round_started_at, scan_mode) \
-             SELECT id, true, NULL, $2, NULL, address, now(), $3 FROM nodes WHERE id = ANY($1) \
+             SELECT id, true, $4, $2, NULL, address, now(), $3 FROM nodes WHERE id = ANY($1) \
              ON CONFLICT (node_id) DO NOTHING RETURNING node_id",
         )
         .bind(&fresh)
         .bind(input.as_str())
         .bind(ScanMode::Normal.as_str())
+        .bind(login_order)
         .fetch_all(&mut *tx)
         .await?;
         let mut out = self
@@ -1474,13 +1477,16 @@ mod tests {
 
         // Without an input, a node with no settings stops the whole call.
         let all = [running, stopped, fresh, unknown];
-        let held = repo.switch(&all, None, true, None).await.expect("switch");
+        let held = repo
+            .switch(&all, None, true, None, None)
+            .await
+            .expect("switch");
         assert_eq!(held.needs_input, [fresh]);
         assert!(held.switched.is_empty());
         assert_eq!(ids(list(OverviewState::Off).await.expect("off")), [stopped]);
 
         let done = repo
-            .switch(&all, None, true, Some(BackupInput::Ssh))
+            .switch(&all, None, true, Some(BackupInput::Ssh), Some(&[login]))
             .await
             .expect("switch");
         let mut both = vec![stopped, fresh];
@@ -1510,14 +1516,20 @@ mod tests {
         let made = repo.get(fresh).await.expect("get").expect("row");
         assert_eq!(made.input, BackupInput::Ssh);
         assert_eq!(made.model_override, None);
+        // The order the caller picked goes to a node with no settings, never to one with its own.
+        assert_eq!(made.login_order, Some(vec![login]));
+        assert_eq!(kept.login_order, None, "its own order is kept");
 
         // A folder the nodes are not in switches nothing.
         let other = repo
-            .switch(&all, Some(&[Uuid::new_v4()]), false, None)
+            .switch(&all, Some(&[Uuid::new_v4()]), false, None, None)
             .await
             .expect("switch");
         assert!(other.switched.is_empty());
-        let stop = repo.switch(&all, None, false, None).await.expect("switch");
+        let stop = repo
+            .switch(&all, None, false, None, None)
+            .await
+            .expect("switch");
         assert_eq!(stop.switched.len(), 3);
         assert!(list(OverviewState::On).await.expect("on").is_empty());
     }

@@ -43,11 +43,13 @@ export interface SwitchPlan {
   ids: string[];
   skipped: ConfigBackupRow[];
   needsInput: boolean;
+  /** How many of `ids` have settings of their own, and so keep their own logins (ADR-240 Inc.2). */
+  keeping: number;
 }
 
 export function planSwitch(rows: readonly ConfigBackupRow[], enabled: boolean): SwitchPlan {
   if (!enabled) {
-    return { ids: rows.filter((r) => r.enabled).map((r) => r.node_id), skipped: [], needsInput: false };
+    return { ids: rows.filter((r) => r.enabled).map((r) => r.node_id), skipped: [], needsInput: false, keeping: 0 };
   }
   const off = rows.filter((r) => !r.enabled);
   const take = off.filter(canSwitchOn);
@@ -55,5 +57,6 @@ export function planSwitch(rows: readonly ConfigBackupRow[], enabled: boolean): 
     ids: take.map((r) => r.node_id),
     skipped: off.filter((r) => !canSwitchOn(r)),
     needsInput: take.some((r) => !r.configured),
+    keeping: take.filter((r) => r.configured).length,
   };
 }

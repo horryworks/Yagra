@@ -230,3 +230,34 @@ test('starting a Detect remembers the ticks it used', async ({ page }) => {
     )
     .toEqual([S2]);
 });
+
+// A config backup with no order of its own tries the CLI logins in this order (ADR-205 Inc.5), so
+// the CLI tab moves them the way the SNMP tab moves communities: within the tab, the rest in place.
+test('moving a CLI login up saves the whole order, the SNMP rows where they stood', async ({
+  page,
+  errors,
+}) => {
+  const [first] = defaultBodyFor('/api/v1/credentials') as unknown as Schemas['CredentialSummary'][];
+  const C1 = '00000000-0000-4000-8000-0000000000d1';
+  const C2 = '00000000-0000-4000-8000-0000000000d2';
+  const mixed = [
+    { ...first, id: S1, name: 'ymock-first', kind: 'snmp_v2c' },
+    { ...first, id: C1, name: 'ymock-ops-login', kind: 'cli_login' },
+    { ...first, id: S2, name: 'ymock-second', kind: 'snmp_v3' },
+    { ...first, id: C2, name: 'ymock-admin-login', kind: 'cli_login' },
+  ];
+  await page.route('**/api/v1/credentials', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await route.fulfill({ json: mixed });
+  });
+  await page.goto('/nodes/credentials?tab=cli');
+  // The first login has nowhere higher to go.
+  await expect(page.getByRole('button', { name: 'Move ymock-ops-login up' })).toHaveCount(0);
+  const put = page.waitForRequest(
+    (r) => r.method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/credentials/order',
+  );
+  await page.getByRole('button', { name: 'Move ymock-admin-login up' }).click();
+  const body = (await put).postDataJSON() as { ids: string[] };
+  expect(body.ids).toEqual([S1, C2, S2, C1]);
+  expect(errors.uncaught).toEqual([]);
+});

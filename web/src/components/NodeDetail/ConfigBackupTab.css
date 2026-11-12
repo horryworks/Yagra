@@ -203,9 +203,9 @@
   gap: var(--space-2);
 }
 
-/* SSH only, beside the switch while the backup is off: one row with it, so no margin of its own. */
-.cfgb-card-right .cfgb-card-ssh {
-  margin: 0;
+/* How many logins are ticked, at the left of the row that holds "Start backup" (ADR-240 Inc.2). */
+.cfgb-picked {
+  margin: 0 auto 0 0;
 }
 
 /* The fix sits under the sentence that names the problem, not under the mark. */

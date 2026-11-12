@@ -35,15 +35,17 @@ describe('config backup list', () => {
   });
 
   it('switches off only what is on', () => {
-    expect(planSwitch([running, stopped], false)).toEqual({ ids: ['a'], skipped: [], needsInput: false });
+    expect(planSwitch([running, stopped], false)).toEqual({ ids: ['a'], skipped: [], needsInput: false, keeping: 0 });
   });
 
   it('switches on what has a model, and asks for an input only for a node with no settings', () => {
-    expect(planSwitch([running, stopped], true)).toEqual({ ids: ['b'], skipped: [], needsInput: false });
+    expect(planSwitch([running, stopped], true)).toEqual({ ids: ['b'], skipped: [], needsInput: false, keeping: 1 });
     const plan = planSwitch([stopped, fresh, noModel], true);
     expect(plan.ids).toEqual(['b', 'c']);
     expect(plan.skipped).toEqual([noModel]);
     expect(plan.needsInput).toBe(true);
+    // The stopped node has settings, so it keeps its own logins; the fresh one takes those picked.
+    expect(plan.keeping).toBe(1);
   });
 });
 

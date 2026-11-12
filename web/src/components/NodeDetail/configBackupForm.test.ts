@@ -5,6 +5,7 @@ import {
   attemptLine,
   bodyOf,
   canOfferSave,
+  canStartWith,
   cardOf,
   historyRows,
   lastSuccessAt,
@@ -15,6 +16,8 @@ import {
   isDirty,
   isQuietFetchRefusal,
   loginLabel,
+  loginMark,
+  openingFormOf,
   pickedLogins,
   previousOf,
   refreshMs,
@@ -156,6 +159,65 @@ describe('config backup form (ADR-210)', () => {
   });
 });
 
+describe('starting from picked logins (ADR-240 Inc.2)', () => {
+  it('opens a node that is off and never had an order with nothing ticked, and cannot start it', () => {
+    const v = view();
+    const form = openingFormOf(v);
+    expect(form.order).toEqual([]);
+    expect(canStartWith(form, v)).toBe(false);
+    expect(canStartWith({ ...form, order: ['b'] }, v)).toBe(true);
+    // "Select all" is every CLI login, still sent as null.
+    expect(canStartWith({ ...form, order: null }, v)).toBe(true);
+    expect(bodyOf({ ...form, order: null }, true).login_order).toBeNull();
+  });
+
+  it('keeps an order chosen before, and a node that is on opens as stored', () => {
+    expect(openingFormOf(view({ login_order: ['c', 'a'] })).order).toEqual(['c', 'a']);
+    expect(openingFormOf(view({ enabled: true })).order).toBeNull();
+  });
+
+  it('marks each picked login: tried, waiting its turn, or how it last ended', () => {
+    const searching = view({
+      enabled: true,
+      readiness: 'ready',
+      credential_id: 'b',
+      pending: true,
+      attempts: [attempt({ credential_id: 'a', outcome: 'auth_failed' })],
+    });
+    expect(loginMark(searching, 'a')).toEqual({ key: 'config.loginMark.auth_failed', tone: 'bad' });
+    expect(loginMark(searching, 'b')).toEqual({ key: 'config.loginMark.trying', tone: 'busy' });
+    expect(loginMark(searching, 'c')).toEqual({ key: 'config.loginMark.waiting', tone: 'none' });
+    // Between tries the one handed out is waiting too.
+    expect(loginMark({ ...searching, pending: false }, 'b')?.key).toBe('config.loginMark.waiting');
+    // Until the rotation moves on, the one just refused says so rather than waiting.
+    const justRefused = {
+      ...searching,
+      pending: false,
+      attempts: [attempt({ credential_id: 'b', outcome: 'auth_failed' }), ...searching.attempts],
+    };
+    expect(loginMark(justRefused, 'b')?.key).toBe('config.loginMark.auth_failed');
+    expect(loginMark(justRefused, 'c')?.key).toBe('config.loginMark.waiting');
+    // Once a login works, every row says how its own last attempt ended, or nothing.
+    const found = {
+      ...searching,
+      pending: false,
+      login_confirmed: true,
+      attempts: [attempt({ credential_id: 'b', outcome: 'success' }), ...searching.attempts],
+    };
+    expect(loginMark(found, 'b')).toEqual({ key: 'config.loginMark.success', tone: 'ok' });
+    expect(loginMark(found, 'a')?.key).toBe('config.loginMark.auth_failed');
+    expect(loginMark(found, 'c')).toBeNull();
+    // A device that does not answer says nothing against the login.
+    const quiet = { ...found, attempts: [attempt({ credential_id: 'b', outcome: 'unreachable' })] };
+    expect(loginMark(quiet, 'b')?.tone).toBe('none');
+  });
+
+  it('says nothing while off, or for a login the node does not try', () => {
+    expect(loginMark(view({ attempts: [attempt({ credential_id: 'a' })] }), 'a')).toBeNull();
+    expect(loginMark(view({ enabled: true }), 'z')).toBeNull();
+  });
+});
+
 describe('naming a login', () => {
   it('uses the name when it is known, else its place in the order, else says it is gone', () => {
     const names = new Map([['a', 'ops-a']]);
@@ -279,7 +341,11 @@ describe('the status card (ADR-240)', () => {
       kind: 'busy',
       line: { key: 'config.state.fetching' },
     });
-    expect(cardOf({ ...working, login_confirmed: false }).line.key).toBe('config.card.searching');
+    // Between two tries the card names which login is next and how many there are (ADR-240 Inc.2).
+    const next = cardOf({ ...working, login_confirmed: false });
+    expect(next).toMatchObject({ kind: 'busy', line: { key: 'config.card.searchingN' } });
+    expect(next.line.params).toEqual({ n: working.candidates.indexOf(working.credential_id ?? '') + 1, total: 3 });
+    expect(cardOf({ ...working, login_confirmed: false, credential_id: null }).line.key).toBe('config.card.searching');
   });
 
   it('offers a new login only when every login was refused, not when the device went quiet', () => {

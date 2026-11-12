@@ -510,6 +510,26 @@ pub(super) struct ConfigBackupBody {
 /// The most logins one node's order may name.
 const MAX_ORDER: usize = 200;
 
+/// Refuse an order of logins a node may not be given: too long, a login named twice, or one that
+/// is not a CLI login. The one check behind the PUT and the switch (ADR-240 Inc.2 decision 12).
+async fn check_login_order(admin: &super::AdminState, order: &[Uuid]) -> ApiResult<()> {
+    let bad = |m: &str| ApiError::bad_request("invalid_config_backup", m.to_owned());
+    if order.len() > MAX_ORDER {
+        return Err(bad("too many logins in the order"));
+    }
+    let mut seen = std::collections::HashSet::new();
+    if !order.iter().all(|id| seen.insert(*id)) {
+        return Err(bad("a login appears twice in the order"));
+    }
+    let logins = rotation::cli_logins(&admin.creds)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    if !order.iter().all(|id| logins.contains(id)) {
+        return Err(bad("every login in the order must be a CLI login"));
+    }
+    Ok(())
+}
+
 #[utoipa::path(
     put, path = "/api/v1/nodes/{node_id}/config-backup", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
@@ -556,19 +576,7 @@ async fn put_config_backup(
         (None, None) => None,
     };
     if let Some(order) = login_order.as_deref() {
-        if order.len() > MAX_ORDER {
-            return Err(bad("too many logins in the order"));
-        }
-        let mut seen = std::collections::HashSet::new();
-        if !order.iter().all(|id| seen.insert(*id)) {
-            return Err(bad("a login appears twice in the order"));
-        }
-        let logins = rotation::cli_logins(&admin.creds)
-            .await
-            .map_err(|e| read_failed(&e))?;
-        if !order.iter().all(|id| logins.contains(id)) {
-            return Err(bad("every login in the order must be a CLI login"));
-        }
+        check_login_order(&admin, order).await?;
     }
     if body.enabled {
         refuse_scoped_login(&scope)?;
@@ -1225,6 +1233,11 @@ pub(super) struct SwitchBody {
     /// `enabled` is true; a node with settings keeps its own.
     #[serde(default)]
     input: Option<BackupInput>,
+    /// The CLI logins a node that has no settings yet tries, in order (ADR-240 Inc.2 decision
+    /// 12). Omitted or `null`: every CLI login, in the try order of Credentials & secrets. A node
+    /// with settings keeps its own order; switching off ignores it.
+    #[serde(default)]
+    login_order: Option<Vec<Uuid>>,
 }
 
 /// What a switch did.
@@ -1243,8 +1256,8 @@ pub(crate) struct SwitchResult {
     post, path = "/api/v1/config-backups/switch", tag = "nodes",
     request_body = SwitchBody,
     responses(
-        (status = 200, description = "Switched in one transaction. A node with settings keeps them; one with none gets `input`, every CLI login and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list", body = SwitchResult),
-        (status = 400, description = "No node, more than 5,000, an unknown input, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`)", body = super::error::ErrorBody),
+        (status = 200, description = "Switched in one transaction. A node with settings keeps them; one with none gets `input`, `login_order` (every CLI login when it is left out) and the normal pace. Nothing is fetched at once: the logins are tried by the rotation within the lockout limits, and the configuration is fetched in the next scheduled run. The bundled oxidized is asked to re-read its node list", body = SwitchResult),
+        (status = 400, description = "No node, more than 5,000, an unknown input, an empty `login_order` or one naming a login that is not a CLI login or naming one twice, or a node with no settings switched on without `input` (`invalid_config_backup`, `input_required`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig; or the backup is switched on by an account restricted to folders (`scope_unsupported`), by a role without ManageCredentials, or by an API token (`login_not_permitted`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -1269,6 +1282,14 @@ async fn switch_config_backups(
     if body.input == Some(BackupInput::Unknown) {
         return Err(bad("input must be ssh, telnet or ssh_then_telnet"));
     }
+    // Only switching on hands an order to anything; switching off ignores it.
+    let login_order = body.login_order.filter(|_| body.enabled);
+    if let Some(order) = login_order.as_deref() {
+        if order.is_empty() {
+            return Err(bad("name at least one login, or leave login_order out"));
+        }
+        check_login_order(&admin, order).await?;
+    }
     if body.enabled {
         refuse_scoped_login(&scope)?;
         hand_out.check()?;
@@ -1278,7 +1299,13 @@ async fn switch_config_backups(
     ids.dedup();
     let out = admin
         .config_backup
-        .switch(&ids, scope.group_filter(), body.enabled, body.input)
+        .switch(
+            &ids,
+            scope.group_filter(),
+            body.enabled,
+            body.input,
+            login_order.as_deref(),
+        )
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -1998,6 +2025,63 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// Switching on from the list hands a node with no settings the logins picked, in their order,
+    /// and refuses an order the PUT would refuse (ADR-240 Inc.2 decision 12).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_list_switch_hands_a_new_node_the_logins_picked(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let node = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        let profile = yagra_common::oxidized_model::PROFILE_MODELS[0].0;
+        let found: Option<Uuid> = sqlx::query_scalar("SELECT id FROM profiles WHERE name = $1")
+            .bind(profile)
+            .fetch_optional(&pool)
+            .await
+            .expect("profile");
+        let profile_id = match found {
+            Some(id) => id,
+            None => yagra_base::pgtest::profile(&pool, profile).await,
+        };
+        sqlx::query("UPDATE nodes SET profile_id = $2 WHERE id = $1")
+            .bind(node)
+            .bind(profile_id)
+            .execute(&pool)
+            .await
+            .expect("modelled profile");
+        let first = yagra_base::pgtest::credential(&pool, "ops", "cli_login").await;
+        let second = yagra_base::pgtest::credential(&pool, "admin", "cli_login").await;
+        let community = yagra_base::pgtest::credential(&pool, "public", "snmp_v2c").await;
+        let operator = token(&st, yagra_common::Role::Operator);
+        let path = "/api/v1/config-backups/switch";
+
+        for order in [
+            serde_json::json!([]),
+            serde_json::json!([community]),
+            serde_json::json!([first, first]),
+        ] {
+            let bad = serde_json::json!({
+                "node_ids": [node], "enabled": true, "input": "ssh", "login_order": order,
+            });
+            let (status, body) = send(&st, "POST", path, &operator, Some(bad)).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error"]["code"], "invalid_config_backup", "{body}");
+        }
+
+        let on = serde_json::json!({
+            "node_ids": [node], "enabled": true, "input": "ssh", "login_order": [second],
+        });
+        let (status, body) = send(&st, "POST", path, &operator, Some(on)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["switched"], serde_json::json!([node.to_string()]));
+        let read = format!("/api/v1/nodes/{node}/config-backup");
+        let (status, body) = send(&st, "GET", &read, &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["login_order"], serde_json::json!([second.to_string()]));
+        assert_eq!(body["candidates"], serde_json::json!([second.to_string()]));
     }
 
     /// An Operator signed in switches the backup on, but an Admin-role API token cannot, on either
