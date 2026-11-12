@@ -55,6 +55,7 @@
     "usage": {
       "unused": "未使用",
       "count_other": "ノード {{count}} 台",
+      "configBackups_other": "config バックアップ {{count}} 台",
       "merakiOrgs_other": "Meraki 組織 {{count}} 件",
       "netboxServers_other": "NetBox サーバー {{count}} 台"
     },

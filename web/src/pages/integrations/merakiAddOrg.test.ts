@@ -25,6 +25,7 @@ const cred = (id: string, name: string, kind: string): CredentialSummary => ({
   used_by: 0,
   used_by_meraki_orgs: 0,
   used_by_netbox_servers: 0,
+  used_by_config_backups: 0,
 });
 
 describe('keyFields — the one field a request names its key by', () => {

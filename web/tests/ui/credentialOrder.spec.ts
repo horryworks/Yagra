@@ -261,3 +261,31 @@ test('moving a CLI login up saves the whole order, the SNMP rows where they stoo
   expect(body.ids).toEqual([S1, C2, S2, C1]);
   expect(errors.uncaught).toEqual([]);
 });
+
+// A CLI login the config backups try is not "Unused", and deleting it says it takes it away from
+// them (ADR-205 Inc.6). The arithmetic is `credentialList.test.ts`'s; this is the cell and the
+// dialog that read it.
+test('a CLI login the config backups try says so, in the list and in the delete', async ({ page }) => {
+  const [first] = defaultBodyFor('/api/v1/credentials') as unknown as Schemas['CredentialSummary'][];
+  const login = {
+    ...first,
+    id: '00000000-0000-4000-8000-0000000000d3',
+    name: 'ymock-backup-login',
+    kind: 'cli_login',
+    used_by: 0,
+    used_by_meraki_orgs: 0,
+    used_by_netbox_servers: 0,
+    used_by_config_backups: 4,
+  };
+  await page.route('**/api/v1/credentials', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await route.fulfill({ json: [login] });
+  });
+  await page.goto('/nodes/credentials?tab=cli');
+  const row = page.locator('.dt-row').filter({ hasText: 'ymock-backup-login' });
+  await expect(row).toContainText('4 config backups');
+  await expect(row).not.toContainText('Unused');
+  await row.hover();
+  await row.getByRole('button', { name: 'Delete' }).click();
+  await expect(page.getByRole('dialog')).toContainText('4 config backups reference it');
+});

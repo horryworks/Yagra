@@ -44,6 +44,12 @@ pub struct CredentialSummary {
     /// How many NetBox servers are read with it. Refuses the delete exactly as the field above
     /// does (`netbox_servers.credential_id`, the same constraint).
     pub used_by_netbox_servers: i64,
+    /// How many nodes switched on for config backup try this login (ADR-205 Inc.6): those naming
+    /// it in their own order, and, for a CLI login, those with no order of their own, which try
+    /// every CLI login. A node switched off tries nothing and is not counted.
+    ///
+    /// Like `used_by`, not a refusal: a deleted login is dropped from an order when it is read.
+    pub used_by_config_backups: i64,
 }
 
 /// What [`CredentialStore::delete`] did.
@@ -537,9 +543,14 @@ impl CredentialStore {
                (SELECT count(*) FROM meraki_orgs m WHERE m.credential_id = c.id) \
                  AS used_by_meraki_orgs, \
                (SELECT count(*) FROM netbox_servers s WHERE s.credential_id = c.id) \
-                 AS used_by_netbox_servers \
+                 AS used_by_netbox_servers, \
+               (SELECT count(*) FROM node_config_backup b WHERE b.enabled \
+                  AND (c.id = ANY(b.login_order) \
+                       OR (b.login_order IS NULL AND c.kind = $1))) \
+                 AS used_by_config_backups \
              FROM credentials c ORDER BY c.try_order, c.created_at, c.id",
         )
+        .bind(KIND_CLI_LOGIN)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
@@ -551,6 +562,7 @@ impl CredentialStore {
                     used_by: row.try_get("used_by")?,
                     used_by_meraki_orgs: row.try_get("used_by_meraki_orgs")?,
                     used_by_netbox_servers: row.try_get("used_by_netbox_servers")?,
+                    used_by_config_backups: row.try_get("used_by_config_backups")?,
                 })
             })
             .collect()
@@ -1059,6 +1071,46 @@ mod tests {
         assert_eq!(ids, listed);
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&a) && ids.contains(&b));
+    }
+
+    /// A CLI login counts the nodes switched on for config backup that try it: those naming it in
+    /// their own order, and those with no order, which try every CLI login (ADR-205 Inc.6). A node
+    /// switched off tries nothing, and an SNMP credential is never tried by a backup.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_cli_login_counts_the_backups_that_try_it(pool: PgPool) {
+        use crate::config_backup::{BackupInput, ConfigBackupRepo, NodeConfigBackup, ScanMode};
+        let kek: Kek = Arc::new(StaticKeyProvider::single([6u8; 32]));
+        let store = CredentialStore::new(pool.clone(), kek);
+        let snmp = store.create("v2c", "snmp_v2c", b"public").await.unwrap();
+        let a = store.create("cli-a", KIND_CLI_LOGIN, b"s").await.unwrap();
+        let b = store.create("cli-b", KIND_CLI_LOGIN, b"s").await.unwrap();
+        let repo = ConfigBackupRepo::new(pool.clone());
+        for (n, enabled, order) in [
+            (1u8, true, Some(vec![a])),
+            (2, true, None),
+            (3, false, Some(vec![b])),
+            (4, true, Some(vec![b])),
+        ] {
+            let node = crate::pgtest::node(&pool, &format!("sw-{n:02}"), n, None).await;
+            let cfg = NodeConfigBackup {
+                enabled,
+                login_order: order,
+                input: BackupInput::Ssh,
+                model_override: Some("ios".to_owned()),
+                scan_mode: ScanMode::Normal,
+            };
+            assert!(repo.put(node, &cfg, true).await.expect("put"));
+        }
+        let counts: std::collections::HashMap<Uuid, i64> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.id, c.used_by_config_backups))
+            .collect();
+        // a: its own order on sw-01, every login on sw-02. b: sw-02 and sw-04; sw-03 is off.
+        assert_eq!((counts[&a], counts[&b], counts[&snmp]), (2, 2, 0));
     }
 
     /// A stored nonce of the wrong length — a damaged restore, a hand edit — is reported as a row

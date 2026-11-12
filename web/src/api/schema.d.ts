@@ -7861,6 +7861,15 @@ export interface components {
             used_by: number;
             /**
              * Format: int64
+             * @description How many nodes switched on for config backup try this login (ADR-205 Inc.6): those naming
+             *     it in their own order, and, for a CLI login, those with no order of their own, which try
+             *     every CLI login. A node switched off tries nothing and is not counted.
+             *
+             *     Like `used_by`, not a refusal: a deleted login is dropped from an order when it is read.
+             */
+            used_by_config_backups: number;
+            /**
+             * Format: int64
              * @description How many Meraki organizations are polled with it (ADR-164 Inc.6).
              *
              *     🚨 Not a binding that can be cleared: `meraki_orgs.credential_id` is `NOT NULL … ON DELETE

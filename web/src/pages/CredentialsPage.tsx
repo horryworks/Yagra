@@ -96,6 +96,7 @@ import {
   CREDENTIAL_GROUP_LABEL_KEYS,
   CREDENTIAL_TABLE_PREFIX,
   credentialGroupCounts,
+  clearedUsageLabel,
   integrationUsageLabel,
   isHeldByIntegration,
   kindLabel,
@@ -688,6 +689,7 @@ function DeleteCredentialModal({
       </Modal>
     );
   }
+  const cleared = clearedUsageLabel(cred, t);
   return (
     <ConfirmDeleteModal
       title={t('cred.delete.title')}
@@ -702,11 +704,9 @@ function DeleteCredentialModal({
         values={{ name: cred.name }}
         components={{ strong: <strong /> }}
       />{' '}
-      {/* The node count on its own, not `usageLabel`: this sentence is about the bindings the
-          delete clears, and by this point nothing else uses the credential. */}
-      {cred.used_by > 0
-        ? t('cred.delete.inUse', { usage: t('cred.usage.count', { count: cred.used_by }) })
-        : t('cred.delete.unused')}{' '}
+      {/* What the delete takes the credential away from (nodes, config backups), not `usageLabel`:
+          by this point no integration holds it — those refuse the delete instead. */}
+      {cleared ? t('cred.delete.inUse', { usage: cleared }) : t('cred.delete.unused')}{' '}
       {t('cred.delete.irreversible')}
     </ConfirmDeleteModal>
   );

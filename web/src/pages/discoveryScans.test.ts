@@ -366,6 +366,7 @@ describe('seeding the form from the last sweep (ADR-134)', () => {
     used_by: 0,
     used_by_meraki_orgs: 0,
     used_by_netbox_servers: 0,
+    used_by_config_backups: 0,
   });
   const mem = (over: Partial<DiscoveryScanMemory> = {}): DiscoveryScanMemory => ({
     targetSpec: '10.0.0.0/24',

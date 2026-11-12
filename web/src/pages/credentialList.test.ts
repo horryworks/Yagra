@@ -29,6 +29,7 @@ import {
   kindLabel,
   totalUsage,
   usageLabel,
+  clearedUsageLabel,
 } from './credentialList';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -45,7 +46,16 @@ const cred = (
   used_by = 0,
   used_by_meraki_orgs = 0,
   used_by_netbox_servers = 0,
-): CredentialSummary => ({ id, name, kind, used_by, used_by_meraki_orgs, used_by_netbox_servers });
+  used_by_config_backups = 0,
+): CredentialSummary => ({
+  id,
+  name,
+  kind,
+  used_by,
+  used_by_meraki_orgs,
+  used_by_netbox_servers,
+  used_by_config_backups,
+});
 
 // The Meraki key is the row that matters: no NODE references one (`used_by` is 0), and three
 // organizations are polled with it. Read through `used_by` alone it is indistinguishable from
@@ -165,7 +175,8 @@ describe('credential kind and usage labels', () => {
     expect(kindLabel('', t)).toBe('');
   });
 
-  const usage = (nodes: number, orgs = 0, servers = 0) => cred('x', 'x', 'x', nodes, orgs, servers);
+  const usage = (nodes: number, orgs = 0, servers = 0, backups = 0) =>
+    cred('x', 'x', 'x', nodes, orgs, servers, backups);
 
   it('gives "unused" its own phrase rather than counting to zero', () => {
     // Unused is the state an operator looks for when deciding what may be deleted.
@@ -187,6 +198,25 @@ describe('credential kind and usage labels', () => {
       'cred.usage.count=2 · cred.usage.merakiOrgs=3 · cred.usage.netboxServers=1',
     );
     expect(usageLabel(usage(2, 0, 1), t)).toBe('cred.usage.count=2 · cred.usage.netboxServers=1');
+  });
+
+  it('counts the config backups that try a CLI login, and lists them after the nodes (ADR-205 Inc.6)', () => {
+    // 🚨 The defect this replaced: a CLI login every backed-up node tried read "Unused".
+    expect(usageLabel(usage(0, 0, 0, 4), t)).toBe('cred.usage.configBackups=4');
+    expect(usageLabel(usage(2, 0, 1, 4), t)).toBe(
+      'cred.usage.count=2 · cred.usage.configBackups=4 · cred.usage.netboxServers=1',
+    );
+    expect(totalUsage(usage(0, 0, 0, 4))).toBe(4);
+    // A backup does not hold a login: the delete takes it out of their orders and is offered.
+    expect(isHeldByIntegration(usage(0, 0, 0, 4))).toBe(false);
+  });
+
+  it('names what a delete takes the credential away from, or nothing', () => {
+    expect(clearedUsageLabel(usage(0), t)).toBeNull();
+    expect(clearedUsageLabel(usage(3), t)).toBe('cred.usage.count=3');
+    expect(clearedUsageLabel(usage(0, 0, 0, 2), t)).toBe('cred.usage.configBackups=2');
+    // An integration is not part of it: it refuses the delete instead.
+    expect(clearedUsageLabel(usage(1, 2, 0, 2), t)).toBe('cred.usage.count=1 · cred.usage.configBackups=2');
   });
 
   it('is held by an integration only when an organization or a server uses it', () => {

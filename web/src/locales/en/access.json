@@ -56,6 +56,8 @@
       "unused": "Unused",
       "count_one": "{{count}} node",
       "count_other": "{{count}} nodes",
+      "configBackups_one": "{{count}} config backup",
+      "configBackups_other": "{{count}} config backups",
       "merakiOrgs_one": "{{count}} Meraki organization",
       "merakiOrgs_other": "{{count}} Meraki organizations",
       "netboxServers_one": "{{count}} NetBox server",

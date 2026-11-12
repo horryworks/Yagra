@@ -32252,7 +32252,8 @@
           "kind",
           "used_by",
           "used_by_meraki_orgs",
-          "used_by_netbox_servers"
+          "used_by_netbox_servers",
+          "used_by_config_backups"
         ],
         "properties": {
           "id": {
@@ -32269,6 +32270,11 @@
             "type": "integer",
             "format": "int64",
             "description": "How many **nodes** reference this credential. Counted at list time from\n`nodes.credential_id`. Deleting the credential clears those bindings (`ON DELETE SET NULL`).\n\n⚠️ Nodes only, and the name predates the two fields below: `0` here used to read as\n\"unused\" for a Meraki key that three organizations were being polled with."
+          },
+          "used_by_config_backups": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes switched on for config backup try this login (ADR-205 Inc.6): those naming\nit in their own order, and, for a CLI login, those with no order of their own, which try\nevery CLI login. A node switched off tries nothing and is not counted.\n\nLike `used_by`, not a refusal: a deleted login is dropped from an order when it is read."
           },
           "used_by_meraki_orgs": {
             "type": "integer",

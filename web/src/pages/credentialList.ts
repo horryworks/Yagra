@@ -31,11 +31,11 @@ import type { SortState, SortValues } from '../lib/tableSort';
 import type { CredentialSummary } from '../types/api';
 import { CREDENTIAL_GROUPS, credentialGroupOf, type CredentialGroup } from '../lib/credentialKinds';
 
-/** The three counts of what uses a credential. `used_by` is **nodes only** — the name predates the
- *  other two (ADR-164 Inc.6), and for a Meraki key it is always zero. */
+/** The four counts of what uses a credential. `used_by` is **nodes only** — the name predates the
+ *  other three (ADR-164 Inc.6), and for a Meraki key it is always zero. */
 type CredentialUsage = Pick<
   CredentialSummary,
-  'used_by' | 'used_by_meraki_orgs' | 'used_by_netbox_servers'
+  'used_by' | 'used_by_meraki_orgs' | 'used_by_netbox_servers' | 'used_by_config_backups'
 >;
 
 /** The fields this module reads. Generic over the row so the page passes real `CredentialSummary`
@@ -168,10 +168,27 @@ function countOf(n: number | undefined): number {
   return n ?? 0;
 }
 
-/** Everything that uses a credential: nodes, Meraki organizations and NetBox servers together.
- *  What the "Used by" column sorts on, and what decides whether a row reads as unused. */
+/** Everything that uses a credential: nodes, the config backups that try it, Meraki organizations
+ *  and NetBox servers together. What the "Used by" column sorts on, and what decides whether a row
+ *  reads as unused. */
 export function totalUsage(c: CredentialUsage): number {
-  return countOf(c.used_by) + countOf(c.used_by_meraki_orgs) + countOf(c.used_by_netbox_servers);
+  return (
+    countOf(c.used_by) +
+    countOf(c.used_by_config_backups) +
+    countOf(c.used_by_meraki_orgs) +
+    countOf(c.used_by_netbox_servers)
+  );
+}
+
+/** The uses a delete takes the credential away from without refusing: nodes polled with it, and
+ *  the config backups that try it (ADR-205 Inc.6), each as its own phrase. */
+function clearedUsageParts(c: CredentialUsage, t: TFunction): string[] {
+  const parts: string[] = [];
+  const nodes = countOf(c.used_by);
+  const backups = countOf(c.used_by_config_backups);
+  if (nodes > 0) parts.push(t('cred.usage.count', { count: nodes }));
+  if (backups > 0) parts.push(t('cred.usage.configBackups', { count: backups }));
+  return parts;
 }
 
 /** Whether an integration still uses this credential — a Meraki organization is polled with it, or
@@ -212,12 +229,16 @@ export function integrationUsageLabel(c: CredentialUsage, t: TFunction): string 
  *  not merely no node. It takes the row rather than a number so no caller can hand it `used_by`
  *  alone again: that read "Unused" for a Meraki key three organizations were being polled with. */
 export function usageLabel(c: CredentialUsage, t: TFunction): string {
-  const nodes = countOf(c.used_by);
-  const parts = [
-    ...(nodes > 0 ? [t('cred.usage.count', { count: nodes })] : []),
-    ...integrationUsageParts(c, t),
-  ];
+  const parts = [...clearedUsageParts(c, t), ...integrationUsageParts(c, t)];
   return parts.length === 0 ? t('cred.usage.unused') : parts.join(USAGE_SEPARATOR);
+}
+
+/** The `{{usage}}` of the delete's "they will lose this binding" sentence: what the delete takes the
+ *  credential away from, or null when nothing does. Integrations are left out — by the time this
+ *  sentence shows, none holds the credential (they refuse the delete instead). */
+export function clearedUsageLabel(c: CredentialUsage, t: TFunction): string | null {
+  const parts = clearedUsageParts(c, t);
+  return parts.length === 0 ? null : parts.join(USAGE_SEPARATOR);
 }
 
 /** How many rows each tab holds (ADR-205 Inc.1). */
