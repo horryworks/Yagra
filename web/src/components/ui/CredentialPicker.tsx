@@ -71,7 +71,7 @@ export function CredentialPicker({
       {options.length === 0 ? (
         <p className="cred-picker-empty">{emptyText ?? t('credPicker.empty')}</p>
       ) : (
-        <>
+        <div className="cred-picker-frame">
         <div className="cred-picker-head">
           {/* Spacers the width of the grip and the number, so the box sits over the rows' boxes. */}
           <span className="cred-picker-head-grip" aria-hidden="true" />
@@ -125,7 +125,7 @@ export function CredentialPicker({
             })}
           </ul>
         </SortableList>
-        </>
+        </div>
       )}
     </div>
   );
