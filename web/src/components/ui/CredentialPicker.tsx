@@ -8,12 +8,16 @@
 // numbered in that order beside the grip. The order of the unticked rows is this screen's alone:
 // it is not sent, so reopening the screen draws the selection on top again. Each caller puts its
 // own link to Credentials & secrets under the picker, where a new credential is added.
+//
+// Above the rows sits one "select all" box, in line with the rows' own boxes (ADR-256 Inc.2): it
+// ticks every row in the order drawn, or clears them all when every row is ticked.
 
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { CredentialSummary } from '../../types/api';
 import { arrangeRows, selectionOf, toggleRow } from './credentialSelection';
 import { DragGrip, SortableItem, SortableList } from './Sortable';
+import { SelectAllBox } from './SelectAllBox';
 import './CredentialPicker.css';
 
 interface CredentialPickerProps {
@@ -50,6 +54,10 @@ export function CredentialPicker({
     setHeld(rows);
     onChange(toggleRow(rows, selected, id));
   };
+  const tickAll = (next: ReadonlySet<string>) => {
+    setHeld(rows);
+    onChange(selectionOf(rows, next));
+  };
   const reorder = (next: string[]) => {
     setHeld(next);
     const order = selectionOf(next, ticked);
@@ -63,6 +71,24 @@ export function CredentialPicker({
       {options.length === 0 ? (
         <p className="cred-picker-empty">{emptyText ?? t('credPicker.empty')}</p>
       ) : (
+        <>
+        <div className="cred-picker-head">
+          {/* Spacers the width of the grip and the number, so the box sits over the rows' boxes. */}
+          <span className="cred-picker-head-grip" aria-hidden="true" />
+          <span className="cred-picker-row-n" aria-hidden="true" />
+          <SelectAllBox
+            visibleKeys={rows}
+            selected={ticked}
+            onChange={tickAll}
+            disabled={disabled}
+            className="cred-picker-pick"
+          >
+            <span className="cred-picker-head-label">{t('select.all')}</span>
+            <span className="cred-picker-head-count mono">
+              {t('select.count', { n: selected.length, total: rows.length })}
+            </span>
+          </SelectAllBox>
+        </div>
         <SortableList ids={rows} onReorder={reorder} nameOf={nameOf}>
           <ul className="cred-picker-list">
             {rows.map((id) => {
@@ -99,6 +125,7 @@ export function CredentialPicker({
             })}
           </ul>
         </SortableList>
+        </>
       )}
     </div>
   );

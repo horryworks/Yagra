@@ -28,6 +28,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, Select } from '../components/ui/Field';
 import { FieldGroup, Fields } from '../components/ui/FormLayout';
+import { SelectAllBox } from '../components/ui/SelectAllBox';
 import { Callout } from '../components/ui/Section';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
@@ -602,6 +603,16 @@ function ChangeScopeModal({
             <p className="muted">{t('users.scopeModal.noGroups')}</p>
           ) : (
             <div className="users-scope-list">
+              {/* Every folder, or none (ADR-256 decision 10). None ticked means the whole fleet,
+                  which the line under the list says. */}
+              <SelectAllBox
+                visibleKeys={groups.map((g) => g.id)}
+                selected={new Set(selected)}
+                onChange={(next) => setSelected(groups.map((g) => g.id).filter((id) => next.has(id)))}
+                className="users-scope-row users-scope-head"
+              >
+                <span className="users-scope-name">{t('common:select.all')}</span>
+              </SelectAllBox>
               {groups.map((g) => (
                 <label key={g.id} className="users-scope-row">
                   <input

@@ -179,16 +179,30 @@ test.describe('a node not backed up yet', () => {
     expect((await put).postDataJSON()).toMatchObject({ login_order: [SECOND, LOGIN] });
   });
 
-  test('Select all starts with every CLI login, sent as the default, and SSH only goes with it', async ({
+  test("the picker's select-all row ticks every login in the order drawn, and SSH only goes with it", async ({
     page,
   }) => {
+    // ADR-256 decision 9: the "Select all" button that sent `null` is gone; every login at once is
+    // the picker's own box, and it sends the rows as drawn.
     await page.goto(`/nodes/${NODE_ID}?tab=config`);
-    await page.getByRole('button', { name: 'Select all' }).click();
+    await expect(page.getByRole('button', { name: 'Select all' })).toHaveCount(0);
+    const all = page.locator('.cfgb-settings .cred-picker-head').getByRole('checkbox');
+    const head = page.locator('.cfgb-settings .cred-picker-head');
+    // The box sits over the rows' boxes, not at the edge of the list.
+    const headX = (await all.boundingBox())!.x;
+    const rowX = (await page.locator('.cfgb-settings .cred-picker-row').first().getByRole('checkbox').boundingBox())!.x;
+    expect(Math.abs(headX - rowX)).toBeLessThanOrEqual(1);
+    await all.click();
+    await expect(head).toContainText('2 / 2');
+    // From "all" the same box clears every login, and ticks them all again.
+    await all.click();
+    await expect(head).toContainText('0 / 2');
+    await all.click();
     await expect(page.locator('.cfgb-picked')).toHaveText('2 selected');
     await page.locator('.cfgb-settings').getByRole('checkbox', { name: 'SSH only' }).check();
     const put = page.waitForRequest(isPut('/config-backup'));
     await page.getByRole('button', { name: 'Start backup' }).click();
-    expect((await put).postDataJSON()).toMatchObject({ enabled: true, login_order: null, input: 'ssh' });
+    expect((await put).postDataJSON()).toMatchObject({ enabled: true, login_order: [LOGIN, SECOND], input: 'ssh' });
   });
 });
 

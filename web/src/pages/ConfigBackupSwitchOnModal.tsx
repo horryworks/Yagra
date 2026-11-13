@@ -11,7 +11,6 @@ import { Modal } from '../components/ui/Modal';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Callout } from '../components/ui/Section';
-import { Button } from '../components/ui/Button';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { api } from '../services/api';
 import { done } from '../lib/submitState';
@@ -33,15 +32,16 @@ interface Props {
 export function ConfigBackupSwitchOnModal({ ids, skipped, keeping, onClose, onSaved }: Props) {
   const { t } = useTranslation('nodes');
   const [sshOnly, setSshOnly] = useState(false);
-  // `null` is every CLI login in the try order, sent as such so a login added later is tried too.
-  const [order, setOrder] = useState<string[] | null>([]);
+  // The logins picked, in order. Every login at once is the picker's "select all" row (ADR-256
+  // decision 9); the API's `null` (every CLI login, the try order) is no longer offered here.
+  const [order, setOrder] = useState<string[]>([]);
   const form = useSubmit({ errorFallback: t('config.err.save'), onDone: onSaved });
   const creds = useLoad(() => api.listCredentials(), [], {
     initial: [],
     errorFallback: t('config.err.logins'),
   });
   const logins = useMemo(() => creds.data.filter((c) => isCliCredentialKind(c.kind)), [creds.data]);
-  const picked = order ?? logins.map((c) => c.id);
+  const picked = order;
 
   function save() {
     form.submit(async () => {
@@ -71,10 +71,7 @@ export function ConfigBackupSwitchOnModal({ ids, skipped, keeping, onClose, onSa
     >
       <Fields>
         <CheckField checked={sshOnly} onChange={setSshOnly} label={t('config.input.ssh')} />
-        <FieldGroup
-          label={t('config.logins')}
-          action={order !== null && <Button onClick={() => setOrder(null)}>{t('config.selectAll')}</Button>}
-        >
+        <FieldGroup label={t('config.logins')}>
           <CredentialPicker
             options={logins}
             selected={picked}

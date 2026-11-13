@@ -4,7 +4,8 @@
 // four different ways to select everything and one had none.
 //
 // What these checks cannot see is said beside each. A hand-built table (Discovery's candidates)
-// uses `SelectAllBox` directly; nothing here forces that, the rule in `ui-conventions.md` does.
+// and a list of boxes (the credential picker, the folder scopes, Rediscover - Inc.2) use
+// `SelectAllBox` directly; nothing here forces that, the rule in `ui-conventions.md` does.
 
 import { describe, expect, it } from 'vitest';
 import { SRC, codeOnly, readSources } from './testSupport/sources';
@@ -16,10 +17,6 @@ const CHECKBOX_BESIDE_A_TABLE: Record<string, string> = {
   'pages/UsersPage.tsx': "the user dialog's folder-scope list, not a table column",
 };
 
-/** Strings named like a "select all" that are not one, with what they really do. */
-const NOT_A_SELECT_ALL: Record<string, string> = {
-  'nodes: config.selectAll': 'puts the CLI logins back to "try every one, in order" (ADR-240); a mode, not a selection',
-};
 
 describe('a table selects its rows through DataTable (ADR-256)', () => {
   const sources = readSources(SRC);
@@ -50,6 +47,6 @@ describe('a table selects its rows through DataTable (ADR-256)', () => {
         .filter(() => ns !== 'common')
         .map((k) => `${ns}: ${k}`),
     );
-    expect(offenders.sort()).toEqual(Object.keys(NOT_A_SELECT_ALL).sort());
+    expect(offenders).toEqual([]);
   });
 });

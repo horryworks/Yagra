@@ -167,7 +167,7 @@ describe('starting from picked logins (ADR-240 Inc.2)', () => {
     expect(form.order).toEqual([]);
     expect(canStartWith(form, v)).toBe(false);
     expect(canStartWith({ ...form, order: ['b'] }, v)).toBe(true);
-    // "Select all" is every CLI login, still sent as null.
+    // A node stored with null (every CLI login) can still start, and is sent as stored.
     expect(canStartWith({ ...form, order: null }, v)).toBe(true);
     expect(bodyOf({ ...form, order: null }, true).login_order).toBeNull();
   });

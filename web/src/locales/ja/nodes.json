@@ -1270,7 +1270,6 @@
     "noLogins": "保存済みの CLI ログインがありません。",
     "picked_one": "{{count}} 個を選択",
     "picked_other": "{{count}} 個を選択",
-    "selectAll": "すべて選ぶ",
     "loginIndex": "ログイン {{n}}",
     "loginGone": "削除されたログイン",
     "state": {

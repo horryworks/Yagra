@@ -49,6 +49,7 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { Field, TextInput, Select, FieldError } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
+import { SelectAllBox } from '../components/ui/SelectAllBox';
 import { Page, Stack } from '../components/ui/Page';
 import { InfoPress } from '../components/ui/InfoTip';
 import { EmptyState } from '../components/ui/EmptyState';
@@ -384,6 +385,16 @@ function CreateTokenModal({
           <FieldGroup label={t('field.scope')}>
             {groups.length > 0 && (
               <div className="users-scope-list">
+                {/* Every folder, or none (ADR-256 decision 10). None ticked means the whole
+                    fleet, which the line under the list says. */}
+                <SelectAllBox
+                  visibleKeys={groups.map((g) => g.id)}
+                  selected={new Set(scopeGroups)}
+                  onChange={(next) => setScopeGroups(groups.map((g) => g.id).filter((id) => next.has(id)))}
+                  className="users-scope-row users-scope-head"
+                >
+                  <span className="users-scope-name">{t('common:select.all')}</span>
+                </SelectAllBox>
                 {groups.map((g) => (
                   <label key={g.id} className="users-scope-row">
                     <input

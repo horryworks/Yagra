@@ -489,15 +489,9 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               />
               {canStart && (
                 <div className="cfgb-logins">
-                  <FieldGroup
-                    label={t('config.logins')}
-                    action={
-                      // `null` is every CLI login in the try order, which also takes in one added later.
-                      form.order !== null && (
-                        <Button onClick={() => setForm({ ...form, order: null })}>{t('config.selectAll')}</Button>
-                      )
-                    }
-                  >
+                  {/* Every login at once is the picker's own "select all" row (ADR-256 decision 9). A
+                      node stored with `null` (every CLI login, the try order) shows all ticked. */}
+                  <FieldGroup label={t('config.logins')}>
                     <CredentialPicker
                       options={logins}
                       selected={pickedLogins(form, v)}

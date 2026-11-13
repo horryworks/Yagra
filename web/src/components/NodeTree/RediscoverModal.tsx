@@ -17,6 +17,7 @@ import { ScreenLink } from '../ui/ScreenLink';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Stack } from '../ui/Page';
 import { Callout } from '../ui/Section';
+import { SelectAllBox } from '../ui/SelectAllBox';
 import {
   applicable,
   applyBody,
@@ -237,7 +238,15 @@ export function RediscoverModal({
             )}
             <div className="rediscover-grid" role="table">
               <div className="rediscover-head" role="row">
-                <span role="columnheader" />
+                {/* Every row that can be applied, or none (ADR-256 decision 10). */}
+                <span role="columnheader">
+                  <SelectAllBox
+                    visibleKeys={canApply}
+                    selected={ticked}
+                    onChange={(next) => setChosen(new Set(canApply.filter((f) => next.has(f))))}
+                    disabled={form.busy}
+                  />
+                </span>
                 <span role="columnheader">{t('rediscover.col.field')}</span>
                 <span role="columnheader">{t('rediscover.col.current')}</span>
                 <span role="columnheader">{t('rediscover.col.found')}</span>

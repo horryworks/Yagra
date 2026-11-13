@@ -1280,7 +1280,6 @@
     "noLogins": "No stored CLI logins yet.",
     "picked_one": "{{count}} selected",
     "picked_other": "{{count}} selected",
-    "selectAll": "Select all",
     "loginIndex": "Login {{n}}",
     "loginGone": "A deleted login",
     "state": {

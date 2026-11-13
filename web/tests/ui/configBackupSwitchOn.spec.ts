@@ -50,7 +50,7 @@ test.use({
 
 test('the dialog offers the CLI logins unticked and sends the ones picked', async ({ page, errors }) => {
   await page.goto('/nodes/config-backups');
-  await page.getByRole('checkbox', { name: 'Select all' }).click();
+  await page.locator('.dt-head').getByRole('checkbox', { name: 'Select all' }).click();
   await page.getByRole('button', { name: 'Turn on 2' }).click();
 
   const dialog = page.getByRole('dialog');
@@ -77,15 +77,16 @@ test('the dialog offers the CLI logins unticked and sends the ones picked', asyn
   expect(errors.uncaught).toEqual([]);
 });
 
-test('Select all in the dialog sends every CLI login as the default', async ({ page }) => {
+test("the dialog's select-all row sends every CLI login in the order drawn", async ({ page }) => {
   await page.goto('/nodes/config-backups');
-  await page.getByRole('checkbox', { name: 'Select all' }).click();
+  await page.locator('.dt-head').getByRole('checkbox', { name: 'Select all' }).click();
   await page.getByRole('button', { name: 'Turn on 2' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: 'Select all' }).click();
+  await expect(dialog.getByRole('button', { name: 'Select all' })).toHaveCount(0);
+  await dialog.locator('.cred-picker-head').getByRole('checkbox').click();
   const sent = page.waitForRequest(
     (r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/v1/config-backups/switch',
   );
   await dialog.getByRole('button', { name: 'Turn on 2' }).click();
-  expect((await sent).postDataJSON()).toMatchObject({ login_order: null });
+  expect((await sent).postDataJSON()).toMatchObject({ login_order: [LOGIN, SECOND] });
 });
