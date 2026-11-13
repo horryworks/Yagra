@@ -184,5 +184,11 @@
     "over": "{{name}}: {{n}} of {{total}}.",
     "dropped": "Dropped {{name}} at {{n}} of {{total}}.",
     "cancelled": "Cancelled. {{name}} is back at {{n}} of {{total}}."
+  },
+  "select": {
+    "all": "Select all",
+    "column": "Select",
+    "row": "Select {{name}}",
+    "count": "{{n}} / {{total}}"
   }
 }

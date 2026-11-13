@@ -595,7 +595,6 @@
     },
     "devices": {
       "cols": {
-        "select": "選択",
         "name": "名前",
         "model": "モデル",
         "network": "ネットワーク",
@@ -627,9 +626,6 @@
       "notWatched": "監視対象外",
       "underNetwork": "{{folder}} ▸ {{network}}",
       "treeRoot": "ツリー直下",
-      "selectDevice": "{{name}} を選択",
-      "selectAll": "インポートできるデバイスをすべて選択",
-      "clearSelection": "選択を外す",
       "noun_other": "デバイス",
       "empty": "デバイスはまだありません。最初の同期が成功すると表示されます。"
     },

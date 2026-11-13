@@ -20,6 +20,8 @@ import type { TableId } from '../../lib/tableIds';
 import { ColumnResizeHandles, ColumnWidthReset } from './ColumnResizeHandles';
 import { useColumnWidths } from './useColumnWidths';
 import { SortableItem, SortableList } from './Sortable';
+import { SelectAllBox } from './SelectAllBox';
+import { toggleOne } from '../../lib/selectAll';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -145,6 +147,23 @@ interface Props<T> {
     /** While a save is in flight: the grips stay drawn but do not start a drag. */
     disabled?: boolean;
   };
+  /** Rows the operator ticks for a bulk action (ADR-256). The table draws the first column itself:
+   *  a box per row and, over them, one box that selects every row on screen or clears them all.
+   *  A screen never writes its own checkbox column or its own "select all" — `selectAll.test.ts`
+   *  fails the build for either. Keys are `rowKey`. On a phone the box sits in a row above the
+   *  cards, because a card repeats the header and a box there would select every row from any
+   *  card. ⚠️ A `renderCard` must draw the row's own box itself; none of the selecting tables
+   *  has one today. */
+  selection?: {
+    selected: ReadonlySet<string>;
+    onChange: (next: Set<string>) => void;
+    /** A row this answers false for draws no box and is never selected by the header. */
+    isSelectable?: (row: T) => boolean;
+    /** What a screen reader calls the row's box. */
+    nameOf: (row: T) => string;
+    /** While a bulk action is in flight. */
+    disabled?: boolean;
+  };
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -152,7 +171,7 @@ const CARD_PX = 110; // default estimate for a mobile card before it is measured
 
 export function DataTable<T>({
   rows,
-  columns,
+  columns: ownColumns,
   tableId,
   rowKey,
   onReachEnd,
@@ -172,8 +191,55 @@ export function DataTable<T>({
   expandedKey,
   autoRowHeight,
   sortable,
+  selection,
 }: Props<T>) {
   const { t } = useTranslation();
+  // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
+  // grid can't fit ~390px. A custom `renderCard` wins; otherwise a generic labeled card is built
+  // from the columns. Desktop is byte-for-byte its previous grid self.
+  const cardMode = useViewportMode() === 'mobile';
+  // The rows the header box acts on: on screen (the caller has already filtered `rows`) and
+  // tickable (ADR-256 decision 2).
+  const isSelectable = selection?.isSelectable;
+  const selectableKeys = useMemo(
+    () => (selection ? rows.filter((r) => isSelectable?.(r) ?? true).map(rowKey) : []),
+    [selection, rows, isSelectable, rowKey],
+  );
+  // The selection column is an ordinary first column, so the grids, the widths and the generic
+  // card all treat it like any other. Its header is the box on a desktop and plain text on a
+  // phone, where the box moves above the cards.
+  const columns = useMemo<Column<T>[]>(() => {
+    if (!selection) return ownColumns;
+    const select: Column<T> = {
+      key: '__select',
+      header: cardMode ? (
+        t('select.column')
+      ) : (
+        <SelectAllBox
+          visibleKeys={selectableKeys}
+          selected={selection.selected}
+          onChange={selection.onChange}
+          disabled={selection.disabled}
+        />
+      ),
+      width: '40px',
+      render: (row) =>
+        (selection.isSelectable?.(row) ?? true) ? (
+          <input
+            type="checkbox"
+            className="dt-select-box"
+            aria-label={t('select.row', { name: selection.nameOf(row) })}
+            checked={selection.selected.has(rowKey(row))}
+            disabled={selection.disabled}
+            onChange={(e) =>
+              selection.onChange(toggleOne(selection.selected, rowKey(row), e.target.checked))
+            }
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : null,
+    };
+    return [select, ...ownColumns];
+  }, [selection, ownColumns, cardMode, selectableKeys, rowKey, t]);
   const scrollRef = useRef<HTMLDivElement>(null);
   // ⚠️ ONE const, used by THREE grids: `.dt-head`, `.dt-filters` and every `.dt-row`. If they ever
   // disagree the filter controls sit under the wrong columns, and nothing catches it — `.tsx` tests
@@ -198,11 +264,6 @@ export function DataTable<T>({
   // that already fit are untouched.
   const minWidth = minTableWidth(sized);
   const widthStyle = minWidth > 0 ? { minWidth: `${minWidth}px` } : undefined;
-  // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
-  // grid can't fit ~390px. A custom `renderCard` wins; otherwise a generic labeled card is built
-  // from the columns. Desktop is byte-for-byte its previous grid self.
-  const cardMode = useViewportMode() === 'mobile';
-
   // Heights are measured whenever they can vary — mobile cards always, an expandable table because
   // the open row is several times a closed one, and an `autoRowHeight` table because one of its
   // cells stacks. Elsewhere the fixed 44px estimate stands, so the existing tables keep the cheaper
@@ -336,6 +397,25 @@ export function DataTable<T>({
           })}
           <ColumnResizeHandles control={resize} columns={columns} labels={filterLabels} />
           <ColumnWidthReset control={resize} columnCount={columns.length} />
+        </div>
+      )}
+      {selection && cardMode && rows.length > 0 && (
+        <div className="dt-selectall">
+          <SelectAllBox
+            visibleKeys={selectableKeys}
+            selected={selection.selected}
+            onChange={selection.onChange}
+            disabled={selection.disabled}
+            className="dt-selectall-label"
+          >
+            <span>{t('select.all')}</span>
+            <span className="dt-selectall-count">
+              {t('select.count', {
+                n: selectableKeys.filter((k) => selection.selected.has(k)).length,
+                total: selectableKeys.length,
+              })}
+            </span>
+          </SelectAllBox>
         </div>
       )}
       {/* The scroller carries the same floor as the two grids above it, or the rows would stop

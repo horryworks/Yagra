@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Every table whose rows you tick has one "select all" box, in the header of the tick column.** It selects every row on screen that can be ticked (rows hidden by a column filter are left alone); when some are ticked it shows a dash, and when all are ticked a press clears the selection, hidden rows included. On a phone the box sits in a row above the cards with the count. This replaces the toolbar's **Select all** on Reclassify, **Select all shown** and **Unpick** on Config backups, and **Select all importable** and **Clear selection** on a Meraki organization's devices and on Duplicates; Discovery's results table, which had none, gains it. Duplicates keeps **Select all but the suggested keepers** (ADR-256).
+
 ## v0.3.79 — Start config backup with the CLI logins you pick, and put lists in order by dragging the grip at their left
 
 ### Improvements

@@ -228,7 +228,7 @@
       "why": "before ADR-246"
     },
     "dashboard/WidgetFrame.css": {
-      "lines": 329,
+      "lines": 319,
       "why": "before ADR-246"
     },
     "dashboard/widgets/widgets.css": {
@@ -272,7 +272,7 @@
       "why": "before ADR-246"
     },
     "pages/ConfigBackupsPage.css": {
-      "lines": 61,
+      "lines": 55,
       "why": "before ADR-246"
     },
     "pages/ConfigBundlePage.css": {
@@ -280,7 +280,7 @@
       "why": "before ADR-246"
     },
     "pages/CredentialsPage.css": {
-      "lines": 75,
+      "lines": 46,
       "why": "before ADR-246"
     },
     "pages/DiscoveryPage.css": {
@@ -364,7 +364,7 @@
       "why": "before ADR-246"
     },
     "pages/ReclassifyPage.css": {
-      "lines": 27,
+      "lines": 20,
       "why": "before ADR-246"
     },
     "pages/RelocationPage.css": {

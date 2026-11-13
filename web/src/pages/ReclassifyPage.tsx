@@ -45,33 +45,9 @@ export function ReclassifyPage() {
   }, [view]);
 
   const rows = useMemo(() => view?.proposals ?? [], [view]);
-  const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.node_id));
-
-  const toggle = (id: string, on: boolean) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
 
   const columns = useMemo<Column<ReclassifyProposal>[]>(() => {
     const cols: Column<ReclassifyProposal>[] = [];
-    if (canConfig) {
-      cols.push({
-        key: 'select',
-        header: t('reclassify.cols.select'),
-        width: '70px',
-        render: (r) => (
-          <input
-            type="checkbox"
-            aria-label={t('reclassify.selectNode', { name: r.node_name })}
-            checked={selected.has(r.node_id)}
-            onChange={(e) => toggle(r.node_id, e.target.checked)}
-          />
-        ),
-      });
-    }
     cols.push(
       {
         key: 'node',
@@ -134,7 +110,7 @@ export function ReclassifyPage() {
       },
     );
     return cols;
-  }, [t, canConfig, selected]);
+  }, [t]);
 
   const lock = () => {
     const ids = rows.filter((r) => selected.has(r.node_id)).map((r) => r.node_id);
@@ -180,18 +156,6 @@ export function ReclassifyPage() {
     <>
       <LoadGate load={proposals} permission="manage_config">
         <TableToolbar>
-          {canConfig && rows.length > 0 && (
-            <label className="reclassify-select-all">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                onChange={(e) =>
-                  setSelected(e.target.checked ? new Set(rows.map((r) => r.node_id)) : new Set())
-                }
-              />
-              <span>{t('reclassify.selectAll')}</span>
-            </label>
-          )}
           <TableSpacer />
           {/* Locked and not-yet-identified nodes are counted but never listed, so those two counts
               open the reason when pressed — the list cannot show a row for them. */}
@@ -238,6 +202,11 @@ export function ReclassifyPage() {
           rows={rows}
           columns={columns}
           rowKey={(r) => r.node_id}
+          selection={
+            canConfig
+              ? { selected, onChange: setSelected, nameOf: (r) => r.node_name, disabled: busy }
+              : undefined
+          }
           loading={loading}
           empty={t(emptyState(view).key, { count: emptyState(view).count })}
         />

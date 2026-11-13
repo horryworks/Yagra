@@ -65,31 +65,8 @@ export function DuplicateNodesPage() {
   const ignored = ignoredShown(view);
   const empty = emptyState(view);
 
-  const toggle = (id: string, on: boolean) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-
   const columns = useMemo<Column<DuplicateRow>[]>(() => {
     const cols: Column<DuplicateRow>[] = [];
-    if (canConfig) {
-      cols.push({
-        key: 'select',
-        header: t('duplicates.cols.select'),
-        width: '70px',
-        render: (r) => (
-          <input
-            type="checkbox"
-            aria-label={t('duplicates.selectNode', { name: r.member.node_name })}
-            checked={selected.has(r.member.node_id)}
-            onChange={(e) => toggle(r.member.node_id, e.target.checked)}
-          />
-        ),
-      });
-    }
     cols.push(
       {
         key: 'group',
@@ -191,7 +168,7 @@ export function DuplicateNodesPage() {
       },
     );
     return cols;
-  }, [t, canConfig, selected, groupName]);
+  }, [t, groupName]);
 
   return (
     <Page layout="list">
@@ -205,11 +182,6 @@ export function DuplicateNodesPage() {
           {canConfig && rows.length > 0 && (
             <Button variant="outline" onClick={() => setSelected(selectAllButKeepers(view))}>
               {t('duplicates.selectKeepers')}
-            </Button>
-          )}
-          {canConfig && selected.size > 0 && (
-            <Button variant="outline" onClick={() => setSelected(new Set())}>
-              {t('duplicates.clearSelection')}
             </Button>
           )}
           <TableSpacer />
@@ -269,6 +241,11 @@ export function DuplicateNodesPage() {
           rows={rows}
           columns={columns}
           rowKey={(r) => r.member.node_id}
+          selection={
+            canConfig
+              ? { selected, onChange: setSelected, nameOf: (r) => r.member.node_name }
+              : undefined
+          }
           rowClass={(r) => `dup-shade-${r.shade}`}
           loading={loading}
           empty={t(empty.key, { count: empty.count })}

@@ -139,13 +139,10 @@
   },
   "reclassify": {
     "truncated": "Showing the first {{shown}} of {{total}}.",
-    "selectAll": "Select all",
-    "selectNode": "Select {{name}}",
     "apply": "Apply to selected",
     "lock": "Keep current profile",
     "noRule": "No rule matched — Generic SNMP",
     "cols": {
-      "select": "Select",
       "node": "Node",
       "current": "Current profile",
       "suggested": "Suggested profile",
@@ -185,14 +182,11 @@
     "counts": "{{total}} groups ({{confident}} likely, {{possible}} to check) · {{scanned}} nodes compared",
     "truncated": "Showing the first {{shown}} of {{total}} groups. Delete some and reload to see the rest.",
     "selectKeepers": "Select all but the suggested keepers",
-    "clearSelection": "Clear selection",
-    "selectNode": "Select {{name}}",
     "delete_one": "Delete {{count}} selected node",
     "delete_other": "Delete {{count}} selected nodes",
     "keep": "Suggested keep",
     "root": "Top level",
     "cols": {
-      "select": "Select",
       "group": "Group",
       "evidence": "Evidence",
       "node": "Node",

@@ -231,17 +231,6 @@ export function networksToWatchOnImport(
   ].sort();
 }
 
-/** Every serial in `devices` that can be imported — what "Select all importable" ticks.
- *
- *  The page hands it the rows the filter row is *showing*, not the whole list, so "State: New" +
- *  "select all" is how an operator says "import everything new" without meaning the 400 devices
- *  they deleted on purpose. */
-export function importableSerials(
-  devices: readonly Pick<MerakiDevice, 'serial' | 'state' | 'filing'>[],
-): string[] {
-  return devices.filter(isImportable).map((d) => d.serial);
-}
-
 /** The selection, minus every serial that can no longer be imported — what is kept across a
  *  reload. Returns the same set when nothing dropped, so a caller can hand it to `setState`
  *  without causing a render. */

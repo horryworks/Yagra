@@ -17,7 +17,6 @@ import {
   deviceDestination,
   deviceSearchText,
   devicesToImport,
-  importableSerials,
   isImportable,
   merakiDeviceFilterColumns,
   merakiDeviceFilters,
@@ -276,15 +275,6 @@ describe('the networks an import starts watching (ADR-164 決定 16)', () => {
     // There, watching a network makes the next sync import every other device in it: two devices
     // picked by hand would end as the whole site. The page's notice offers that choice instead.
     expect(networksToWatchOnImport(chosen('A', 'B', 'D'), list, true)).toEqual([]);
-  });
-});
-
-describe('importableSerials', () => {
-  it('ticks only the rows that have a checkbox', () => {
-    // "Select all" over a list that is mostly nodes must not put a node's serial in the selection:
-    // the count on the Import button is the selection's size.
-    const rows = MERAKI_DEVICE_STATES.map((state) => device({ serial: state, state }));
-    expect(importableSerials(rows)).toEqual(['new', 'never_online', 'deleted']);
   });
 });
 

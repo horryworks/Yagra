@@ -1317,7 +1317,6 @@
     },
     "list": {
       "cols": {
-        "pick": "Select",
         "node": "Node",
         "state": "State",
         "last": "Last attempt",
@@ -1343,11 +1342,8 @@
         "never": "Nothing to set up.",
         "all": "Nothing to back up."
       },
-      "pickAll": "Select all shown",
-      "pick": "Select {{name}}",
       "picked_one": "{{count}} selected",
       "picked_other": "{{count}} selected",
-      "unpick": "Clear selection",
       "switchOne": "Back up {{name}}",
       "switchOnN_one": "Turn on {{count}}",
       "switchOnN_other": "Turn on {{count}}",

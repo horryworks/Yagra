@@ -136,13 +136,10 @@
   },
   "reclassify": {
     "truncated": "{{total}} 台のうち先頭の {{shown}} 台を表示しています。",
-    "selectAll": "すべて選択",
-    "selectNode": "{{name}} を選択",
     "apply": "選んだノードに当てる",
     "lock": "今のプロファイルで固定",
     "noRule": "当たるルールなし（Generic SNMP）",
     "cols": {
-      "select": "選択",
       "node": "ノード",
       "current": "今のプロファイル",
       "suggested": "判定結果",
@@ -182,13 +179,10 @@
     "counts": "{{total}} 組（重複の可能性が高い {{confident}}・要確認 {{possible}}）· 比べたノード {{scanned}} 台",
     "truncated": "{{total}} 組のうち先頭の {{shown}} 組を表示しています。削除して読み直すと続きが出ます。",
     "selectKeepers": "残す候補以外をすべて選択",
-    "clearSelection": "選択を外す",
-    "selectNode": "{{name}} を選択",
     "delete_other": "選んだ {{count}} 台を削除",
     "keep": "残す候補",
     "root": "最上位",
     "cols": {
-      "select": "選択",
       "group": "組",
       "evidence": "根拠",
       "node": "ノード",

@@ -2,13 +2,6 @@
 /* Nodes ▸ Reclassify (ADR-140). The table itself is DataTable's; these are the toolbar's two
    additions and the lines around the table. */
 
-.reclassify-select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  cursor: pointer;
-}
-
 .reclassify-counts {
   color: var(--text-secondary);
   white-space: nowrap;

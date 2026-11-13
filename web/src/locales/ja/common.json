@@ -175,5 +175,11 @@
     "over": "{{name}}: {{total}} 個中 {{n}} 番目。",
     "dropped": "{{name}} を {{total}} 個中 {{n}} 番目に置きました。",
     "cancelled": "やめました。{{name}} は {{total}} 個中 {{n}} 番目です。"
+  },
+  "select": {
+    "all": "すべて選択",
+    "column": "選択",
+    "row": "{{name}} を選択",
+    "count": "{{n}} / {{total}}"
   }
 }

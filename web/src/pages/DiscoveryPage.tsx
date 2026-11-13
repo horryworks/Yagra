@@ -118,6 +118,7 @@ import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
 import { nodeHref } from '../lib/entityHref';
+import { SelectAllBox } from '../components/ui/SelectAllBox';
 import './DiscoveryPage.css';
 
 /** A stable empty list, so `candidates` keeps its identity between renders when there is no scan
@@ -712,6 +713,23 @@ export function DiscoveryPage() {
   const patchRow = (addr: string, patch: Partial<RowState>) =>
     setRowState((cur) => ({ ...cur, [addr]: { ...cur[addr], ...patch } }));
 
+  // The header's "select all" (ADR-256): the candidates the filters leave on screen that can be
+  // ticked — an address already in the tree cannot.
+  const tickable = shownCandidates
+    .filter((c) => rowState[c.address] && !existing.has(c.address))
+    .map((c) => c.address);
+  const ticked = new Set(
+    Object.entries(rowState)
+      .filter(([addr, r]) => r.selected && !existing.has(addr))
+      .map(([addr]) => addr),
+  );
+  const setTicked = (next: ReadonlySet<string>) =>
+    setRowState((cur) =>
+      Object.fromEntries(
+        Object.entries(cur).map(([addr, r]) => [addr, { ...r, selected: next.has(addr) }]),
+      ),
+    );
+
   /** Ask the server where the candidates it has not answered for yet would be filed.
    *
    * ⚠️ Only the **new** addresses, which is what makes this safe to run beside a 2s candidate
@@ -1247,7 +1265,9 @@ export function DiscoveryPage() {
           />
           <div className="disco-table">
             <div className="disco-head">
-              <div className="disco-h" />
+              <div className="disco-h">
+                <SelectAllBox visibleKeys={tickable} selected={ticked} onChange={setTicked} />
+              </div>
               {/* Folder, name and profile carry no funnel: they are the operator's *input* for the
                   import about to happen, and filtering a field you are typing into would take the
                   row out from under the cursor. The credential funnel filters on what the scan

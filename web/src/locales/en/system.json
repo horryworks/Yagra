@@ -614,7 +614,6 @@
     },
     "devices": {
       "cols": {
-        "select": "Select",
         "name": "Name",
         "model": "Model",
         "network": "Network",
@@ -646,9 +645,6 @@
       "notWatched": "not watched",
       "underNetwork": "{{folder}} ▸ {{network}}",
       "treeRoot": "Tree root",
-      "selectDevice": "Select {{name}}",
-      "selectAll": "Select all importable",
-      "clearSelection": "Clear selection",
       "noun_one": "device",
       "noun_other": "devices",
       "empty": "No devices yet. They appear after the first successful sync."

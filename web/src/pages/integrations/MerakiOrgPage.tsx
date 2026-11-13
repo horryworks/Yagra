@@ -50,7 +50,6 @@ import {
   deviceDestination,
   devicesToImport,
   importRequestDevices,
-  importableSerials,
   isImportable,
   merakiDeviceFilterColumns,
   modelSubLine,
@@ -303,41 +302,13 @@ export function MerakiOrgPage() {
     reloadAll,
   );
 
-  const toggle = useCallback((serial: string, on: boolean) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(serial);
-      else next.delete(serial);
-      return next;
-    });
-  }, []);
-
   const orgName = org?.name ?? '';
   // What the list is filtered BY is held apart from what the table draws: the drawn columns change
-  // identity on every tick (the checkbox cell reads `selected`), and a filter hook holding them
-  // would re-filter and re-count every device per tick (`merakiDeviceFilterColumns`).
+  // identity whenever their labels do, and a filter hook holding them would re-filter and re-count
+  // every device each time (`merakiDeviceFilterColumns`).
   const filterColumns = useMemo(() => merakiDeviceFilterColumns(merakiDeviceFilters(t)), [t]);
   const columns = useMemo(() => {
     const cols: Column<MerakiDevice>[] = [];
-    if (canConfig) {
-      cols.push({
-        key: 'select',
-        header: t('meraki.devices.cols.select'),
-        width: '64px',
-        // Only a row that can be imported has anything to tick. A node gets an empty cell rather
-        // than a disabled box: a control nobody can use is not drawn (ADR-056).
-        render: (d) =>
-          isImportable(d) ? (
-            <input
-              type="checkbox"
-              aria-label={t('meraki.devices.selectDevice', { name: d.name || d.serial })}
-              checked={selected.has(d.serial)}
-              disabled={busy}
-              onChange={(e) => toggle(d.serial, e.target.checked)}
-            />
-          ) : null,
-      });
-    }
     cols.push(
       {
         key: 'name',
@@ -436,7 +407,7 @@ export function MerakiOrgPage() {
       if (drawn) drawn.filter = filter;
     }
     return cols;
-  }, [t, canConfig, selected, busy, toggle, orgName, groupName, filterColumns]);
+  }, [t, orgName, groupName, filterColumns]);
 
   const filtering = useClientFilters(filterColumns, devices);
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
@@ -499,8 +470,6 @@ export function MerakiOrgPage() {
       .catch((e: unknown) => setActionError(errMsg(e, t('meraki.err.watchAll'))))
       .finally(() => setBusy(false));
   };
-
-  const selectable = useMemo(() => importableSerials(shown), [shown]);
 
   return (
     <Page layout="sections">
@@ -593,24 +562,6 @@ export function MerakiOrgPage() {
               total: devices.length,
               noun: (n) => t('meraki.devices.noun', { count: n }),
             }}
-            tools={
-              <>
-                {canConfig && selectable.length > 0 && (
-                  <Button
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => setSelected(new Set([...selected, ...selectable]))}
-                  >
-                    {t('meraki.devices.selectAll')}
-                  </Button>
-                )}
-                {canConfig && selected.size > 0 && (
-                  <Button variant="outline" disabled={busy} onClick={() => setSelected(new Set())}>
-                    {t('meraki.devices.clearSelection')}
-                  </Button>
-                )}
-              </>
-            }
           >
             {canConfig && selected.size > 0 && (
               <Button variant="primary" onClick={importSelected} disabled={busy}>
@@ -633,6 +584,19 @@ export function MerakiOrgPage() {
               onFiltersChange={setFilters}
               filterCounts={counts}
               rowKey={(d) => d.serial}
+              selection={
+                canConfig
+                  ? {
+                      selected,
+                      onChange: setSelected,
+                      // Only a row that can be imported has anything to tick; a node draws no box
+                      // (ADR-056).
+                      isSelectable: isImportable,
+                      nameOf: (d) => d.name || d.serial,
+                      disabled: busy,
+                    }
+                  : undefined
+              }
               empty={anyFiltered ? t('common:filter.noMatch') : t('meraki.devices.empty')}
             />
           </div>

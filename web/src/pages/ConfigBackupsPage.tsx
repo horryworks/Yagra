@@ -97,7 +97,6 @@ export function ConfigBackupsPage() {
   const shown = useMemo(() => rowsIn(list.data, filter), [list.data, filter]);
   // Only rows still on screen count as picked: a filter change or a reload drops the rest.
   const picked = useMemo(() => shown.filter((r) => selected.has(r.node_id)), [shown, selected]);
-  const allPicked = shown.length > 0 && picked.length === shown.length;
 
   const pickFilter = (next: ListFilter) => {
     setFilter(next);
@@ -148,32 +147,7 @@ export function ConfigBackupsPage() {
       const l = loginLabel(id, names, []);
       return l.kind === 'name' ? l.name : '—';
     };
-    const toggle = (id: string) =>
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (!next.delete(id)) next.add(id);
-        return next;
-      });
     return [
-      ...(canOff
-        ? [
-            {
-              key: 'pick',
-              // Text, not the select-all box: a phone draws each row as a card that repeats the
-              // header, and a box there would select every row from any card.
-              header: t('config.list.cols.pick'),
-              width: '70px',
-              render: (r: ConfigBackupRow) => (
-                <input
-                  type="checkbox"
-                  checked={selected.has(r.node_id)}
-                  aria-label={t('config.list.pick', { name: nodeName(r.node_id) })}
-                  onChange={() => toggle(r.node_id)}
-                />
-              ),
-            },
-          ]
-        : []),
       {
         key: 'node',
         header: t('config.list.cols.node'),
@@ -249,7 +223,7 @@ export function ConfigBackupsPage() {
         render: (r) => (r.try_after ? <TimeCell iso={r.try_after} /> : '—'),
       },
     ];
-  }, [t, nodeName, names, canCreds, canOff, canOn, selected, switching, onSwitch]);
+  }, [t, nodeName, names, canCreds, canOff, canOn, switching, onSwitch]);
 
   const onPlan = planSwitch(picked, true);
   const offPlan = planSwitch(picked, false);
@@ -316,18 +290,6 @@ export function ConfigBackupsPage() {
           of them (LoadGate), not above them. */}
       <LoadGate load={list}>
         <TableToolbar>
-          {canOff && shown.length > 0 && (
-            <label className="cfgbl-pickall">
-              <input
-                type="checkbox"
-                checked={allPicked}
-                onChange={() =>
-                  setSelected(allPicked ? new Set() : new Set(shown.map((r) => r.node_id)))
-                }
-              />
-              <span>{t('config.list.pickAll')}</span>
-            </label>
-          )}
           <div className="cfgbl-filter">
             <Segmented
               ariaLabel={t('config.list.filter')}
@@ -353,7 +315,6 @@ export function ConfigBackupsPage() {
                   {t('config.list.switchOffN', { count: offPlan.ids.length })}
                 </Button>
               )}
-              <Button onClick={() => setSelected(new Set())}>{t('config.list.unpick')}</Button>
             </div>
           )}
         </TableToolbar>
@@ -363,6 +324,16 @@ export function ConfigBackupsPage() {
           rows={shown}
           columns={columns}
           rowKey={(r) => r.node_id}
+          selection={
+            canOff
+              ? {
+                  selected,
+                  onChange: setSelected,
+                  nameOf: (r) => nodeName(r.node_id),
+                  disabled: switching,
+                }
+              : undefined
+          }
           loading={list.loading}
           empty={list.error ?? <EmptyState text={t(`config.list.emptyOf.${filter}`)} />}
         />

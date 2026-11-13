@@ -1307,7 +1307,6 @@
     },
     "list": {
       "cols": {
-        "pick": "選択",
         "node": "ノード",
         "state": "状態",
         "last": "最後の試行",
@@ -1333,11 +1332,8 @@
         "never": "未設定の機器はありません。",
         "all": "対象の機器はありません。"
       },
-      "pickAll": "表示中をすべて選ぶ",
-      "pick": "{{name}} を選ぶ",
       "picked_one": "{{count}} 台を選択",
       "picked_other": "{{count}} 台を選択",
-      "unpick": "選択を外す",
       "switchOne": "{{name}} のバックアップ",
       "switchOnN_one": "{{count}} 台をオンにする",
       "switchOnN_other": "{{count}} 台をオンにする",
