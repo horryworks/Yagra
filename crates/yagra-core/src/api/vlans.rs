@@ -264,19 +264,19 @@ pub(crate) async fn node_vlans(
     node_id: Uuid,
     visible: impl Fn(Uuid) -> bool,
 ) -> anyhow::Result<Vec<NodeVlan>> {
-    let interfaces = admin.repo.list_interfaces(node_id).await?;
-    let l3 = admin.l3.current(node_id).await?;
+    // Four independent reads, asked together rather than one after another.
+    let (interfaces, l3, snapshot, context) = tokio::try_join!(
+        admin.repo.list_interfaces(node_id),
+        admin.l3.current(node_id),
+        admin.vlans.current(node_id),
+        admin.meraki_devices.vlan_context(node_id),
+    )?;
     let addresses = addresses_by_ifindex(l3.as_ref());
-    let snapshot = admin.vlans.current(node_id).await?;
-    let meraki = admin
-        .meraki_devices
-        .vlan_context(node_id)
-        .await?
-        .map(|c| MerakiVlans {
-            is_mx: c.product_type.trim().eq_ignore_ascii_case("appliance"),
-            vlans: c.vlans,
-            mx_node: gateway_mx(&c.mx_nodes, node_id, &visible),
-        });
+    let meraki = context.map(|c| MerakiVlans {
+        is_mx: c.product_type.trim().eq_ignore_ascii_case("appliance"),
+        vlans: c.vlans,
+        mx_node: gateway_mx(&c.mx_nodes, node_id, &visible),
+    });
     Ok(vlan_rows(VlanSources {
         snapshot: snapshot.as_ref(),
         interfaces: &interfaces,
