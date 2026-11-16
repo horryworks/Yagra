@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.80 — Name each node's VLANs in a tab beside Interfaces, and select every row of a table from one box in its header
+
 ### New Features
 
 - **A node's VLANs by name, in a new VLANs tab right of Interfaces.** Each VLAN shows its name, how many access and trunk ports carry it, and its gateway: the VLAN interface that routes it (`Vlan30`, `Vlanif30`) with its addresses, or for a Meraki switch the network's MX. A count opens Interfaces filtered to exactly those ports. A VLAN a port uses but the device's own VLAN table does not list is marked **Not defined**, and the tab carries a warning dot. Cisco reads the names from CISCO-VTP-MIB (with the VLAN's active or suspended state), Huawei from Q-BRIDGE, in a second walk after the hourly port VLAN walk — a device without the table still sends its port VLANs. A Meraki switch or MX takes the names, subnets and MX addresses from its network's MX VLAN list, which the inventory sync already read and now keeps. The same rows are served by the new `GET /api/v1/nodes/{node_id}/vlans` and under `vlans` in the MCP `get_node_status` tool, and `GET /api/v1/nodes/{node_id}` gains `vlans_read`. Names appear after the next VLAN walk (up to an hour) and, for Meraki, after the next LAN read of the network (up to a day) (ADR-257, Issue #71).

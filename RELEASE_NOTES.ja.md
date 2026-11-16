@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.80 — ノードの VLAN を名前つきで Interfaces の横のタブに出す。表の行は見出しのチェック 1 つで全部選ぶ
+
 ### 新機能
 
 - **ノードの VLAN を名前つきで出す VLAN タブを、Interfaces の右に足しました。** VLAN ごとに、名前、その VLAN を通すアクセスポートとトランクポートの数、ゲートウェイが出ます。ゲートウェイは、その VLAN をルーティングする VLAN インターフェース（`Vlan30`・`Vlanif30`）とそのアドレスです。Meraki のスイッチでは、同じネットワークの MX です。数を押すと、そのポートだけに絞り込んだ Interfaces に移ります。ポートが使っているのに機器の VLAN の表に無い VLAN には「未定義」が付き、タブに注意の印が出ます。名前は、Cisco は CISCO-VTP-MIB から（VLAN が動いているか停止中かも）、Huawei は Q-BRIDGE から、1 時間ごとのポートの VLAN の walk の後にもう 1 回 walk して読みます。表の無い機器でも、ポートの VLAN は今までどおり届きます。Meraki のスイッチと MX は、ネットワークの MX の VLAN 一覧から名前・サブネット・MX のアドレスを取ります。この一覧は在庫の同期がもともと読んでいて、今回から捨てずに残します。同じ行は、新しい `GET /api/v1/nodes/{node_id}/vlans` と、MCP の `get_node_status` の `vlans` でも読めます。`GET /api/v1/nodes/{node_id}` には `vlans_read` が増えました。名前が出るのは、次の VLAN の walk（最大 1 時間）の後です。Meraki は、そのネットワークの次の LAN の読み取り（最大 1 日）の後です（ADR-257、Issue #71）。
