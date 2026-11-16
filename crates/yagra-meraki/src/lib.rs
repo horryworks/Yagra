@@ -1623,16 +1623,16 @@ impl MerakiDeviceRepo {
     /// node with no Meraki binding.
     ///
     /// The VLANs are the network's MX VLAN list, read by the sync (ADR-164 decision 28); `None`
-    /// inside when no core that keeps them has read that network yet. The MX is the network's MX
-    /// node, when one is monitored here — the lowest node id, so a warm-spare pair answers the
-    /// same one every time.
+    /// inside when no core that keeps them has read that network yet. The MXs are every MX node of
+    /// the network monitored here, lowest node id first: a warm-spare pair is answered in the same
+    /// order every time, and the caller skips one it may not see rather than losing the gateway.
     pub async fn vlan_context(&self, node_id: Uuid) -> anyhow::Result<Option<MerakiVlanContext>> {
         let row = sqlx::query(
             "SELECT d.product_type, n.lan_vlans, \
-               (SELECT m.node_id FROM meraki_devices m \
+               ARRAY(SELECT m.node_id FROM meraki_devices m \
                  WHERE m.org_id = d.org_id AND m.network_id = d.network_id \
                    AND m.product_type = 'appliance' \
-                 ORDER BY m.node_id LIMIT 1) AS mx_node \
+                 ORDER BY m.node_id) AS mx_nodes \
              FROM meraki_devices d \
              LEFT JOIN meraki_org_networks n \
                ON n.org_id = d.org_id AND n.network_id = d.network_id \
@@ -1649,7 +1649,7 @@ impl MerakiDeviceRepo {
         Ok(Some(MerakiVlanContext {
             product_type: row.try_get("product_type")?,
             vlans: vlans.map(|j| j.0),
-            mx_node: row.try_get("mx_node")?,
+            mx_nodes: row.try_get("mx_nodes")?,
         }))
     }
 }
@@ -1661,8 +1661,8 @@ pub struct MerakiVlanContext {
     pub product_type: String,
     /// The network's MX VLANs; `None` until a core that keeps them has read the network.
     pub vlans: Option<Vec<inventory::NetworkVlan>>,
-    /// The network's MX node, when one is monitored here.
-    pub mx_node: Option<Uuid>,
+    /// The network's MX nodes monitored here, lowest node id first (a warm-spare pair is two).
+    pub mx_nodes: Vec<Uuid>,
 }
 
 /// Where a Meraki node sits, in the Dashboard's own terms (ADR-185) — `GET /api/v1/nodes/{node_id}`'s
@@ -2882,7 +2882,7 @@ mod tests {
             .expect("bound");
         assert_eq!(ctx.product_type, "switch");
         assert_eq!(ctx.vlans, Some(vec![vlan.clone()]));
-        assert_eq!(ctx.mx_node, Some(mx), "the network's MX is named");
+        assert_eq!(ctx.mx_nodes, vec![mx], "the network's MX is named");
         assert_eq!(
             devices
                 .vlan_context(mx)
@@ -2898,7 +2898,7 @@ mod tests {
             .await
             .expect("read")
             .expect("bound");
-        assert_eq!((lone.vlans, lone.mx_node), (None, None));
+        assert_eq!((lone.vlans, lone.mx_nodes), (None, Vec::new()));
         // A node with no Meraki binding.
         assert_eq!(devices.vlan_context(Uuid::nil()).await.expect("read"), None);
     }

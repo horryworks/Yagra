@@ -85,7 +85,7 @@ export function CredentialPicker({
           >
             <span className="cred-picker-head-label">{t('select.all')}</span>
             <span className="cred-picker-head-count mono">
-              {t('select.count', { n: selected.length, total: rows.length })}
+              {t('select.count', { n: rows.filter((id) => ticked.has(id)).length, total: rows.length })}
             </span>
           </SelectAllBox>
         </div>

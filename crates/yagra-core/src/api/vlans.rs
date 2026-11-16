@@ -246,6 +246,16 @@ pub(crate) fn vlans_read_for(
     }
 }
 
+/// The MX a Meraki node's VLANs are routed by, as the caller may see it: the first of the
+/// network's MXs (lowest node id first) that is another node and visible. In a warm-spare pair
+/// whose first MX sits in a folder the caller cannot see, the second one still answers. Pure.
+fn gateway_mx(mx_nodes: &[Uuid], node_id: Uuid, visible: impl Fn(Uuid) -> bool) -> Option<Uuid> {
+    mx_nodes
+        .iter()
+        .copied()
+        .find(|mx| *mx != node_id && visible(*mx))
+}
+
 /// Read and join one node's VLANs — the REST handler and `get_node_status` both call this, so the
 /// two cannot answer differently. `visible` says whether the caller may see another node; it
 /// decides whether a Meraki switch's MX may be named as its gateway.
@@ -265,7 +275,7 @@ pub(crate) async fn node_vlans(
         .map(|c| MerakiVlans {
             is_mx: c.product_type.trim().eq_ignore_ascii_case("appliance"),
             vlans: c.vlans,
-            mx_node: c.mx_node.filter(|mx| *mx != node_id && visible(*mx)),
+            mx_node: gateway_mx(&c.mx_nodes, node_id, &visible),
         });
     Ok(vlan_rows(VlanSources {
         snapshot: snapshot.as_ref(),
@@ -476,6 +486,20 @@ mod tests {
         });
         assert_eq!(rows[0].name.as_deref(), Some("Data"));
         assert_eq!(rows[0].gateway, None);
+    }
+
+    #[test]
+    fn a_warm_spare_mx_answers_when_the_first_is_hidden() {
+        let (a, b, me) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(9));
+        // Both visible: the lowest id, every time.
+        assert_eq!(gateway_mx(&[a, b], me, |_| true), Some(a));
+        // The first hidden from this caller: the spare still names the gateway.
+        assert_eq!(gateway_mx(&[a, b], me, |n| n != a), Some(b));
+        // Neither visible, or none monitored: no gateway.
+        assert_eq!(gateway_mx(&[a, b], me, |_| false), None);
+        assert_eq!(gateway_mx(&[], me, |_| true), None);
+        // An MX is never named as its own gateway.
+        assert_eq!(gateway_mx(&[me, b], me, |_| true), Some(b));
     }
 
     #[test]

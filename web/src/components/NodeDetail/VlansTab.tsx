@@ -124,7 +124,9 @@ export function VlansTab({ rows, loaded, error, interfaces }: Props) {
 
   return (
     <div className="nd-nb">
-      {error && <p className="form-error nd-tabpad">{error}</p>}
+      {/* A failed re-read keeps the rows it had, so the error goes above them; with no rows it is
+          the table's own empty line instead, never beside "no VLANs read yet". */}
+      {error && rows.length > 0 && <p className="form-error nd-tabpad">{error}</p>}
       <ListToolbar
         list={filtering}
         labels={{
@@ -147,7 +149,7 @@ export function VlansTab({ rows, loaded, error, interfaces }: Props) {
           filterCounts={filtering.counts}
           rowKey={(v) => String(v.vlan_id)}
           loading={!loaded}
-          empty={filtering.anyFiltered ? t('common:filter.noMatch') : t('vlans.empty')}
+          empty={error ?? (filtering.anyFiltered ? t('common:filter.noMatch') : t('vlans.empty'))}
         />
       </div>
     </div>

@@ -158,15 +158,20 @@ pub fn assemble_names(dialect: VlanDialect, rows: &[SnmpInstanceRow]) -> Option<
     (!names.is_empty()).then_some(names)
 }
 
-/// A device's name octets as text: invalid UTF-8 replaced, trimmed, control characters dropped and
-/// bounded to [`MAX_VLAN_NAME_CHARS`].
+/// A device's name octets as text: invalid UTF-8 replaced, control characters dropped, trimmed and
+/// bounded to [`MAX_VLAN_NAME_CHARS`]. Trimmed before it is bounded, so padding never costs a
+/// character of the name itself.
 fn name_text(b: &[u8]) -> String {
-    String::from_utf8_lossy(b)
+    let cleaned: String = String::from_utf8_lossy(b)
         .chars()
         .filter(|c| !c.is_control())
+        .collect();
+    cleaned
+        .trim()
+        .chars()
         .take(MAX_VLAN_NAME_CHARS)
         .collect::<String>()
-        .trim()
+        .trim_end()
         .to_owned()
 }
 
@@ -558,6 +563,15 @@ mod tests {
         let n = assemble_names(VlanDialect::Huawei, &rows).unwrap();
         assert!(n[0].name.starts_with("AB"));
         assert_eq!(n[0].name.chars().count(), MAX_VLAN_NAME_CHARS);
+    }
+
+    #[test]
+    fn padding_before_a_long_name_costs_none_of_its_characters() {
+        let mut padded = b"          ".to_vec();
+        padded.extend(std::iter::repeat_n(b'y', MAX_VLAN_NAME_CHARS));
+        let rows = vec![oct(QBRIDGE_STATIC_NAME, &[8], padded)];
+        let n = assemble_names(VlanDialect::Huawei, &rows).unwrap();
+        assert_eq!(n[0].name, "y".repeat(MAX_VLAN_NAME_CHARS));
     }
 
     #[test]

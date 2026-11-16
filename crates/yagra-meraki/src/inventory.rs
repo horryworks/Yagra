@@ -183,15 +183,19 @@ pub fn network_vlans(addrs: &[MerakiLanAddress]) -> Vec<NetworkVlan> {
                 .contains(&id)
                 .then(|| NetworkVlan {
                     id,
+                    // Trimmed before it is bounded, so padding costs none of the name.
                     name: a
                         .name
                         .as_deref()
                         .unwrap_or_default()
                         .chars()
                         .filter(|c| !c.is_control())
-                        .take(MAX_NETWORK_VLAN_NAME_CHARS)
                         .collect::<String>()
                         .trim()
+                        .chars()
+                        .take(MAX_NETWORK_VLAN_NAME_CHARS)
+                        .collect::<String>()
+                        .trim_end()
                         .to_owned(),
                     subnet: a.subnet.as_deref().map(str::trim).map(str::to_owned),
                     appliance_ip: a.appliance_ip.as_deref().and_then(usable_address),
