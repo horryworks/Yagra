@@ -67,8 +67,9 @@ use yagra_transport::{
 use crate::filing::MerakiFiled;
 use crate::import::{pick_automatic, ImportResolver};
 use crate::inventory::{
-    lan_addresses, lan_order, lan_reads_due, lan_rereads_per_sync, networks_with_an_mx, plan_sync,
-    seen_devices, LanAddresses, LanReads, MerakiInventoryRepo, NetworkLan,
+    lan_addresses, lan_order, lan_reads_due, lan_rereads_per_sync, network_vlans,
+    networks_with_an_mx, plan_sync, seen_devices, LanAddresses, LanReads, MerakiInventoryRepo,
+    NetworkLan, NetworkLanRead,
 };
 use crate::{resolve_meraki_key, MerakiInflight, MerakiLane, MerakiOrg, MerakiOrgRepo};
 use yagra_base::neighbors::NeighborRepo;
@@ -987,7 +988,7 @@ impl MerakiSync {
                         )
                     });
                 let now = Utc::now();
-                let mut read: Vec<(String, Vec<IpAddr>)> = Vec::new();
+                let mut read: Vec<NetworkLanRead> = Vec::new();
                 self.tried
                     .lock()
                     .expect("meraki tried networks poisoned")
@@ -1000,7 +1001,11 @@ impl MerakiSync {
                         Ok(addresses) => {
                             let ips = lan_order(&addresses);
                             let outcome = if ips.is_empty() { "no_lan" } else { "ok" };
-                            read.push((network.clone(), ips.clone()));
+                            read.push(NetworkLanRead {
+                                network_id: network.clone(),
+                                ips: ips.clone(),
+                                vlans: network_vlans(&addresses),
+                            });
                             known.insert(network, NetworkLan { ips, read_at: now });
                             outcome
                         }
@@ -1703,7 +1708,9 @@ mod tests {
     fn vlan(id: u32, ip: &str) -> yagra_transport::MerakiLanAddress {
         yagra_transport::MerakiLanAddress {
             vlan_id: Some(id),
-            appliance_ip: ip.to_owned(),
+            appliance_ip: Some(ip.to_owned()),
+            name: Some(format!("VLAN {id}")),
+            subnet: None,
         }
     }
 

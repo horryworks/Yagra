@@ -125,6 +125,7 @@ fn fragments() -> Vec<(&'static str, utoipa::openapi::OpenApi)> {
         ("system", super::system::Doc::openapi()),
         ("support", super::support::Doc::openapi()),
         ("collection", super::collection::Doc::openapi()),
+        ("vlans", super::vlans::Doc::openapi()),
         ("classification", super::classification::Doc::openapi()),
         ("reclassify", super::reclassify::Doc::openapi()),
         ("rediscover", super::rediscover::Doc::openapi()),

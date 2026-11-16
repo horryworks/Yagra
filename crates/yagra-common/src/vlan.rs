@@ -97,6 +97,33 @@ impl PortVlan {
     }
 }
 
+/// Whether a VLAN the device defines is forwarding (ADR-257 decision 1). Only Cisco's VTP table
+/// says; a Huawei name read from Q-BRIDGE carries no state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VlanState {
+    /// `vtpVlanState` 1, operational.
+    Active,
+    /// `vtpVlanState` 2, suspended: defined but forwarding nothing.
+    Suspended,
+    /// Any other value (the two MTU states), or one a newer poller wrote.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One VLAN the device defines, with the name it gives it (ADR-257).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VlanName {
+    /// The VLAN ID, 1..=4094.
+    pub id: u16,
+    /// The name exactly as the device answered it, trimmed. Empty when the device has none.
+    #[serde(default)]
+    pub name: String,
+    /// The VLAN's state, when the table says one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<VlanState>,
+}
+
 /// Every port's VLAN facts on one observation of one node.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VlanSnapshot {
@@ -104,15 +131,35 @@ pub struct VlanSnapshot {
     /// no snapshot at all rather than a partial one.
     #[serde(default)]
     pub ports: Vec<PortVlan>,
+    /// The VLANs the device defines, ordered by ID (ADR-257). `None` means the names were **not
+    /// read** — a poller older than ADR-257, a make with no name table, or a name walk that did not
+    /// finish. `Some(empty)` means the device was read and defines none. The difference is what
+    /// lets a surface say "not defined" only when it actually looked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<Vec<VlanName>>,
 }
 
 impl VlanSnapshot {
     /// Build a snapshot, ordering the ports by `ifIndex` and keeping the first of any duplicate.
+    /// The names are not read; [`Self::with_names`] adds them.
     #[must_use]
     pub fn new(mut ports: Vec<PortVlan>) -> Self {
         ports.sort_by_key(|p| p.ifindex);
         ports.dedup_by_key(|p| p.ifindex);
-        Self { ports }
+        Self { ports, names: None }
+    }
+
+    /// The same snapshot with the device's VLAN names, ordered by ID with the first of any
+    /// duplicate kept and IDs outside 1..=4094 dropped. `None` keeps "not read".
+    #[must_use]
+    pub fn with_names(mut self, names: Option<Vec<VlanName>>) -> Self {
+        self.names = names.map(|mut n| {
+            n.retain(|v| (VLAN_MIN..=VLAN_MAX).contains(&v.id));
+            n.sort_by_key(|v| v.id);
+            n.dedup_by_key(|v| v.id);
+            n
+        });
+        self
     }
 
     /// The port with this `ifIndex`, if the snapshot has one.
@@ -159,6 +206,27 @@ impl VlanDialect {
             None
         }
     }
+}
+
+/// The VLAN a switch virtual interface routes for, read from its interface name (ADR-257 decision
+/// 6): Cisco's `Vlan30` (ifDescr) and `Vl30` (ifName), Huawei's `Vlanif30`, and the
+/// `Vlan-interface30` spelling of HPE Comware. Case and a space before the number are ignored.
+///
+/// `None` for anything else — including a VLAN ID outside 1..=4094 — so a name this does not
+/// recognise leaves a gateway empty rather than attaching it to the wrong VLAN.
+#[must_use]
+pub fn svi_vlan(if_name: &str) -> Option<u16> {
+    let lower = if_name.trim().to_ascii_lowercase();
+    // Longest prefix first: `vl` is a prefix of all three others.
+    let rest = ["vlan-interface", "vlanif", "vlan", "vl"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p))?;
+    let digits = rest.trim_start();
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) || digits.starts_with('0') {
+        return None;
+    }
+    let id: u16 = digits.parse().ok()?;
+    (VLAN_MIN..=VLAN_MAX).contains(&id).then_some(id)
 }
 
 /// Sorted, merged ranges from any list of VLAN IDs. IDs outside 1..=4094 are dropped.
@@ -299,6 +367,77 @@ mod tests {
         let p: PortVlan =
             serde_json::from_str(r#"{"ifindex":3,"mode":"trunk","future":1}"#).unwrap();
         assert!(p.allowed.is_empty() && p.native.is_none());
+    }
+
+    #[test]
+    fn an_svi_name_gives_its_vlan_in_every_spelling() {
+        assert_eq!(svi_vlan("Vlan30"), Some(30));
+        assert_eq!(svi_vlan("Vl30"), Some(30));
+        assert_eq!(svi_vlan("Vlanif110"), Some(110));
+        assert_eq!(svi_vlan("VLANIF4094"), Some(4094));
+        assert_eq!(svi_vlan("Vlan-interface20"), Some(20));
+        assert_eq!(svi_vlan("Vlan 20"), Some(20));
+        assert_eq!(svi_vlan(" vlan1 "), Some(1));
+    }
+
+    #[test]
+    fn a_name_that_is_not_an_svi_gives_no_vlan() {
+        for n in [
+            "GigabitEthernet1/0/1",
+            "Vlan",
+            "Vlan0",
+            "Vlan4095",
+            "Vlan030",
+            "Vlan30.1",
+            "Vlanif-30",
+            "Virtual-Template1",
+            "Vlan30a",
+            "",
+        ] {
+            assert_eq!(svi_vlan(n), None, "{n}");
+        }
+    }
+
+    #[test]
+    fn names_are_ordered_deduplicated_and_kept_in_range() {
+        let n = |id, name: &str| VlanName {
+            id,
+            name: name.into(),
+            state: None,
+        };
+        let s = VlanSnapshot::new(Vec::new()).with_names(Some(vec![
+            n(30, "b"),
+            n(0, "x"),
+            n(10, "a"),
+            n(30, "c"),
+            n(4095, "y"),
+        ]));
+        let got: Vec<_> = s
+            .names
+            .unwrap()
+            .into_iter()
+            .map(|v| (v.id, v.name))
+            .collect();
+        assert_eq!(got, vec![(10, "a".into()), (30, "b".into())]);
+        assert_eq!(VlanSnapshot::new(Vec::new()).with_names(None).names, None);
+    }
+
+    #[test]
+    fn names_not_read_and_names_read_empty_survive_the_wire_apart() {
+        // A snapshot from a poller older than ADR-257 has no `names` key: not read.
+        let old: VlanSnapshot = serde_json::from_str(r#"{"ports":[]}"#).unwrap();
+        assert_eq!(old.names, None);
+        // Not read is not written, so an N-1 core reads the same document it always did.
+        assert!(!serde_json::to_string(&old).unwrap().contains("names"));
+        // Read and empty is a different answer and must round-trip as one.
+        let empty = VlanSnapshot::new(Vec::new()).with_names(Some(Vec::new()));
+        let back: VlanSnapshot =
+            serde_json::from_str(&serde_json::to_string(&empty).unwrap()).unwrap();
+        assert_eq!(back.names, Some(Vec::new()));
+        // A state this build does not know still decodes, and a future field is ignored.
+        let v: VlanName =
+            serde_json::from_str(r#"{"id":5,"name":"x","state":"mtu_too_big","more":1}"#).unwrap();
+        assert_eq!(v.state, Some(VlanState::Unknown));
     }
 
     #[test]

@@ -27,6 +27,7 @@ import {
   type InterfaceVlan,
   type Neighbor,
   type NodeMetricEntry,
+  type NodeVlan,
   type WirelessApRow,
 } from '../../types/api';
 import { AP_STATE_UNKNOWN, apSearchText, apStateKey, isImported } from './apRows';
@@ -201,6 +202,42 @@ export function interfaceFilters(
 
 export function interfaceColumns(t: TFunction): FilterableColumn<FilterableInterface>[] {
   return specColumns(interfaceFilters(t));
+}
+
+// ────────────────────────────────────────────────────────────────────── VLANs
+
+/** The VLANs tab's column filters (ADR-257), keyed by the column each sits beside. A node has at
+ *  most a few thousand VLANs and the tab already holds all of them, so this filters in the browser. */
+export function vlanFilters(t: TFunction): Record<string, ColumnFilterSpec<NodeVlan>> {
+  return {
+    vlan: {
+      kind: 'values',
+      parse: parseVlanId,
+      readValues: (v) => String(v.vlan_id),
+      placeholder: t('interfaces.vlanPlaceholder'),
+      max: 20,
+    },
+    name: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (v) => [v.name],
+      containsSemantics: 'substring',
+      placeholder: t('vlans.colName'),
+    },
+    gateway: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (v) => [
+        v.gateway?.if_name,
+        v.subnet,
+        ...(v.gateway?.addresses ?? []).map((a) => a.ip),
+      ],
+      containsSemantics: 'substring',
+      placeholder: t('vlans.colGateway'),
+    },
+  };
 }
 
 // ────────────────────────────────────────────────────────────────── neighbours

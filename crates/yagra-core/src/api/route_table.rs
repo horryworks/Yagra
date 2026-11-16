@@ -1424,6 +1424,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/nodes/:node_id/vlans",
+        NodeScoped,
+        // Folded (ADR-257): `NodeStatusDto.vlans` is the same rows, built by the same
+        // `api::vlans::node_vlans`, so the two cannot answer differently.
+        Tool("get_node_status"),
+    ),
+    (
+        "GET",
         "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
         NodeScoped,
         // Which threshold rules reach one port, from any of the five scope levels, each flagged

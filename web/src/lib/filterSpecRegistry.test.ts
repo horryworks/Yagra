@@ -38,6 +38,7 @@ import {
   interfaceFilters,
   metricFilters,
   neighborFilters,
+  vlanFilters,
 } from '../components/NodeDetail/tabFilters';
 import { activeAlertFilters } from '../pages/activeAlertFilters';
 import { tokenFilters } from '../pages/apiTokenFilters';
@@ -124,6 +125,11 @@ const REGISTRY: readonly Entry[] = [
     module: 'components/NodeDetail/tabFilters.ts',
     name: 'neighborFilters',
     build: () => specColumns(neighborFilters(t)),
+  },
+  {
+    module: 'components/NodeDetail/tabFilters.ts',
+    name: 'vlanFilters',
+    build: () => specColumns(vlanFilters(t)),
   },
   {
     module: 'components/NodeDetail/tabFilters.ts',
@@ -359,6 +365,11 @@ const NODE_TABS: readonly RouteTable[] = [
     entries: ['neighborFilters'],
     prefix: nodeTabFilterPrefix('neighbors'),
     wiredIn: { file: 'components/NodeDetail/NeighborsTab.tsx', spelling: "nodeTabFilterPrefix('neighbors')" },
+  },
+  {
+    entries: ['vlanFilters'],
+    prefix: nodeTabFilterPrefix('vlans'),
+    wiredIn: { file: 'components/NodeDetail/VlansTab.tsx', spelling: "nodeTabFilterPrefix('vlans')" },
   },
   {
     entries: ['metricFilters'],

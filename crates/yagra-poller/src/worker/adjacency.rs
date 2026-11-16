@@ -169,7 +169,9 @@ pub(super) async fn execute_vlans(
         // the column flag alone cannot tell a full table from one cut at the cap — the same
         // reasoning as the ENTITY index walk in `physical.rs`.
         Ok(walk) if walk.every_column_answered && walk.rows.len() < MAX_VLAN_WALK_ROWS => {
-            r.vlans = Some(crate::vlans::assemble(dialect, &walk.rows));
+            let ports = crate::vlans::assemble(dialect, &walk.rows);
+            let names = walk_vlan_names(job, transport, dialect, timeout, walker).await;
+            r.vlans = Some(ports.with_names(names));
         }
         Ok(walk) => {
             // A walk that filled its row budget lands here too, whichever column it was cut in.
@@ -186,6 +188,50 @@ pub(super) async fn execute_vlans(
     }
     r
 }
+
+/// Walk the VLAN names a device defines — ADR-257 decision 2.
+///
+/// A walk of its own, after the port walk, so a device without the name table (or one that times
+/// out on it) still sends its ports. `None` — "names not read" — whenever this walk cannot vouch
+/// for a whole table: a column that did not answer, the row budget reached, an error, or an empty
+/// table (see `vlans::assemble_names`). A surface marks a VLAN "not defined" only on `Some`.
+async fn walk_vlan_names(
+    job: &PollJob,
+    transport: &dyn Transport,
+    dialect: yagra_common::VlanDialect,
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> Option<Vec<yagra_common::VlanName>> {
+    let columns = crate::vlans::name_columns(dialect);
+    if columns.is_empty() {
+        return None;
+    }
+    match walker
+        .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_NAME_ROWS)
+        .await
+    {
+        Ok(walk) if walk.every_column_answered && walk.rows.len() < MAX_VLAN_NAME_ROWS => {
+            crate::vlans::assemble_names(dialect, &walk.rows)
+        }
+        Ok(walk) => {
+            metrics::counter!("yagra_vlan_name_walk_incomplete_total").increment(1);
+            tracing::debug!(
+                job_id = %job.job_id,
+                rows = walk.rows.len(),
+                "VLAN name walk incomplete; names not sent"
+            );
+            None
+        }
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "VLAN name walk failed");
+            None
+        }
+    }
+}
+
+/// The most rows the name walk may collect: three columns over every usable VLAN ID, under one VTP
+/// domain, is 12,282. A device answering more is out of spec, and its names are not sent.
+const MAX_VLAN_NAME_ROWS: usize = 16_384;
 
 /// The most rows one VLAN walk may collect across all its columns. Estimated, not measured: the
 /// largest device walked for ADR-201 (a four-member Huawei stack, 220 interfaces) has about 2,000
@@ -723,6 +769,66 @@ mod tests {
         let r = execute(&vlan_job(), &fake, 0).await;
         assert!(r.observational);
         assert_eq!(r.vlans.map(|s| s.ports.len()), Some(3));
+    }
+
+    /// `vtpVlanName` rows under VTP domain 1.
+    fn vtp_names(vlans: &[u32]) -> Vec<yagra_transport::SnmpInstanceRow> {
+        vlans
+            .iter()
+            .map(|v| yagra_transport::SnmpInstanceRow {
+                oid_base: "1.3.6.1.4.1.9.9.46.1.3.1.1.4".into(),
+                instance: vec![1, *v],
+                value: yagra_transport::SnmpValue::Bytes(format!("V{v}").into_bytes()),
+            })
+            .collect()
+    }
+
+    /// ADR-257 decision 2 in the direction that sends: the port walk and the name walk both
+    /// complete, and the names ride the same snapshot.
+    #[tokio::test]
+    async fn a_complete_name_walk_rides_the_port_snapshot() {
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_instances = access_ports(2);
+        fake.snmp_instances.extend(vtp_names(&[1, 10]));
+        let s = execute(&vlan_job(), &fake, 0)
+            .await
+            .vlans
+            .expect("snapshot");
+        assert_eq!(s.ports.len(), 2);
+        let ids: Vec<u16> = s.names.expect("names read").iter().map(|n| n.id).collect();
+        assert_eq!(ids, vec![1, 10]);
+    }
+
+    /// The point of a separate walk: a name table that does not answer costs the names, never the
+    /// ports. Only the name column is made to fail, so the port walk beside it stays complete
+    /// (`failure-injection-must-break-only-the-read-under-test`).
+    #[tokio::test]
+    async fn a_name_walk_that_did_not_finish_still_sends_the_ports_and_no_names() {
+        let mut fake = FakeTransport::reachable(1.0)
+            .with_unanswered_instance_column("1.3.6.1.4.1.9.9.46.1.3.1.1.4");
+        fake.snmp_instances = access_ports(2);
+        fake.snmp_instances.extend(vtp_names(&[1, 10]));
+        let s = execute(&vlan_job(), &fake, 0)
+            .await
+            .vlans
+            .expect("ports still sent");
+        assert_eq!(s.ports.len(), 2);
+        assert_eq!(
+            s.names, None,
+            "an unfinished name walk is 'not read', never 'defines none'"
+        );
+    }
+
+    /// A device that answers no name row at all does not implement the table: not read.
+    #[tokio::test]
+    async fn an_empty_name_table_is_sent_as_not_read() {
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_instances = access_ports(2);
+        let s = execute(&vlan_job(), &fake, 0)
+            .await
+            .vlans
+            .expect("snapshot");
+        assert_eq!(s.names, None);
     }
 
     /// The row budget ends a column as answered (the walker stops asking, it does not fail), so a

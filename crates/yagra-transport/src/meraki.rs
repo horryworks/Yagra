@@ -2397,14 +2397,22 @@ fn parse_ha_roles(rows: &[Value]) -> Vec<(String, Option<MerakiHaRole>)> {
         .collect()
 }
 
-/// One address an MX holds on its network's LAN side (ADR-164 decision 28): its IP on one VLAN, or — in
-/// a network with VLANs turned off — on the single LAN, which has no VLAN number.
+/// One VLAN on an MX network's LAN side (ADR-164 decision 28), or — in a network with VLANs turned
+/// off — the single LAN, which has no VLAN number.
+///
+/// Since ADR-257 decision 4 a VLAN with no MX address is kept as well: it still has a name, which is
+/// what the VLANs tab shows. The address choice reads only the VLANs that carry one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MerakiLanAddress {
     /// The VLAN's number (`id`). `None` on a single LAN.
     pub vlan_id: Option<u32>,
-    /// The MX's own address on it (`applianceIp`), as the Dashboard wrote it.
-    pub appliance_ip: String,
+    /// The MX's own address on it (`applianceIp`), as the Dashboard wrote it. Always present on a
+    /// single LAN, whose read is refused without one (decision 19).
+    pub appliance_ip: Option<String>,
+    /// The VLAN's name (`name`), as the Dashboard wrote it.
+    pub name: Option<String>,
+    /// The VLAN's subnet (`subnet`), as the Dashboard wrote it, e.g. `10.1.0.0/24`.
+    pub subnet: Option<String>,
 }
 
 /// One network's LAN addresses, or why this read could not say.
@@ -2594,13 +2602,18 @@ async fn network_lan(s: &mut Session, network: &str) -> MerakiNetworkLan {
     }
 }
 
-/// A network's VLANs → one address per VLAN that names one. Pure.
+/// A network's VLANs → one entry per VLAN that names a number or an address. Pure.
 fn parse_vlan_lans(rows: &[Value]) -> Vec<MerakiLanAddress> {
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).map(str::to_owned);
     rows.iter()
         .filter_map(|r| {
-            Some(MerakiLanAddress {
-                vlan_id: vlan_number(r.get("id")),
-                appliance_ip: r.get("applianceIp")?.as_str()?.to_owned(),
+            let vlan_id = vlan_number(r.get("id"));
+            let appliance_ip = text(r, "applianceIp");
+            (vlan_id.is_some() || appliance_ip.is_some()).then(|| MerakiLanAddress {
+                vlan_id,
+                appliance_ip,
+                name: text(r, "name"),
+                subnet: text(r, "subnet"),
             })
         })
         .collect()
@@ -2619,7 +2632,12 @@ fn vlan_number(v: Option<&Value>) -> Option<u32> {
 fn parse_single_lan(document: &Value) -> Option<MerakiLanAddress> {
     Some(MerakiLanAddress {
         vlan_id: None,
-        appliance_ip: document.get("applianceIp")?.as_str()?.to_owned(),
+        appliance_ip: Some(document.get("applianceIp")?.as_str()?.to_owned()),
+        name: None,
+        subnet: document
+            .get("subnet")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -3938,29 +3956,36 @@ mod tests {
     #[test]
     fn a_networks_vlans_become_one_address_each() {
         let rows = vec![
-            json!({"id": 10, "networkId": "N_1", "subnet": "10.1.0.0/24", "applianceIp": "10.1.0.1"}),
+            json!({"id": 10, "networkId": "N_1", "name": "Data", "subnet": "10.1.0.0/24", "applianceIp": "10.1.0.1"}),
             json!({"id": "20", "networkId": "N_1", "applianceIp": "10.2.0.1"}),
-            // No address: nothing to take from this VLAN.
-            json!({"id": 30, "networkId": "N_1"}),
+            // No address: kept for its name (ADR-257), and the address choice skips it.
+            json!({"id": 30, "networkId": "N_1", "name": "Voice"}),
             json!({"networkId": "N_1", "applianceIp": "10.4.0.1"}),
+            // Neither a number nor an address: nothing to say about it.
+            json!({"networkId": "N_1", "name": "orphan"}),
             json!("not a vlan"),
         ];
+        let lan = |id: Option<u32>, ip: Option<&str>, name: Option<&str>, subnet: Option<&str>| {
+            MerakiLanAddress {
+                vlan_id: id,
+                appliance_ip: ip.map(Into::into),
+                name: name.map(Into::into),
+                subnet: subnet.map(Into::into),
+            }
+        };
         assert_eq!(
             parse_vlan_lans(&rows),
             vec![
-                MerakiLanAddress {
-                    vlan_id: Some(10),
-                    appliance_ip: "10.1.0.1".into()
-                },
-                MerakiLanAddress {
-                    vlan_id: Some(20),
-                    appliance_ip: "10.2.0.1".into()
-                },
+                lan(
+                    Some(10),
+                    Some("10.1.0.1"),
+                    Some("Data"),
+                    Some("10.1.0.0/24")
+                ),
+                lan(Some(20), Some("10.2.0.1"), None, None),
+                lan(Some(30), None, Some("Voice"), None),
                 // An id that cannot be read keeps the address; core orders it last.
-                MerakiLanAddress {
-                    vlan_id: None,
-                    appliance_ip: "10.4.0.1".into()
-                },
+                lan(None, Some("10.4.0.1"), None, None),
             ]
         );
     }
@@ -3971,7 +3996,9 @@ mod tests {
             parse_single_lan(&json!({"subnet": "10.9.0.0/24", "applianceIp": "10.9.0.1"})),
             Some(MerakiLanAddress {
                 vlan_id: None,
-                appliance_ip: "10.9.0.1".into()
+                appliance_ip: Some("10.9.0.1".into()),
+                name: None,
+                subnet: Some("10.9.0.0/24".into()),
             })
         );
         assert_eq!(parse_single_lan(&json!({"subnet": "10.9.0.0/24"})), None);

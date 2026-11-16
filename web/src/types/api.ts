@@ -1390,6 +1390,8 @@ export type InterfaceRow = components['schemas']['InterfaceRow'];
 export type InterfaceAddress = components['schemas']['InterfaceAddress'];
 /** A port's mode and VLANs (ADR-201); `null` on a row whose VLANs are not reported. */
 export type InterfaceVlan = components['schemas']['InterfaceVlan'];
+/** One VLAN of a node, by name (ADR-257) — `GET /api/v1/nodes/{node_id}/vlans`. */
+export type NodeVlan = components['schemas']['NodeVlan'];
 /** One inclusive VLAN range. */
 export type VlanSpan = components['schemas']['VlanSpan'];
 

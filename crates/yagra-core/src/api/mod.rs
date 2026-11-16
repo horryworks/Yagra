@@ -111,6 +111,7 @@ pub(crate) mod topology_level;
 pub(crate) mod upgrade;
 pub(crate) mod users;
 pub(crate) mod util;
+pub(crate) mod vlans;
 mod webtls;
 pub(crate) mod wireless;
 
@@ -519,6 +520,8 @@ pub fn router(state: ApiState) -> Router {
         // three permissions rather than one — see `api/support.rs`.
         .merge(support::routes())
         .merge(collection::routes())
+        // A node's VLANs by name (ADR-257), beside the interface list they are read with.
+        .merge(vlans::routes())
         .merge(classification::routes())
         .merge(reclassify::routes())
         .merge(rediscover::routes())

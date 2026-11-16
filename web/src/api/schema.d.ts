@@ -3667,6 +3667,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/vlans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A node's VLANs with their names, states and gateways (ADR-257).
+         * @description `View`, like the interface list it sits beside. Skeleton mode answers an empty list: the VLANs
+         *     are PostgreSQL-only, so "none known" is the truthful answer.
+         */
+        get: operations["list_node_vlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/wireless-controller": {
         parameters: {
             query?: never;
@@ -12261,6 +12282,12 @@ export interface components {
             url_check?: null | components["schemas"]["UrlCheckConfig"];
             /** @description Descriptive maker/model, editable from the node detail. */
             vendor?: string | null;
+            /**
+             * @description Whether this node's VLANs are read, and so whether the node detail offers its VLANs tab
+             *     (ADR-257 decision 8): a Cisco or Huawei device polled over SNMP, or a Meraki switch or MX.
+             *     Decided by `api::vlans::vlans_read_for` alone — do not re-derive it from `vendor`.
+             */
+            vlans_read: boolean;
             wireless?: null | components["schemas"]["NodeWireless"];
         };
         /** @description The subset of a node the model may see. Notably not the credential binding. */
@@ -12606,6 +12633,34 @@ export interface components {
             /** @description Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
             vendor?: string | null;
         };
+        /** @description One VLAN of a node (ADR-257). */
+        NodeVlan: {
+            /**
+             * @description `false`: a port uses this VLAN and the device's own VLAN table does not list it — a
+             *     configuration gap. `null` when that cannot be judged (names not read, or a Meraki switch,
+             *     whose own VLANs need no definition on the MX).
+             */
+            defined?: boolean | null;
+            gateway?: null | components["schemas"]["VlanGateway"];
+            /**
+             * @description The name the device (or the Meraki Dashboard) gives it, verbatim. `null` when the names were
+             *     not read; an empty string when the device gives this VLAN none.
+             */
+            name?: string | null;
+            state?: null | components["schemas"]["NodeVlanState"];
+            /** @description The VLAN's subnet as the Meraki Dashboard writes it (`10.1.0.0/24`). `null` elsewhere. */
+            subnet?: string | null;
+            /**
+             * Format: int32
+             * @description The VLAN ID, 1-4094.
+             */
+            vlan_id: number;
+        };
+        /**
+         * @description Whether a VLAN the device defines is forwarding. Only Cisco's VTP table says.
+         * @enum {string}
+         */
+        NodeVlanState: "active" | "suspended";
         /** @description What a node is to the wireless inventory. */
         NodeWireless: {
             ap?: null | components["schemas"]["WirelessApRow"];
@@ -16304,6 +16359,27 @@ export interface components {
         /** @description Build version for Settings ▸ About. */
         VersionInfo: {
             core: string;
+        };
+        /**
+         * @description Where a VLAN is routed: a switch virtual interface on this node, or — for a Meraki switch — the
+         *     network's MX.
+         */
+        VlanGateway: {
+            /** @description The gateway's addresses on this VLAN. Empty when the address walk has not run yet. */
+            addresses: components["schemas"]["InterfaceAddress"][];
+            /** @description The interface's name (`Vl30`, `Vlanif30`). `null` for an MX, which has no interface row. */
+            if_name?: string | null;
+            /**
+             * Format: int32
+             * @description The interface's `ifIndex`. `null` for an MX.
+             */
+            ifindex?: number | null;
+            /**
+             * Format: uuid
+             * @description The node that routes it, when that is **another** node — a Meraki switch's MX. `null` when
+             *     it is this node.
+             */
+            node_id?: string | null;
         };
         /** @description One inclusive VLAN range — `{first: 801, last: 869}`; a single VLAN has `first == last`. */
         VlanSpan: {
@@ -30897,6 +30973,47 @@ export interface operations {
             };
             /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_node_vlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The node's VLANs by ID: the ones its VLAN table defines and the ones its ports use. Empty until the hourly VLAN walk (or, for Meraki, the network's LAN read) has run, and in skeleton mode */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeVlan"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

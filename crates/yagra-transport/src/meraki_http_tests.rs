@@ -1459,7 +1459,9 @@ async fn each_network_answers_with_its_vlans_its_single_lan_or_nothing() {
 
     let lan = |vlan_id: Option<u32>, ip: &str| MerakiLanAddress {
         vlan_id,
-        appliance_ip: ip.to_owned(),
+        appliance_ip: Some(ip.to_owned()),
+        name: None,
+        subnet: None,
     };
     assert_eq!(
         got,
@@ -1468,7 +1470,13 @@ async fn each_network_answers_with_its_vlans_its_single_lan_or_nothing() {
                 "N_1".to_owned(),
                 Ok(vec![lan(Some(20), "10.1.20.1"), lan(Some(10), "10.1.10.1")])
             ),
-            ("N_2".to_owned(), Ok(vec![lan(None, "10.2.0.1")])),
+            (
+                "N_2".to_owned(),
+                Ok(vec![MerakiLanAddress {
+                    subnet: Some("10.2.0.0/24".into()),
+                    ..lan(None, "10.2.0.1")
+                }])
+            ),
             ("N_3".to_owned(), Ok(vec![])),
             ("N_4".to_owned(), Err(MerakiFetchError::Status(500))),
             ("N_5".to_owned(), Ok(vec![])),

@@ -493,6 +493,9 @@ pub struct NodeStatusDto {
     /// an alert of its own for this — the alert is about the organization, or the controller.
     pub collection_fault: Option<crate::api::nodes::CollectionFault>,
     pub interfaces: Vec<InterfaceDto>,
+    /// The node's VLANs by name (ADR-257) — the rows `GET /api/v1/nodes/{node_id}/vlans` serves,
+    /// from the same `api::vlans::node_vlans`. Empty until the VLAN walk has run.
+    pub vlans: Vec<crate::api::vlans::NodeVlan>,
     /// Whether SNMP polling is **configured** for this node — not whether it is answering.
     ///
     /// Mirrors `NodeDetail.snmp_configured` on `GET /api/v1/nodes/{node_id}`, which is the question
@@ -1333,6 +1336,23 @@ mod tests {
                         ifindex: 3,
                         name: Some("Gi1/0/1".to_owned()),
                     }],
+                }),
+            }],
+            // Populated, gateway and its addresses included, for the same reason (ADR-257).
+            vlans: vec![crate::api::vlans::NodeVlan {
+                vlan_id: 30,
+                name: Some("VOICE".to_owned()),
+                state: Some(crate::api::vlans::NodeVlanState::Active),
+                defined: Some(true),
+                subnet: Some("192.0.2.0/24".to_owned()),
+                gateway: Some(crate::api::vlans::VlanGateway {
+                    if_name: Some("Vlan30".to_owned()),
+                    ifindex: Some(30),
+                    addresses: vec![crate::api::collection::InterfaceAddress {
+                        ip: "192.0.2.1".to_owned(),
+                        prefix_len: Some(24),
+                    }],
+                    node_id: Some(uuid::Uuid::nil()),
                 }),
             }],
         };

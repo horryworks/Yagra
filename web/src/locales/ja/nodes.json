@@ -216,6 +216,7 @@
     "geoNumber": "緯度と経度は数値で入力してください",
     "geoRange": "緯度は -90〜90、経度は -180〜180 の範囲で入力してください",
     "loadInterfaces": "インターフェースの読み込みに失敗しました",
+    "loadVlans": "VLAN の読み込みに失敗しました",
     "requestPoll": "ポーリング要求に失敗しました",
     "deleteNode": "ノードの削除に失敗しました",
     "deleteNodes": "ノードの一括削除に失敗しました",
@@ -260,6 +261,7 @@
     "overview": "概要",
     "ap": "AP",
     "interfaces": "インターフェース",
+    "vlans": "VLAN",
     "neighbors": "隣接",
     "collection": "収集",
     "events": "イベント",
@@ -523,6 +525,18 @@
       "malformed": "不正な応答"
     },
     "partOfOutage": "このノードの停止に含まれる"
+  },
+  "vlans": {
+    "colVlan": "VLAN",
+    "colName": "名前",
+    "colGateway": "ゲートウェイ",
+    "col": {
+      "access": "アクセスポート",
+      "trunk": "トランクポート"
+    },
+    "notDefined": "未定義",
+    "suspended": "停止中",
+    "empty": "この機器の VLAN はまだ読んでいません。"
   },
   "interfaces": {
     "emptyDiscovered": "インターフェースはまだありません。SNMP 認証情報とテーブルメトリクスがあれば、テーブルウォーク後に出ます。",

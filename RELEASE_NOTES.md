@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **A node's VLANs by name, in a new VLANs tab right of Interfaces.** Each VLAN shows its name, how many access and trunk ports carry it, and its gateway: the VLAN interface that routes it (`Vlan30`, `Vlanif30`) with its addresses, or for a Meraki switch the network's MX. A count opens Interfaces filtered to exactly those ports. A VLAN a port uses but the device's own VLAN table does not list is marked **Not defined**, and the tab carries a warning dot. Cisco reads the names from CISCO-VTP-MIB (with the VLAN's active or suspended state), Huawei from Q-BRIDGE, in a second walk after the hourly port VLAN walk — a device without the table still sends its port VLANs. A Meraki switch or MX takes the names, subnets and MX addresses from its network's MX VLAN list, which the inventory sync already read and now keeps. The same rows are served by the new `GET /api/v1/nodes/{node_id}/vlans` and under `vlans` in the MCP `get_node_status` tool, and `GET /api/v1/nodes/{node_id}` gains `vlans_read`. Names appear after the next VLAN walk (up to an hour) and, for Meraki, after the next LAN read of the network (up to a day) (ADR-257, Issue #71).
+
 ### Improvements
 
 - **Every table whose rows you tick has one "select all" box, in the header of the tick column.** It selects every row on screen that can be ticked (rows hidden by a column filter are left alone); when some are ticked it shows a dash, and when all are ticked a press clears the selection, hidden rows included. On a phone the box sits in a row above the cards with the count. This replaces the toolbar's **Select all** on Reclassify, **Select all shown** and **Unpick** on Config backups, and **Select all importable** and **Clear selection** on a Meraki organization's devices and on Duplicates; Discovery's results table, which had none, gains it. Duplicates keeps **Select all but the suggested keepers** (ADR-256).

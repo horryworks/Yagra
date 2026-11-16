@@ -36,6 +36,7 @@ import {
   type InterfaceRow,
   type NodeKind,
   type NodeState,
+  type NodeVlan,
   type WirelessControllerSummary,
 } from '../../types/api';
 import { isMerakiAccessPoint } from '../../lib/nodeKind';
@@ -46,6 +47,8 @@ export const NODE_DETAIL_TABS = [
   // node hides it, so the ordering change is invisible outside the one kind it is for.
   'ap',
   'interfaces',
+  // Right of Interfaces (ADR-257): the same ports, read per VLAN, and its counts open Interfaces.
+  'vlans',
   'neighbors',
   'collection',
   'config',
@@ -152,6 +155,10 @@ export interface NodeDetailSubject {
    *  ports and only an access point has radios for the Interfaces tab to list (ADR-167 decision 13,
    *  ADR-168 decision 11). */
   merakiProductType: string | null;
+  /** Whether this node's VLANs are read — `NodeDetail.vlans_read` (ADR-257 decision 8). The
+   *  server's answer, never re-derived from the vendor here: which makers have a VLAN walk is decided
+   *  in one place, `api::vlans::vlans_read_for`. */
+  vlansRead: boolean;
 }
 
 /** Live node facts the tab bar decorates itself from. Kept free of React types so the badge/warn
@@ -171,6 +178,8 @@ export interface NodeDetailTabStats {
   /** The config backup asks for a fix or the device is unsaved (ADR-240 decision 5,
    *  `configBackupForm.ts::needsAttention`). False until read, and on a node with no Config tab. */
   configAttention: boolean;
+  /** The node's VLANs (ADR-257); empty until read, and on a node with no VLANs tab. */
+  vlans: NodeVlan[];
 }
 
 /** Per-tab presentation rules. `labelKey` resolves in the `nodes` i18n namespace. */
@@ -244,6 +253,17 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
     needsWlanController: false,
     badge: (s) => s.interfaces.length || null,
     warn: (s) => s.interfaces.some((r) => r.oper_status != null && r.oper_status !== 1),
+  },
+  // A Cisco or Huawei device, a Meraki switch or MX (ADR-257). `needsSnmp` is answered by the
+  // server's `vlansRead` for this tab — the maker decides it, which neither the kind nor SNMP does.
+  // The dot: a port uses a VLAN the device's own table does not define.
+  vlans: {
+    labelKey: 'tabs.vlans',
+    kinds: ['device', 'meraki'],
+    needsSnmp: true,
+    needsWlanController: false,
+    badge: (s) => s.vlans.length || null,
+    warn: (s) => s.vlans.some((v) => v.defined === false),
   },
   // No badge: the count would need a second fetch on every tab-bar render, and adjacency is not
   // something a number in a pill answers ("2 neighbours" tells an operator nothing they wanted).
@@ -378,12 +398,20 @@ export function neighborsFed(node: NodeDetailSubject): boolean {
   }
 }
 
+/** Whether a `needsSnmp` tab has something feeding it on this node: Neighbors and VLANs each have
+ *  their own answer, every other such tab reads the node's ports. */
+function walkFeeds(tab: NodeDetailTab, node: NodeDetailSubject): boolean {
+  if (tab === 'neighbors') return neighborsFed(node);
+  if (tab === 'vlans') return node.vlansRead;
+  return interfacesFed(node);
+}
+
 export function visibleNodeDetailTabs(node: NodeDetailSubject): readonly NodeDetailTab[] {
   return NODE_DETAIL_TABS.filter((tab) => {
     const meta = NODE_DETAIL_TAB_META[tab];
     return (
       meta.kinds.includes(node.kind) &&
-      (!meta.needsSnmp || (tab === 'neighbors' ? neighborsFed(node) : interfacesFed(node))) &&
+      (!meta.needsSnmp || walkFeeds(tab, node)) &&
       (node.isWlanController || !meta.needsWlanController)
     );
   });

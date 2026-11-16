@@ -1080,33 +1080,43 @@ impl MerakiOrgRepo {
     /// The addresses travel as one comma-joined string per network — an address never holds a comma,
     /// and PostgreSQL cannot `unnest` an array of arrays of different lengths. `string_to_array('',
     /// ',')` is the empty array, which is how "no LAN" is stored.
+    ///
+    /// Each network's VLANs (ADR-257 decision 4) go into `lan_vlans` from the same answer, one JSON
+    /// document per network, sent as text for the same reason.
     pub async fn record_network_lans(
         &self,
         org_uuid: Uuid,
-        lans: &[(String, Vec<IpAddr>)],
+        lans: &[crate::inventory::NetworkLanRead],
     ) -> anyhow::Result<u64> {
         if lans.is_empty() {
             return Ok(0);
         }
-        let ids: Vec<&str> = lans.iter().map(|(id, _)| id.as_str()).collect();
+        let ids: Vec<&str> = lans.iter().map(|l| l.network_id.as_str()).collect();
         let joined: Vec<String> = lans
             .iter()
-            .map(|(_, ips)| {
-                ips.iter()
+            .map(|l| {
+                l.ips
+                    .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(",")
             })
             .collect();
+        let vlans: Vec<String> = lans
+            .iter()
+            .map(|l| serde_json::to_string(&l.vlans))
+            .collect::<Result<_, _>>()?;
         let res = sqlx::query(
             "UPDATE meraki_org_networks n \
-             SET lan_ips = string_to_array(r.ips, ','), lan_read_at = now() \
-             FROM unnest($2::text[], $3::text[]) AS r(id, ips) \
+             SET lan_ips = string_to_array(r.ips, ','), lan_vlans = r.vlans::jsonb, \
+                 lan_read_at = now() \
+             FROM unnest($2::text[], $3::text[], $4::text[]) AS r(id, ips, vlans) \
              WHERE n.org_id = $1 AND n.network_id = r.id",
         )
         .bind(org_uuid)
         .bind(&ids)
         .bind(&joined)
+        .bind(&vlans)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
@@ -1608,6 +1618,51 @@ impl MerakiDeviceRepo {
             network_name: blank_is_none(row.try_get("network_name")?),
         }))
     }
+
+    /// What the VLANs tab knows about a Meraki node's network (ADR-257 decision 4). `None` for a
+    /// node with no Meraki binding.
+    ///
+    /// The VLANs are the network's MX VLAN list, read by the sync (ADR-164 decision 28); `None`
+    /// inside when no core that keeps them has read that network yet. The MX is the network's MX
+    /// node, when one is monitored here — the lowest node id, so a warm-spare pair answers the
+    /// same one every time.
+    pub async fn vlan_context(&self, node_id: Uuid) -> anyhow::Result<Option<MerakiVlanContext>> {
+        let row = sqlx::query(
+            "SELECT d.product_type, n.lan_vlans, \
+               (SELECT m.node_id FROM meraki_devices m \
+                 WHERE m.org_id = d.org_id AND m.network_id = d.network_id \
+                   AND m.product_type = 'appliance' \
+                 ORDER BY m.node_id LIMIT 1) AS mx_node \
+             FROM meraki_devices d \
+             LEFT JOIN meraki_org_networks n \
+               ON n.org_id = d.org_id AND n.network_id = d.network_id \
+             WHERE d.node_id = $1",
+        )
+        .bind(node_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let vlans: Option<sqlx::types::Json<Vec<inventory::NetworkVlan>>> =
+            row.try_get("lan_vlans")?;
+        Ok(Some(MerakiVlanContext {
+            product_type: row.try_get("product_type")?,
+            vlans: vlans.map(|j| j.0),
+            mx_node: row.try_get("mx_node")?,
+        }))
+    }
+}
+
+/// A Meraki node's network as the VLANs tab reads it — [`MerakiDeviceRepo::vlan_context`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MerakiVlanContext {
+    /// The node's Dashboard product type (`switch`, `appliance`, `wireless`, …).
+    pub product_type: String,
+    /// The network's MX VLANs; `None` until a core that keeps them has read the network.
+    pub vlans: Option<Vec<inventory::NetworkVlan>>,
+    /// The network's MX node, when one is monitored here.
+    pub mx_node: Option<Uuid>,
 }
 
 /// Where a Meraki node sits, in the Dashboard's own terms (ADR-185) — `GET /api/v1/nodes/{node_id}`'s
@@ -2748,6 +2803,104 @@ mod tests {
         .fetch_one(pool)
         .await
         .expect("the node's folder")
+    }
+
+    /// ADR-257 decision 4 end to end through the database: the LAN read stores a network's VLANs
+    /// beside its addresses, and a switch in that network reads them back with its MX named.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_networks_vlans_are_stored_and_read_back_for_its_switch(pool: sqlx::PgPool) {
+        let cred = pgtest::credential(&pool, "meraki-key", "meraki_api").await;
+        let repo = MerakiOrgRepo::new(pool.clone());
+        let id = repo
+            .create("1", "Acme", "https://api.meraki.com", cred)
+            .await
+            .expect("create");
+        let org = repo.get(id).await.expect("get").expect("the org");
+        let kind = |d: MerakiImportDevice, p: &str| MerakiImportDevice {
+            product_type: p.to_owned(),
+            ..d
+        };
+        repo.import_devices(
+            &org,
+            &[
+                kind(device("Q-SW", "N_1", "One"), "switch"),
+                kind(device("Q-MX", "N_1", "One"), "appliance"),
+                kind(device("Q-LONE", "N_2", "Two"), "switch"),
+            ],
+        )
+        .await
+        .expect("import");
+        repo.record_networks(
+            id,
+            &[("N_1".into(), "One".into()), ("N_2".into(), "Two".into())],
+            true,
+        )
+        .await
+        .expect("networks");
+        let vlan = inventory::NetworkVlan {
+            id: 10,
+            name: "Data".into(),
+            subnet: Some("10.1.0.0/24".into()),
+            appliance_ip: Some("10.1.0.1".parse().expect("ip")),
+        };
+        repo.record_network_lans(
+            id,
+            &[inventory::NetworkLanRead {
+                network_id: "N_1".into(),
+                ips: vec!["10.1.0.1".parse().expect("ip")],
+                vlans: vec![vlan.clone()],
+            }],
+        )
+        .await
+        .expect("record");
+
+        let devices = MerakiDeviceRepo::new(pool.clone());
+        let node_of = |serial: &str| {
+            let serial = serial.to_owned();
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT node_id FROM meraki_devices WHERE serial = $1",
+                )
+                .bind(serial)
+                .fetch_one(&pool)
+                .await
+                .expect("node")
+            }
+        };
+        let (sw, mx, lone) = (
+            node_of("Q-SW").await,
+            node_of("Q-MX").await,
+            node_of("Q-LONE").await,
+        );
+
+        let ctx = devices
+            .vlan_context(sw)
+            .await
+            .expect("read")
+            .expect("bound");
+        assert_eq!(ctx.product_type, "switch");
+        assert_eq!(ctx.vlans, Some(vec![vlan.clone()]));
+        assert_eq!(ctx.mx_node, Some(mx), "the network's MX is named");
+        assert_eq!(
+            devices
+                .vlan_context(mx)
+                .await
+                .expect("read")
+                .expect("bound")
+                .vlans,
+            Some(vec![vlan])
+        );
+        // A network the read has not stored VLANs for, with no MX: nothing known, nothing named.
+        let lone = devices
+            .vlan_context(lone)
+            .await
+            .expect("read")
+            .expect("bound");
+        assert_eq!((lone.vlans, lone.mx_node), (None, None));
+        // A node with no Meraki binding.
+        assert_eq!(devices.vlan_context(Uuid::nil()).await.expect("read"), None);
     }
 
     /// Importing devices creates one HostTree group per network under the org's root, one node per

@@ -18324,6 +18324,63 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/vlans": {
+      "get": {
+        "tags": [
+          "collection"
+        ],
+        "summary": "A node's VLANs with their names, states and gateways (ADR-257).",
+        "description": "`View`, like the interface list it sits beside. Skeleton mode answers an empty list: the VLANs\nare PostgreSQL-only, so \"none known\" is the truthful answer.",
+        "operationId": "list_node_vlans",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node's VLANs by ID: the ones its VLAN table defines and the ones its ports use. Empty until the hourly VLAN walk (or, for Meraki, the network's LAN read) has run, and in skeleton mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeVlan"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/wireless-controller": {
       "put": {
         "tags": [
@@ -40804,6 +40861,7 @@
           "profile_locked",
           "kind",
           "snmp_configured",
+          "vlans_read",
           "tags",
           "inherited_tags",
           "tags_excluded"
@@ -40998,6 +41056,10 @@
               "null"
             ],
             "description": "Descriptive maker/model, editable from the node detail."
+          },
+          "vlans_read": {
+            "type": "boolean",
+            "description": "Whether this node's VLANs are read, and so whether the node detail offers its VLANs tab\n(ADR-257 decision 8): a Cisco or Huawei device polled over SNMP, or a Meraki switch or MX.\nDecided by `api::vlans::vlans_read_for` alone — do not re-derive it from `vendor`."
           },
           "wireless": {
             "oneOf": [
@@ -41666,6 +41728,72 @@
             "description": "Descriptive maker/model for the \"name (addr) (vendor) (model)\" display."
           }
         }
+      },
+      "NodeVlan": {
+        "type": "object",
+        "description": "One VLAN of a node (ADR-257).",
+        "required": [
+          "vlan_id"
+        ],
+        "properties": {
+          "defined": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`false`: a port uses this VLAN and the device's own VLAN table does not list it — a\nconfiguration gap. `null` when that cannot be judged (names not read, or a Meraki switch,\nwhose own VLANs need no definition on the MX)."
+          },
+          "gateway": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VlanGateway",
+                "description": "Where the VLAN is routed, when Yagra can tell."
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the device (or the Meraki Dashboard) gives it, verbatim. `null` when the names were\nnot read; an empty string when the device gives this VLAN none."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NodeVlanState",
+                "description": "`active` or `suspended`, on a Cisco switch. `null` where the device does not say."
+              }
+            ]
+          },
+          "subnet": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The VLAN's subnet as the Meraki Dashboard writes it (`10.1.0.0/24`). `null` elsewhere."
+          },
+          "vlan_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The VLAN ID, 1-4094.",
+            "minimum": 0
+          }
+        }
+      },
+      "NodeVlanState": {
+        "type": "string",
+        "description": "Whether a VLAN the device defines is forwarding. Only Cisco's VTP table says.",
+        "enum": [
+          "active",
+          "suspended"
+        ]
       },
       "NodeWireless": {
         "type": "object",
@@ -49367,6 +49495,46 @@
         "properties": {
           "core": {
             "type": "string"
+          }
+        }
+      },
+      "VlanGateway": {
+        "type": "object",
+        "description": "Where a VLAN is routed: a switch virtual interface on this node, or — for a Meraki switch — the\nnetwork's MX.",
+        "required": [
+          "addresses"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InterfaceAddress"
+            },
+            "description": "The gateway's addresses on this VLAN. Empty when the address walk has not run yet."
+          },
+          "if_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The interface's name (`Vl30`, `Vlanif30`). `null` for an MX, which has no interface row."
+          },
+          "ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The interface's `ifIndex`. `null` for an MX.",
+            "minimum": 0
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node that routes it, when that is **another** node — a Meraki switch's MX. `null` when\nit is this node."
           }
         }
       },

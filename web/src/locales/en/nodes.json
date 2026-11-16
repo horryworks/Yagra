@@ -216,6 +216,7 @@
     "geoNumber": "latitude and longitude must be numbers",
     "geoRange": "latitude must be between -90 and 90, longitude between -180 and 180",
     "loadInterfaces": "failed to load interfaces",
+    "loadVlans": "failed to load VLANs",
     "requestPoll": "failed to request poll",
     "deleteNode": "failed to delete node",
     "deleteNodes": "failed to delete nodes",
@@ -260,6 +261,7 @@
     "overview": "Overview",
     "ap": "APs",
     "interfaces": "Interfaces",
+    "vlans": "VLANs",
     "neighbors": "Neighbors",
     "collection": "Collection",
     "events": "Events",
@@ -525,6 +527,18 @@
       "malformed": "Malformed response"
     },
     "partOfOutage": "part of this node’s outage"
+  },
+  "vlans": {
+    "colVlan": "VLAN",
+    "colName": "Name",
+    "colGateway": "Gateway",
+    "col": {
+      "access": "Access ports",
+      "trunk": "Trunk ports"
+    },
+    "notDefined": "Not defined",
+    "suspended": "Suspended",
+    "empty": "No VLANs read from this device yet."
   },
   "interfaces": {
     "emptyDiscovered": "No interfaces yet. They appear after an SNMP table walk, which needs a bound SNMP credential and a table metric.",

@@ -440,6 +440,16 @@ impl YagraMcp {
                        hour for Cisco Catalyst, Huawei and Meraki MS switches; null means not \
                        reported (not walked yet, another make, or a device that answers none of the \
                        VLAN tables), not that the port has no VLAN. \
+                       `vlans` is the node's VLANs by ID — the ones its VLAN table defines and the \
+                       ones its ports use as access, voice or native VLAN (a trunk's allowed list \
+                       adds none). Each has `name` (null when names were not read; Cisco reads \
+                       CISCO-VTP-MIB, Huawei Q-BRIDGE, a Meraki switch or MX its network's MX VLAN \
+                       list), `state` (active or suspended, Cisco only), `defined` (false means a \
+                       port uses a VLAN the device's own table does not list — a configuration gap; \
+                       null means not judged, always for Meraki), `subnet` (Meraki only) and \
+                       `gateway` — the VLAN interface that routes it (Vlan30, Vlanif30) with its \
+                       addresses, or for a Meraki switch the network's MX, named by `node_id`. \
+                       Empty until the hourly VLAN walk has run. \
                        `snmp_configured` says whether SNMP polling is CONFIGURED for this node — a \
                        credential bound to it, or the deployment-wide fallback community — and NOT \
                        whether the device is answering. False means no ifTable or CDP/LLDP walk \
@@ -571,6 +581,13 @@ impl YagraMcp {
         // The site's zone and delivery state, from the function the REST detail calls (ADR-252).
         let local_time =
             crate::api::nodes::local_time_of(admin, node.group.map(|g| g.as_uuid())).await;
+        // The node's VLANs, from the function `GET /nodes/{id}/vlans` calls, narrowed to the same
+        // scope (ADR-257). Best effort like the interface list: a failed read leaves it empty.
+        let node_vlans = crate::api::vlans::node_vlans(admin, p.node_id, |n| {
+            scope.allows_node(&self.state, NodeId::from(n))
+        })
+        .await
+        .unwrap_or_default();
         let dto = NodeStatusDto {
             node: NodeSummaryDto::from_node(
                 &node,
@@ -629,6 +646,7 @@ impl YagraMcp {
                     )
                 })
                 .collect(),
+            vlans: node_vlans,
         };
         ok_json(TOOL, &dto)
     }

@@ -82,6 +82,7 @@ import type {
   ImportReport,
   InterfaceHeatmap,
   InterfaceRow,
+  NodeVlan,
   RankedInterfaces,
   InterfaceTopMetric,
   InterfaceSeries,
@@ -1369,6 +1370,10 @@ export const api = {
   /** Interfaces discovered on a node, with query-time utilization. Empty in skeleton mode. */
   listNodeInterfaces: (id: string): Promise<InterfaceRow[]> =>
     apiGet('/api/v1/nodes/{node_id}/interfaces', { path: { node_id: id } }),
+
+  /** A node's VLANs by name, with their gateways (ADR-257). */
+  listNodeVlans: (id: string): Promise<NodeVlan[]> =>
+    apiGet('/api/v1/nodes/{node_id}/vlans', { path: { node_id: id } }),
 
   /** Per-interface throughput + error time-series for the detail charts (defaults: last hour). */
   getInterfaceSeries: (

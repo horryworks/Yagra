@@ -1289,6 +1289,10 @@ pub(crate) struct NodeDetail {
     /// ⚠️ Over-reports rather than under-reports — see
     /// `PollDispatcher::snmp_configured_for`, which is the one place the rule lives.
     snmp_configured: bool,
+    /// Whether this node's VLANs are read, and so whether the node detail offers its VLANs tab
+    /// (ADR-257 decision 8): a Cisco or Huawei device polled over SNMP, or a Meraki switch or MX.
+    /// Decided by `api::vlans::vlans_read_for` alone — do not re-derive it from `vendor`.
+    vlans_read: bool,
     /// The IANA zone this node's site keeps time in (ADR-252): its folder's own, else the nearest
     /// ancestor's, NetBox's winning over a person's on each folder (ADR-226 decision 6). `null` ⇒
     /// no folder above it names one; the screen then shows no local clock.
@@ -1417,6 +1421,11 @@ async fn get_node(
     // Asked of the dispatcher, which is the only holder of the environment community — before the
     // struct literal below moves `node`'s fields out.
     let snmp_configured = admin.dispatcher.snmp_configured_for(&node);
+    let vlans_read = super::vlans::vlans_read_for(
+        node.vendor.as_deref(),
+        snmp_configured,
+        meraki_device.as_ref().map(|m| m.product_type.as_str()),
+    );
     // One whole-table read of `node_groups` per detail GET — the same profile the pool fact beside
     // it already accepts, against a table of hundreds of rows.
     let inherited_tags = super::util::tag_resolver(admin).await.inherited(&node);
@@ -1452,6 +1461,7 @@ async fn get_node(
         group_id: node.group.map(|g| g.as_uuid()),
         pool: node.pool,
         snmp_configured,
+        vlans_read,
         time_zone,
         delivery,
         notes,

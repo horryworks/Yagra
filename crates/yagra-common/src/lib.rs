@@ -163,8 +163,8 @@ pub use url_check::{
     METRIC_HTTP_UP, METRIC_NAME_MAX_LEN, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
 };
 pub use vlan::{
-    ids_from_bitmap, parse_vlan_list, ranges_from_ids, PortMode, PortVlan, VlanDialect, VlanRange,
-    VlanSnapshot, VLAN_MAX, VLAN_MIN,
+    ids_from_bitmap, parse_vlan_list, ranges_from_ids, svi_vlan, PortMode, PortVlan, VlanDialect,
+    VlanName, VlanRange, VlanSnapshot, VlanState, VLAN_MAX, VLAN_MIN,
 };
 pub use wlan::{
     ap_id, assign_radio_slots, cisco_airespace_run_state, huawei_run_state, sanitize_wlan_text,

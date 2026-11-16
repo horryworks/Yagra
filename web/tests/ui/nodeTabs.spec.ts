@@ -42,9 +42,12 @@ function nodeOf(subject: NodeDetailSubject): Json {
   const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as {
     kind: NodeKind;
     snmp_configured: boolean;
+    vlans_read: boolean;
     wireless: unknown;
     meraki_device: unknown;
   };
+  // Stated like `snmp_configured`: the generator answers every boolean `false` (ADR-257).
+  body.vlans_read = subject.vlansRead;
   body.kind = subject.kind;
   body.snmp_configured = subject.snmpConfigured;
   // 🚨 Stated, never inherited. The generator fills every optional field, so the generated node
@@ -95,7 +98,7 @@ const SNMP_STATES = [
 const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
   ...NODE_KINDS.flatMap((kind) =>
     SNMP_STATES.map(({ snmpConfigured, name }) => ({
-      subject: { kind, snmpConfigured, isWlanController: false, merakiProductType: null },
+      subject: { kind, snmpConfigured, isWlanController: false, merakiProductType: null, vlansRead: false },
       name: `a ${kind} node (${name})`,
     })),
   ),
@@ -105,8 +108,20 @@ const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
       snmpConfigured: true,
       isWlanController: true,
       merakiProductType: null,
+      vlansRead: false,
     },
     name: 'a device that is a wireless controller',
+  },
+  // ADR-257: a Cisco or Huawei device, whose VLANs are read — the only device with the VLANs tab.
+  {
+    subject: {
+      kind: 'device',
+      snmpConfigured: true,
+      isWlanController: false,
+      merakiProductType: null,
+      vlansRead: true,
+    },
+    name: 'a device whose VLANs are read',
   },
   // ADR-167: a Meraki switch shows Interfaces, and an MX — SNMP flag set, as a default community
   // leaves it — does not.
@@ -116,6 +131,7 @@ const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
       snmpConfigured: false,
       isWlanController: false,
       merakiProductType: 'switch',
+      vlansRead: true,
     },
     name: 'a Meraki switch',
   },
@@ -126,6 +142,7 @@ const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
       snmpConfigured: false,
       isWlanController: false,
       merakiProductType: 'wireless',
+      vlansRead: false,
     },
     name: 'a Meraki access point',
   },
@@ -135,6 +152,7 @@ const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
       snmpConfigured: true,
       isWlanController: false,
       merakiProductType: 'appliance',
+      vlansRead: true,
     },
     name: 'a Meraki appliance',
   },
@@ -191,6 +209,8 @@ const SNMP_DEVICE: NodeDetailSubject = {
   snmpConfigured: true,
   isWlanController: false,
   merakiProductType: null,
+  // So the widest device here clicks the VLANs tab too (ADR-257).
+  vlansRead: true,
 };
 
 test.describe('clicking a tab', () => {

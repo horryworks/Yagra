@@ -21,6 +21,7 @@ import { useRefreshTick } from '../../lib/refreshTick';
 import { useNodeTabStore } from '../../store';
 import type {
   InterfaceRow,
+  NodeVlan,
   NodeDetail as NodeDetailData,
   NodeGroup,
   NodeStatus,
@@ -34,6 +35,7 @@ import { InterfacesTab } from './InterfacesTab';
 import { StateAlertsButton } from './StateAlertsButton';
 import type { PortFocus } from './alertJump';
 import { NeighborsTab } from './NeighborsTab';
+import { VlansTab } from './VlansTab';
 import { ApTab } from './ApTab';
 import { CollectionTab } from './CollectionTab';
 import { EventsTab } from './EventsTab';
@@ -147,6 +149,7 @@ export function NodeDetail({
             snmpConfigured: node.snmp_configured,
             isWlanController: node.wireless?.controller != null,
             merakiProductType: node.meraki_device?.product_type ?? null,
+            vlansRead: node.vlans_read,
           }
         : null,
     [node],
@@ -164,6 +167,9 @@ export function NodeDetail({
   const [ifLoaded, setIfLoaded] = useState(false);
   const [ifError, setIfError] = useState<string | null>(null);
   const [collCount, setCollCount] = useState<number | null>(null);
+  const [vlans, setVlans] = useState<NodeVlan[]>([]);
+  const [vlansLoaded, setVlansLoaded] = useState(false);
+  const [vlansError, setVlansError] = useState<string | null>(null);
   /** The port an alert in the header asked the Interfaces tab to select (ADR-238 decision 3). */
   const [portFocus, setPortFocus] = useState<PortFocus | null>(null);
   // Counts every request, so it never repeats while the request itself is cleared after use.
@@ -242,7 +248,39 @@ export function NodeDetail({
     setInterfaces([]);
     setIfError(null);
     setIfLoaded(false);
+    setVlans([]);
+    setVlansError(null);
+    setVlansLoaded(false);
   }, [nodeId]);
+
+  // The node's VLANs (ADR-257), for the tab and its pill. Not on the refresh tick: names change on
+  // the device's own schedule and are read hourly, so a re-read per tick would only repeat itself.
+  const hasVlans = subject != null && visibleNodeDetailTabs(subject).includes('vlans');
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasVlans) {
+      setVlans([]);
+      setVlansError(null);
+      setVlansLoaded(true);
+      return;
+    }
+    api
+      .listNodeVlans(nodeId)
+      .then((r) => {
+        if (cancelled) return;
+        setVlans(r);
+        setVlansError(null);
+        setVlansLoaded(true);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setVlansError(errMsg(e, t('err.loadVlans')));
+        setVlansLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, quietNonce, reloadKey, t, hasVlans]);
 
   // Whether this node can have interfaces at all. Gates the eager fetch below: a URL/DNS/Meraki
   // node never gets an ifTable walk, and neither does a ping-only device, so asking every refresh
@@ -454,6 +492,7 @@ export function NodeDetail({
     state,
     wlanController: node.wireless?.controller ?? null,
     configAttention,
+    vlans,
   };
   // Keyed by NodeDetailTab, so adding a tab to NODE_DETAIL_TABS without a body fails to compile.
   const tabBodies: Record<NodeDetailTab, ReactNode> = {
@@ -487,6 +526,9 @@ export function NodeDetail({
         focus={portFocus}
         onFocusApplied={clearPortFocus}
       />
+    ),
+    vlans: (
+      <VlansTab rows={vlans} loaded={vlansLoaded} error={vlansError} interfaces={interfaces} />
     ),
     neighbors: <NeighborsTab node={node} />,
     collection: <CollectionTab node={node} canEdit={canEdit} />,

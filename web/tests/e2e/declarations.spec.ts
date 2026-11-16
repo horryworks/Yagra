@@ -47,6 +47,8 @@ interface NodeDetailRow {
   /** Present only on a Meraki node; only a switch or an access point has rows to list (ADR-167,
    *  ADR-168). */
   meraki_device?: { product_type: string } | null;
+  /** Whether the node's VLANs are read — the VLANs tab's axis (ADR-257). */
+  vlans_read: boolean;
 }
 
 interface RoleMatrix {
@@ -87,6 +89,8 @@ test('every node kind the deployment actually holds is one the tab rules know', 
       isWlanController: detail.wireless?.controller != null,
       // Likewise: only a Meraki switch or access point has rows to list (ADR-167, ADR-168).
       merakiProductType: detail.meraki_device?.product_type ?? null,
+      // The server's answer for the VLANs tab (ADR-257), off the same document.
+      vlansRead: detail.vlans_read,
     };
     const who = `${node.name} is a ${node.kind}${subject.snmpConfigured ? '' : ' with no SNMP'}`;
 

@@ -45,7 +45,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use yagra_common::{
-    ids_from_bitmap, ranges_from_ids, PortMode, PortVlan, VlanDialect, VlanRange, VlanSnapshot,
+    ids_from_bitmap, ranges_from_ids, PortMode, PortVlan, VlanDialect, VlanName, VlanRange,
+    VlanSnapshot, VlanState,
 };
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
@@ -108,6 +109,118 @@ pub fn columns(dialect: VlanDialect) -> Vec<String> {
         VlanDialect::Unknown => &[],
     };
     set.iter().map(|s| (*s).to_owned()).collect()
+}
+
+// ---- VLAN names (ADR-257) ----
+/// CISCO-VTP-MIB `vtpVlanState`, indexed `managementDomainIndex.vlanIndex`.
+const CISCO_VTP_VLAN_STATE: &str = "1.3.6.1.4.1.9.9.46.1.3.1.1.2";
+/// `vtpVlanType`: 1 is ethernet; the others are the FDDI / Token Ring defaults 1002-1005.
+const CISCO_VTP_VLAN_TYPE: &str = "1.3.6.1.4.1.9.9.46.1.3.1.1.3";
+/// `vtpVlanName`.
+const CISCO_VTP_VLAN_NAME: &str = "1.3.6.1.4.1.9.9.46.1.3.1.1.4";
+/// Q-BRIDGE `dot1qVlanStaticName`, indexed by the VLAN ID. Read on Huawei only: both YunShan and
+/// VRP answered Q-BRIDGE when walked for ADR-201, and HUAWEI-L2VLAN-MIB was never measured.
+const QBRIDGE_STATIC_NAME: &str = "1.3.6.1.2.1.17.7.1.4.3.1.1";
+
+/// The longest name kept, in characters. Both tables define 32; this only bounds what a device
+/// answering out of spec can put on the bus.
+const MAX_VLAN_NAME_CHARS: usize = 64;
+
+/// The columns the VLAN-name walk reads for a dialect (ADR-257 decision 1). A separate walk from
+/// [`columns`], so a device without the name table still sends its ports.
+#[must_use]
+pub fn name_columns(dialect: VlanDialect) -> Vec<String> {
+    let set: &[&str] = match dialect {
+        VlanDialect::Cisco => &[
+            CISCO_VTP_VLAN_STATE,
+            CISCO_VTP_VLAN_TYPE,
+            CISCO_VTP_VLAN_NAME,
+        ],
+        VlanDialect::Huawei => &[QBRIDGE_STATIC_NAME],
+        VlanDialect::Unknown => &[],
+    };
+    set.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// The VLANs a device defines, from the rows of [`name_columns`].
+///
+/// `None` when the walk produced **no name at all**. Every switch defines at least VLAN 1, so an
+/// empty table is an agent that does not implement it (an agent answering "no such object" counts
+/// as answered), not a switch with no VLANs — and reading it as "defines none" would mark every
+/// VLAN in use as not defined.
+#[must_use]
+pub fn assemble_names(dialect: VlanDialect, rows: &[SnmpInstanceRow]) -> Option<Vec<VlanName>> {
+    let names = match dialect {
+        VlanDialect::Cisco => cisco_names(rows),
+        VlanDialect::Huawei => qbridge_names(rows),
+        VlanDialect::Unknown => Vec::new(),
+    };
+    (!names.is_empty()).then_some(names)
+}
+
+/// A device's name octets as text: invalid UTF-8 replaced, trimmed, control characters dropped and
+/// bounded to [`MAX_VLAN_NAME_CHARS`].
+fn name_text(b: &[u8]) -> String {
+    String::from_utf8_lossy(b)
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_VLAN_NAME_CHARS)
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
+/// A VLAN ID from the last arc of an instance, when it is one.
+fn vlan_arc(inst: &[u32]) -> Option<u16> {
+    let v = u16::try_from(*inst.last()?).ok()?;
+    (yagra_common::VLAN_MIN..=yagra_common::VLAN_MAX)
+        .contains(&v)
+        .then_some(v)
+}
+
+fn cisco_names(rows: &[SnmpInstanceRow]) -> Vec<VlanName> {
+    let state = column(rows, CISCO_VTP_VLAN_STATE);
+    let kind = column(rows, CISCO_VTP_VLAN_TYPE);
+    column(rows, CISCO_VTP_VLAN_NAME)
+        .into_iter()
+        .filter_map(|(inst, v)| {
+            // The index is `domain.vlan`; a VLAN listed under two domains keeps the first.
+            let [_, _] = inst.as_slice() else { return None };
+            let id = vlan_arc(&inst)?;
+            // Only ethernet VLANs. A row with no type answered is kept rather than guessed away.
+            if let Some(SnmpValue::Int(t)) = kind.get(&inst) {
+                if *t != 1 {
+                    return None;
+                }
+            }
+            let name = match v {
+                SnmpValue::Bytes(b) => name_text(b),
+                _ => return None,
+            };
+            let state = match state.get(&inst) {
+                Some(SnmpValue::Int(1)) => Some(VlanState::Active),
+                Some(SnmpValue::Int(2)) => Some(VlanState::Suspended),
+                Some(_) => Some(VlanState::Unknown),
+                None => None,
+            };
+            Some(VlanName { id, name, state })
+        })
+        .collect()
+}
+
+fn qbridge_names(rows: &[SnmpInstanceRow]) -> Vec<VlanName> {
+    column(rows, QBRIDGE_STATIC_NAME)
+        .into_iter()
+        .filter_map(|(inst, v)| {
+            let [_] = inst.as_slice() else { return None };
+            let SnmpValue::Bytes(b) = v else { return None };
+            Some(VlanName {
+                id: vlan_arc(&inst)?,
+                name: name_text(b),
+                state: None,
+            })
+        })
+        .collect()
 }
 
 /// Build the snapshot for `dialect` from every walked row.
@@ -358,6 +471,103 @@ mod tests {
         let mut b = vec![0xffu8; 128];
         b[0] = 0x7f;
         b
+    }
+
+    /// A VTP table in the shape a Catalyst answers: domain 1, the four FDDI / Token Ring defaults,
+    /// a suspended VLAN, a padded name, and an empty one. The names are made up (ADR-165).
+    fn vtp_rows() -> Vec<SnmpInstanceRow> {
+        let mut r = Vec::new();
+        for (vlan, state, kind, name) in [
+            (1u32, 1i64, 1i64, "default"),
+            (10, 1, 1, "MGMT"),
+            (30, 1, 1, " VOICE "),
+            (200, 2, 1, "GUEST"),
+            (300, 1, 1, ""),
+            (1002, 1, 2, "fddi-default"),
+            (1003, 1, 3, "token-ring-default"),
+            (1004, 1, 4, "fddinet-default"),
+            (1005, 1, 5, "trnet-default"),
+        ] {
+            r.push(int(CISCO_VTP_VLAN_STATE, &[1, vlan], state));
+            r.push(int(CISCO_VTP_VLAN_TYPE, &[1, vlan], kind));
+            r.push(oct(
+                CISCO_VTP_VLAN_NAME,
+                &[1, vlan],
+                name.as_bytes().to_vec(),
+            ));
+        }
+        r
+    }
+
+    #[test]
+    fn cisco_names_come_from_the_vtp_table_with_the_token_ring_defaults_dropped() {
+        let n = assemble_names(VlanDialect::Cisco, &vtp_rows()).unwrap();
+        let got: Vec<_> = n.iter().map(|v| (v.id, v.name.as_str(), v.state)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (1, "default", Some(VlanState::Active)),
+                (10, "MGMT", Some(VlanState::Active)),
+                (30, "VOICE", Some(VlanState::Active)),
+                (200, "GUEST", Some(VlanState::Suspended)),
+                (300, "", Some(VlanState::Active)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_vlan_under_two_vtp_domains_is_named_once_by_the_first() {
+        let rows = vec![
+            oct(CISCO_VTP_VLAN_NAME, &[2, 10], b"second".to_vec()),
+            oct(CISCO_VTP_VLAN_NAME, &[1, 10], b"first".to_vec()),
+        ];
+        let s = VlanSnapshot::new(Vec::new()).with_names(assemble_names(VlanDialect::Cisco, &rows));
+        let n = s.names.unwrap();
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].name, "first");
+        // No state or type answered: the row is kept, with no state.
+        assert_eq!(n[0].state, None);
+    }
+
+    #[test]
+    fn huawei_names_come_from_qbridge_and_carry_no_state() {
+        let rows = vec![
+            oct(QBRIDGE_STATIC_NAME, &[1], b"VLAN 0001".to_vec()),
+            oct(QBRIDGE_STATIC_NAME, &[110], b"PRINTERS".to_vec()),
+            oct(QBRIDGE_STATIC_NAME, &[4095], b"reserved".to_vec()),
+            // A two-arc instance is not this table's shape.
+            oct(QBRIDGE_STATIC_NAME, &[1, 5], b"x".to_vec()),
+        ];
+        let n = assemble_names(VlanDialect::Huawei, &rows).unwrap();
+        let got: Vec<_> = n.iter().map(|v| (v.id, v.name.as_str(), v.state)).collect();
+        assert_eq!(got, vec![(1, "VLAN 0001", None), (110, "PRINTERS", None)]);
+    }
+
+    #[test]
+    fn an_empty_name_table_is_not_read_rather_than_defines_none() {
+        assert_eq!(assemble_names(VlanDialect::Cisco, &[]), None);
+        assert_eq!(assemble_names(VlanDialect::Huawei, &[]), None);
+        assert_eq!(assemble_names(VlanDialect::Unknown, &vtp_rows()), None);
+    }
+
+    #[test]
+    fn a_name_is_bounded_and_stripped_of_control_characters() {
+        let mut long = b"\x07A\nB".to_vec();
+        long.extend(std::iter::repeat_n(b'x', 200));
+        let rows = vec![oct(QBRIDGE_STATIC_NAME, &[7], long)];
+        let n = assemble_names(VlanDialect::Huawei, &rows).unwrap();
+        assert!(n[0].name.starts_with("AB"));
+        assert_eq!(n[0].name.chars().count(), MAX_VLAN_NAME_CHARS);
+    }
+
+    #[test]
+    fn each_dialect_reads_names_from_tables_its_port_walk_does_not() {
+        for d in [VlanDialect::Cisco, VlanDialect::Huawei] {
+            let ports = columns(d);
+            assert!(!name_columns(d).is_empty());
+            assert!(name_columns(d).iter().all(|c| !ports.contains(c)));
+        }
+        assert!(name_columns(VlanDialect::Unknown).is_empty());
     }
 
     /// The shape of a lab Catalyst 3850: an access port that also carries the trunk table's default

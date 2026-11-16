@@ -141,6 +141,68 @@ pub struct NetworkLan {
     pub read_at: DateTime<Utc>,
 }
 
+/// What one network's LAN read found, as it is recorded: the addresses in the order the MX choice
+/// reads them, and the VLANs for the VLANs tab.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkLanRead {
+    pub network_id: String,
+    pub ips: Vec<IpAddr>,
+    pub vlans: Vec<NetworkVlan>,
+}
+
+/// One VLAN of an MX network as the VLANs tab shows it (ADR-257 decision 4), stored as one element of
+/// `meraki_org_networks.lan_vlans`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NetworkVlan {
+    /// The VLAN ID, 1..=4094.
+    pub id: u16,
+    /// The name the Dashboard gives it; empty when it gives none.
+    #[serde(default)]
+    pub name: String,
+    /// Its subnet as the Dashboard wrote it (`10.1.0.0/24`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subnet: Option<String>,
+    /// The MX's own address on it — the VLAN's gateway.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appliance_ip: Option<IpAddr>,
+}
+
+/// The longest VLAN name kept, in characters: the Dashboard's own field is short, and this bounds
+/// what a response out of spec can store.
+const MAX_NETWORK_VLAN_NAME_CHARS: usize = 64;
+
+/// A network's VLANs for the VLANs tab: numbered ones only (a single LAN has no VLAN), by ID, each
+/// once, the name trimmed and bounded. Pure.
+#[must_use]
+pub fn network_vlans(addrs: &[MerakiLanAddress]) -> Vec<NetworkVlan> {
+    let mut out: Vec<NetworkVlan> = addrs
+        .iter()
+        .filter_map(|a| {
+            let id = u16::try_from(a.vlan_id?).ok()?;
+            (yagra_common::VLAN_MIN..=yagra_common::VLAN_MAX)
+                .contains(&id)
+                .then(|| NetworkVlan {
+                    id,
+                    name: a
+                        .name
+                        .as_deref()
+                        .unwrap_or_default()
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .take(MAX_NETWORK_VLAN_NAME_CHARS)
+                        .collect::<String>()
+                        .trim()
+                        .to_owned(),
+                    subnet: a.subnet.as_deref().map(str::trim).map(str::to_owned),
+                    appliance_ip: a.appliance_ip.as_deref().and_then(usable_address),
+                })
+        })
+        .collect();
+    out.sort_by_key(|v| v.id);
+    out.dedup_by_key(|v| v.id);
+    out
+}
+
 /// Per network whose LAN side has been read, the address its MX takes (`None` when it has no LAN
 /// address). A network that has never been read is absent.
 pub type LanAddresses = HashMap<String, Option<IpAddr>>;
@@ -155,7 +217,7 @@ pub fn lan_order(addrs: &[MerakiLanAddress]) -> Vec<IpAddr> {
     let mut seen = HashSet::new();
     sorted
         .into_iter()
-        .filter_map(|a| usable_address(&a.appliance_ip))
+        .filter_map(|a| a.appliance_ip.as_deref().and_then(usable_address))
         .filter(|ip| seen.insert(*ip))
         .collect()
 }
@@ -1853,10 +1915,53 @@ mod tests {
         s.parse().expect("ip")
     }
 
+    #[test]
+    fn a_networks_vlans_are_numbered_ordered_and_named() {
+        let v = |id: Option<u32>, ip: Option<&str>, name: Option<&str>| MerakiLanAddress {
+            vlan_id: id,
+            appliance_ip: ip.map(Into::into),
+            name: name.map(Into::into),
+            subnet: id.map(|i| format!("10.0.{i}.0/24")),
+        };
+        let got = network_vlans(&[
+            v(Some(30), None, Some(" Voice ")),
+            v(Some(10), Some("10.0.10.1"), Some("Data")),
+            v(None, Some("10.9.0.1"), None),
+            v(Some(10), Some("10.0.10.9"), Some("again")),
+            v(Some(5000), Some("10.0.0.1"), Some("out of range")),
+            v(Some(20), Some("not an ip"), None),
+        ]);
+        assert_eq!(
+            got,
+            vec![
+                NetworkVlan {
+                    id: 10,
+                    name: "Data".into(),
+                    subnet: Some("10.0.10.0/24".into()),
+                    appliance_ip: Some(ip("10.0.10.1")),
+                },
+                NetworkVlan {
+                    id: 20,
+                    name: String::new(),
+                    subnet: Some("10.0.20.0/24".into()),
+                    appliance_ip: None,
+                },
+                NetworkVlan {
+                    id: 30,
+                    name: "Voice".into(),
+                    subnet: Some("10.0.30.0/24".into()),
+                    appliance_ip: None,
+                },
+            ]
+        );
+    }
+
     fn lan(vlan_id: Option<u32>, ip: &str) -> MerakiLanAddress {
         MerakiLanAddress {
             vlan_id,
-            appliance_ip: ip.to_owned(),
+            appliance_ip: Some(ip.to_owned()),
+            name: None,
+            subnet: None,
         }
     }
 

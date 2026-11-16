@@ -1,0 +1,12 @@
+-- 0177_meraki_network_vlans - each MX network's VLANs, named (ADR-257 decision 4).
+--
+-- reversible: additive only - one nullable column on `meraki_org_networks`, nothing narrowed and
+-- nothing rewritten. An older core never names this column: its LAN read writes `lan_ips` and
+-- `lan_read_at` as before and leaves this one where it was, so rolling the binary back leaves the
+-- value in place, unread, and rolling forward again finds it (refreshed by the next LAN read). No
+-- `schema_compat` floor, for the reason 0108 records.
+--
+-- Written by the same per-network read that writes `lan_ips` (ADR-164 decision 28), from the same
+-- answer: one JSON array per network of {id, name, subnet, appliance_ip}. NULL until that read has
+-- run once under a core that writes it; `[]` is a network read and holding no VLAN.
+ALTER TABLE meraki_org_networks ADD COLUMN lan_vlans JSONB;

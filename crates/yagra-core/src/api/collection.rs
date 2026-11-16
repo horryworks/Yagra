@@ -695,7 +695,7 @@ pub(crate) struct InterfaceRow {
 ///
 /// Every address the device lists is here, in a fixed order (IPv4 before IPv6, numeric within
 /// each), so a secondary is as visible as the primary — SNMP does not say which is which.
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceAddress {
     /// The address itself, in its usual text form; never narrowed to IPv4.
     pub(crate) ip: String,
