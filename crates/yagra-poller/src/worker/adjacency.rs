@@ -161,6 +161,8 @@ pub(super) async fn execute_vlans(
         tracing::debug!(job_id = %job.job_id, "VLAN walk for a dialect this poller does not know");
         return r;
     }
+    let timeout = vlan_column_timeout(timeout);
+    let started = std::time::Instant::now();
     match walker
         .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_WALK_ROWS)
         .await
@@ -176,9 +178,12 @@ pub(super) async fn execute_vlans(
         Ok(walk) => {
             // A walk that filled its row budget lands here too, whichever column it was cut in.
             metrics::counter!("yagra_vlan_walk_incomplete_total").increment(1);
-            tracing::debug!(
+            // Info, not debug: this is the line that says how far short a slow device fell, and it
+            // comes at most once an hour per node (ADR-201 Increment 2).
+            tracing::info!(
                 job_id = %job.job_id,
                 rows = walk.rows.len(),
+                elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 "VLAN walk incomplete; nothing sent"
             );
         }
@@ -206,6 +211,7 @@ async fn walk_vlan_names(
     if columns.is_empty() {
         return None;
     }
+    let timeout = vlan_column_timeout(timeout);
     match walker
         .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_NAME_ROWS)
         .await
@@ -227,6 +233,26 @@ async fn walk_vlan_names(
             None
         }
     }
+}
+
+/// The shortest per-round-trip wait the VLAN walks use (ADR-201 Increment 2). The walk's budget is
+/// eight of these, so this also takes it from 16 s to 40 s.
+///
+/// **Why not the job's own 2 s.** Measured on the PoC: a two-member Huawei S6730 stack (VRP 5.170,
+/// 230 interfaces) spent the whole 16 s budget on the first six of Huawei's twelve columns, every
+/// hour, so its ports never once showed a VLAN — the walk sends nothing unless every column
+/// answered. VRP is slow on Huawei's own tables (the patch table in ADR-138 Increment 4 is the
+/// same habit), and the trunk and hybrid columns carry 256 bytes per port each.
+///
+/// ⚠️ 40 s is an estimate, not a measurement: the six columns not reached include four of those
+/// heavy ones. It also stays inside `table_plan`'s 60 s single-flight floor, so a one-minute job
+/// queued behind this walk on the same device waits rather than being shed.
+const VLAN_COLUMN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The wait for the VLAN walks: [`VLAN_COLUMN_TIMEOUT`], or the job's own when that is longer — a
+/// job already more patient is never made less so.
+fn vlan_column_timeout(job_timeout: Duration) -> Duration {
+    job_timeout.max(VLAN_COLUMN_TIMEOUT)
 }
 
 /// The most rows the name walk may collect: three columns over every usable VLAN ID, under one VTP
@@ -759,6 +785,35 @@ mod tests {
                 value: yagra_transport::SnmpValue::Int(10),
             })
             .collect()
+    }
+
+    /// ADR-201 Increment 2: both VLAN walks — the ports and the names — wait 5 s per round trip,
+    /// not the job's 2 s. At 2 s a VRP stack spent its whole budget on half the columns and never
+    /// sent a VLAN.
+    #[tokio::test]
+    async fn the_vlan_walks_wait_longer_than_the_job() {
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_instances = access_ports(3);
+        let r = execute(&vlan_job(), &fake, 0).await;
+        assert!(r.vlans.is_some());
+        assert_eq!(
+            fake.instance_walk_timeouts(),
+            vec![VLAN_COLUMN_TIMEOUT; 2],
+            "the port walk and the name walk"
+        );
+    }
+
+    /// A job already more patient than [`VLAN_COLUMN_TIMEOUT`] keeps its own wait.
+    #[test]
+    fn a_longer_job_timeout_is_kept() {
+        assert_eq!(
+            vlan_column_timeout(Duration::from_secs(2)),
+            VLAN_COLUMN_TIMEOUT
+        );
+        assert_eq!(
+            vlan_column_timeout(Duration::from_secs(9)),
+            Duration::from_secs(9)
+        );
     }
 
     /// The ADR-201 property in the direction that sends: every column answered, under the cap.
