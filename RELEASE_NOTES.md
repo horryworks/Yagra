@@ -13,6 +13,7 @@
 ### Bug Fixes
 
 - **Port VLANs and VLAN names now reach a large, slow Huawei VRP stack.** The hourly VLAN walk had 16 seconds for all twelve of Huawei's columns; a two-member VRP 5.170 stack with 230 interfaces used them up halfway, every hour, and because the walk sends nothing unless every column answers, its ports never showed a VLAN and its VLANs tab stayed empty. Both VLAN walks now wait 5 seconds per request instead of 2, which gives them 40 seconds. A walk that still runs out logs `VLAN walk incomplete` at info level with the time it took (ADR-201 Inc.2).
+- **A10 Networks appliances now get their model and serial number.** ACOS answers no ENTITY-MIB, where Yagra reads both, so an A10 showed only its vendor and OS version. The model is now the word before `, ACOS` in its `sysDescr` (`TH3040S`, `vThunder`), the same place LibreNMS reads it, and the serial comes from A10-AX-MIB's `axSysSerialNumber.0`. Both appear after the node's next hourly identity read; a model an operator typed or a classification rule names still wins (ADR-147 Inc.12).
 
 ## v0.3.80 — Name each node's VLANs in a tab beside Interfaces, and select every row of a table from one box in its header
 

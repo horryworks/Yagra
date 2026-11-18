@@ -56,7 +56,11 @@ pub fn identify(sysdescr: &str) -> DeviceIdentity {
     let d = sysdescr.to_ascii_lowercase();
     // (vendor, model-token prefixes to look for).
     let (vendor, prefixes): (Option<&str>, &[&str]) =
-        if d.contains("huawei") || d.contains("vrp") || d.contains("usg") {
+        // First, and matched with its case: `, ACOS ` is A10's own spelling, and the model before
+        // it has no prefix to look for (`vThunder` has no digit) — see `acos_model`.
+        if sysdescr.contains(ACOS_MARK) {
+            (Some("A10 Networks"), &[])
+        } else if d.contains("huawei") || d.contains("vrp") || d.contains("usg") {
             // `ac` and `airengine` are its wireless controllers (`Huawei AC6508`), which no other
             // prefix matched, so they stored no model at all (ADR-147 Inc.8 decision 33).
             (Some("Huawei"), HUAWEI_MODEL_PREFIXES)
@@ -80,10 +84,41 @@ pub fn identify(sysdescr: &str) -> DeviceIdentity {
     let yunshan = (vendor == Some("Huawei"))
         .then(|| yunshan_model(sysdescr))
         .flatten();
+    let acos = (vendor == Some("A10 Networks"))
+        .then(|| acos_model(sysdescr))
+        .flatten();
     DeviceIdentity {
         vendor: vendor.map(str::to_owned),
-        model: yunshan.or_else(|| extract_model(sysdescr, prefixes)),
+        model: yunshan
+            .or(acos)
+            .or_else(|| extract_model(sysdescr, prefixes)),
     }
+}
+
+/// What every A10 ACOS `sysDescr` puts right after the model: `… Gateway TH3040S, ACOS 4.1.4-GR1-P3,`.
+const ACOS_MARK: &str = ", ACOS ";
+
+/// The longest model [`acos_model`] takes. A word longer than this is not a model.
+const ACOS_MODEL_MAX_CHARS: usize = 64;
+
+/// The model an A10 ACOS device names right before `, ACOS ` (ADR-147 Increment 12, decision 40).
+///
+/// ACOS answers no ENTITY-MIB at all, so this is where its model is. The cut is LibreNMS's
+/// `acos.yaml`, `(?<hardware>\S+( TPS)?), ACOS`: the word before the mark, and the word before that
+/// too when the last one is `TPS` (`TH6435 TPS`). No digit is asked for — a virtual appliance names
+/// itself `vThunder`. `None` when that word is missing or is not printable ASCII of a model's length,
+/// since `sysDescr` is the device's own untrusted text.
+fn acos_model(sysdescr: &str) -> Option<String> {
+    let (before, _) = sysdescr.split_once(ACOS_MARK)?;
+    let mut words = before.split_whitespace().rev();
+    let last = words.next()?;
+    let model = if last == "TPS" {
+        format!("{} TPS", words.next()?)
+    } else {
+        last.to_owned()
+    };
+    let printable = model.chars().all(|c| c.is_ascii_graphic() || c == ' ');
+    (printable && model.len() <= ACOS_MODEL_MAX_CHARS).then_some(model)
 }
 
 /// The model a YunShan OS device names on the last line of its `sysDescr` (ADR-147 Increment 7).
@@ -370,6 +405,53 @@ Huawei Versatile Routing Platform Software
 VRP (R) software, Version 5.170 (S5731 V200R021C10SPC600)
 Copyright (C) 2000-2022 HUAWEI TECH Co., Ltd";
         assert_eq!(identify(vrp).model.as_deref(), Some("S5731-S48P4X"));
+    }
+
+    /// ADR-147 Increment 12: the A10 descriptions — the two shapes the PoC's five appliances
+    /// answered (2026-11-18) and the two LibreNMS recordings in `testdata/os_version_fixtures.json`.
+    /// The `TPS` line is written to LibreNMS's pattern, not taken from a recording or a device.
+    #[test]
+    fn an_a10_names_its_model_right_before_acos() {
+        for (descr, model) in [
+            (
+                "Thunder Series Unified Application Service Gateway TH3040S, ACOS 4.1.4-GR1-P3,",
+                "TH3040S",
+            ),
+            (
+                "Thunder Series Unified Application Service Gateway vThunder, ACOS 4.1.4-GR1-P3,",
+                "vThunder",
+            ),
+            (
+                "Thunder Series Unified Application Service Gateway TH5630, ACOS 4.1.0-P5,",
+                "TH5630",
+            ),
+            (
+                "AX Series Advanced Traffic Manager AXvThunder, ACOS 2.7.2-P4-SP1,",
+                "AXvThunder",
+            ),
+            (
+                "Thunder Series Threat Protection System TH6435 TPS, ACOS 3.2.2-P5,",
+                "TH6435 TPS",
+            ),
+        ] {
+            let id = identify(descr);
+            assert_eq!(id.vendor.as_deref(), Some("A10 Networks"), "{descr:?}");
+            assert_eq!(id.model.as_deref(), Some(model), "{descr:?}");
+        }
+    }
+
+    /// What is not an A10's model is not taken: no word before the mark, a word no model is, and
+    /// `acos` spelled any other way, which is not A10's description at all.
+    #[test]
+    fn an_a10_without_a_model_word_gets_no_model() {
+        let bare = identify(", ACOS 4.1.4,");
+        assert_eq!(bare.vendor.as_deref(), Some("A10 Networks"));
+        assert_eq!(bare.model, None);
+        assert_eq!(identify("TPS, ACOS 3.2.2,").model, None);
+        let long = format!("Gateway {}, ACOS 4.1.4,", "X".repeat(65));
+        assert_eq!(identify(&long).model, None);
+        assert_eq!(identify("Gateway TH\u{7}3040S, ACOS 4.1.4,").model, None);
+        assert_eq!(identify("Gateway TH3040S, acos 4.1.4,").vendor, None);
     }
 
     #[test]

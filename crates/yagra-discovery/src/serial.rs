@@ -81,6 +81,9 @@ pub const CLASS_CHASSIS: i64 = 3;
 pub const OID_JNX_VC_MEMBER_SERIAL: &str = "1.3.6.1.4.1.2636.3.40.1.4.1.1.1.2";
 /// `jnxBoxSerialNo` — the Juniper box's own serial, at instance `.0` (JUNIPER-MIB).
 pub const OID_JNX_BOX_SERIAL: &str = "1.3.6.1.4.1.2636.3.1.3";
+/// `axSysSerialNumber` — an A10 ACOS appliance's serial, at instance `.0` (A10-AX-MIB, `axSysInfo`).
+/// ACOS answers no ENTITY-MIB, so this is the only place its serial is (ADR-147 Increment 12).
+pub const OID_AX_SYS_SERIAL_NUMBER: &str = "1.3.6.1.4.1.22610.2.4.1.6.2";
 /// The longest serial — or list of a stack's serials — a node keeps. Longer is cut, never refused.
 /// Sized for [`SERIAL_MAX_CHASSIS`] serials of 22 characters with their separators (Inc.11
 /// decision 38); the longest measured is 20.
@@ -163,15 +166,23 @@ pub struct VendorRead {
 }
 
 /// The vendors [`vendor_read`] knows. A new vendor is one row here.
-const VENDOR_READS: &[VendorRead] = &[VendorRead {
-    name: "juniper",
-    enterprise: "1.3.6.1.4.1.2636",
-    origin: "LibreNMS/OS/Junos.php (jnxBoxSerialNo.0), with every JUNIPER-VIRTUALCHASSIS-MIB member listed first (ADR-147 decisions 2 and 11)",
-    columns: &[
-        VendorColumn::Members(OID_JNX_VC_MEMBER_SERIAL),
-        VendorColumn::Scalar(OID_JNX_BOX_SERIAL),
-    ],
-}];
+const VENDOR_READS: &[VendorRead] = &[
+    VendorRead {
+        name: "juniper",
+        enterprise: "1.3.6.1.4.1.2636",
+        origin: "LibreNMS/OS/Junos.php (jnxBoxSerialNo.0), with every JUNIPER-VIRTUALCHASSIS-MIB member listed first (ADR-147 decisions 2 and 11)",
+        columns: &[
+            VendorColumn::Members(OID_JNX_VC_MEMBER_SERIAL),
+            VendorColumn::Scalar(OID_JNX_BOX_SERIAL),
+        ],
+    },
+    VendorRead {
+        name: "a10",
+        enterprise: "1.3.6.1.4.1.22610",
+        origin: "resources/definitions/os_discovery/acos.yaml (A10-AX-MIB::axSysSerialNumber.0), measured on a PoC TH3040S on 2026-11-18 (ADR-147 decision 41)",
+        columns: &[VendorColumn::Scalar(OID_AX_SYS_SERIAL_NUMBER)],
+    },
+];
 
 /// The vendor whose own MIB this device's serial should be read from first, by the enterprise its
 /// `sysObjectID` names. `None` for every other device, which is read through ENTITY-MIB alone.
@@ -2014,6 +2025,36 @@ mod tests {
             .expect("the column")
             .insert(0, "BOX1".to_owned());
         assert_eq!(resolve_vendor(juniper(), &rows).as_deref(), Some("BOX1"));
+    }
+
+    /// ADR-147 Increment 12: an A10 is read from `axSysSerialNumber.0`, by its enterprise — both
+    /// `sysObjectID`s the PoC's appliances answered. The serial is made up, in the shape measured
+    /// (`TH` and letters and digits).
+    #[test]
+    fn an_a10_serial_comes_from_ax_sys_serial_number() {
+        for oid in ["1.3.6.1.4.1.22610.1.3.35", "1.3.6.1.4.1.22610.1.3.13"] {
+            let read = vendor_read(Some(oid)).unwrap_or_else(|| panic!("{oid} is not read as A10"));
+            assert_eq!(read.name, "a10");
+            assert_eq!(
+                read.columns,
+                &[VendorColumn::Scalar(OID_AX_SYS_SERIAL_NUMBER)]
+            );
+            let rows = BTreeMap::from([(
+                OID_AX_SYS_SERIAL_NUMBER.to_owned(),
+                BTreeMap::from([(0, " TH30400000000000\r\n".to_owned())]),
+            )]);
+            assert_eq!(
+                resolve_vendor(read, &rows).as_deref(),
+                Some("TH30400000000000")
+            );
+            // An empty answer is no serial, so the poller goes on to ENTITY-MIB.
+            let empty = BTreeMap::from([(
+                OID_AX_SYS_SERIAL_NUMBER.to_owned(),
+                BTreeMap::from([(0, String::new())]),
+            )]);
+            assert_eq!(resolve_vendor(read, &empty), None);
+        }
+        assert!(vendor_read(Some("1.3.6.1.4.1.226100.1")).is_none());
     }
 
     #[test]
