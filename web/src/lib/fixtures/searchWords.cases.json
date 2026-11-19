@@ -1,0 +1,40 @@
+{
+  "words": [
+    { "term": "", "words": [] },
+    { "term": "   ", "words": [] },
+    { "term": "core", "words": ["core"] },
+    { "term": "Tokyo  Core", "words": ["tokyo", "core"] },
+    { "term": " tokyo\tcore ", "words": ["tokyo", "core"] },
+    { "term": "tokyo\u3000core", "words": ["tokyo", "core"] },
+    { "term": "tokyo\u0085core", "words": ["tokyo", "core"] },
+    { "term": "tokyo\ufeffcore", "words": ["tokyo\ufeffcore"] },
+    { "term": "core CORE", "words": ["core"] },
+    { "term": "10.0.0.1", "words": ["10.0.0.1"] },
+    { "term": "2001:DB8::1 sw", "words": ["2001:db8::1", "sw"] },
+    { "term": "sw_01", "words": ["sw_01"] },
+    { "term": "a b c d e f g h", "words": ["a", "b", "c", "d", "e", "f", "g", "h"] },
+    { "term": "a b c d e f g h i", "words": null },
+    { "term": "a b c d e f g h h", "words": ["a", "b", "c", "d", "e", "f", "g", "h"] }
+  ],
+  "paths": [
+    { "term": "tokyo", "path": ["Tokyo"], "whole": true },
+    { "term": "tokyo core", "path": ["Tokyo"], "whole": false },
+    { "term": "tokyo core", "path": ["Tokyo", "Core"], "whole": true },
+    { "term": "japan core", "path": ["Japan", "Tokyo", "Core"], "whole": true },
+    { "term": "kyo", "path": ["Japan", "Tokyo"], "whole": true },
+    { "term": "osaka", "path": ["Japan", "Tokyo"], "whole": false },
+    { "term": "", "path": ["Tokyo"], "whole": false },
+    { "term": "TOKYO", "path": ["tokyo"], "whole": true }
+  ],
+  "address": [
+    { "word": "10.0.", "address": true },
+    { "word": "10", "address": true },
+    { "word": "2001:db8::", "address": true },
+    { "word": "fe80:", "address": true },
+    { "word": "core", "address": false },
+    { "word": "cafe", "address": false },
+    { "word": "sw-01", "address": false },
+    { "word": "10.0.0.1/24", "address": false },
+    { "word": "", "address": false }
+  ]
+}

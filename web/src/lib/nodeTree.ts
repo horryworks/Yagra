@@ -3,6 +3,7 @@
 // shapes, answer "is X a descendant of Y" for drag-drop cycle guards, and roll up the health of a
 // group's descendant nodes. Kept free of React so they can be unit-tested directly.
 
+import { everyWordIn, searchWords } from './nodeSearch';
 import type { TFunction } from 'i18next';
 import { GROUP_TYPES } from '../types/api';
 import type { GroupType, NodeGroup, NodeState, NodeSummary } from '../types/api';
@@ -229,6 +230,27 @@ export function filterTerm(filter: string): string {
   return filter.trim().toLowerCase();
 }
 
+/** Each folder's path of names, root first and itself last (ADR-258). Built in one pass over a
+ *  parent map, so a thousand folders cost a thousand steps per depth level, not a walk each. A
+ *  folder whose parent is not in the list starts its own path; a cycle stops at the repeat. */
+export function folderPaths(groups: readonly NodeGroup[]): Map<string, string[]> {
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  const out = new Map<string, string[]>();
+  const pathOf = (id: string, seen: Set<string>): string[] => {
+    const done = out.get(id);
+    if (done) return done;
+    const g = byId.get(id);
+    if (!g || seen.has(id)) return [];
+    seen.add(id);
+    const parent = g.parent_id ? pathOf(g.parent_id, seen) : [];
+    const path = [...parent, g.name];
+    out.set(id, path);
+    return path;
+  };
+  for (const g of groups) pathOf(g.id, new Set());
+  return out;
+}
+
 /** Concatenate node lists, keeping the FIRST entry for a repeated id.
  *
  *  Filter mode renders the server search page PLUS the members of the groups the term revealed, and
@@ -262,8 +284,11 @@ export function mergeNodesById(...lists: NodeSummary[][]): NodeSummary[] {
  *  group degrades to the old behaviour (its matching nodes still show, its other members do not),
  *  never to a loading placeholder that nothing will ever resolve. */
 export function revealedGroupKeys(groups: NodeGroup[], filter: string, cap: number): string[] {
-  const q = filterTerm(filter);
-  if (!q) return [];
+  const words = searchWords(filter) ?? [];
+  if (words.length === 0) return [];
+  // A folder is revealed when EVERY word is on its path (ADR-258): "tokyo" opens Tokyo, "tokyo
+  // core" opens only a Core folder under it, never the whole of Tokyo.
+  const pathOf = folderPaths(groups);
   // 🚨 **Indexed once, not once per match** (ADR-133). This used to call `subtreeGroupIds(groups, …)`
   // per matching folder, and that helper rebuilds the whole parent→children index on entry — so a
   // one-letter term on a thousand folders was a thousand index builds, ~10^6 operations for an
@@ -272,7 +297,7 @@ export function revealedGroupKeys(groups: NodeGroup[], filter: string, cap: numb
   const out: string[] = [];
   const seen = new Set<string>();
   for (const g of groups) {
-    if (!g.name.toLowerCase().includes(q)) continue;
+    if (!everyWordIn(words, pathOf.get(g.id) ?? [g.name])) continue;
     for (const id of subtreeIdsFrom(childrenOf, g.id)) {
       if (seen.has(id)) continue;
       seen.add(id);
@@ -574,9 +599,15 @@ export function flattenTree(
      *  `groupCounts`, and hiding folders from an answer that has not arrived would blank the tree
      *  for a round trip — including the folders that do have nodes. */
     withNodesOnly?: { keep: ReadonlySet<string> };
+    /** The ids of the nodes the server search matched (ADR-258). 🚨 **The tree does not judge a
+     *  node against the term itself.** A word can match a port's address or a folder above the
+     *  node, neither of which is in hand here — judging by the name alone is what hid every node
+     *  found by its address. Omit it and a node is judged by its own name and address. */
+    matched?: ReadonlySet<string>;
   },
 ): FlatRow[] {
   const q = filterTerm(opts.filter);
+  const words = searchWords(opts.filter) ?? [];
   // Two different questions, and conflating them was the bug. `byTerm` decides what *matches a
   // name*; `narrowing` decides whether the tree is showing a filtered set at all — which is what
   // force-expansion, hiding an empty folder and the ungrouped header turn on.
@@ -589,7 +620,13 @@ export function flattenTree(
   // as empty (no rows yet, so hidden) — and would never show a single member.
   const searching = byTerm || opts.narrowed === true;
   const narrowing = searching || pinned !== undefined;
-  const nameMatches = (name: string) => name.toLowerCase().includes(q);
+  /** A node the term asks for: the server said so, or (no server answer) every word is in its
+   *  name or address. */
+  const matched = opts.matched;
+  const nodeMatches = (n: NodeSummary) =>
+    matched ? matched.has(n.id) : everyWordIn(words, [n.name, n.address ?? '']);
+  /** A folder shown whole: every word is somewhere on its path. */
+  const pathMatches = (path: readonly string[]) => everyWordIn(words, path);
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
   // The counts are on their way (ADR-133). Everything below asks this BEFORE it asks `counts`,
@@ -631,11 +668,16 @@ export function flattenTree(
    * *name* matches the term shows all of its members, so its count must too; deriving the number
    * from anything simpler would put a figure beside the bar that the rows below contradict.
    */
-  const visibleNodes = (group: TreeGroup, ancestorMatch: boolean): NodeSummary[] => {
+  const visibleNodes = (
+    group: TreeGroup,
+    ancestorMatch: boolean,
+    path: readonly string[],
+  ): NodeSummary[] => {
     if (!groupKept(group.id)) return [];
-    const eff = ancestorMatch || (byTerm && nameMatches(group.name));
-    const own = group.nodes.filter((n) => nodeKept(n) && (!byTerm || eff || nameMatches(n.name)));
-    return [...own, ...group.children.flatMap((c) => visibleNodes(c, eff))];
+    const here = [...path, group.name];
+    const eff = ancestorMatch || (byTerm && pathMatches(here));
+    const own = group.nodes.filter((n) => nodeKept(n) && (!byTerm || eff || nodeMatches(n)));
+    return [...own, ...group.children.flatMap((c) => visibleNodes(c, eff, here))];
   };
 
   /**
@@ -646,11 +688,12 @@ export function flattenTree(
    * ⚠️ One predicate where there were two (`subtreeMatches` / `subtreeHasNodes`): neither could ask
    * the pinned question, and a third copy that could was the drift waiting to happen.
    */
-  const survivesSearch = (group: TreeGroup): boolean => {
+  const survivesSearch = (group: TreeGroup, path: readonly string[]): boolean => {
     if (!groupKept(group.id)) return false;
-    if (byTerm && nameMatches(group.name)) return true;
-    if (group.nodes.some((n) => nodeKept(n) && (!byTerm || nameMatches(n.name)))) return true;
-    return group.children.some(survivesSearch);
+    const here = [...path, group.name];
+    if (byTerm && pathMatches(here)) return true;
+    if (group.nodes.some((n) => nodeKept(n) && (!byTerm || nodeMatches(n)))) return true;
+    return group.children.some((c) => survivesSearch(c, here));
   };
 
   /**
@@ -676,9 +719,16 @@ export function flattenTree(
     return acc;
   };
 
-  const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
-    // A folder's own name can only be matched by a term. A state filter says nothing about it.
-    const selfMatch = byTerm && group.name.toLowerCase().includes(q);
+  const walkGroup = (
+    group: TreeGroup,
+    depth: number,
+    ancestorMatch: boolean,
+    path: readonly string[],
+  ): void => {
+    // A folder can only be matched by a term, and only when EVERY word is on its path (ADR-258).
+    // A state filter says nothing about it.
+    const here = [...path, group.name];
+    const selfMatch = byTerm && pathMatches(here);
     const effMatch = ancestorMatch || selfMatch;
     // Hide a group entirely when nothing under it survives the narrowing. With a term that means
     // "no name below matches"; without one it means "no rows below at all", because the caller
@@ -691,7 +741,7 @@ export function flattenTree(
     // ⚠️ Pinned only on its own asks nothing of the subtree: a pinned folder whose members have not
     // arrived has no rows yet, and hiding it for that would stop it ever asking for them.
     if (!groupKept(group.id)) return;
-    if (searching && !effMatch && !survivesSearch(group)) return;
+    if (searching && !effMatch && !survivesSearch(group, path)) return;
 
     // Searching never reads the saved layout, so a folder closed while browsing cannot hide its own
     // match (ADR-053 Inc.6). It reads the set derived from what was pressed under this filter, which
@@ -716,13 +766,13 @@ export function flattenTree(
     // Under Pinned only with no search, a pinned folder is shown whole, so it reads exactly as it
     // does when browsing; a folder above the pins counts only what it shows (`pinnedAncestorCounts`).
     const tally: StateTally | null = searching
-      ? tallyStates(visibleNodes(group, ancestorMatch))
+      ? tallyStates(visibleNodes(group, ancestorMatch, path))
       : pending
         ? null
         : pinned && !pinned.subtree.has(group.id)
           ? subtree
             ? tallyFromCounts(pinnedAncestorCounts(group, subtree))
-            : tallyStates(visibleNodes(group, ancestorMatch))
+            : tallyStates(visibleNodes(group, ancestorMatch, path))
           : subtree
             ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
             : tallyStates(descendantNodes(group));
@@ -749,7 +799,7 @@ export function flattenTree(
     // Only a term rejects a node here — the state / kind / pool filters already did their rejecting
     // server-side, so every node still in hand is one the operator asked for.
     const shown = group.nodes.filter(
-      (n) => nodeKept(n) && (!byTerm || effMatch || nameMatches(n.name)),
+      (n) => nodeKept(n) && (!byTerm || effMatch || nodeMatches(n)),
     );
     // 🚨 **A two-pointer merge, not `[...children, ...shown].sort(byOrder)`.** `buildNodeTree` has
     // already sorted both, and this function runs again on every `/nodes/by-group` response — a
@@ -770,7 +820,7 @@ export function flattenTree(
         child !== undefined &&
         (node === undefined || byOrder<{ sort_order: number; name: string }>(child, node) <= 0)
       ) {
-        walkGroup(child, depth + 1, effMatch);
+        walkGroup(child, depth + 1, effMatch, here);
         ci += 1;
       } else if (node !== undefined) {
         rows.push({ kind: 'node', depth: depth + 1, node });
@@ -793,11 +843,11 @@ export function flattenTree(
     }
   };
 
-  for (const g of tree.roots) walkGroup(g, 0, false);
+  for (const g of tree.roots) walkGroup(g, 0, false, []);
 
   const ungroupedShown =
     byTerm || pinned
-      ? tree.ungrouped.filter((n) => nodeKept(n) && (!byTerm || nameMatches(n.name)))
+      ? tree.ungrouped.filter((n) => nodeKept(n) && (!byTerm || nodeMatches(n)))
       : tree.ungrouped;
   // Show the ungrouped header + its root drop zone whenever there's any inventory (so the drop zone
   // is reachable next to the groups), but not while narrowing with nothing ungrouped to show, and

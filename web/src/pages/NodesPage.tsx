@@ -21,6 +21,7 @@
 // virtualized (only on-screen rows in the DOM, S13); node state stays live via the node-state SSE
 // stream (`useNodeStates`) rather than a full refetch.
 
+import { MAX_SEARCH_WORDS, searchWords } from '../lib/nodeSearch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -563,6 +564,14 @@ export function NodesPage() {
         : members.nodes;
     return pinnedOnly && !serverNarrowed ? mergeNodesById(base, [...pinNodes]) : base;
   }, [serverNarrowed, filtering, search.nodes, members.nodes, pinnedOnly, pinNodes]);
+  // The nodes the server search matched (ADR-258). The tree shows these as matches rather than
+  // judging the term against a node's name, because a word may match a port's address or a folder
+  // above the node — the tree used to drop every node found by its address.
+  const tooManyWords = searchWords(filter) === null;
+  const searchMatches = useMemo(
+    () => new Set(search.nodes.map((n) => n.id)),
+    [search.nodes],
+  );
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.
   // `live` publishes a new Map on every flush (any node in the FLEET, ~10×/s during a first-observe
@@ -1197,7 +1206,13 @@ export function NodesPage() {
       {/* 🚨 Said, with a way to ask again. A failed search used to come back as an empty list, and an
           empty filtered tree draws nothing — so under "Needs attention" a failed read was a blank
           pane, which reads as "nothing needs attention". */}
-      {filtering && search.failed && (
+      {/* More words than core accepts (ADR-258): said as itself, not as a search that failed. */}
+      {tooManyWords && (
+        <p className="form-error" role="alert">
+          {t('err.tooManyWords', { max: MAX_SEARCH_WORDS })}
+        </p>
+      )}
+      {filtering && search.failed && !tooManyWords && (
         <p className="form-error" role="alert">
           {t('err.searchNodes')}{' '}
           <Button onClick={search.refetch}>{t('common:actions.retry')}</Button>
@@ -1368,6 +1383,7 @@ export function NodesPage() {
             // while `?q=` is already in hand. The tree keeps the folders pressed under a search until
             // both say the search is gone (ADR-154 increment 2).
             searchRequested={filtering}
+            searchMatches={searchMatches}
             onSelectNode={(n) => select({ kind: 'node', id: n.id })}
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onSelectNone={() => select(null)}

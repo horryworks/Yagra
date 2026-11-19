@@ -2856,8 +2856,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Server-side node search for the node-picker typeahead: case-insensitive substring over name or
-         *     address, capped, so a picker never loads the whole inventory into the browser (ui-conventions:
+         * Server-side node search for the node-picker typeahead: white-space-separated words, every one of
+         *     which must match the node's name, its address, one of its ports' addresses or a folder above it
+         *     (ADR-258), capped, so a picker never loads the whole inventory into the browser (ui-conventions:
          *     search is server-side at fleet scale). Also backs the Nodes tree name filter and the
          *     Troubleshoot scope picker. Routes through the shared `NodeListing`, so it works in skeleton mode.
          */
@@ -26744,7 +26745,11 @@ export interface operations {
             query?: {
                 cursor?: string;
                 limit?: number;
-                /** @description Case-insensitive substring of the node's name or address. */
+                /**
+                 * @description Words separated by white space, at most eight; a node is returned when **every** word is a
+                 *     case-insensitive substring of its name, its address, one of its ports' addresses, or the
+                 *     name of a folder above it that the caller can see.
+                 */
                 search?: string;
                 /**
                  * @description Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).
@@ -26787,7 +26792,7 @@ export interface operations {
                     "application/json": components["schemas"]["NodePage"];
                 };
             };
-            /** @description An unknown state or kind token, or an address that is not an IP address */
+            /** @description An unknown state or kind token, an address that is not an IP address, or a search of more than eight words (`too_many_terms`) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -27621,6 +27626,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeSearchResult"][];
+                };
+            };
+            /** @description A search of more than eight words (`too_many_terms`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */

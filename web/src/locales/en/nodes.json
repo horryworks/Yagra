@@ -86,7 +86,7 @@
     "filterTruncated": "Showing the first {{count}} matches — narrow the search to see the rest.",
     "groupTruncated": "Some large groups are showing a partial member list. Use search to find a specific node.",
     "revealTruncated": "Too many groups matched to open them all — narrow the search to see their members.",
-    "searchPlaceholder": "Search…",
+    "searchPlaceholder": "Name, IP or folder",
     "treeLabel": "Inventory tree",
     "loadingInventory": "Loading inventory…",
     "selectPrompt": "Select a node or group to see its detail.",
@@ -199,6 +199,7 @@
   "err": {
     "loadNodes": "failed to load nodes",
     "searchNodes": "The search could not be run. An empty list here does not mean nothing matches.",
+    "tooManyWords": "Use at most {{max}} words.",
     "loadNode": "failed to load node",
     "setMaintenance": "failed to set maintenance",
     "release": "failed to change the suppression",

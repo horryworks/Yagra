@@ -112,7 +112,9 @@ pub(super) struct NodeAvailabilityParams {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ListNodesParams {
-    /// Case-insensitive substring matched against node name or address.
+    /// Up to eight words separated by spaces. A node is returned when every word is a
+    /// case-insensitive substring of its name, its address, one of its ports' addresses, or the
+    /// name of a folder above it.
     search: Option<String>,
     /// Exact IP address of the node, compared as an address (so `2001:DB8::1` finds
     /// `2001:db8::1`). Pair it with `kind=device,meraki` to ask whether a device is already
@@ -454,8 +456,10 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "List monitored nodes with their rolled-up state. Optional case-insensitive \
-                       `search` matches name or address; narrow further with `state` \
+        description = "List monitored nodes with their rolled-up state. Optional `search` is up \
+                       to eight words separated by spaces, every one of which must match, case \
+                       ignored, the node's name, its address, one of its ports' addresses or the \
+                       name of a folder above it; narrow further with `state` \
                        (ok|warning|critical|unreachable|unknown|maintenance), `kind` \
                        (wireless_ap|meraki|url|dns|device) and `pool` (the effective poll pool, \
                        inherited from the folder tree when the node sets none); `limit` is 1–100 \
@@ -509,13 +513,25 @@ impl YagraMcp {
         // list uses — `NodeListing` takes a `GroupFilter` on every method precisely so no call site
         // can default to the whole fleet without saying so.
         let groups = scope.group_filter();
-        let nodes = if p.search.is_some() || address.is_some() || filter.is_set() {
+        // The words go through the same reader as REST (ADR-258), so a ninth word is the same
+        // refusal and a folder name the same match.
+        let words = match crate::api::nodes::search_words_for(
+            &self.state,
+            scope,
+            p.search.as_deref().unwrap_or(""),
+        )
+        .await
+        {
+            Ok(w) => w,
+            Err(e) => return tool_api_error(TOOL, &e),
+        };
+        let nodes = if !words.is_empty() || address.is_some() || filter.is_set() {
             // The shared seam, so a model and the WebUI cannot be told different things about
             // which nodes match — the filters run in-process here too, over the same bounded scan.
             match crate::api::nodes::filtered_node_page(
                 &self.state,
                 scope,
-                p.search.as_deref().unwrap_or(""),
+                &words,
                 address,
                 &filter,
                 limit,

@@ -1734,3 +1734,43 @@ describe('flatRowKey / rowDepth for the insertion slot (ADR-162 増分 2)', () =
     expect(rowDepth(undefined)).toBe(-1);
   });
 });
+
+// ADR-258: words separated by white space, every one of which has to match.
+describe('the tree under a search of several words', () => {
+  const groups = [group('g1', 'Tokyo'), group('g2', 'Core', 'g1'), group('g3', 'Edge', 'g1')];
+  const tree = () =>
+    buildNodeTree(groups, [
+      node('n1', 'core-sw01', 'g1'),
+      node('n2', 'edge-sw01', 'g1'),
+      node('n3', 'rtr-01', 'g2'),
+    ]);
+  const shownNodes = (filter: string, matched?: ReadonlySet<string>) =>
+    flattenTree(tree(), { collapsed: {}, filter, matched })
+      .filter((r) => r.kind === 'node')
+      .map(flatRowKey);
+
+  it('reveals a folder only when every word is on its path', () => {
+    expect(revealedGroupKeys(groups, 'tokyo', 10)).toEqual(['g1', 'g2', 'g3']);
+    // "core" names the Core folder under Tokyo, so only that subtree opens — not the whole of Tokyo.
+    expect(revealedGroupKeys(groups, 'tokyo core', 10)).toEqual(['g2']);
+    expect(revealedGroupKeys(groups, 'tokyo nowhere', 10)).toEqual([]);
+  });
+
+  it('shows the nodes the server matched, not the ones whose name holds the term', () => {
+    // The server matched n2 by a port address the tree cannot see.
+    expect(shownNodes('198.51.100.7', new Set(['n2']))).toEqual(['n:n2']);
+    // And left out a node whose name holds a word, because another word did not match it.
+    expect(shownNodes('sw01 198.51.100.7', new Set(['n2']))).toEqual(['n:n2']);
+  });
+
+  it('shows a folder whole when every word is on its path, whatever the server matched', () => {
+    // "tokyo core": the Core folder's path holds both words, so its members show; Tokyo's own
+    // members show only where the server matched them.
+    expect(shownNodes('tokyo core', new Set(['n1']))).toEqual(['n:n3', 'n:n1']);
+  });
+
+  it('judges by name and address when there is no server answer', () => {
+    expect(shownNodes('core 10.0.0.1')).toEqual(['n:n1']);
+    expect(shownNodes('core edge')).toEqual([]);
+  });
+});

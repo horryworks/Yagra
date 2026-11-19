@@ -12611,7 +12611,7 @@
           {
             "name": "search",
             "in": "query",
-            "description": "Case-insensitive substring of the node's name or address.",
+            "description": "Words separated by white space, at most eight; a node is returned when **every** word is a\ncase-insensitive substring of its name, its address, one of its ports' addresses, or the\nname of a folder above it that the caller can see.",
             "required": false,
             "schema": {
               "type": "string"
@@ -12666,7 +12666,7 @@
             }
           },
           "400": {
-            "description": "An unknown state or kind token, or an address that is not an IP address",
+            "description": "An unknown state or kind token, an address that is not an IP address, or a search of more than eight words (`too_many_terms`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -13646,7 +13646,7 @@
         "tags": [
           "nodes"
         ],
-        "summary": "Server-side node search for the node-picker typeahead: case-insensitive substring over name or\naddress, capped, so a picker never loads the whole inventory into the browser (ui-conventions:\nsearch is server-side at fleet scale). Also backs the Nodes tree name filter and the\nTroubleshoot scope picker. Routes through the shared `NodeListing`, so it works in skeleton mode.",
+        "summary": "Server-side node search for the node-picker typeahead: white-space-separated words, every one of\nwhich must match the node's name, its address, one of its ports' addresses or a folder above it\n(ADR-258), capped, so a picker never loads the whole inventory into the browser (ui-conventions:\nsearch is server-side at fleet scale). Also backs the Nodes tree name filter and the\nTroubleshoot scope picker. Routes through the shared `NodeListing`, so it works in skeleton mode.",
         "operationId": "search_nodes",
         "parameters": [
           {
@@ -13677,6 +13677,16 @@
                   "items": {
                     "$ref": "#/components/schemas/NodeSearchResult"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A search of more than eight words (`too_many_terms`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }

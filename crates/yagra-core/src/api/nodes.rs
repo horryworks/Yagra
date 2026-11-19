@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_base::groups::placement_order;
+use yagra_base::repo::SearchWord;
 use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -272,7 +273,9 @@ pub(crate) struct GroupNodes {
 pub(crate) struct NodePageQuery {
     pub cursor: Option<Uuid>,
     pub limit: Option<i64>,
-    /// Case-insensitive substring of the node's name or address.
+    /// Words separated by white space, at most eight; a node is returned when **every** word is a
+    /// case-insensitive substring of its name, its address, one of its ports' addresses, or the
+    /// name of a folder above it that the caller can see.
     pub search: Option<String>,
     /// Exact IP address of the node, compared as an address (so `2001:DB8::1` finds `2001:db8::1`).
     /// Pair it with `kind=device,meraki` to ask whether a device is already monitored at an address.
@@ -337,7 +340,7 @@ impl NodeFilter {
 pub(crate) async fn filtered_node_page(
     st: &ApiState,
     scope: &super::scope::NodeScope,
-    term: &str,
+    words: &[SearchWord],
     address: Option<IpAddr>,
     filter: &NodeFilter,
     limit: i64,
@@ -352,7 +355,7 @@ pub(crate) async fn filtered_node_page(
     };
     let candidates = st
         .nodes
-        .search(scope.group_filter(), term, address, scan)
+        .search(scope.group_filter(), words, address, scan)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
@@ -364,6 +367,96 @@ pub(crate) async fn filtered_node_page(
         nodes.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     }
     Ok((nodes, scan_hit_ceiling || over_page))
+}
+
+/// The words of a node search, each carrying the folders it names (ADR-258).
+///
+/// Shared by the Nodes tree, the node picker and MCP `list_nodes`, so the three cannot read one
+/// term three ways. A term of more than [`yagra_common::node_search::MAX_SEARCH_WORDS`] words is
+/// refused with 400 `too_many_terms` rather than shortened.
+///
+/// A word names a folder when the folder's own name holds it; the folder's whole subtree comes
+/// with it, so "tokyo" finds a node two folders below Tokyo. 🚨 Only folders the caller can see
+/// count: a word that matched a folder above their scope would let them test that folder's name
+/// one guess at a time (ADR-014). In skeleton mode there are no folders, and a folder read that
+/// fails is a 500 rather than a search that quietly stopped looking at folders.
+pub(crate) async fn search_words_for(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    term: &str,
+) -> ApiResult<Vec<SearchWord>> {
+    let words = yagra_common::node_search::search_words(term).map_err(|_| {
+        ApiError::bad_request(
+            "too_many_terms",
+            format!(
+                "a search holds at most {} words",
+                yagra_common::node_search::MAX_SEARCH_WORDS
+            ),
+        )
+    })?;
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(admin) = st.admin.as_ref() else {
+        return Ok(words.into_iter().map(SearchWord::plain).collect());
+    };
+    let groups = admin.groups.list().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list folders for a node search",
+            "failed to search nodes",
+        )
+    })?;
+    let folders: Vec<(Uuid, Option<Uuid>, String)> = groups
+        .into_iter()
+        .map(|g| (g.id, g.parent_id, g.name.to_lowercase()))
+        .collect();
+    Ok(words
+        .into_iter()
+        .map(|text| SearchWord {
+            folders: folders_named(&folders, scope.group_filter(), &text),
+            text,
+        })
+        .collect())
+}
+
+/// Every folder `visible` admits whose name holds `word`, and the subtree under each (ADR-258).
+/// `folders` is `(id, parent, lower-cased name)`; `None` for `visible` is an unrestricted caller.
+///
+/// The children index is built once and every match walked from it, so a one-letter word over a
+/// thousand folders is one pass rather than a thousand (the cost ADR-133 found in the WebUI).
+fn folders_named(
+    folders: &[(Uuid, Option<Uuid>, String)],
+    visible: Option<&[Uuid]>,
+    word: &str,
+) -> Vec<Uuid> {
+    let sees = |id: &Uuid| visible.is_none_or(|v| v.contains(id));
+    let mut children: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for (id, parent, _) in folders {
+        if let Some(p) = parent {
+            children.entry(*p).or_default().push(*id);
+        }
+    }
+    let mut out: Vec<Uuid> = Vec::new();
+    let mut seen: HashSet<Uuid> = HashSet::new();
+    let mut stack: Vec<Uuid> = folders
+        .iter()
+        .filter(|(id, _, name)| sees(id) && name.contains(word))
+        .map(|(id, _, _)| *id)
+        .collect();
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if sees(&id) {
+            out.push(id);
+        }
+        if let Some(kids) = children.get(&id) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    out.sort_unstable();
+    out
 }
 
 /// Which single-purpose rows each of the given nodes carries, resolved into a [`NodeKind`].
@@ -564,7 +657,7 @@ pub(super) async fn build_node_summaries(
     params(NodePageQuery),
     responses(
         (status = 200, description = "One keyset page of the inventory, or a single capped page in search mode", body = NodePage),
-        (status = 400, description = "An unknown state or kind token, or an address that is not an IP address", body = super::error::ErrorBody),
+        (status = 400, description = "An unknown state or kind token, an address that is not an IP address, or a search of more than eight words (`too_many_terms`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
         (status = 503, description = "Too many inventory reads in flight — retry shortly (`list_busy`)", body = super::error::ErrorBody),
@@ -583,14 +676,14 @@ async fn list_nodes(
         .limit
         .unwrap_or(100)
         .clamp(1, yagra_base::repo::NODE_SEARCH_MAX);
-    let term = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let words = search_words_for(&st, &scope, q.search.as_deref().unwrap_or("")).await?;
     let address = parse_address_filter(q.address.as_deref())?;
     let filter = parse_node_filter(q.state.as_deref(), q.kind.as_deref(), q.pool.as_deref())?;
     // Filter mode: any of search / address / state / kind / pool returns a single capped page (no
     // keyset cursor) — the tree narrows the fleet without loading it.
-    if term.is_some() || address.is_some() || filter.is_set() {
+    if !words.is_empty() || address.is_some() || filter.is_set() {
         let (nodes, truncated) =
-            filtered_node_page(&st, &scope, term.unwrap_or(""), address, &filter, limit).await?;
+            filtered_node_page(&st, &scope, &words, address, &filter, limit).await?;
         return Ok(Json(NodePage {
             nodes: build_node_summaries(&st, nodes, HashMap::new()).await,
             next_cursor: None,
@@ -919,8 +1012,9 @@ pub(crate) struct NodeSearchResult {
     address: String,
 }
 
-/// Server-side node search for the node-picker typeahead: case-insensitive substring over name or
-/// address, capped, so a picker never loads the whole inventory into the browser (ui-conventions:
+/// Server-side node search for the node-picker typeahead: white-space-separated words, every one of
+/// which must match the node's name, its address, one of its ports' addresses or a folder above it
+/// (ADR-258), capped, so a picker never loads the whole inventory into the browser (ui-conventions:
 /// search is server-side at fleet scale). Also backs the Nodes tree name filter and the
 /// Troubleshoot scope picker. Routes through the shared `NodeListing`, so it works in skeleton mode.
 #[utoipa::path(
@@ -928,6 +1022,7 @@ pub(crate) struct NodeSearchResult {
     params(NodeSearchQuery),
     responses(
         (status = 200, description = "Matching nodes, capped", body = Vec<NodeSearchResult>),
+        (status = 400, description = "A search of more than eight words (`too_many_terms`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
     ),
@@ -938,11 +1033,11 @@ async fn search_nodes(
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<NodeSearchQuery>,
 ) -> ApiResult<Json<Vec<NodeSearchResult>>> {
-    let term = q.q.unwrap_or_default();
+    let words = search_words_for(&st, &scope, q.q.as_deref().unwrap_or("")).await?;
     let limit = q.limit.unwrap_or(50);
     let nodes = st
         .nodes
-        .search(scope.group_filter(), term.trim(), None, limit)
+        .search(scope.group_filter(), &words, None, limit)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "node search", "failed to search nodes")
@@ -1046,7 +1141,7 @@ async fn list_group_nodes(
         // an ungrouped node is outside every group scope, which `search` enforces for us.
         let nodes = if q.group.is_none() && batch.is_none() {
             st.nodes
-                .search(scope.group_filter(), "", None, GROUP_NODES_CAP)
+                .search(scope.group_filter(), &[], None, GROUP_NODES_CAP)
                 .await
                 .unwrap_or_default()
         } else {
@@ -3362,6 +3457,64 @@ mod tests {
         status_with(st, method, path, token, body).await
     }
 
+    /// A folder named by a word brings its whole subtree, and only the folders the caller sees
+    /// count — including a matching folder ABOVE the caller's scope (ADR-258 decision 4).
+    #[test]
+    fn a_word_names_the_visible_folders_holding_it_and_their_subtrees() {
+        let japan = Uuid::from_u128(1);
+        let tokyo = Uuid::from_u128(2);
+        let core = Uuid::from_u128(3);
+        let osaka = Uuid::from_u128(4);
+        let folders = vec![
+            (japan, None, "japan".to_owned()),
+            (tokyo, Some(japan), "tokyo".to_owned()),
+            (core, Some(tokyo), "core".to_owned()),
+            (osaka, Some(japan), "osaka".to_owned()),
+        ];
+        assert_eq!(folders_named(&folders, None, "tokyo"), vec![tokyo, core]);
+        assert_eq!(
+            folders_named(&folders, None, "japan"),
+            vec![japan, tokyo, core, osaka]
+        );
+        assert!(folders_named(&folders, None, "nagoya").is_empty());
+        // A caller who sees only Tokyo's subtree cannot match on "japan" above it.
+        let visible = [tokyo, core];
+        assert!(folders_named(&folders, Some(&visible), "japan").is_empty());
+        assert_eq!(
+            folders_named(&folders, Some(&visible), "tokyo"),
+            vec![tokyo, core]
+        );
+        // One letter over every folder is still each folder once.
+        assert_eq!(folders_named(&folders, None, "a").len(), 4);
+    }
+
+    /// A ninth word is refused on both node searches, never shortened (ADR-258 decision 1).
+    #[tokio::test]
+    async fn a_search_of_nine_words_is_refused_on_both_routes() {
+        let nine = "a%20b%20c%20d%20e%20f%20g%20h%20i";
+        for path in [
+            format!("/api/v1/nodes?search={nine}"),
+            format!("/api/v1/nodes/search?q={nine}"),
+        ] {
+            assert_eq!(
+                status_of(public_state(), "GET", &path, None).await,
+                StatusCode::BAD_REQUEST,
+                "{path}"
+            );
+        }
+        let eight = "a%20b%20c%20d%20e%20f%20g%20h";
+        assert_eq!(
+            status_of(
+                public_state(),
+                "GET",
+                &format!("/api/v1/nodes?search={eight}"),
+                None
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+
     #[tokio::test]
     async fn a_write_stays_closed_on_a_public_dashboard() {
         // `public_dashboard` opens reads only. A manual poll is an operator action that reaches
@@ -3862,10 +4015,16 @@ mod tests {
         // keystroke in the tree read 5,000 rows to show 100.
         let st = public_state();
         let scope = super::super::scope::NodeScope::All;
-        let (rows, truncated) =
-            filtered_node_page(&st, &scope, "demo", None, &NodeFilter::default(), 100)
-                .await
-                .expect("search succeeds");
+        let (rows, truncated) = filtered_node_page(
+            &st,
+            &scope,
+            &[SearchWord::plain("demo")],
+            None,
+            &NodeFilter::default(),
+            100,
+        )
+        .await
+        .expect("search succeeds");
         assert_eq!(rows.len(), 1, "the skeleton inventory holds one node");
         assert!(!truncated);
     }
@@ -3882,7 +4041,7 @@ mod tests {
             state: vec![NodeState::Unknown],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", None, &want_unknown, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &want_unknown, 100)
             .await
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1);
@@ -3890,7 +4049,7 @@ mod tests {
             state: vec![NodeState::Ok],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", None, &want_ok, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &want_ok, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty(), "no node displays ok, so none may match ok");
@@ -3912,7 +4071,7 @@ mod tests {
                 kind: vec![kind],
                 ..Default::default()
             };
-            let (rows, _) = filtered_node_page(&st, &scope, "", None, &f, 100)
+            let (rows, _) = filtered_node_page(&st, &scope, &[], None, &f, 100)
                 .await
                 .expect("filter succeeds");
             assert_eq!(rows.len(), expect, "{kind:?}");
@@ -3930,7 +4089,7 @@ mod tests {
             pool: vec![yagra_bus::DEFAULT_POOL.to_owned()],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", None, &f, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &f, 100)
             .await
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1, "the demo node inherits the default pool");
@@ -3938,7 +4097,7 @@ mod tests {
             pool: vec!["tokyo".to_owned()],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", None, &f, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &f, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty());
@@ -3998,7 +4157,7 @@ mod tests {
             state: vec![NodeState::Ok, NodeState::Unknown],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", None, &with, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &with, 100)
             .await
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1);
@@ -4006,7 +4165,7 @@ mod tests {
             state: vec![NodeState::Ok, NodeState::Warning],
             ..Default::default()
         };
-        let (rows, _) = filtered_node_page(&st, &scope, "", None, &without, 100)
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &without, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty());

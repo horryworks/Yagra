@@ -255,6 +255,10 @@ interface Props {
    *  `filter` alone and a reload erases the record the moment it is restored. Omit it where there is
    *  no search to wait for; the tree then decides from `filter` and `narrowed` alone. */
   searchRequested?: boolean;
+  /** The ids the server search matched (ADR-258). A word may match a port's address or a folder
+   *  above a node, which the tree cannot see, so it takes the server's answer rather than judging
+   *  the term against a node's name. Omit it and the tree judges by name and address. */
+  searchMatches?: ReadonlySet<string>;
   /** Render the internal Add-group / drag-hint toolbar (the split hosts Add-group in its pane head). */
   showToolbar?: boolean;
   onOpenNode: (node: NodeSummary) => void;
@@ -410,6 +414,7 @@ export function NodeTree({
   narrowed,
   narrowKey,
   searchRequested,
+  searchMatches,
   showToolbar = true,
   onOpenNode,
   onAddGroup,
@@ -539,6 +544,7 @@ export function NodeTree({
         failedGroups,
         pinned: pinnedFilter,
         withNodesOnly: withNodes,
+        matched: searchMatches,
       }),
     [
       tree,
@@ -553,6 +559,7 @@ export function NodeTree({
       failedGroups,
       pinnedFilter,
       withNodes,
+      searchMatches,
     ],
   );
   /**

@@ -31,6 +31,7 @@ pub mod neighbor;
 pub mod no_reading;
 pub mod node;
 mod node_kind;
+pub mod node_search;
 mod notify_template;
 pub mod oid;
 pub mod oxidized_model;

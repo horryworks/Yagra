@@ -86,7 +86,7 @@
     "filterTruncated": "一致した先頭 {{count}} 件を表示中 — 検索語を絞ると残りも見られます。",
     "groupTruncated": "大きなグループはメンバーを一部しか表示していません。目的のノードは検索から探してください。",
     "revealTruncated": "一致したグループが多すぎるため、一部はメンバーを表示していません。検索語を絞ってください。",
-    "searchPlaceholder": "検索…",
+    "searchPlaceholder": "名前・IP・フォルダ",
     "treeLabel": "インベントリツリー",
     "loadingInventory": "インベントリを読み込み中…",
     "selectPrompt": "詳細を表示するにはノードまたはグループを選択してください。",
@@ -199,6 +199,7 @@
   "err": {
     "loadNodes": "ノードの読み込みに失敗しました",
     "searchNodes": "検索を実行できませんでした。一覧が空でも、一致するものが無いという意味ではありません。",
+    "tooManyWords": "語は {{max}} 個までです。",
     "loadNode": "ノードの読み込みに失敗しました",
     "setMaintenance": "メンテナンスの設定に失敗しました",
     "release": "抑止の変更に失敗しました",

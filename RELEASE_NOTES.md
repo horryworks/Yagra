@@ -21,6 +21,11 @@
 ### Improvements
 
 - **A failed automatic save no longer stops the next one.** Yagra used to stop saving a node on its own after one failed save until a person saved it; it now tries again right after the next fetch, in the login that fetch used. A failure that does not heal — a read-only login, say — therefore leaves one failed save and one audit row per fetch (ADR-222 Inc.11).
+- **The All nodes search box takes several words, and finds a node by any of its addresses or the folder it is in.** Words separated by spaces must all match, and each may match the node's name, its address, the address of any of its ports, or the name of a folder above it — `tokyo core` lists the nodes with `core` in their name under a Tokyo folder, and `10.20.` finds a router by a loopback. A folder is still shown whole when every word is on its path. The box's placeholder now says `Name, IP or folder`. `GET /api/v1/nodes?search=`, `GET /api/v1/nodes/search?q=` and MCP's `list_nodes` all read a term this way, refuse more than eight words with 400 `too_many_terms`, and match `%` and `_` as themselves rather than as wildcards (ADR-258).
+
+### Bug Fixes
+
+- **A node found by its address is no longer hidden in the All nodes tree.** The server matched a term against a node's address, but the tree then kept only the nodes whose name held it, so typing an IP address showed nothing (ADR-258).
 
 ## v0.3.81 — Read a node's backed-up configuration over MCP, and push config backups into a yagra/ folder that keeps the repository's own files
 
