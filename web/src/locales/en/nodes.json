@@ -1461,6 +1461,18 @@
         "save": "Could not save the automatic-save setting"
       }
     },
+    "mcpText": {
+      "title": "Config text for AI clients",
+      "on": "On",
+      "off": "Off",
+      "warning": "MCP clients holding manage-config can read device configurations; a secret both filters miss reaches them. Every read is audited.",
+      "lineOn": "Config text for AI clients: on",
+      "lineOff": "Config text for AI clients: off",
+      "change": "Change",
+      "err": {
+        "save": "Could not save the config-text setting"
+      }
+    },
     "card": {
       "off": "Not backed up",
       "searching": "Looking for a login that works",

@@ -641,6 +641,9 @@ mod tests {
         // Starts work and spends money; the agent must not recurse into itself.
         "run_analysis",
         "run_rca",
+        // Device configuration text: the in-process caller is the RCA agent, whose LLM may be a
+        // hosted service, and ADR-210 stage 10 decision 88 does not hand it configurations.
+        "get_node_config",
     ];
 
     #[tokio::test]

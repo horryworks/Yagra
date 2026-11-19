@@ -15,6 +15,7 @@ const base: ConfigBackupScheduleView = {
   done: null,
   total: null,
   auto_save: { enabled: false },
+  mcp_config_text: { enabled: false },
 };
 
 describe('scheduleLine', () => {

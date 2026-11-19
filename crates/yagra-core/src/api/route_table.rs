@@ -1536,25 +1536,19 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/config-backup/versions",
         NodeScoped,
-        Exempt(
-            "a list of version ids whose only use is opening a version's text, which MCP does not              serve (ADR-210 decision 16); whether the node is fetched and its last result are in              get_node_status",
-        ),
+        Tool("get_node_config"),
     ),
     (
         "GET",
         "/api/v1/nodes/:node_id/config-backup/versions/:oid",
         NodeScoped,
-        Exempt(
-            "device configuration text: oxidized's remove_secret is model by model and can miss              one, so it is not handed to an AI client (ADR-210 decision 16)",
-        ),
+        Tool("get_node_config"),
     ),
     (
         "GET",
         "/api/v1/nodes/:node_id/config-backup/diff",
         NodeScoped,
-        Exempt(
-            "two versions of device configuration text, kept off MCP for the reason the text              itself is (ADR-210 decision 16)",
-        ),
+        Tool("get_node_config"),
     ),
     (
         "POST",
@@ -1590,24 +1584,29 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "PUT",
+        "/api/v1/config-mcp-settings",
+        Global(
+            "the deployment's one switch for configuration text over MCP, refused to a caller \
+             restricted to folders",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/nodes/:node_id/config-backup/saves/:save_id/startup",
         NodeScoped,
         Exempt(
-            "device configuration text kept before a save, off MCP for the reason a version's \
-             text is (ADR-210 decision 16); that a save happened and how it ended are in \
-             get_node_status",
+            "device configuration text kept before a save; ADR-210 stage 10 opened a version's \
+             text, its diffs and the unsaved comparison to get_node_config and left this one off \
+             (decision 82); that a save happened and how it ended are in get_node_status",
         ),
     ),
     (
         "GET",
         "/api/v1/nodes/:node_id/config-backup/unsaved",
         NodeScoped,
-        Exempt(
-            "device configuration text from comparing running with startup, off MCP for the \
-             reason a version's text is (ADR-210 decision 16); that the node reads as unsaved, \
-             and since when, are in get_node_status",
-        ),
+        Tool("get_node_config"),
     ),
     (
         "GET",

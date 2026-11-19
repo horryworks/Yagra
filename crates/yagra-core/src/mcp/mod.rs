@@ -29,6 +29,8 @@
 //! device-configuration tools** (monitoring lane, ADR-015/029), and no credential/secret is ever
 //! placed in a tool result (ADR-018; enforced structurally in [`dto`] + its canary test).
 
+// What `get_node_config` does to a configuration before a client sees it (ADR-210 stage 10).
+mod config_text;
 mod dto;
 pub(crate) mod folded;
 // Test-only, like `api/route_table.rs`: the one accessor every source-text check reads the tool
@@ -86,7 +88,8 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     trusting any of the above, check get_system_health — if a poller is offline or a store is \
     unreachable, missing data means missing collection rather than a healthy quiet, and its \
     monitoring_gaps section names the windows where that was true. get_audit says who changed \
-    what. To see how Yagra itself is set up — thresholds, event_rules, \
+    what. A device's backed-up configuration, with secrets blanked, is get_node_config; its text \
+    answers only where an Admin has switched that on. To see how Yagra itself is set up — thresholds, event_rules, \
     notification_channels, routing_rules, notification_default_route, delivery_hours, profiles, \
     node_collection, forward_destinations, \
     report_definitions and the deployment settings — use get_config; its `kind` argument selects \

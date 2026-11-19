@@ -788,6 +788,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-mcp-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["put_mcp_config_text"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-save-settings": {
         parameters: {
             query?: never;
@@ -7399,6 +7415,11 @@ export interface components {
              */
             max_concurrency: number;
             /**
+             * @description Whether an MCP client may read configuration text through `get_node_config` (ADR-210
+             *     stage 10 decision 85). Changed with `PUT /api/v1/config-mcp-settings`.
+             */
+            mcp_config_text: components["schemas"]["McpConfigText"];
+            /**
              * Format: date-time
              * @description When it finished; `null` while it is going.
              */
@@ -10838,6 +10859,15 @@ export interface components {
             in_force: boolean;
             /** @description The stored rule, in the same shape the rules list serves. */
             rule: components["schemas"]["StoredThreshold"];
+        };
+        /**
+         * @description Whether `/mcp` may hand a device configuration's text to an AI client (ADR-210 stage 10
+         *     decision 85). Off by default. oxidized's secret filter and Yagra's own second pass can both
+         *     miss a line, so switching this on is a person accepting that, not a setting Yagra assumes.
+         */
+        McpConfigText: {
+            /** @description Off by default. */
+            enabled: boolean;
         };
         MerakiCadenceReq: {
             /** Format: int32 */
@@ -19670,6 +19700,48 @@ export interface operations {
             };
             /** @description This deployment has no write side (skeleton mode) */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_mcp_config_text: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpConfigText"];
+            };
+        };
+        responses: {
+            /** @description Saved. When on, an MCP client holding manage-config can read a backed-up configuration's text, its diffs and its unsaved comparison through get_node_config, with secrets blanked by oxidized and again by Yagra. Neither pass is complete, so a secret both miss reaches the client. Every read is audited */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpConfigText"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem, the caller is an API token (`session_required`), or the caller is restricted to folders (`scope_unsupported`) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

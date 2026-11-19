@@ -682,9 +682,9 @@ impl MayHandOutLogins {
 /// One stored version.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ConfigVersion {
-    oid: String,
+    pub(crate) oid: String,
     /// When it was stored. `null` when oxidized printed a time this could not read.
-    stored_at: Option<DateTime<Utc>>,
+    pub(crate) stored_at: Option<DateTime<Utc>>,
 }
 
 #[utoipa::path(
@@ -704,7 +704,16 @@ async fn list_versions(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<ConfigVersion>>> {
-    let ox = oxidized_of(&admin)?;
+    Ok(Json(versions_of(&admin, node_id).await?))
+}
+
+/// A node's stored versions, newest first — what `GET …/versions` answers, shared with `/mcp`'s
+/// `get_node_config` (ADR-210 stage 10). The caller has already checked the node's visibility.
+pub(crate) async fn versions_of(
+    admin: &super::AdminState,
+    node_id: Uuid,
+) -> ApiResult<Vec<ConfigVersion>> {
+    let ox = oxidized_of(admin)?;
     // 🚨 A node oxidized does not hold answers its history with a 500 (`NodeNotFound`), which read
     // as "the config backup service did not answer" under the table of every node not switched on
     // yet — measured on a lab deployment. So the answer is none, without asking, for a node not in
@@ -718,7 +727,7 @@ async fn list_versions(
         .flatten()
         .filter(|c| c.enabled && c.input.protocol(None).is_some());
     let Some(cfg) = listed else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
     let profile = admin
         .config_backup
@@ -726,22 +735,20 @@ async fn list_versions(
         .await
         .map_err(|e| read_failed(&e))?;
     if oxidized::source::model_of(cfg.model_override.as_deref(), profile.as_deref()).is_none() {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     }
     let versions = ox
         .client
         .versions(node_id)
         .await
         .map_err(|e| oxidized_failed(&e))?;
-    Ok(Json(
-        versions
-            .into_iter()
-            .map(|v| ConfigVersion {
-                stored_at: v.date.as_deref().and_then(oxidized::client::parse_time),
-                oid: v.oid,
-            })
-            .collect(),
-    ))
+    Ok(versions
+        .into_iter()
+        .map(|v| ConfigVersion {
+            stored_at: v.date.as_deref().and_then(oxidized::client::parse_time),
+            oid: v.oid,
+        })
+        .collect())
 }
 
 /// A Git object id: 40 lowercase hexadecimal characters. Checked before it reaches oxidized's
@@ -787,15 +794,25 @@ async fn get_version(
     admin: Admin,
     Path((node_id, oid)): Path<(Uuid, String)>,
 ) -> ApiResult<Json<ConfigText>> {
-    check_oid(&oid)?;
-    let ox = oxidized_of(&admin)?;
-    let text = ox
-        .client
-        .version_text(node_id, &oid)
+    let text = version_text_of(&admin, node_id, &oid).await?;
+    Ok(Json(ConfigText { oid, text }))
+}
+
+/// One version's text — what `GET …/versions/{oid}` answers, shared with `/mcp`'s
+/// `get_node_config` (ADR-210 stage 10). Checks the id; the caller has already checked the
+/// permission and the node's visibility.
+pub(crate) async fn version_text_of(
+    admin: &super::AdminState,
+    node_id: Uuid,
+    oid: &str,
+) -> ApiResult<String> {
+    check_oid(oid)?;
+    let ox = oxidized_of(admin)?;
+    ox.client
+        .version_text(node_id, oid)
         .await
         .map_err(|e| oxidized_failed(&e))?
-        .ok_or_else(no_such_version)?;
-    Ok(Json(ConfigText { oid, text }))
+        .ok_or_else(no_such_version)
 }
 
 /// A version id that is not one of the node's versions (ADR-210 stage 9: oxidized's repository
@@ -1565,6 +1582,9 @@ pub(crate) struct ConfigBackupScheduleView {
     /// Whether Yagra saves on its own a device a fetch finds unsaved (ADR-222 decisions 8 and 13).
     /// Changed with `PUT /api/v1/config-save-settings`.
     auto_save: yagra_base::config_save::AutoSave,
+    /// Whether an MCP client may read configuration text through `get_node_config` (ADR-210
+    /// stage 10 decision 85). Changed with `PUT /api/v1/config-mcp-settings`.
+    mcp_config_text: yagra_base::config_save::McpConfigText,
 }
 
 fn schedule_failed(e: &anyhow::Error) -> ApiError {
@@ -1592,6 +1612,11 @@ pub(crate) async fn schedule_view(
         .auto_save()
         .await
         .map_err(|e| schedule_failed(&e))?;
+    let mcp_config_text = admin
+        .config_saves
+        .mcp_config_text()
+        .await
+        .map_err(|e| schedule_failed(&e))?;
     // The counts are the whole fleet's: a scoped caller would read them as its own.
     let progress = s
         .run_started_at
@@ -1611,6 +1636,7 @@ pub(crate) async fn schedule_view(
         done: progress.map(|p| p.done),
         total: progress.map(|p| p.total),
         auto_save,
+        mcp_config_text,
     })
 }
 

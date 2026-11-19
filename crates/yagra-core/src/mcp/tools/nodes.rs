@@ -17,8 +17,10 @@ use yagra_common::{NodeId, NodeKind, Permission};
 
 use super::YagraMcp;
 use crate::api::scope::NodeScope;
+use crate::mcp::config_text;
 use crate::mcp::dto::{
-    AlertDto, FleetSummaryDto, InterfaceDto, NodeGroupDto, NodeStatusDto, NodeSummaryDto,
+    AlertDto, ConfigLineDto, ConfigVersionDto, FleetSummaryDto, InterfaceDto, NodeConfigTextDto,
+    NodeConfigVersionsDto, NodeGroupDto, NodeStatusDto, NodeSummaryDto,
 };
 
 // The shared scope: the helpers in `support.rs` and the types the other domain modules declare,
@@ -152,10 +154,183 @@ pub(super) struct ListNodeGroupsParams {
     include_state: Option<bool>,
 }
 
+/// What `get_node_config` was asked for (ADR-210 stage 10 decision 82).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ConfigView {
+    Versions,
+    Text,
+    Diff,
+    Unsaved,
+}
+
+impl ConfigView {
+    /// Omitted means `text`: the latest configuration is what a caller asking for one wants.
+    pub(super) fn from_token(view: Option<&str>) -> Option<Self> {
+        match view {
+            None | Some("text") => Some(Self::Text),
+            Some("versions") => Some(Self::Versions),
+            Some("diff") => Some(Self::Diff),
+            Some("unsaved") => Some(Self::Unsaved),
+            Some(_) => None,
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Versions => "versions",
+            Self::Text => "text",
+            Self::Diff => "diff",
+            Self::Unsaved => "unsaved",
+        }
+    }
+
+    /// What the view demands: the list of versions is `View`, as `GET …/versions` is; text is
+    /// `ManageConfig`, as the REST routes that serve it are (ADR-210 decision 10).
+    pub(super) fn permission(self) -> Permission {
+        match self {
+            Self::Versions => Permission::View,
+            Self::Text | Self::Diff | Self::Unsaved => Permission::ManageConfig,
+        }
+    }
+
+    /// Whether the view carries configuration text, and so needs the switch and an audit row.
+    pub(super) fn carries_text(self) -> bool {
+        self != Self::Versions
+    }
+}
+
+/// Lines either side of a change that a `diff` keeps, as a unified diff shows them.
+const DIFF_CONTEXT: usize = 3;
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(super) struct NodeConfigParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// `text` (default) for one version, `diff` for two compared, `unsaved` for how the running
+    /// configuration differs from startup, or `versions` for the list of stored versions.
+    view: Option<String>,
+    /// `text`: the version to show (default the latest).
+    version: Option<String>,
+    /// `diff`: the older version (default the one before `to`).
+    from: Option<String>,
+    /// `diff`: the newer version (default the latest).
+    to: Option<String>,
+    /// Keep only lines matching this regular expression (at most 200 characters), for example
+    /// `^interface ` or `(?i)snmp`. Matched against the text after secrets are blanked.
+    #[serde(rename = "match")]
+    pattern: Option<String>,
+    /// Matched lines to skip, for the next page (default 0).
+    offset: Option<usize>,
+    /// Lines to return (1-2000, default 500).
+    limit: Option<usize>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(super) struct PrefixGapsParams {
     /// The folder to check (an id from list_node_groups). Its subfolders are included.
     group_id: Uuid,
+}
+
+/// The answer for a node with no stored version.
+fn no_versions() -> Result<CallToolResult, McpError> {
+    tool_unavailable(
+        "get_node_config",
+        "this node has no stored configuration version; get_node_status says whether it is \
+         backed up and how its last fetch went",
+    )
+}
+
+/// Numbered lines from redacted ones.
+fn numbered(lines: Vec<(String, bool)>) -> Vec<(ConfigLineDto, bool)> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, (text, redacted))| {
+            (
+                ConfigLineDto {
+                    n: i + 1,
+                    change: None,
+                    text,
+                },
+                redacted,
+            )
+        })
+        .collect()
+}
+
+/// Which two versions a `diff` compares when the caller left one or both out: `to` defaults to the
+/// latest and `from` to the version stored just before `to`. `versions` is newest first.
+pub(super) fn pick_diff_pair(
+    versions: &[crate::api::config_backup::ConfigVersion],
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Option<(String, String)> {
+    let to = match to {
+        Some(t) => t.to_owned(),
+        None => versions.first()?.oid.clone(),
+    };
+    let from = match from {
+        Some(f) => f.to_owned(),
+        None => {
+            let at = versions.iter().position(|v| v.oid == to)?;
+            versions.get(at + 1)?.oid.clone()
+        }
+    };
+    Some((from, to))
+}
+
+/// Two texts compared line by line, each side's secrets blanked over its whole text first (so a
+/// private-key block is recognised across its lines) and only changes with their context kept.
+///
+/// The comparison runs over the texts as stored, then takes each line's words from the blanked
+/// side, so a changed password still shows as a changed (blanked) line rather than vanishing.
+pub(super) fn diff_lines(old: &str, new: &str) -> Vec<(ConfigLineDto, bool)> {
+    let diff = similar::TextDiff::from_lines(old, new);
+    // Blank the very lines the diff indexes. `str::lines` and `similar` do not cut a text at the
+    // same places (a lone `\r` is one example), and a blanked line looked up by an index from the
+    // other cut is another line's words, or a private-key line judged without its block.
+    let old_red = config_text::redact_lines(diff.old_slices().iter().copied());
+    let new_red = config_text::redact_lines(diff.new_slices().iter().copied());
+    let changes: Vec<(similar::ChangeTag, String, bool)> = diff
+        .iter_all_changes()
+        .map(|c| {
+            let side = match c.tag() {
+                similar::ChangeTag::Delete => c.old_index().and_then(|i| old_red.get(i)),
+                similar::ChangeTag::Equal | similar::ChangeTag::Insert => {
+                    c.new_index().and_then(|i| new_red.get(i))
+                }
+            };
+            // Fail closed: a change whose line was not blanked above is shown as blanked whole.
+            let (text, redacted) = side
+                .cloned()
+                .unwrap_or_else(|| (config_text::REDACTED.to_owned(), true));
+            (c.tag(), text, redacted)
+        })
+        .collect();
+    let changed: Vec<bool> = changes
+        .iter()
+        .map(|(tag, _, _)| *tag != similar::ChangeTag::Equal)
+        .collect();
+    let keep = config_text::diff_context(&changed, DIFF_CONTEXT);
+    changes
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| keep[*i])
+        .map(|(i, (tag, text, redacted))| {
+            (
+                ConfigLineDto {
+                    n: i + 1,
+                    change: Some(match tag {
+                        similar::ChangeTag::Equal => "same",
+                        similar::ChangeTag::Insert => "added",
+                        similar::ChangeTag::Delete => "removed",
+                    }),
+                    text,
+                },
+                redacted,
+            )
+        })
+        .collect()
 }
 
 #[tool_router(router = nodes_router, vis = "pub(super)")]
@@ -937,6 +1112,248 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "A device configuration backed up by Yagra's config backup: `view=text` \
+                       (default) for one stored version, `diff` for two versions compared, \
+                       `unsaved` for how the running configuration differs from startup, or \
+                       `versions` for the list of stored versions and their times. Text comes as \
+                       numbered lines with secrets replaced by `<redacted>`: a line naming a \
+                       password, secret, community, key, cipher or similar loses everything after \
+                       that word, and stored hashes are blanked wherever they are. Both oxidized's \
+                       filter and Yagra's own can miss a vendor spelling, so treat the text as \
+                       sensitive. A diff shows changed lines with 3 lines of context. Pages: \
+                       `limit` lines (default 500) from `offset`; `match` keeps only lines \
+                       matching a regular expression; `truncated` true means more lines follow. \
+                       `versions` needs view permission; the text views need manage-config, are \
+                       audited per read, and answer only when an Admin has switched configuration \
+                       text for AI clients on (shown as `mcp_config_text` in \
+                       get_system_health(section=config_schedule)). Whether a node is backed up at \
+                       all, and its last fetch, are in get_node_status."
+    )]
+    async fn get_node_config(
+        &self,
+        Parameters(p): Parameters<NodeConfigParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_node_config";
+        let Some(view) = ConfigView::from_token(p.view.as_deref()) else {
+            return tool_bad_params(
+                TOOL,
+                &format!(
+                    "unknown view {:?}; must be text, diff, unsaved or versions",
+                    p.view.as_deref().unwrap_or_default()
+                ),
+            );
+        };
+        let identity = identity_of(&ctx);
+        let Some(authed) = authed_for(identity.clone(), view.permission()) else {
+            if view.carries_text() {
+                if let Some(id) = identity.as_ref() {
+                    self.audit_config_read(id, p.node_id, view, 403).await;
+                }
+            }
+            return tool_forbidden(
+                TOOL,
+                &format!(
+                    "this token lacks {} permission",
+                    permission_label(view.permission())
+                ),
+            );
+        };
+        if let Some(deny) = self
+            .deny_invisible_node_for(Some(authed.clone()), TOOL, p.node_id)
+            .await
+        {
+            return deny;
+        }
+        let node_id = p.node_id;
+        let (result, status) = self.node_config_in(p, view).await;
+        if view.carries_text() {
+            self.audit_config_read(&authed, node_id, view, status).await;
+        }
+        result
+    }
+
+    /// One audit row per read of configuration text, refusals included (ADR-210 stage 10
+    /// decision 86). `/mcp` does not pass through `audit_mw`, so the tool writes it.
+    async fn audit_config_read(
+        &self,
+        identity: &crate::mcp::McpIdentity,
+        node: Uuid,
+        view: ConfigView,
+        status: u16,
+    ) {
+        record_audit(
+            &self.state,
+            identity,
+            &format!("mcp.get_node_config node={node} view={}", view.as_str()),
+            status,
+        )
+        .await;
+    }
+
+    /// The body of `get_node_config` once the caller is authorized and the node visible, with the
+    /// status its audit row records. Not reachable through `call_in`: the RCA agent is not offered
+    /// configuration text (decision 88).
+    pub(super) async fn node_config_in(
+        &self,
+        p: NodeConfigParams,
+        view: ConfigView,
+    ) -> (Result<CallToolResult, McpError>, u16) {
+        const TOOL: &str = "get_node_config";
+        let Some(admin) = self.state.admin.as_ref() else {
+            return (
+                tool_unavailable(TOOL, "config backup requires live mode"),
+                503,
+            );
+        };
+        let fail = |e: &crate::api::ApiError| (tool_api_error(TOOL, e), e.status().as_u16());
+        if view == ConfigView::Versions {
+            return match crate::api::config_backup::versions_of(admin, p.node_id).await {
+                Ok(v) => (
+                    ok_json(
+                        TOOL,
+                        &NodeConfigVersionsDto {
+                            node_id: p.node_id,
+                            versions: v
+                                .into_iter()
+                                .map(|v| ConfigVersionDto {
+                                    version: v.oid,
+                                    stored_at: v.stored_at,
+                                })
+                                .collect(),
+                        },
+                    ),
+                    200,
+                ),
+                Err(e) => fail(&e),
+            };
+        }
+        // Decision 84: the text views answer only while an Admin has switched them on.
+        match admin.config_saves.mcp_config_text().await {
+            Ok(s) if s.enabled => {}
+            Ok(_) => {
+                return (
+                    tool_unavailable(
+                        TOOL,
+                        "configuration text is switched off for AI clients on this deployment; \
+                         an Admin can switch it on under Config backups",
+                    ),
+                    403,
+                )
+            }
+            Err(e) => {
+                return (
+                    tool_error(TOOL, "read the MCP config-text setting", &e),
+                    500,
+                )
+            }
+        }
+        let pattern = match p.pattern.as_deref().map(config_text::compile_match) {
+            None => None,
+            Some(Ok(re)) => Some(re),
+            Some(Err(why)) => return (tool_bad_params(TOOL, &why), 400),
+        };
+        let mut dto = NodeConfigTextDto {
+            node_id: p.node_id,
+            view: view.as_str(),
+            version: None,
+            from: None,
+            to: None,
+            since: None,
+            checked_at: None,
+            total_lines: 0,
+            matched_lines: 0,
+            offset: p.offset.unwrap_or(0),
+            truncated: false,
+            redacted_lines: 0,
+            lines: Vec::new(),
+        };
+        let lines: Vec<(ConfigLineDto, bool)> = match view {
+            // Answered above, before the switch: the list carries no text.
+            ConfigView::Versions => return (no_versions(), 404),
+            ConfigView::Text => {
+                let oid = match p.version {
+                    Some(v) => v,
+                    None => match crate::api::config_backup::versions_of(admin, p.node_id).await {
+                        Ok(v) => match v.into_iter().next() {
+                            Some(latest) => latest.oid,
+                            None => return (no_versions(), 404),
+                        },
+                        Err(e) => return fail(&e),
+                    },
+                };
+                let text = match crate::api::config_backup::version_text_of(admin, p.node_id, &oid)
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => return fail(&e),
+                };
+                dto.version = Some(oid);
+                numbered(config_text::redact_lines(text.lines()))
+            }
+            ConfigView::Unsaved => {
+                let u = match crate::api::config_save::unsaved_of(admin, p.node_id).await {
+                    Ok(u) => u,
+                    Err(e) => return fail(&e),
+                };
+                dto.since = Some(u.since);
+                dto.checked_at = Some(u.checked_at);
+                numbered(config_text::redact_lines(u.text.lines()))
+            }
+            ConfigView::Diff => {
+                let (from, to) =
+                    if let (Some(f), Some(t)) = (p.from.clone(), p.to.clone()) {
+                        (f, t)
+                    } else {
+                        let versions =
+                            match crate::api::config_backup::versions_of(admin, p.node_id).await {
+                                Ok(v) => v,
+                                Err(e) => return fail(&e),
+                            };
+                        match pick_diff_pair(&versions, p.from.as_deref(), p.to.as_deref()) {
+                            Some(pair) => pair,
+                            None => return (
+                                tool_unavailable(
+                                    TOOL,
+                                    "this node has fewer than two stored versions to compare, or \
+                                     `to` is its oldest",
+                                ),
+                                404,
+                            ),
+                        }
+                    };
+                let old = match crate::api::config_backup::version_text_of(admin, p.node_id, &from)
+                    .await
+                {
+                    Ok(t) => t,
+                    Err(e) => return fail(&e),
+                };
+                let new =
+                    match crate::api::config_backup::version_text_of(admin, p.node_id, &to).await {
+                        Ok(t) => t,
+                        Err(e) => return fail(&e),
+                    };
+                dto.from = Some(from);
+                dto.to = Some(to);
+                diff_lines(&old, &new)
+            }
+        };
+        dto.total_lines = lines.len();
+        dto.redacted_lines = lines.iter().filter(|(_, r)| *r).count();
+        let page = config_text::page(
+            lines.into_iter().map(|(l, _)| l).collect(),
+            |l: &ConfigLineDto| l.text.as_str(),
+            pattern.as_ref(),
+            dto.offset,
+            p.limit.unwrap_or(config_text::DEFAULT_LIMIT),
+        );
+        dto.matched_lines = page.matched;
+        dto.truncated = page.truncated;
+        dto.lines = page.lines;
+        (ok_json(TOOL, &dto), 200)
+    }
+
+    #[tool(
         description = "How many nodes were in each state over time, as one aligned series per \
                        state. `from`/`to` are Unix seconds (default the last 24h, max a 90-day \
                        window). Fleet-wide only: the timeline is stored already summed with no \
@@ -1087,6 +1504,107 @@ impl YagraMcp {
 mod tests {
     use super::*;
     use crate::mcp::tools::testkit::*;
+
+    // ── get_node_config (ADR-210 stage 10) ──────────────────────────────────────────────────────
+
+    #[test]
+    fn a_config_view_names_its_permission_and_whether_it_carries_text() {
+        assert_eq!(ConfigView::from_token(None), Some(ConfigView::Text));
+        assert_eq!(ConfigView::from_token(Some("bogus")), None);
+        for v in [
+            ConfigView::Versions,
+            ConfigView::Text,
+            ConfigView::Diff,
+            ConfigView::Unsaved,
+        ] {
+            assert_eq!(ConfigView::from_token(Some(v.as_str())), Some(v));
+            // Text needs manage-config, as the REST routes that serve it do; the list does not.
+            assert_eq!(
+                v.permission() == Permission::ManageConfig,
+                v.carries_text(),
+                "{v:?}"
+            );
+        }
+        assert_eq!(ConfigView::Versions.permission(), Permission::View);
+    }
+
+    fn version(oid: char) -> crate::api::config_backup::ConfigVersion {
+        crate::api::config_backup::ConfigVersion {
+            oid: oid.to_string().repeat(40),
+            stored_at: None,
+        }
+    }
+
+    #[test]
+    fn a_diff_defaults_to_the_latest_and_the_version_before_it() {
+        let v = [version('c'), version('b'), version('a')]; // newest first
+        let oid = |c: char| c.to_string().repeat(40);
+        assert_eq!(pick_diff_pair(&v, None, None), Some((oid('b'), oid('c'))));
+        assert_eq!(
+            pick_diff_pair(&v, None, Some(&oid('b'))),
+            Some((oid('a'), oid('b')))
+        );
+        // `to` is the oldest: there is nothing before it.
+        assert_eq!(pick_diff_pair(&v, None, Some(&oid('a'))), None);
+        assert_eq!(pick_diff_pair(&v[..1], None, None), None);
+        assert_eq!(pick_diff_pair(&[], None, None), None);
+        assert_eq!(
+            pick_diff_pair(&v, Some(&oid('a')), None),
+            Some((oid('a'), oid('c')))
+        );
+    }
+
+    #[test]
+    fn a_diff_shows_a_changed_secret_as_changed_without_its_value() {
+        let mut old: Vec<String> = (1..=20).map(|i| format!("line {i}")).collect();
+        let mut new = old.clone();
+        old[9] = "snmp-server community oldvalue RO".to_owned();
+        new[9] = "snmp-server community newvalue RO".to_owned();
+        let lines = diff_lines(&old.join("\n"), &new.join("\n"));
+        let text: Vec<String> = lines.iter().map(|(l, _)| l.text.clone()).collect();
+        assert!(
+            text.iter()
+                .all(|t| !t.contains("oldvalue") && !t.contains("newvalue")),
+            "{text:?}"
+        );
+        let kinds: Vec<_> = lines.iter().map(|(l, _)| l.change.unwrap()).collect();
+        assert!(kinds.contains(&"removed") && kinds.contains(&"added"));
+        // Three lines of context either side of the change, and nothing further away.
+        assert_eq!(lines.len(), 3 + 2 + 3, "{text:?}");
+        assert!(text.contains(&"line 7".to_owned()) && !text.contains(&"line 6".to_owned()));
+        assert_eq!(lines.iter().filter(|(_, r)| *r).count(), 2);
+    }
+
+    /// A lone `\r` cuts a line for the diff but not for `str::lines`; the blanking has to follow
+    /// the diff's cut, or a key line is looked up by the wrong index and shown.
+    #[test]
+    fn a_diff_blanks_by_the_lines_it_compares() {
+        let old =
+            "a\n-----BEGIN PRIVATE KEY-----\nMIIEold\rMIIEold2\n-----END PRIVATE KEY-----\nb\n";
+        let new =
+            "a\n-----BEGIN PRIVATE KEY-----\nMIIEnew\rMIIEnew2\n-----END PRIVATE KEY-----\nb\n";
+        let lines = diff_lines(old, new);
+        assert!(!lines.is_empty());
+        for (l, _) in &lines {
+            assert!(!l.text.contains("MIIE"), "{:?}", l.text);
+        }
+    }
+
+    #[test]
+    fn identical_versions_diff_to_nothing() {
+        assert!(diff_lines("a\nb\n", "a\nb\n").is_empty());
+    }
+
+    /// With no write side there is no config backup to read, and no text leaves.
+    #[tokio::test]
+    async fn get_node_config_needs_live_mode() {
+        let p: NodeConfigParams =
+            serde_json::from_value(serde_json::json!({ "node_id": uuid::Uuid::nil() }))
+                .expect("params");
+        let (r, status) = mcp().node_config_in(p, ConfigView::Text).await;
+        assert_eq!(status, 503);
+        assert_eq!(json_of(&r.expect("ok"))["available"], false);
+    }
 
     #[tokio::test]
     async fn fleet_summary_counts_never_observed_nodes_as_unknown() {

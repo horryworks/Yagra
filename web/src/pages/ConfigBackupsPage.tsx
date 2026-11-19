@@ -45,7 +45,7 @@ import {
 import { ConfigBackupSwitchOnModal } from './ConfigBackupSwitchOnModal';
 import { scheduleLine } from './configBackupSchedule';
 import { ConfigBackupScheduleModal } from './ConfigBackupScheduleModal';
-import { ConfigAutoSaveModal } from './ConfigAutoSaveModal';
+import { ConfigSwitchModal } from './ConfigSwitchModal';
 import './ConfigBackupsPage.css';
 
 export function ConfigBackupsPage() {
@@ -68,7 +68,9 @@ export function ConfigBackupsPage() {
   // When the backups are fetched (ADR-210 stage 6): the daily start and how far a run has got.
   const canConfig = useCan('manage_config');
   const canSave = useCan('save_device_config');
+  const canSystem = useCan('manage_system');
   const [autoSaveOpen, setAutoSaveOpen] = useState(false);
+  const [mcpTextOpen, setMcpTextOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const schedule = useLoad(() => api.getConfigBackupSchedule(), [], {
     initial: null,
@@ -269,6 +271,20 @@ export function ConfigBackupsPage() {
               )}
             </p>
           )}
+          {schedule.data && (
+            <p className="cfgbl-sched">
+              <span>
+                {schedule.data.mcp_config_text.enabled
+                  ? t('config.mcpText.lineOn')
+                  : t('config.mcpText.lineOff')}
+              </span>
+              {canSystem && (
+                <Button onClick={() => setMcpTextOpen(true)} aria-label={t('config.mcpText.title')}>
+                  {t('config.mcpText.change')}
+                </Button>
+              )}
+            </p>
+          )}
           {line && (
             <p className={`cfgbl-push ${line.key === 'git.push.failed' ? 'bad' : ''}`}>
               <Link to={GIT_REMOTE_PATH}>{t('system:git.name')}</Link>
@@ -339,11 +355,25 @@ export function ConfigBackupsPage() {
         />
       </LoadGate>
       {autoSaveOpen && schedule.data && (
-        <ConfigAutoSaveModal
-          schedule={schedule.data}
+        <ConfigSwitchModal
+          keys="config.autoSave"
+          enabled={schedule.data.auto_save.enabled}
+          save={(enabled) => api.putConfigAutoSave({ enabled })}
           onClose={() => setAutoSaveOpen(false)}
           onSaved={() => {
             setAutoSaveOpen(false);
+            schedule.reload();
+          }}
+        />
+      )}
+      {mcpTextOpen && schedule.data && (
+        <ConfigSwitchModal
+          keys="config.mcpText"
+          enabled={schedule.data.mcp_config_text.enabled}
+          save={(enabled) => api.putConfigMcpText({ enabled })}
+          onClose={() => setMcpTextOpen(false)}
+          onSaved={() => {
+            setMcpTextOpen(false);
             schedule.reload();
           }}
         />

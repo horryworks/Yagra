@@ -802,6 +802,9 @@ fn changes_monitoring_config(path: &str) -> bool {
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/save"))
         || path == "/api/v1/config-save-settings"
         || path == "/api/v1/config-backup-schedule"
+        // The MCP config-text switch (ADR-210 stage 10) is the same row of `config_save_settings`,
+        // read afresh by `get_node_config` at every call.
+        || path == "/api/v1/config-mcp-settings"
         // The same shape, one step earlier in the workflow (ADR-131 decision 7): which folder's range
         // would claim each address a sweep just found. It writes nothing — the import that may
         // follow is `POST /discovery/import`, which is **not** listed here and does bump the

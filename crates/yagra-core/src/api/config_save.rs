@@ -7,13 +7,19 @@
 //!   that fetch succeeds, so what is saved is already backed up (decision 7). Audited by
 //!   `audit_mw` like every write.
 //! - `GET …/config-backup/saves/{save_id}/startup` — the startup configuration a save replaced.
-//!   `ManageConfig`, and off MCP, for the reason a version's text is (ADR-210 decision 16).
+//!   `ManageConfig`, and off MCP: ADR-210 stage 10 opened a version's text to `get_node_config`
+//!   and left this one off (decision 82).
 //! - `GET …/config-backup/unsaved` — what the device printed the last time the save script found
-//!   running and startup different (Inc.9). Same permission and the same reason to stay off MCP.
+//!   running and startup different (Inc.9). `ManageConfig`; on MCP through `get_node_config`
+//!   (`view=unsaved`) since ADR-210 stage 10, behind its switch, blanking and audit.
 //! - `PUT /api/v1/config-save-settings` — automatic save on or off (decision 8): when on, a device
 //!   a fetch finds unsaved is saved right after that fetch (decision 13). `SaveDeviceConfig` and a
 //!   fleet-wide caller: it lets Yagra save every device on its own. Read back in
 //!   `GET /api/v1/config-backup-schedule`.
+//! - `PUT /api/v1/config-mcp-settings` - whether `/mcp`'s `get_node_config` may hand a
+//!   configuration's text to an AI client (ADR-210 stage 10 decision 85). `ManageSystem`, a
+//!   signed-in person (`Caller`, never an API token: a token is what would read the text) and a
+//!   fleet-wide caller. Read back in `GET /api/v1/config-backup-schedule`.
 //!
 //! And two routes for the save script inside the bundled oxidized, outside `/api/v1`, behind the
 //! source token, on the internal listener only (ADR-217):
@@ -34,13 +40,14 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_save::{AutoSave, SaveFailure, SaveOrigin};
+use yagra_base::config_save::{AutoSave, McpConfigText, SaveFailure, SaveOrigin};
 use yagra_common::config_save::{commands_for, SaveCommands};
 
 use super::config_backup::{check_source_token, oxidized_of, start_fetch};
 use super::error::{ApiError, ApiResult};
 use super::extract::{
-    Admin, Caller, RequireManageConfig, RequireSaveDeviceConfig, Scoped, VisibleNode,
+    Admin, Caller, RequireManageConfig, RequireManageSystem, RequireSaveDeviceConfig, Scoped,
+    VisibleNode,
 };
 use super::ApiState;
 use crate::oxidized::{self, save::Action};
@@ -52,6 +59,7 @@ use crate::oxidized::{self, save::Action};
     get_startup,
     get_unsaved,
     put_auto_save,
+    put_mcp_config_text,
     save_job,
     save_report
 ))]
@@ -72,6 +80,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/config-save-settings",
             axum::routing::put(put_auto_save),
+        )
+        .route(
+            "/api/v1/config-mcp-settings",
+            axum::routing::put(put_mcp_config_text),
         )
         .route("/internal/oxidized/save", get(save_job).post(save_report))
 }
@@ -198,11 +210,11 @@ async fn get_startup(
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct UnsavedText {
     /// The first time the two were seen to differ.
-    since: chrono::DateTime<Utc>,
+    pub(crate) since: chrono::DateTime<Utc>,
     /// When the script last compared them.
-    checked_at: chrono::DateTime<Utc>,
+    pub(crate) checked_at: chrono::DateTime<Utc>,
     /// What the device printed for that comparison.
-    text: String,
+    pub(crate) text: String,
 }
 
 #[utoipa::path(
@@ -221,6 +233,13 @@ async fn get_unsaved(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<UnsavedText>> {
+    Ok(Json(unsaved_of(&admin, node_id).await?))
+}
+
+/// The comparison `GET …/unsaved` answers, shared with `/mcp`'s `get_node_config` (ADR-210 stage
+/// 10) so the two surfaces refuse the same node for the same reason. The caller has already
+/// checked the permission and the node's visibility.
+pub(crate) async fn unsaved_of(admin: &super::AdminState, node_id: Uuid) -> ApiResult<UnsavedText> {
     let state = admin
         .config_saves
         .unsaved_of(node_id)
@@ -236,11 +255,11 @@ async fn get_unsaved(
             )
         })?;
     let checked_at = state.map_or(since, |s| s.checked_at);
-    Ok(Json(UnsavedText {
+    Ok(UnsavedText {
         since,
         checked_at,
         text,
-    }))
+    })
 }
 
 #[utoipa::path(
@@ -267,6 +286,35 @@ async fn put_auto_save(
         .set_auto_save(body)
         .await
         .map_err(|e| failed(&e, "config auto-save setting"))?;
+    Ok(Json(saved))
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/config-mcp-settings", tag = "nodes",
+    request_body = McpConfigText,
+    responses(
+        (status = 200, description = "Saved. When on, an MCP client holding manage-config can read a backed-up configuration's text, its diffs and its unsaved comparison through get_node_config, with secrets blanked by oxidized and again by Yagra. Neither pass is complete, so a secret both miss reaches the client. Every read is audited", body = McpConfigText),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem, the caller is an API token (`session_required`), or the caller is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn put_mcp_config_text(
+    _perm: RequireManageSystem,
+    _person: Caller,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<McpConfigText>,
+) -> ApiResult<Json<McpConfigText>> {
+    super::scope::require_fleet_wide(
+        &scope,
+        "this setting decides what AI clients may read about every device, so an account \
+         restricted to folders cannot set it",
+    )?;
+    let saved = admin
+        .config_saves
+        .set_mcp_config_text(body)
+        .await
+        .map_err(|e| failed(&e, "config text for MCP setting"))?;
     Ok(Json(saved))
 }
 
@@ -883,6 +931,35 @@ mod tests {
             send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
         assert_eq!(status, StatusCode::OK, "{schedule}");
         assert_eq!(schedule["auto_save"]["enabled"], true);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    /// Configuration text for MCP is off by default, refused to an Operator, switched on by an
+    /// Admin and read back with the schedule (ADR-210 stage 10 decision 85). That an API token is
+    /// refused is `Caller`'s own rule, tested in `extract.rs`.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn config_text_for_mcp_is_set_by_an_admin(pool: sqlx::PgPool) {
+        let home = ox_state_home();
+        let st = with_oxidized(pool.clone(), &home).await;
+        let path = "/api/v1/config-mcp-settings";
+        let body = serde_json::json!({ "enabled": true });
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (status, schedule) =
+            send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
+        assert_eq!(status, StatusCode::OK, "{schedule}");
+        assert_eq!(
+            schedule["mcp_config_text"]["enabled"], false,
+            "off by default"
+        );
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, _) = send(&st, "PUT", path, &operator, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, saved) = send(&st, "PUT", path, &admin, Some(body)).await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        assert_eq!(saved, serde_json::json!({ "enabled": true }));
+        let (_, schedule) = send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
+        assert_eq!(schedule["mcp_config_text"]["enabled"], true);
         std::fs::remove_dir_all(&home).ok();
     }
 

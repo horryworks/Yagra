@@ -133,6 +133,15 @@ pub struct AutoSave {
     pub enabled: bool,
 }
 
+/// Whether `/mcp` may hand a device configuration's text to an AI client (ADR-210 stage 10
+/// decision 85). Off by default. oxidized's secret filter and Yagra's own second pass can both
+/// miss a line, so switching this on is a person accepting that, not a setting Yagra assumes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct McpConfigText {
+    /// Off by default.
+    pub enabled: bool,
+}
+
 /// How many saves a node keeps. A newer one pushes the oldest finished one out.
 pub const SAVES_KEPT: i64 = 10;
 
@@ -442,6 +451,34 @@ impl ConfigSaveRepo {
         .execute(&self.pool)
         .await?;
         self.auto_save().await
+    }
+
+    /// Whether `/mcp` may serve configuration text (ADR-210 stage 10 decision 85). A missing row
+    /// reads as off.
+    pub async fn mcp_config_text(&self) -> anyhow::Result<McpConfigText> {
+        let row = sqlx::query("SELECT mcp_config_text FROM config_save_settings")
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(r) = row else {
+            return Ok(McpConfigText::default());
+        };
+        Ok(McpConfigText {
+            enabled: r.try_get("mcp_config_text")?,
+        })
+    }
+
+    /// Change it.
+    pub async fn set_mcp_config_text(&self, s: McpConfigText) -> anyhow::Result<McpConfigText> {
+        sqlx::query(
+            "INSERT INTO config_save_settings (id, mcp_config_text, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET mcp_config_text = EXCLUDED.mcp_config_text, \
+             updated_at = now()",
+        )
+        .bind(s.enabled)
+        .execute(&self.pool)
+        .await?;
+        self.mcp_config_text().await
     }
 
     /// Whether the node's latest save failed. An automatic save waits for a person after one

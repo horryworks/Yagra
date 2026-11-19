@@ -560,7 +560,7 @@ pub struct NodeStatusDto {
     /// Config backup through the bundled oxidized (ADR-210 stage 2): whether the node is fetched,
     /// or the one thing to fix, and the last result. Mirrors `GET
     /// /api/v1/nodes/{node_id}/config-backup`, from the same function. The configuration text is
-    /// deliberately not on this surface. `null` ⇒ the read failed.
+    /// `get_node_config`'s (ADR-210 stage 10), not this tool's. `null` ⇒ the read failed.
     pub config_backup: Option<crate::api::config_backup::ConfigBackupSummary>,
 }
 
@@ -1010,6 +1010,71 @@ fn unix_s_to_rfc3339(s: i64) -> String {
     chrono::DateTime::from_timestamp(s, 0)
         .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).expect("epoch is valid"))
         .to_rfc3339()
+}
+
+/// One stored version of a node's configuration, as `get_node_config(view=versions)` lists it
+/// (ADR-210 stage 10). No text: a version id is what `view=text` and `view=diff` take.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigVersionDto {
+    /// The version id (a Git object id) to pass as `version`, `from` or `to`.
+    pub version: String,
+    /// When it was stored; `null` when the time could not be read.
+    pub stored_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// `get_node_config(view=versions)`: the node's stored versions, newest first.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeConfigVersionsDto {
+    pub node_id: Uuid,
+    pub versions: Vec<ConfigVersionDto>,
+}
+
+/// One line of configuration text, as `get_node_config` returns it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigLineDto {
+    /// The line's position, from 1: in the version for `text` and `unsaved`, in the whole
+    /// comparison for `diff`. A jump between two lines is lines left out (filtered, or unchanged
+    /// lines outside a diff's context).
+    pub n: usize,
+    /// `diff` only: `added` (only in `to`), `removed` (only in `from`) or `same` (context).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change: Option<&'static str>,
+    /// The line, with secrets replaced by `<redacted>`.
+    pub text: String,
+}
+
+/// `get_node_config(view=text|diff|unsaved)`: one page of configuration text with its secrets
+/// blanked (ADR-210 stage 10 decisions 84 and 87). Carries the counts a caller needs to know it
+/// has not seen everything — a page that stopped short and said nothing would read as the end.
+#[derive(Debug, Clone, Serialize)]
+pub struct NodeConfigTextDto {
+    pub node_id: Uuid,
+    /// `text`, `diff` or `unsaved`.
+    pub view: &'static str,
+    /// `text`: the version shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// `diff`: the older and the newer version compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// `unsaved`: when running and startup were first seen to differ, and last compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Lines in the whole text (for `diff`, lines of the comparison kept as changes or context).
+    pub total_lines: usize,
+    /// Of those, the lines `match` kept (all of them without one).
+    pub matched_lines: usize,
+    /// The first matched line this page starts at, from 0.
+    pub offset: usize,
+    /// More matched lines follow this page: ask again with a larger `offset`.
+    pub truncated: bool,
+    /// Lines of the whole text in which something was replaced by `<redacted>`.
+    pub redacted_lines: usize,
+    pub lines: Vec<ConfigLineDto>,
 }
 
 #[cfg(test)]
@@ -1702,6 +1767,41 @@ mod tests {
             &serde_json::to_value(&suppressions).unwrap(),
             "Suppressions",
         );
+
+        // ── ADR-210 stage 10 ────────────────────────────────────────────────────────────────────
+
+        let versions = NodeConfigVersionsDto {
+            node_id: node.id.0,
+            versions: vec![ConfigVersionDto {
+                version: "0".repeat(40),
+                stored_at: Some(chrono::Utc::now()),
+            }],
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&versions).unwrap(),
+            "NodeConfigVersions",
+        );
+        // Every optional field filled, so the canary sees every key the type can carry.
+        let text = NodeConfigTextDto {
+            node_id: node.id.0,
+            view: "diff",
+            version: Some("0".repeat(40)),
+            from: Some("1".repeat(40)),
+            to: Some("2".repeat(40)),
+            since: Some(chrono::Utc::now()),
+            checked_at: Some(chrono::Utc::now()),
+            total_lines: 3,
+            matched_lines: 1,
+            offset: 0,
+            truncated: false,
+            redacted_lines: 1,
+            lines: vec![ConfigLineDto {
+                n: 2,
+                change: Some("added"),
+                text: "snmp-server community <redacted>".to_owned(),
+            }],
+        };
+        assert_no_forbidden_keys(&serde_json::to_value(&text).unwrap(), "NodeConfigText");
     }
 
     /// **Every DTO in this module is covered by the canary above.**
@@ -1790,6 +1890,8 @@ mod tests {
         ("search_events", "Event"),
         ("poll_now", "PollNowResult"),
         ("list_suppressions", "Suppressions"),
+        ("get_node_config", "NodeConfigVersions"),
+        ("get_node_config", "NodeConfigText"),
     ];
 
     /// Tools whose result is a `serde_json::json!` object built in the tool body. There is no

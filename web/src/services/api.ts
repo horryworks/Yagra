@@ -1326,6 +1326,10 @@ export const api = {
   putConfigAutoSave: (body: { enabled: boolean }) =>
     apiPut('/api/v1/config-save-settings', { body }),
 
+  /** Whether MCP's get_node_config may hand configuration text to AI clients (ADR-210 stage 10). */
+  putConfigMcpText: (body: { enabled: boolean }) =>
+    apiPut('/api/v1/config-mcp-settings', { body }),
+
   /** Change the daily start time (UTC) and how many nodes are fetched at once. */
   putConfigBackupSchedule: (body: ConfigBackupScheduleBody): Promise<ConfigBackupScheduleView> =>
     apiPut('/api/v1/config-backup-schedule', { body }),

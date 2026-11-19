@@ -3719,6 +3719,56 @@
         }
       }
     },
+    "/api/v1/config-mcp-settings": {
+      "put": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "put_mcp_config_text",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpConfigText"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved. When on, an MCP client holding manage-config can read a backed-up configuration's text, its diffs and its unsaved comparison through get_node_config, with secrets blanked by oxidized and again by Yagra. Neither pass is complete, so a secret both miss reaches the client. Every read is audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpConfigText"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem, the caller is an API token (`session_required`), or the caller is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config-save-settings": {
       "put": {
         "tags": [
@@ -31044,7 +31094,8 @@
           "concurrency",
           "max_concurrency",
           "running",
-          "auto_save"
+          "auto_save",
+          "mcp_config_text"
         ],
         "properties": {
           "at_hour": {
@@ -31081,6 +31132,10 @@
             "format": "int32",
             "description": "The most `concurrency` may be.",
             "minimum": 0
+          },
+          "mcp_config_text": {
+            "$ref": "#/components/schemas/McpConfigText",
+            "description": "Whether an MCP client may read configuration text through `get_node_config` (ADR-210\nstage 10 decision 85). Changed with `PUT /api/v1/config-mcp-settings`."
           },
           "run_finished_at": {
             "type": [
@@ -38494,6 +38549,19 @@
           "rule": {
             "$ref": "#/components/schemas/StoredThreshold",
             "description": "The stored rule, in the same shape the rules list serves."
+          }
+        }
+      },
+      "McpConfigText": {
+        "type": "object",
+        "description": "Whether `/mcp` may hand a device configuration's text to an AI client (ADR-210 stage 10\ndecision 85). Off by default. oxidized's secret filter and Yagra's own second pass can both\nmiss a line, so switching this on is a person accepting that, not a setting Yagra assumes.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Off by default."
           }
         }
       },
