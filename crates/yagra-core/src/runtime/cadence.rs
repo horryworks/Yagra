@@ -51,7 +51,7 @@ token_enum!(Cadence, Unknown, "*_schedules.frequency", [
 /// A struct rather than five positional arguments because the two `Option<i16>` days and the two
 /// `i16` times are trivially transposable at a call site, and the compiler cannot tell — a schedule
 /// that fires at 30 minutes past hour 9 rather than 9:30 is a bug you find in production.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schedule {
     pub frequency: Cadence,
     /// 0=Sun … 6=Sat, for [`Cadence::Weekly`].
@@ -68,10 +68,10 @@ pub struct Schedule {
 /// Compute the next firing instant, strictly after `now`. Pure, so the month-end, roll-over and
 /// daylight-saving cases are unit-tested without a clock or a database.
 #[must_use]
-pub fn compute_next_run(s: Schedule, now: DateTime<Utc>) -> DateTime<Utc> {
+pub fn compute_next_run(s: &Schedule, now: DateTime<Utc>) -> DateTime<Utc> {
     let hour = s.at_hour.clamp(0, 23) as u32;
     let minute = s.at_minute.clamp(0, 59) as u32;
-    let tz = s.time_zone;
+    let tz = &s.time_zone;
     let at_time =
         |date: NaiveDate| -> DateTime<Utc> { wall_clock::resolve(tz, date, hour, minute) };
     // The calendar is walked in the schedule's zone: "today", the weekday and the month are all
@@ -156,13 +156,18 @@ mod tests {
     #[test]
     fn a_daily_schedule_fires_at_its_wall_time_in_its_own_zone() {
         // 09:00 in Tokyo is 00:00Z. At 23:30Z on the 29th it is already 08:30 on the 30th there.
-        let s = zoned(Cadence::Daily, 9, 0, Tz::Asia__Tokyo);
+        let s = zoned(
+            Cadence::Daily,
+            9,
+            0,
+            wall_clock::parse_zone("Asia/Tokyo").unwrap(),
+        );
         assert_eq!(
-            compute_next_run(s, at("2026-10-29T23:30:00Z")),
+            compute_next_run(&s, at("2026-10-29T23:30:00Z")),
             at("2026-10-30T00:00:00Z")
         );
         assert_eq!(
-            compute_next_run(s, at("2026-10-30T00:00:00Z")),
+            compute_next_run(&s, at("2026-10-30T00:00:00Z")),
             at("2026-10-31T00:00:00Z")
         );
     }
@@ -171,14 +176,19 @@ mod tests {
     fn a_monthly_first_at_seven_in_tokyo_lands_on_the_first_there() {
         // The case a UTC-only day of month could not express: the 1st 07:00 JST is the last day
         // of the previous month in UTC.
-        let mut s = zoned(Cadence::Monthly, 7, 0, Tz::Asia__Tokyo);
+        let mut s = zoned(
+            Cadence::Monthly,
+            7,
+            0,
+            wall_clock::parse_zone("Asia/Tokyo").unwrap(),
+        );
         s.day_of_month = Some(1);
         assert_eq!(
-            compute_next_run(s, at("2026-10-15T00:00:00Z")),
+            compute_next_run(&s, at("2026-10-15T00:00:00Z")),
             at("2026-10-31T22:00:00Z")
         );
         assert_eq!(
-            compute_next_run(s, at("2026-10-31T22:00:00Z")),
+            compute_next_run(&s, at("2026-10-31T22:00:00Z")),
             at("2026-11-30T22:00:00Z")
         );
     }
@@ -187,10 +197,15 @@ mod tests {
     fn a_weekly_schedule_reads_the_weekday_in_its_own_zone() {
         // Monday 08:00 in Tokyo is Sunday 23:00Z. At Sunday 12:00Z it is Sunday 21:00 in Tokyo,
         // so the next Monday there is a few hours away, not eight days.
-        let mut s = zoned(Cadence::Weekly, 8, 0, Tz::Asia__Tokyo);
+        let mut s = zoned(
+            Cadence::Weekly,
+            8,
+            0,
+            wall_clock::parse_zone("Asia/Tokyo").unwrap(),
+        );
         s.day_of_week = Some(1);
         assert_eq!(
-            compute_next_run(s, at("2026-11-01T12:00:00Z")),
+            compute_next_run(&s, at("2026-11-01T12:00:00Z")),
             at("2026-11-01T23:00:00Z")
         );
     }
@@ -201,7 +216,7 @@ mod tests {
         let mut now = at(start);
         (0..times)
             .map(|_| {
-                now = compute_next_run(s, now);
+                now = compute_next_run(&s, now);
                 now
             })
             .collect()
@@ -209,9 +224,15 @@ mod tests {
 
     #[test]
     fn across_the_spring_gap_a_daily_schedule_neither_skips_nor_doubles() {
-        // New York has no 02:30 on 2027-03-14: that day fires at the end of the gap, 03:00 EDT.
+        // New York has no 02:30 on 2027-03-14: that day reads it with the offset before the gap
+        // (EST), which is 03:30 EDT (ADR-221 Inc.3 decision 9).
         let got = fire(
-            zoned(Cadence::Daily, 2, 30, Tz::America__New_York),
+            zoned(
+                Cadence::Daily,
+                2,
+                30,
+                wall_clock::parse_zone("America/New_York").unwrap(),
+            ),
             "2027-03-12T12:00:00Z",
             4,
         );
@@ -219,7 +240,7 @@ mod tests {
             got,
             vec![
                 at("2027-03-13T07:30:00Z"),
-                at("2027-03-14T07:00:00Z"),
+                at("2027-03-14T07:30:00Z"),
                 at("2027-03-15T06:30:00Z"),
                 at("2027-03-16T06:30:00Z"),
             ]
@@ -230,7 +251,12 @@ mod tests {
     fn across_the_autumn_overlap_a_daily_schedule_fires_once_on_the_first_occurrence() {
         // 01:30 happens twice in New York on 2026-11-01 (05:30Z and 06:30Z): only the first fires.
         let got = fire(
-            zoned(Cadence::Daily, 1, 30, Tz::America__New_York),
+            zoned(
+                Cadence::Daily,
+                1,
+                30,
+                wall_clock::parse_zone("America/New_York").unwrap(),
+            ),
             "2026-10-30T12:00:00Z",
             4,
         );
@@ -246,7 +272,12 @@ mod tests {
         // Asked from between the two occurrences, the next run is the next day, not the second one.
         assert_eq!(
             compute_next_run(
-                zoned(Cadence::Daily, 1, 30, Tz::America__New_York),
+                &zoned(
+                    Cadence::Daily,
+                    1,
+                    30,
+                    wall_clock::parse_zone("America/New_York").unwrap()
+                ),
                 at("2026-11-01T06:00:00Z")
             ),
             at("2026-11-02T06:30:00Z")
@@ -256,13 +287,18 @@ mod tests {
     #[test]
     fn a_new_york_schedule_keeps_its_wall_time_through_daylight_saving() {
         // 09:00 EDT is 13:00Z and 09:00 EST is 14:00Z: the instant moves, the wall time does not.
-        let s = zoned(Cadence::Daily, 9, 0, Tz::America__New_York);
+        let s = zoned(
+            Cadence::Daily,
+            9,
+            0,
+            wall_clock::parse_zone("America/New_York").unwrap(),
+        );
         assert_eq!(
-            compute_next_run(s, at("2026-10-31T00:00:00Z")),
+            compute_next_run(&s, at("2026-10-31T00:00:00Z")),
             at("2026-10-31T13:00:00Z")
         );
         assert_eq!(
-            compute_next_run(s, at("2026-11-02T00:00:00Z")),
+            compute_next_run(&s, at("2026-11-02T00:00:00Z")),
             at("2026-11-02T14:00:00Z")
         );
     }
@@ -271,11 +307,11 @@ mod tests {
     fn daily_rolls_to_tomorrow_when_the_time_has_passed() {
         let now = at("2026-07-28T09:00:00Z");
         assert_eq!(
-            compute_next_run(sched(Cadence::Daily, 8, 0), now),
+            compute_next_run(&sched(Cadence::Daily, 8, 0), now),
             at("2026-07-29T08:00:00Z")
         );
         assert_eq!(
-            compute_next_run(sched(Cadence::Daily, 10, 30), now),
+            compute_next_run(&sched(Cadence::Daily, 10, 30), now),
             at("2026-07-28T10:30:00Z")
         );
     }
@@ -287,7 +323,7 @@ mod tests {
         let now = at("2026-07-28T09:00:00Z");
         let mut s = sched(Cadence::Weekly, 8, 0);
         s.day_of_week = Some(2); // Tue
-        let next = compute_next_run(s, now);
+        let next = compute_next_run(&s, now);
         assert_eq!(next, at("2026-08-04T08:00:00Z"));
         assert!(next > now);
     }
@@ -298,9 +334,9 @@ mod tests {
         let now = at("2026-01-15T00:00:00Z");
         let mut s = sched(Cadence::Monthly, 6, 0);
         s.day_of_month = Some(31);
-        assert_eq!(compute_next_run(s, now), at("2026-01-28T06:00:00Z"));
+        assert_eq!(compute_next_run(&s, now), at("2026-01-28T06:00:00Z"));
         assert_eq!(
-            compute_next_run(s, at("2026-01-29T00:00:00Z")),
+            compute_next_run(&s, at("2026-01-29T00:00:00Z")),
             at("2026-02-28T06:00:00Z")
         );
     }
@@ -310,7 +346,7 @@ mod tests {
         let mut s = sched(Cadence::Monthly, 0, 0);
         s.day_of_month = Some(5);
         assert_eq!(
-            compute_next_run(s, at("2026-12-20T00:00:00Z")),
+            compute_next_run(&s, at("2026-12-20T00:00:00Z")),
             at("2027-01-05T00:00:00Z")
         );
     }
@@ -321,8 +357,8 @@ mod tests {
         // feature is broken; firing daily is visibly wrong in a way an operator can act on.
         let now = at("2026-07-28T09:00:00Z");
         assert_eq!(
-            compute_next_run(sched(Cadence::Unknown, 8, 0), now),
-            compute_next_run(sched(Cadence::Daily, 8, 0), now)
+            compute_next_run(&sched(Cadence::Unknown, 8, 0), now),
+            compute_next_run(&sched(Cadence::Daily, 8, 0), now)
         );
     }
 
@@ -332,12 +368,12 @@ mod tests {
         // sides: the clamp happens, and it does not also push the firing out a day.
         let now = at("2026-07-28T09:00:00Z");
         assert_eq!(
-            compute_next_run(sched(Cadence::Daily, 99, 99), now),
+            compute_next_run(&sched(Cadence::Daily, 99, 99), now),
             at("2026-07-28T23:59:00Z")
         );
         // Negative clamps to 00:00, which is behind 09:00 — so that one does roll to tomorrow.
         assert_eq!(
-            compute_next_run(sched(Cadence::Daily, -5, -5), now),
+            compute_next_run(&sched(Cadence::Daily, -5, -5), now),
             at("2026-07-29T00:00:00Z")
         );
     }

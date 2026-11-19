@@ -1129,7 +1129,7 @@ mod tests {
                 day_of_month: None,
                 at_hour: 3,
                 at_minute: 30,
-                time_zone: yagra_base::wall_clock::Tz::Asia__Tokyo,
+                time_zone: yagra_base::wall_clock::parse_zone("Asia/Tokyo").unwrap(),
             },
             time_zone: Some("Asia/Tokyo".to_owned()),
             enabled,

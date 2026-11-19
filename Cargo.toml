@@ -182,8 +182,11 @@ minijinja = { version = "2", default-features = false, features = ["builtins", "
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 # IANA zone rules for preset schedules (ADR-221): a schedule holds its wall time in a named zone,
-# and the next run is resolved through that zone's DST rules. Core-only (via yagra-base).
-chrono-tz = "0.10"
+# and the next run is resolved through that zone's DST rules. Core-only (via yagra-base), and only
+# inside `yagra-base/src/wall_clock.rs` (ADR-221 Inc.3, which replaced the archived `chrono-tz`).
+# The zone database is compiled in: the runtime image carries no /usr/share/zoneinfo, and jiff's
+# defaults read the system copy on Linux, which would leave every zone name unknown in a container.
+jiff = { version = "0.2.43", default-features = false, features = ["std", "tzdb-bundle-always"] }
 # Support bundle (ADR-045): one downloadable archive of logs + status for a deployment nobody can
 # reach a shell on. `tar` + `flate2` rather than `zip` because both are pure Rust with no C
 # toolchain in the way (flate2 defaults to the miniz_oxide backend), and because the archive holds

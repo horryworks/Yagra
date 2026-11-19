@@ -2664,7 +2664,7 @@ async fn run_report_scheduler(
             Ok(due) => {
                 for sched in due {
                     let next = runtime::cadence::compute_next_run(
-                        runtime::cadence::Schedule {
+                        &runtime::cadence::Schedule {
                             frequency: sched.frequency,
                             day_of_week: sched.day_of_week,
                             day_of_month: sched.day_of_month,
@@ -2781,7 +2781,7 @@ async fn advance(
     status: analysis::AnalysisScheduleStatus,
 ) {
     let next = runtime::cadence::compute_next_run(
-        runtime::cadence::Schedule {
+        &runtime::cadence::Schedule {
             frequency: sched.frequency,
             day_of_week: sched.day_of_week,
             day_of_month: sched.day_of_month,

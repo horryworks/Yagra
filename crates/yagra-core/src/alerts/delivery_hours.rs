@@ -99,7 +99,11 @@ impl Window {
 }
 
 /// The hours one node keeps: its zone and every window a schedule gives it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// `Hash` is written by hand because the zone type has none (ADR-221 Inc.3 decision 12). It hashes
+/// the windows only: equal values still hash alike, and two names for the same rules (`Japan`,
+/// `Asia/Tokyo`) compare equal, so hashing a name would break that.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeHours {
     pub zone: Tz,
     pub windows: Vec<Window>,
@@ -109,12 +113,18 @@ pub struct NodeHours {
 /// week and a day always finds one.
 const LOOKAHEAD_MINUTES: i64 = 8 * 24 * 60;
 
+impl std::hash::Hash for NodeHours {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.windows.hash(state);
+    }
+}
+
 impl NodeHours {
     /// Whether any window is open at `now`, read in this node's zone. Several schedules on one
     /// node are a union: one saying "open" is enough (decision 4).
     #[must_use]
     pub fn is_open(&self, now: DateTime<Utc>) -> bool {
-        let local = now.with_timezone(&self.zone);
+        let local = yagra_base::wall_clock::to_local(&self.zone, now);
         // `number_from_monday` is 1..=7 and the minute of the day is below 1440, so both fit.
         let day = u8::try_from(local.weekday().number_from_monday()).unwrap_or(1);
         let minute = u16::try_from(local.hour() * 60 + local.minute()).unwrap_or(0);
@@ -309,7 +319,7 @@ pub fn folder_hours(
         let zone = zones
             .get(group)
             .and_then(|(name, _)| yagra_base::wall_clock::parse_zone(name))
-            .unwrap_or(default_zone);
+            .unwrap_or_else(|| default_zone.clone());
         out.insert(*group, NodeHours { zone, windows });
     }
     out
@@ -808,14 +818,14 @@ mod tests {
         ];
         let policy = build_policy(&[by_site, by_other], &nodes, &folders, Tz::UTC);
         let covered = |n: u128| policy.nodes.get(&NodeId::from(Uuid::from_u128(n)));
-        assert_eq!(covered(1).map(|h| h.zone), Some(tokyo()));
+        assert_eq!(covered(1).map(|h| h.zone.clone()), Some(tokyo()));
         assert_eq!(
-            covered(2).map(|h| h.zone),
+            covered(2).map(|h| h.zone.clone()),
             Some(tokyo()),
             "the floor inherits the site's zone"
         );
         assert_eq!(
-            covered(3).map(|h| h.zone),
+            covered(3).map(|h| h.zone.clone()),
             Some(Tz::UTC),
             "no zoned folder: the default"
         );

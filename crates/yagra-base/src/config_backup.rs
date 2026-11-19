@@ -1234,7 +1234,7 @@ impl ConfigBackupRepo {
         .bind(i16::from(at_hour))
         .bind(i16::from(at_minute))
         .bind(i16::from(concurrency))
-        .bind(time_zone.map(|tz| tz.name()))
+        .bind(time_zone.as_ref().map(crate::wall_clock::zone_name))
         .execute(&self.pool)
         .await?;
         self.schedule().await
@@ -1356,7 +1356,7 @@ fn small(r: &sqlx::postgres::PgRow, col: &str) -> anyhow::Result<u8> {
 
 /// When config backups are fetched (ADR-210 stage 6): every day from one wall time in one zone
 /// (ADR-221), so many nodes at a time, and where the latest run stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupSchedule {
     pub at_hour: u8,
     pub at_minute: u8,

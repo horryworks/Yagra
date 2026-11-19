@@ -84,10 +84,10 @@ pub(crate) struct Progress {
 /// either side of `t`'s UTC date, and `next_start` needs one beyond it;
 /// a daylight-saving gap or overlap resolves the way `yagra_base::wall_clock::resolve` says.
 fn starts_around(s: &BackupSchedule, t: DateTime<Utc>) -> [DateTime<Utc>; 4] {
-    let today = wall_clock::local_date(s.time_zone, t);
+    let today = wall_clock::local_date(&s.time_zone, t);
     let at = |d: i64| {
         wall_clock::resolve(
-            s.time_zone,
+            &s.time_zone,
             today + TimeDelta::days(d),
             u32::from(s.at_hour),
             u32::from(s.at_minute),
@@ -428,7 +428,7 @@ mod tests {
     fn the_start_time_is_a_wall_time_in_the_schedules_zone() {
         // 02:00 in Tokyo is 17:00Z the day before.
         let s = BackupSchedule {
-            time_zone: yagra_base::wall_clock::Tz::Asia__Tokyo,
+            time_zone: yagra_base::wall_clock::parse_zone("Asia/Tokyo").unwrap(),
             ..sched(1)
         };
         assert_eq!(

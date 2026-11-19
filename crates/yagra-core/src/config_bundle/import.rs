@@ -111,7 +111,7 @@ pub(super) fn next_run(
     now: DateTime<Utc>,
 ) -> DateTime<Utc> {
     compute_next_run(
-        Schedule {
+        &Schedule {
             frequency: Cadence::from_stored(frequency),
             day_of_week,
             day_of_month,

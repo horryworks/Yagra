@@ -286,7 +286,7 @@ pub(crate) fn stored_time_zone(name: Option<&str>) -> Option<String> {
     name.map(str::trim)
         .filter(|n| !n.is_empty())
         .and_then(yagra_base::wall_clock::parse_zone)
-        .map(|tz| tz.name().to_owned())
+        .map(|tz| yagra_base::wall_clock::zone_name(&tz).to_owned())
 }
 
 /// Append one audit row, logging rather than failing if the write does not land.
@@ -842,7 +842,8 @@ mod tests {
     }
 
     /// A zone is stored in the spelling it was sent in, as NetBox stores it (ADR-253 decision 1):
-    /// an alias stays an alias, and only the surrounding blanks go.
+    /// an alias stays an alias, and only the surrounding blanks go. Letter case is the one thing
+    /// put right (ADR-221 Inc.3 decision 10), so what is stored is a name the picker lists.
     #[test]
     fn a_stored_zone_keeps_the_spelling_it_was_sent_in() {
         for name in ["Japan", "US/Eastern", "Asia/Calcutta", "Asia/Tokyo"] {
@@ -850,9 +851,11 @@ mod tests {
             assert_eq!(stored_time_zone(Some(name)).as_deref(), Some(name));
         }
         assert_eq!(stored_time_zone(Some("  Japan ")).as_deref(), Some("Japan"));
-        assert!(
-            parse_time_zone(Some("japan")).is_err(),
-            "names are matched as written"
+        assert_eq!(stored_time_zone(Some("japan")).as_deref(), Some("Japan"));
+        assert_eq!(
+            stored_time_zone(Some("asia/tokyo")).as_deref(),
+            Some("Asia/Tokyo")
         );
+        assert!(parse_time_zone(Some("Mars/Olympus_Mons")).is_err());
     }
 }

@@ -809,7 +809,7 @@ fn parse_schedule_body(
         time_zone: super::util::stored_time_zone(body.time_zone.as_deref()),
         enabled: body.enabled.unwrap_or(true),
     };
-    let next = crate::runtime::cadence::compute_next_run(cadence, chrono::Utc::now());
+    let next = crate::runtime::cadence::compute_next_run(&cadence, chrono::Utc::now());
     Ok((input, next))
 }
 

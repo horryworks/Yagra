@@ -845,7 +845,7 @@ fn parse_schedule_body(
              configured — scheduling it would produce an empty run on every fire",
         ));
     }
-    let next = crate::runtime::cadence::compute_next_run(cadence, chrono::Utc::now());
+    let next = crate::runtime::cadence::compute_next_run(&cadence, chrono::Utc::now());
     Ok((
         crate::analysis::ScheduleInput {
             params,

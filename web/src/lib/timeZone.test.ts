@@ -58,8 +58,11 @@ describe('a wall clock in a zone', () => {
 
   // The two daylight-saving rules are core's (`yagra_base::wall_clock::resolve`); these are the
   // same cases its tests name, so the screen predicts what core will do.
-  it('resolves a wall time inside the spring gap to the end of the gap', () => {
-    expect(zonedWallToMs(2027, 3, 14, 2, 30, 'America/New_York')).toBe(at('2027-03-14T07:00:00Z'));
+  it('reads a wall time inside the spring gap with the offset before the gap, as core does', () => {
+    // 02:30 does not exist on 2027-03-14 in New York; read at EST it is 03:30 EDT.
+    expect(zonedWallToMs(2027, 3, 14, 2, 30, 'America/New_York')).toBe(at('2027-03-14T07:30:00Z'));
+    // The start of a gap is the transition itself under either reading.
+    expect(zonedWallToMs(2027, 3, 14, 2, 0, 'America/New_York')).toBe(at('2027-03-14T07:00:00Z'));
   });
 
   it('resolves a wall time inside the autumn overlap to its first occurrence', () => {

@@ -10,9 +10,10 @@
 // subscribe.
 //
 // Two daylight-saving edges have no single answer when a wall time is turned into an instant. The
-// rule is core's (`yagra_base::wall_clock::resolve`), written again here because the screen has to
-// predict what core will do: a wall time inside a gap is the instant the gap ends, and one inside
-// an overlap is its first occurrence.
+// rule is core's (`yagra_base::wall_clock::resolve`, jiff's "compatible" rule, ADR-221 Inc.3),
+// written again here because the screen has to predict what core will do: a wall time inside a gap
+// is read with the offset in force before the gap (New York's missing 02:30 is 03:30), and one
+// inside an overlap is its first occurrence.
 //
 // ZONE NAMES (ADR-253). The names a person may choose are core's zone database, generated into
 // `zoneNames.json` - the same set NetBox offers, aliases such as `Japan` included. A name is kept
@@ -155,13 +156,17 @@ function asUtc(
   return Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
 }
 
+/** The UTC offset (ms) `tz` has at the instant `t`. */
+function offsetAt(t: number, tz: string): number {
+  return asUtc(wallClock(t, tz)) - Math.floor(t / 1000) * 1000;
+}
+
 /** The instants a wall time names in `tz`: none (a gap), one, or two (an overlap), earliest first. */
 function instantsOf(wall: number, tz: string): number[] {
-  const offsetAt = (t: number) => asUtc(wallClock(t, tz)) - Math.floor(t / 1000) * 1000;
   const offsets = new Set([
-    offsetAt(wall - 86_400_000),
-    offsetAt(wall),
-    offsetAt(wall + 86_400_000),
+    offsetAt(wall - 86_400_000, tz),
+    offsetAt(wall, tz),
+    offsetAt(wall + 86_400_000, tz),
   ]);
   return [...offsets]
     .map((o) => wall - o)
@@ -169,8 +174,8 @@ function instantsOf(wall: number, tz: string): number[] {
     .sort((a, b) => a - b);
 }
 
-/** The instant (ms) that `year-month-day hour:minute` means in `tz`, resolving a daylight-saving
- *  gap to its end and an overlap to its first occurrence (core's rule). */
+/** The instant (ms) that `year-month-day hour:minute` means in `tz`, reading a daylight-saving
+ *  gap with the offset before it and taking an overlap's first occurrence (core's rule). */
 export function zonedWallToMs(
   year: number,
   month: number,
@@ -180,11 +185,11 @@ export function zonedWallToMs(
   tz: string = displayTimeZone(),
 ): number {
   const wall = Date.UTC(year, month - 1, day, hour, minute, 0);
-  for (let m = 0; m <= 24 * 60; m++) {
-    const found = instantsOf(wall + m * 60_000, tz);
-    if (found.length > 0) return found[0];
-  }
-  return wall;
+  const found = instantsOf(wall, tz);
+  if (found.length > 0) return found[0];
+  // A gap: no zone has two transitions within a day, so the offset a day earlier is the one in
+  // force before the gap.
+  return wall - offsetAt(wall - 86_400_000, tz);
 }
 
 /** The short name of `tz` at `ms` — `JST`, `EDT`, `UTC`, or `GMT+5:30` where no abbreviation is

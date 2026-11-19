@@ -1657,7 +1657,7 @@ pub(crate) async fn schedule_view(
         at_hour: s.at_hour,
         at_minute: s.at_minute,
         time_zone: (s.time_zone != yagra_base::wall_clock::Tz::UTC)
-            .then(|| s.time_zone.name().to_owned()),
+            .then(|| yagra_base::wall_clock::zone_name(&s.time_zone).to_owned()),
         concurrency: s.concurrency,
         max_concurrency: yagra_base::config_backup::MAX_CONCURRENCY,
         running,
