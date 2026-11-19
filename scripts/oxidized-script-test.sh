@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs the config save script (ADR-222) inside the oxidized image the composition pins, against a
-# fake device. The image is read from docker-compose.deploy.yml, so moving the pin is what makes
+# Runs the config push (ADR-210 stage 9) and save (ADR-222) scripts inside the oxidized image the
+# composition pins: the push against local destination repositories, the save against a fake
+# device. The image is read from docker-compose.deploy.yml, so moving the pin is what makes
 # this test the new version - the script leans on oxidized internals an upgrade can move.
 #
 # Needs Docker. Prints PASS/FAIL per case and exits non-zero on any failure.
@@ -12,6 +13,11 @@ if [ -z "$IMAGE" ]; then
   exit 2
 fi
 echo "oxidized image: $IMAGE"
+# The push script (ADR-210 stage 9) against local destination repositories.
+docker run --rm --entrypoint ruby \
+  -v "$PWD/crates/yagra-core/src/oxidized/yagra-push.rb:/t/yagra-push.rb:ro" \
+  -v "$PWD/scripts/oxidized-script-test:/t/harness:ro" \
+  "$IMAGE" /t/harness/push.rb /t/yagra-push.rb
 docker run --rm --entrypoint ruby \
   -v "$PWD/crates/yagra-core/src/oxidized/yagra-save.rb:/t/yagra-save.rb:ro" \
   -v "$PWD/crates/yagra-core/src/oxidized/yagra-enable.rb:/t/yagra-enable.rb:ro" \

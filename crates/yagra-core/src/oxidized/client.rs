@@ -129,11 +129,24 @@ impl OxidizedClient {
         Ok(versions_of(&body))
     }
 
-    /// One version's text.
-    pub(crate) async fn version_text(&self, node: Uuid, oid: &str) -> anyhow::Result<String> {
+    /// One version's text, `None` when `oid` is not one of `node`'s versions.
+    ///
+    /// 🚨 The list is asked first because oxidized's view reads `<group>/<node>` out of whatever
+    /// commit `oid` names, and its repository holds commits that are not the node's history: the
+    /// config-backup destination is fetched into it before every push (ADR-210 stage 9). Anyone who
+    /// can write to that destination could commit a file at `yagra/<node id>` and have a crafted
+    /// link show it as the device's configuration.
+    pub(crate) async fn version_text(
+        &self,
+        node: Uuid,
+        oid: &str,
+    ) -> anyhow::Result<Option<String>> {
+        if !self.versions(node).await?.iter().any(|v| v.oid == oid) {
+            return Ok(None);
+        }
         let name = node.to_string();
-        Ok(self
-            .get(
+        Ok(Some(
+            self.get(
                 "/node/version/view",
                 &[
                     ("node", &name),
@@ -144,7 +157,8 @@ impl OxidizedClient {
             )
             .await?
             .text()
-            .await?)
+            .await?,
+        ))
     }
 }
 
@@ -181,5 +195,46 @@ mod tests {
         let nodes: Vec<OxNode> = serde_json::from_str(raw).expect("parse");
         assert_eq!(nodes[0].status.as_deref(), Some("never"));
         assert_eq!(nodes[0].group.as_deref(), Some("yagra"));
+    }
+
+    /// ADR-210 stage 9: a commit that is not one of the node's versions (the fetched backup
+    /// destination is in the same repository) is never handed to oxidized's view.
+    #[tokio::test]
+    async fn a_version_outside_the_nodes_list_is_never_read() {
+        let mine = "a".repeat(40);
+        let theirs = "b".repeat(40);
+        let list = format!(r#"[{{"oid":"{mine}","date":"2026-11-19 10:00:00 UTC"}}]"#);
+        let (addr, seen) = yagra_base::httpfake::serve(vec![
+            (200, list.clone()),
+            (200, list),
+            (200, "hostname sw-01".to_owned()),
+        ])
+        .await;
+        let client = OxidizedClient::new(&format!("http://{addr}"));
+        let node = Uuid::nil();
+        assert_eq!(
+            client.version_text(node, &theirs).await.expect("asked"),
+            None
+        );
+        assert_eq!(
+            client
+                .version_text(node, &mine)
+                .await
+                .expect("asked")
+                .as_deref(),
+            Some("hostname sw-01")
+        );
+        let paths: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.path.clone())
+            .collect();
+        assert_eq!(paths.len(), 3, "{paths:?}");
+        assert!(paths[0].starts_with("/node/version.json"), "{paths:?}");
+        assert!(
+            paths[2].contains(&mine) && !paths.iter().any(|p| p.contains(&theirs)),
+            "{paths:?}"
+        );
     }
 }

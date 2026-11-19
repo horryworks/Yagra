@@ -776,7 +776,7 @@ pub(crate) struct ConfigText {
         (status = 400, description = "Not a version id (`invalid_oid`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
+        (status = 404, description = "No such node the caller can see, or not one of its versions (`config_version_not_found`)", body = super::error::ErrorBody),
         (status = 502, description = "The bundled oxidized did not answer (`oxidized_unreachable`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
     ),
@@ -793,8 +793,18 @@ async fn get_version(
         .client
         .version_text(node_id, &oid)
         .await
-        .map_err(|e| oxidized_failed(&e))?;
+        .map_err(|e| oxidized_failed(&e))?
+        .ok_or_else(no_such_version)?;
     Ok(Json(ConfigText { oid, text }))
+}
+
+/// A version id that is not one of the node's versions (ADR-210 stage 9: oxidized's repository
+/// also holds the fetched backup destination, whose commits are not any node's history).
+fn no_such_version() -> ApiError {
+    ApiError::not_found(
+        "config_version_not_found",
+        "not one of this node's versions",
+    )
 }
 
 /// Which two versions to compare.
@@ -856,7 +866,7 @@ fn diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
         (status = 400, description = "Not a version id (`invalid_oid`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 404, description = "No such node the caller can see", body = super::error::ErrorBody),
+        (status = 404, description = "No such node the caller can see, or not one of its versions (`config_version_not_found`)", body = super::error::ErrorBody),
         (status = 502, description = "The bundled oxidized did not answer (`oxidized_unreachable`)", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no config backup (`config_backup_unavailable`)", body = super::error::ErrorBody),
     ),
@@ -875,12 +885,14 @@ async fn get_diff(
         .client
         .version_text(node_id, &q.from)
         .await
-        .map_err(|e| oxidized_failed(&e))?;
+        .map_err(|e| oxidized_failed(&e))?
+        .ok_or_else(no_such_version)?;
     let new = ox
         .client
         .version_text(node_id, &q.to)
         .await
-        .map_err(|e| oxidized_failed(&e))?;
+        .map_err(|e| oxidized_failed(&e))?
+        .ok_or_else(no_such_version)?;
     Ok(Json(ConfigDiff {
         lines: diff_lines(&old, &new),
         from: q.from,

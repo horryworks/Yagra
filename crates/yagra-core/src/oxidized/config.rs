@@ -348,15 +348,47 @@ mod tests {
     /// The push never speaks HTTP/2 (ADR-215 increment 2, decision 4): the libcurl in the pinned
     /// oxidized image has a use-after-free on an HTTP/2 upload that the server resets, and that is
     /// the one finding in the image Yagra can reach. Remove with the image that fixes it.
+    ///
+    /// Since ADR-210 stage 9 the script reaches the destination three times (ls-remote, fetch,
+    /// push), all through one runner: the runner carries the pin, and no other line may start git
+    /// with the job's URL.
     #[test]
     fn the_push_is_pinned_to_http_1_1() {
-        let push = PUSH_SCRIPT
+        let runner = PUSH_SCRIPT
             .lines()
-            .skip_while(|l| !l.contains("Open3.capture2e(env, 'timeout'"))
+            .skip_while(|l| !l.contains("remote = lambda"))
             .take(3)
             .collect::<String>();
-        assert!(push.contains("'-c', 'http.version=HTTP/1.1'"), "{push}");
-        assert!(push.contains("'push'"), "{push}");
+        assert!(
+            runner.contains("Open3.capture2e(env, 'timeout'"),
+            "{runner}"
+        );
+        assert!(runner.contains("'-c', 'http.version=HTTP/1.1'"), "{runner}");
+        let reaching: Vec<&str> = PUSH_SCRIPT
+            .lines()
+            .filter(|l| l.contains("job['url']"))
+            .collect();
+        assert_eq!(reaching.len(), 3, "{reaching:#?}");
+        for (line, verb) in reaching.iter().zip(["'ls-remote'", "'fetch'", "'push'"]) {
+            assert!(line.contains("remote.call("), "{line}");
+            assert!(line.contains(verb), "{line}");
+        }
+    }
+
+    /// Stage 9: the destination is fetched whole and built on, never shallow (a shallow mark would
+    /// land on oxidized's own repository) and never replaced.
+    #[test]
+    fn the_push_builds_on_the_destination_under_the_folder_core_names() {
+        assert!(PUSH_SCRIPT.contains("folder = job['folder'].to_s"));
+        assert!(PUSH_SCRIPT.contains("REMOTE_REF = 'refs/yagra/remote'"));
+        assert!(!PUSH_SCRIPT.contains("--depth"));
+        assert!(!PUSH_SCRIPT.contains("--shallow"));
+        assert!(!PUSH_SCRIPT.contains("--force"));
+        assert_eq!(
+            yagra_base::config_remote::EXPORT_DIR,
+            "yagra",
+            "the folder is published at every destination; moving it moves every file there"
+        );
     }
 
     /// The script carries no rule of its own: it reports only what core's patterns name, never
@@ -364,7 +396,7 @@ mod tests {
     #[test]
     fn the_push_script_reports_a_kind_and_never_the_output() {
         assert!(PUSH_SCRIPT.contains("job['patterns']"));
-        assert!(PUSH_SCRIPT.contains("'failure' => failure.to_s"));
+        assert!(PUSH_SCRIPT.contains("{ 'failure' => kind_of.call(output, status) }"));
         assert!(!PUSH_SCRIPT.contains("'output'"));
         assert!(!PUSH_SCRIPT.contains("--force"));
         assert!(!PUSH_SCRIPT.contains("+HEAD"));

@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **The config backup Git destination now receives every file under a `yagra/` folder, and keeps whatever else the repository holds.** Before each push Yagra fetches the destination's branch and builds its commit on top of it: `yagra/` is replaced whole, and anything beside it — the configurations of devices Yagra cannot reach, added by hand — stays. A repository that holds commits Yagra did not make is therefore no longer refused. At a destination Yagra already pushes to, the first push after the upgrade moves `<name>.txt` and `deleted/` into `yagra/` in one commit, `Move device configurations into yagra/`, and leaves a top-level file someone edited where it is. Nothing is ever force-pushed. A push is still refused when the branch moves between the fetch and the push (it is tried again ten minutes later) or when the top-level `yagra` is a file. Two deployments pointed at the same repository and branch now overwrite each other's `yagra/` instead of one being refused, so give each deployment its own branch or repository (ADR-210 stage 9).
+
 ### Bug Fixes
 
 - **Port VLANs and VLAN names now reach a large, slow Huawei VRP stack.** The hourly VLAN walk had 16 seconds for all twelve of Huawei's columns; a two-member VRP 5.170 stack with 230 interfaces used them up halfway, every hour, and because the walk sends nothing unless every column answers, its ports never showed a VLAN and its VLANs tab stayed empty. Both VLAN walks now wait 5 seconds per request instead of 2, which gives them 40 seconds. A walk that still runs out logs `VLAN walk incomplete` at info level with the time it took (ADR-201 Inc.2).

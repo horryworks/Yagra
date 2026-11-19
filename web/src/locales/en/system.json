@@ -841,7 +841,7 @@
       "token": "Access token",
       "urlShape": "Use https://host/owner/repo.git, ssh://git@host/owner/repo.git or git@host:owner/repo.git.",
       "keyMade": "A key is made on save; register its public half as a deploy key with write access.",
-      "warning": "Every config backup is pushed here. Passwords are removed model by model and one can be missed, so use a private, empty repository."
+      "warning": "Every config backup is pushed into this repository's yagra/ folder, which this deployment alone may write. Passwords are removed model by model and one can be missed, so use a private repository."
     },
     "push": {
       "none": "No destination is set.",
@@ -852,7 +852,7 @@
     "failure": {
       "auth": "the login was refused or the repository was not found",
       "host_key": "the host key changed",
-      "rejected": "the repository has versions Yagra does not have",
+      "rejected": "the repository refused the push",
       "unreachable": "the host did not answer",
       "other": "git failed",
       "unknown": "git failed"

@@ -677,6 +677,9 @@ pub(crate) struct PushJob {
     /// 38). A node oxidized has a file for and this does not name is pushed as
     /// `deleted/<id>.txt`.
     files: Vec<Vec<String>>,
+    /// The folder `files` are placed under at the destination. Everything outside it is left as the
+    /// destination holds it (stage 9 decision 75).
+    folder: String,
     /// The digest of `files`, echoed in the report.
     layout: String,
 }
@@ -750,6 +753,7 @@ async fn push_ask(
             .into_iter()
             .map(|(id, path)| vec![id.to_string(), path])
             .collect(),
+        folder: config_remote::EXPORT_DIR.to_owned(),
         layout,
     };
     Ok(([(axum::http::header::CACHE_CONTROL, "no-store")], Json(job)).into_response())
@@ -1080,6 +1084,7 @@ mod tests {
             job["files"],
             serde_json::json!([[node.to_string(), "sw-01.txt"]])
         );
+        assert_eq!(job["folder"], "yagra");
         let layout = job["layout"].as_str().expect("layout").to_owned();
 
         let report = |form: String| {

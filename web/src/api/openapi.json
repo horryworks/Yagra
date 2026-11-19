@@ -14552,7 +14552,7 @@
             }
           },
           "404": {
-            "description": "No such node the caller can see",
+            "description": "No such node the caller can see, or not one of its versions (`config_version_not_found`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15094,7 +15094,7 @@
             }
           },
           "404": {
-            "description": "No such node the caller can see",
+            "description": "No such node the caller can see, or not one of its versions (`config_version_not_found`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -43877,6 +43877,7 @@
           "known_hosts",
           "patterns",
           "files",
+          "folder",
           "layout"
         ],
         "properties": {
@@ -43895,6 +43896,10 @@
               }
             },
             "description": "`[node id, path]` pairs: the file each node's configuration is pushed as (stage 4 decision\n38). A node oxidized has a file for and this does not name is pushed as\n`deleted/<id>.txt`."
+          },
+          "folder": {
+            "type": "string",
+            "description": "The folder `files` are placed under at the destination. Everything outside it is left as the\ndestination holds it (stage 9 decision 75)."
           },
           "generation": {
             "type": "integer",

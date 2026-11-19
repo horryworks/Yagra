@@ -13698,6 +13698,11 @@ export interface components {
              */
             files: string[][];
             /**
+             * @description The folder `files` are placed under at the destination. Everything outside it is left as the
+             *     destination holds it (stage 9 decision 75).
+             */
+            folder: string;
+            /**
              * Format: int64
              * @description Echoed in the report, so a push made for a destination that has since changed is ignored.
              */
@@ -28260,7 +28265,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node the caller can see */
+            /** @description No such node the caller can see, or not one of its versions (`config_version_not_found`) */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -28700,7 +28705,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such node the caller can see */
+            /** @description No such node the caller can see, or not one of its versions (`config_version_not_found`) */
             404: {
                 headers: {
                     [name: string]: unknown;

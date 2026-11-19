@@ -45,7 +45,9 @@ pub enum PushFailure {
     Auth,
     /// The destination's SSH host key is not the one learned on the first push.
     HostKey,
-    /// The destination holds a version Yagra does not have, or refuses the branch.
+    /// The destination refused the push: it moved between the fetch and the push, a branch rule
+    /// declined it, or its top-level `yagra` is a file Yagra will not replace (stage 9). Files a
+    /// person adds beside Yagra's folder are no longer a reason (stage 9 decision 78).
     Rejected,
     /// The destination did not answer.
     Unreachable,
@@ -297,11 +299,20 @@ pub fn export_paths(entries: &[NameEntry]) -> Vec<(Uuid, String)> {
     out
 }
 
+/// The folder every file Yagra pushes is placed under at the destination (stage 9 decision 75).
+/// Yagra replaces this folder whole on every push and leaves everything beside it as it found it,
+/// so files a person keeps in the same repository survive.
+pub const EXPORT_DIR: &str = "yagra";
+
 /// One digest of the file-name map, so a rename or a deletion is noticed without storing the map.
+/// [`EXPORT_DIR`] is part of it, so a destination last pushed under another layout is pushed again
+/// even when no version is new (stage 9).
 #[must_use]
 pub fn layout_digest(paths: &[(Uuid, String)]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
+    hasher.update(EXPORT_DIR.as_bytes());
+    hasher.update(b"/\n");
     for (id, path) in paths {
         hasher.update(id.as_bytes());
         hasher.update(path.as_bytes());
@@ -944,6 +955,28 @@ mod tests {
             "a rename"
         );
         assert!(should_push(&r, "b2", &digest, now), "a new version");
+    }
+
+    /// A destination last pushed before files moved under `EXPORT_DIR` (stage 9) holds a digest of
+    /// the bare map, and must be pushed again once even with no new version: the digest that
+    /// version stored is the map hashed with nothing in front of it.
+    #[test]
+    fn the_folder_is_part_of_the_layout_so_the_old_layout_is_pushed_again() {
+        use sha2::{Digest, Sha256};
+        let paths = export_paths(&[entry(1, "sw-01", true)]);
+        let mut old = Sha256::new();
+        for (id, path) in &paths {
+            old.update(id.as_bytes());
+            old.update(path.as_bytes());
+            old.update(b"\n");
+        }
+        let old = data_encoding::HEXLOWER.encode(&old.finalize());
+        let new = layout_digest(&paths);
+        assert_ne!(old, new);
+        let mut r = remote();
+        r.pushed_head = Some("a1".to_owned());
+        r.pushed_layout = Some(old);
+        assert!(should_push(&r, "a1", &new, Utc::now()));
     }
 
     #[test]
