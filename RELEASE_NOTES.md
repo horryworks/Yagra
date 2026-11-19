@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.81 — Read a node's backed-up configuration over MCP, and push config backups into a yagra/ folder that keeps the repository's own files
+
 ### Breaking changes
 
 - **The config backup Git destination now receives every file under a `yagra/` folder, and keeps whatever else the repository holds.** Before each push Yagra fetches the destination's branch and builds its commit on top of it: `yagra/` is replaced whole, and anything beside it — the configurations of devices Yagra cannot reach, added by hand — stays. A repository that holds commits Yagra did not make is therefore no longer refused. At a destination Yagra already pushes to, the first push after the upgrade moves `<name>.txt` and `deleted/` into `yagra/` in one commit, `Move device configurations into yagra/`, and leaves a top-level file someone edited where it is. Nothing is ever force-pushed. A push is still refused when the branch moves between the fetch and the push (it is tried again ten minutes later) or when the top-level `yagra` is a file. Two deployments pointed at the same repository and branch now overwrite each other's `yagra/` instead of one being refused, so give each deployment its own branch or repository (ADR-210 stage 9).
