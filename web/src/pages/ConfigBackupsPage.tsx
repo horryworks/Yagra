@@ -417,7 +417,13 @@ export function ConfigBackupsPage() {
           })}
           confirmLabel={t('config.autoSave.confirmLabel')}
           errorFallback={t('config.autoSave.err')}
-          onConfirm={() => api.switchConfigAutoSave({ node_ids: autoAsk, enabled: true })}
+          onConfirm={() =>
+            api.switchConfigAutoSave({ node_ids: autoAsk, enabled: true }).then((r) => {
+              // A node core declined (its backup or model changed since the list was read) is
+              // said rather than passed off as switched; the reload shows which ones stayed off.
+              setSwitchError(r.unsupported.length > 0 ? t('config.autoSave.err') : null);
+            })
+          }
           onClose={() => setAutoAsk(null)}
           onDone={() => {
             setAutoAsk(null);

@@ -100,6 +100,36 @@ describe('useFilterSearch', () => {
     expect(result.current.loading).toBe(false);
   });
 
+  it('names the term the page on screen answers only once that answer lands (ADR-258)', async () => {
+    // The tree takes the server's matches as the answer. While the next term settles or is in
+    // flight, the page still answers the previous one, and `answeredTerm` is what says so.
+    const second = deferred<{ nodes: NodeSummary[]; truncated: boolean }>();
+    listNodesPage.mockResolvedValueOnce({ nodes: [node('n1')], truncated: false });
+    listNodesPage.mockReturnValueOnce(second.promise);
+
+    const { result, rerender } = renderHook((f: string) => useFilterSearch(f, DEFAULT_INVENTORY_FILTERS), {
+      initialProps: 'core',
+    });
+    expect(result.current.answeredTerm).toBeNull();
+    await tick(200);
+    expect(result.current.answeredTerm).toBe('core');
+
+    rerender('core 10.20.');
+    expect(result.current.answeredTerm).toBe('core');
+    await tick(200);
+    expect(result.current.appliedTerm).toBe('core 10.20.');
+    expect(result.current.answeredTerm).toBe('core');
+
+    await act(async () => {
+      second.resolve({ nodes: [node('n2')], truncated: false });
+    });
+    expect(result.current.answeredTerm).toBe('core 10.20.');
+
+    rerender('');
+    await tick(0);
+    expect(result.current.answeredTerm).toBeNull();
+  });
+
   it('drops the answer to a term the operator has already moved on from', async () => {
     const first = deferred<{ nodes: NodeSummary[] }>();
     const second = deferred<{ nodes: NodeSummary[] }>();

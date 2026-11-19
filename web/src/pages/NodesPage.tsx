@@ -566,11 +566,14 @@ export function NodesPage() {
   }, [serverNarrowed, filtering, search.nodes, members.nodes, pinnedOnly, pinNodes]);
   // The nodes the server search matched (ADR-258). The tree shows these as matches rather than
   // judging the term against a node's name, because a word may match a port's address or a folder
-  // above the node — the tree used to drop every node found by its address.
+  // above the node — the tree used to drop every node found by its address. Only while that page
+  // answers the term now in the box: while the next one settles or is in flight, the tree judges
+  // by name and address as before, rather than showing the previous term's matches under it.
   const tooManyWords = searchWords(filter) === null;
+  const answersBox = search.answeredTerm !== null && search.answeredTerm === filter.trim();
   const searchMatches = useMemo(
-    () => new Set(search.nodes.map((n) => n.id)),
-    [search.nodes],
+    () => (answersBox ? new Set(search.nodes.map((n) => n.id)) : undefined),
+    [answersBox, search.nodes],
   );
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.

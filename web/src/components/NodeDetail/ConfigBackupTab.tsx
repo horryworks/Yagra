@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError, errMsg } from '../../services/api';
-import { useCan } from '../../store';
+import { useCan, useScope } from '../../store';
 import { useLoad } from '../../lib/useLoad';
 import { LoadGate } from '../ui/LoadGate';
 import { Button } from '../ui/Button';
@@ -90,7 +90,10 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const canConfig = useCan('manage_config');
   const canCreds = useCan('manage_credentials');
-  const canSave = useCan('save_device_config');
+  // A save and the automatic-save switch both refuse a caller restricted to folders
+  // (`require_fleet_wide`), so neither is drawn for one - as on the Config backups list.
+  const fleetWide = useScope() === 'All';
+  const canSave = useCan('save_device_config') && fleetWide;
   const [confirmSave, setConfirmSave] = useState(false);
   const [confirmAuto, setConfirmAuto] = useState(false);
   const [poll, setPoll] = useState<number | undefined>(undefined);
@@ -621,7 +624,13 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               title={t('config.autoSave.confirmTitle', { what: node.name })}
               confirmLabel={t('config.autoSave.confirmLabel')}
               errorFallback={t('config.autoSave.err')}
-              onConfirm={() => api.switchConfigAutoSave({ node_ids: [node.id], enabled: true })}
+              onConfirm={() =>
+                api.switchConfigAutoSave({ node_ids: [node.id], enabled: true }).then((r) => {
+                  // Declined by core (its backup or model changed since this view was read): the
+                  // dialog says it could not, rather than closing as if it had.
+                  if (r.unsupported.length > 0) throw new Error('not switched');
+                })
+              }
               onClose={() => setConfirmAuto(false)}
               onDone={() => {
                 setConfirmAuto(false);

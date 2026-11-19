@@ -31,6 +31,11 @@ export interface FilterSearch {
    *  why it is published at issue time rather than on the answer: a folder matched by name loads
    *  its members in parallel with the search page instead of a round-trip behind it. */
   appliedTerm: string;
+  /** The term the page in `nodes` ANSWERS, or `null` when no page is shown. Unlike `appliedTerm`
+   *  it moves only when an answer lands, so a caller can tell the matches on screen from the term
+   *  in the box while the next search is settling or in flight (ADR-258: the tree takes the
+   *  server's matches as the answer, and must not take the previous term's for the new one). */
+  answeredTerm: string | null;
   /** The term as it stands once the operator has stopped typing: trimmed, and `''` the moment the
    *  box is cleared. The value to write to the URL (ADR-153).
    *
@@ -63,6 +68,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [appliedTerm, setAppliedTerm] = useState('');
+  const [answeredTerm, setAnsweredTerm] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [failed, setFailed] = useState(false);
   /** Bumped by `refetch`. Its only job is to be in the effect's deps: asking for the SAME term
@@ -103,6 +109,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
       setAppliedTerm('');
       // The page is no longer shown, so a later failure must not treat it as the answer on screen.
       shownFor.current = null;
+      setAnsweredTerm(null);
       setLoading(false);
       setTruncated(false);
       setFailed(false);
@@ -121,6 +128,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
         if (!cancelled) {
           shownFor.current = asked;
           setNodes(page.nodes);
+          setAnsweredTerm(term);
           setTruncated(page.truncated);
           setFailed(false);
         }
@@ -137,6 +145,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
           if (shownFor.current !== asked) {
             shownFor.current = null;
             setNodes([]);
+            setAnsweredTerm(null);
             setTruncated(false);
           }
           setFailed(true);
@@ -159,6 +168,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
     nodes,
     loading: loading || settling,
     appliedTerm,
+    answeredTerm,
     settledTerm: term,
     truncated,
     failed,

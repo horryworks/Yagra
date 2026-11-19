@@ -28,6 +28,7 @@
 
 ### Bug Fixes
 
+- **A node's Config tab no longer offers Save now or the Auto save switch to an account restricted to folders.** Both are refused for such an account (`scope_unsupported`), so pressing either only ever showed an error; the Config backups list already left them out.
 - **A node found by its address is no longer hidden in the All nodes tree.** The server matched a term against a node's address, but the tree then kept only the nodes whose name held it, so typing an IP address showed nothing (ADR-258).
 
 ## v0.3.81 — Read a node's backed-up configuration over MCP, and push config backups into a yagra/ folder that keeps the repository's own files
