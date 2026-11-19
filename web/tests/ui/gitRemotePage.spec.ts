@@ -70,7 +70,8 @@ test.describe('no destination yet', () => {
     await dialog.getByRole('textbox').first().fill('https://example.com/acme/configs.git');
     await dialog.locator('input[placeholder="x-access-token"]').fill('bot');
     await dialog.locator('#git-token').fill('tok-1');
-    await expect(dialog.locator('.ui-callout')).toContainText('private, empty repository');
+    await expect(dialog.locator('.ui-callout')).toContainText('yagra/ folder');
+    await expect(dialog.locator('.ui-callout')).toContainText('private repository');
     const put = page.waitForRequest(
       (r) => r.method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/config-backup-remote',
     );
