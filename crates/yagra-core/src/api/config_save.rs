@@ -322,7 +322,7 @@ async fn switch_auto_save(
             .map_err(|e| failed(&e, "config auto-save targets"))?;
         let saveable: std::collections::HashSet<Uuid> = targets
             .iter()
-            .filter(|t| can_save_model(t))
+            .filter(|t| oxidized::save::can_save(t))
             .map(|t| t.node_id)
             .collect();
         ids.iter().partition(|id| saveable.contains(id))
@@ -351,15 +351,6 @@ async fn switch_auto_save(
         switched,
         unsupported,
     }))
-}
-
-/// Whether Yagra has a save command for the model a backed-up node is fetched with (decision 16).
-fn can_save_model(t: &yagra_base::config_backup::BackupTarget) -> bool {
-    oxidized::source::model_of(
-        t.config.model_override.as_deref(),
-        t.profile_name.as_deref(),
-    )
-    .is_some_and(|m| commands_for(&m).is_some())
 }
 
 #[utoipa::path(

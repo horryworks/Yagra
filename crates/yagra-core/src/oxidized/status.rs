@@ -93,7 +93,8 @@ async fn tick(client: &OxidizedClient, repo: &ConfigBackupRepo, skipped: u32) ->
 /// Runs until cancelled.
 ///
 /// Each tick also gives up saves that waited or ran past their deadline (ADR-222), so a save
-/// whose fetch never succeeded reads as failed rather than pending for ever.
+/// whose fetch never succeeded reads as failed rather than pending for ever, and switches off
+/// automatic save on a node whose model has no save command (Inc.11 decision 24).
 pub(crate) async fn run_status_loop(
     client: Arc<OxidizedClient>,
     repo: Arc<ConfigBackupRepo>,
@@ -108,6 +109,7 @@ pub(crate) async fn run_status_loop(
         if let Err(e) = saves.expire().await {
             tracing::warn!(error = %e, "config save: overdue saves could not be given up");
         }
+        super::save::switch_off_unsaveable(&repo).await;
     }
 }
 
