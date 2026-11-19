@@ -15,7 +15,7 @@ import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 
 /** The `nodes` key group holding the switch's words: `title`, `on`, `off`, `warning`, `err.save`. */
-export type ConfigSwitchKeys = 'config.autoSave' | 'config.mcpText';
+type ConfigSwitchKeys = 'config.autoSave' | 'config.mcpText';
 
 interface Props {
   keys: ConfigSwitchKeys;

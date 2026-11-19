@@ -164,14 +164,14 @@ pub(super) enum ConfigView {
 }
 
 impl ConfigView {
+    /// Every view, so a token is spelt once, in [`Self::as_str`].
+    const ALL: [Self; 4] = [Self::Versions, Self::Text, Self::Diff, Self::Unsaved];
+
     /// Omitted means `text`: the latest configuration is what a caller asking for one wants.
     pub(super) fn from_token(view: Option<&str>) -> Option<Self> {
         match view {
-            None | Some("text") => Some(Self::Text),
-            Some("versions") => Some(Self::Versions),
-            Some("diff") => Some(Self::Diff),
-            Some("unsaved") => Some(Self::Unsaved),
-            Some(_) => None,
+            None => Some(Self::Text),
+            Some(t) => Self::ALL.into_iter().find(|v| v.as_str() == t),
         }
     }
 
@@ -1599,6 +1599,61 @@ mod tests {
     #[test]
     fn identical_versions_diff_to_nothing() {
         assert!(diff_lines("a\nb\n", "a\nb\n").is_empty());
+    }
+
+    /// The deployment switch is what stands between an MCP client and configuration text (ADR-210
+    /// stage 10 decision 85): off, every text view is refused before oxidized is asked; on, the
+    /// same request goes on to oxidized (here a closed port, so 502). The list of versions carries
+    /// no text and is not behind the switch.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_text_views_answer_only_while_the_switch_is_on(pool: sqlx::PgPool) {
+        use yagra_base::config_save::McpConfigText;
+        let home = std::env::temp_dir().join(format!("yagra-ox-mcp-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).expect("dir");
+        let st = crate::api::tests_support::live_state_with_oxidized(
+            pool,
+            std::sync::Arc::new(crate::api::config_backup::OxidizedHandle {
+                settings: crate::oxidized::Settings {
+                    url: "http://127.0.0.1:9".to_owned(),
+                    home: home.clone(),
+                },
+                client: std::sync::Arc::new(crate::oxidized::client::OxidizedClient::new(
+                    "http://127.0.0.1:9",
+                )),
+            }),
+        )
+        .await;
+        let admin = st.admin.clone().expect("live mode");
+        let mcp = YagraMcp::new(st);
+        let params = |view: &str| -> NodeConfigParams {
+            serde_json::from_value(serde_json::json!({
+                "node_id": uuid::Uuid::new_v4(),
+                "view": view,
+                "version": "a".repeat(40),
+            }))
+            .expect("params")
+        };
+        for view in [ConfigView::Text, ConfigView::Diff, ConfigView::Unsaved] {
+            let (r, status) = mcp.node_config_in(params(view.as_str()), view).await;
+            assert_eq!(status, 403, "{view:?} while off");
+            let text = text_of(&r.expect("answered"));
+            assert!(text.contains("switched off"), "{view:?}: {text}");
+        }
+        // The list is View and textless: it reaches oxidized whatever the switch says.
+        let (_, status) = mcp
+            .node_config_in(params("versions"), ConfigView::Versions)
+            .await;
+        assert_ne!(status, 403, "versions is not behind the switch");
+
+        admin
+            .config_saves
+            .set_mcp_config_text(McpConfigText { enabled: true })
+            .await
+            .expect("switched on");
+        let (_, status) = mcp.node_config_in(params("text"), ConfigView::Text).await;
+        assert_eq!(status, 502, "on: the request reaches oxidized");
+        std::fs::remove_dir_all(&home).ok();
     }
 
     /// With no write side there is no config backup to read, and no text leaves.

@@ -8,13 +8,15 @@
 # What is pushed is not oxidized's own tree, whose files are named by node id: core hands a map from
 # each id to a file name (`<name>.txt`, `deleted/<name>.txt` once the node is gone), and this builds
 # a tree with those names from the same blobs - nothing is copied - as a commit on its own line of
-# history, `refs/yagra/export`. oxidized's repository is never changed, so the version list Yagra
-# shows keeps reading it as before.
+# history, `refs/yagra/export`. oxidized's own branch and HEAD are never touched, so the version
+# list Yagra shows keeps reading them as before.
 #
 # That tree goes under one folder at the destination (core's `folder`, ADR-210 stage 9). Before
 # pushing, this fetches the destination's branch into `refs/yagra/remote` and builds the commit on
 # top of it: the folder is replaced whole and everything beside it - files a person keeps in the
-# same repository - stays as the destination holds it. Nothing is ever forced.
+# same repository - stays as the destination holds it. Nothing is ever forced onto the destination.
+# Its commits do land in oxidized's repository (under that private ref), which is why core's
+# `version_text` asks whether a commit is one of the node's versions before showing it.
 
 require 'base64'
 require 'json'
@@ -33,11 +35,13 @@ URL = URI(ENV.fetch('YAGRA_PUSH_URL'))
 TOKEN_HEADER = 'x-yagra-oxidized-token'
 TOKEN = ENV.fetch('YAGRA_TOKEN')
 LOCK = '/tmp/yagra-push.lock'
-# A push of the whole history can be slow the first time; the hook's own limit is 300 seconds, and
-# the three steps together stay inside it.
-ASK_SECONDS = '30'
-FETCH_SECONDS = '90'
-PUSH_SECONDS = '120'
+# The hook's own limit is 300 seconds, and a hook may first wait LOCK_SECONDS for the one ahead of
+# it, so the three steps together get the other 150: a waiting hook outlasts the running one, and
+# neither is killed mid-push. A first push of a long history that does not fit is tried again at
+# the next fetch, on top of what the destination already took.
+ASK_SECONDS = '15'
+FETCH_SECONDS = '45'
+PUSH_SECONDS = '90'
 FOLDER_NAME = /\A[A-Za-z0-9_][A-Za-z0-9_.-]*\z/
 LOCK_SECONDS = 150
 NODE_ID = /\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/

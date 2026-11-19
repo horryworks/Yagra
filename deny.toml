@@ -40,6 +40,15 @@ ignore = [
     # moves to 3.x, or at once if anything turns on an rmcp client or OAuth feature.
     "RUSTSEC-2026-0457",
     "RUSTSEC-2026-0462",
+    # RUSTSEC-2026-0543 (`chrono`) and RUSTSEC-2026-0555 (`chrono-tz`) — both declared
+    # unmaintained, every version affected, no fixed release. Neither is a vulnerability: nothing
+    # known is wrong with the code we run, only that nobody will fix the next thing. Both are used
+    # throughout the workspace (104 files name `chrono::`), so moving to `jiff` or `time` is a
+    # migration of its own, planned separately rather than folded into a release (user decision,
+    # 2026-11-19, v0.3.81). Remove both when that migration lands, or at once if either crate
+    # receives a vulnerability advisory.
+    "RUSTSEC-2026-0543",
+    "RUSTSEC-2026-0555",
 ]
 
 [licenses]

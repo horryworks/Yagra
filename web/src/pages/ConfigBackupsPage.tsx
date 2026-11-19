@@ -67,7 +67,7 @@ export function ConfigBackupsPage() {
   const line = push.data?.configured ? pushLine(push.data) : null;
   // When the backups are fetched (ADR-210 stage 6): the daily start and how far a run has got.
   const canConfig = useCan('manage_config');
-  // Both switches are deployment-wide: the server refuses a folder-scoped caller.
+  // The schedule and both switches are deployment-wide: the server refuses a folder-scoped caller.
   const fleetWide = useScope() === 'All';
   const canSave = useCan('save_device_config') && fleetWide;
   const canSystem = useCan('manage_system') && fleetWide;
@@ -252,7 +252,7 @@ export function ConfigBackupsPage() {
                   t(sched.state.key, { done: sched.state.done, total: sched.state.total })}
                 {sched.state.key === 'config.schedule.runningBare' && t(sched.state.key)}
               </span>
-              {canConfig && (
+              {canConfig && fleetWide && (
                 <Button onClick={() => setEditing(true)} aria-label={t('config.schedule.title')}>
                   {t('config.schedule.change')}
                 </Button>

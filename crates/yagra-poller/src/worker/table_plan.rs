@@ -35,7 +35,8 @@ pub(super) const SINGLE_FLIGHT_FLOOR: Duration = Duration::from_secs(60);
 
 /// What a walk may run past its own deadline: the deadline stops the next request, not the one
 /// already sent, so a walk can overrun by one round trip and its retry. 15 s covers that at the 2 s
-/// timeout with room left for the scalar GET that queues behind.
+/// timeout with room left for the scalar GET that queues behind, and still covers it at the 5 s
+/// the VLAN walks wait (ADR-201 Inc.2), whose name walk sizes itself against this floor.
 pub(super) const SINGLE_FLIGHT_OVERRUN: Duration = Duration::from_secs(15);
 
 /// The budget one table job (its numeric walk and its name walk together) may spend:

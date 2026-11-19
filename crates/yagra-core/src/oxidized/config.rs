@@ -35,6 +35,9 @@ pub(crate) const SAVE_URL: &str = "http://core:8090/internal/oxidized/save";
 /// both.
 pub(crate) const PUSH_SCRIPT_FILE: &str = "yagra-push.rb";
 const PUSH_SCRIPT: &str = include_str!("yagra-push.rb");
+/// How long oxidized lets the push hook run. The script fits its lock wait and its three steps
+/// inside this; `the_push_steps_fit_the_lock_wait_and_the_hook_limit` holds it to that.
+const PUSH_HOOK_TIMEOUT_SECONDS: u32 = 300;
 /// The save script (ADR-222): the one script that sends a device anything but a fetch, and only
 /// what core hands it from `yagra_common::config_save::SAVE_COMMANDS`.
 pub(crate) const SAVE_SCRIPT_FILE: &str = "yagra-save.rb";
@@ -241,7 +244,7 @@ hooks:
     type: exec
     events: [node_success]
     async: true
-    timeout: 300
+    timeout: {PUSH_HOOK_TIMEOUT_SECONDS}
     cmd: 'YAGRA_TOKEN=\"{token}\" YAGRA_PUSH_URL=\"{push_url}\" /usr/bin/ruby {SHARED_DIR_IN_OXIDIZED}/{PUSH_SCRIPT_FILE}'
   yagra-save:
     type: exec
@@ -373,6 +376,35 @@ mod tests {
             assert!(line.contains("remote.call("), "{line}");
             assert!(line.contains(verb), "{line}");
         }
+    }
+
+    /// A hook waits up to `LOCK_SECONDS` for the one ahead of it, then runs its three steps, all
+    /// inside the hook's 300 s limit. So the three together must fit inside the wait (or a waiting
+    /// hook gives up while the running one still pushes) and the wait plus the three inside 300 s
+    /// (or oxidized kills a hook mid-push and no report is sent). Stage 9's third step broke both.
+    #[test]
+    fn the_push_steps_fit_the_lock_wait_and_the_hook_limit() {
+        let value = |name: &str| -> u32 {
+            let line = PUSH_SCRIPT
+                .lines()
+                .find(|l| l.starts_with(&format!("{name} = ")))
+                .unwrap_or_else(|| panic!("{name} not found"));
+            line.split('=')
+                .nth(1)
+                .expect("value")
+                .trim()
+                .trim_matches('\'')
+                .parse()
+                .expect("number")
+        };
+        let steps = value("ASK_SECONDS") + value("FETCH_SECONDS") + value("PUSH_SECONDS");
+        let wait = value("LOCK_SECONDS");
+        let limit = PUSH_HOOK_TIMEOUT_SECONDS;
+        assert!(steps <= wait, "steps {steps} s outlast the wait {wait} s");
+        assert!(
+            wait + steps <= limit,
+            "wait {wait} + steps {steps} > hook limit {limit}"
+        );
     }
 
     /// Stage 9: the destination is fetched whole and built on, never shallow (a shallow mark would
