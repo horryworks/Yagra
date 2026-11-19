@@ -43,6 +43,7 @@ const off = {
   status: null,
   models: ['ios', 'nxos'],
   save_supported: true,
+  auto_save: false,
   saves: [],
 } satisfies Schemas['ConfigBackupView'];
 

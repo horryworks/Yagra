@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import cases from './fixtures/searchWords.cases.json';
 import { everyWordIn, looksLikeAddressPart, searchWords } from './nodeSearch';

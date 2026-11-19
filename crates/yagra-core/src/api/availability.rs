@@ -319,9 +319,14 @@ mod tests {
         assert_eq!(body["period"], "24h");
         assert_eq!(body["outages"], 1, "{body}");
         assert_eq!(body["down_secs"], 3_600, "{body}");
-        // The handler reads its own clock a few milliseconds after this test read its.
+        // The handler reads its own clock when it is called, which is seconds after this test read
+        // its own on a slow machine (seeding the built-in rules sits in between), so the window is
+        // taken from the answer: the time before the node was added is exactly that span.
         let no_record = body["no_record_secs"].as_i64().expect("no_record_secs");
-        assert!((12 * 3_600 - 1..=12 * 3_600).contains(&no_record), "{body}");
+        let from = body["from_unix_ms"].as_i64().expect("from_unix_ms");
+        let expected = (now - 12 * H - from) / 1_000;
+        assert!((expected - 1..=expected).contains(&no_record), "{body}");
+        assert!(expected <= 12 * 3_600, "{body}");
         let kinds: Vec<&str> = body["spans"]
             .as_array()
             .expect("spans")

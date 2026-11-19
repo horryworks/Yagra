@@ -27,6 +27,8 @@ const row = (node_id: string, configured: boolean) =>
     pending: false,
     model: 'ios',
     poller: 'ready',
+    auto_save: false,
+    save_supported: true,
   }) satisfies Schemas['ConfigBackupRow'];
 
 const credentials = (() => {

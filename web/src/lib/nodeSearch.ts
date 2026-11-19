@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 /** How the inventory search box's term is read (ADR-258): words separated by white space, every
  *  one of which has to match.
  *
