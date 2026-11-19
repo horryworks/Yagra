@@ -308,11 +308,20 @@ Dir.mktmpdir('yagra-push') do |dir|
       text = old_layout ? "Move device configurations into #{folder}/" : message(prev_sub, sub)
       commit = git('commit-tree', tree, *parents.flat_map { |p| ['-p', p] }, '-m', text, env: IDENTITY)
     end
-    git('update-ref', EXPORT_REF, commit, *(prev ? [prev] : [])) if commit != prev
   rescue StandardError
     next finish.call('failure' => 'other')
   end
 
   output, status = remote.call(PUSH_SECONDS, 'push', '--porcelain', job['url'], "#{commit}:#{branch}")
-  finish.call(status.success? ? { 'commit' => commit } : { 'failure' => kind_of.call(output, status) })
+  next finish.call({ 'failure' => kind_of.call(output, status) }) unless status.success?
+
+  # The export line moves only once the destination holds the commit. Moved before, a failed first
+  # push under the folder would leave the line looking already moved, and the next run would keep
+  # the old layout's top-level files beside the folder for good.
+  begin
+    git('update-ref', EXPORT_REF, commit, *(prev ? [prev] : [])) if commit != prev
+  rescue StandardError
+    nil
+  end
+  finish.call('commit' => commit)
 end

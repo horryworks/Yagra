@@ -92,7 +92,7 @@ pub(crate) const V3_MAX_REQUESTS_PER_COLUMN: usize = 1000;
 /// ⚠️ **That headroom is an argument, not a measurement of the fleet.** A 200-port device across a
 /// 100 ms WAN plausibly needs longer and would be truncated. [`Truncation::Deadline`] exists to say
 /// so out loud: if a healthy deployment ever reports it, this number is wrong, not the device.
-pub(crate) const WALK_BUDGET_TIMEOUTS: u32 = 8;
+pub const WALK_BUDGET_TIMEOUTS: u32 = 8;
 
 /// What one column's conversation did, from the budget's point of view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

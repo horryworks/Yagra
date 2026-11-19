@@ -31,12 +31,12 @@ pub(super) const TABLE_BUDGET_CAP: Duration = Duration::from_secs(150);
 ///
 /// 60 s comfortably covers the slowest *healthy* walk measured in the lab (6.0 s against a
 /// 232-interface switch) while keeping a long-interval check from parking behind a wedged device.
-const SINGLE_FLIGHT_FLOOR: Duration = Duration::from_secs(60);
+pub(super) const SINGLE_FLIGHT_FLOOR: Duration = Duration::from_secs(60);
 
 /// What a walk may run past its own deadline: the deadline stops the next request, not the one
 /// already sent, so a walk can overrun by one round trip and its retry. 15 s covers that at the 2 s
 /// timeout with room left for the scalar GET that queues behind.
-const SINGLE_FLIGHT_OVERRUN: Duration = Duration::from_secs(15);
+pub(super) const SINGLE_FLIGHT_OVERRUN: Duration = Duration::from_secs(15);
 
 /// The budget one table job (its numeric walk and its name walk together) may spend:
 /// half the interval, between [`TABLE_BUDGET_FLOOR`] and [`TABLE_BUDGET_CAP`].

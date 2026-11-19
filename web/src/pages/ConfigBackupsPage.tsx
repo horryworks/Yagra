@@ -11,7 +11,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useCan } from '../store';
+import { useCan, useScope } from '../store';
 import type { ConfigBackupRow } from '../types/api';
 import { Page, Stack } from '../components/ui/Page';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -67,8 +67,10 @@ export function ConfigBackupsPage() {
   const line = push.data?.configured ? pushLine(push.data) : null;
   // When the backups are fetched (ADR-210 stage 6): the daily start and how far a run has got.
   const canConfig = useCan('manage_config');
-  const canSave = useCan('save_device_config');
-  const canSystem = useCan('manage_system');
+  // Both switches are deployment-wide: the server refuses a folder-scoped caller.
+  const fleetWide = useScope() === 'All';
+  const canSave = useCan('save_device_config') && fleetWide;
+  const canSystem = useCan('manage_system') && fleetWide;
   const [autoSaveOpen, setAutoSaveOpen] = useState(false);
   const [mcpTextOpen, setMcpTextOpen] = useState(false);
   const [editing, setEditing] = useState(false);

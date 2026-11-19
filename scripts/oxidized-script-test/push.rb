@@ -147,6 +147,11 @@ def tip_of_ox
   status.success? ? out.strip : nil
 end
 
+def tip_of_export
+  out, status = Open3.capture2('git', '--git-dir', OX_REPO, 'rev-parse', '-q', '--verify', 'refs/yagra/export')
+  status.success? ? out.strip : nil
+end
+
 def fresh_destination
   dir = Dir.mktmpdir('dest')
   system('git', 'init', '--bare', '-q', dir, exception: true)
@@ -242,5 +247,29 @@ git(dest, 'update-ref', 'refs/heads/main', theirs)
 report = push(dest)
 check('folder taken by a file: rejected', report['failure'] == 'rejected', report)
 check('folder taken by a file: destination unchanged', tip(dest) == theirs)
+
+# 7. The layout from before the folder, and the first push under it refused: the next run must still
+#    clear the old top-level files (the export line moves only once a push succeeds).
+fresh_oxidized
+dest = fresh_destination
+old = commit(OX_REPO, { 'sw-01.txt' => "hostname sw-01\n", "deleted/#{GONE}.txt" => "hostname sw-09\n" },
+             message: 'old layout')
+git(OX_REPO, 'update-ref', 'refs/yagra/export', old)
+system('git', '--git-dir', dest, 'fetch', '-q', OX_REPO, "refs/yagra/export:refs/heads/main", exception: true)
+hook = File.join(dest, 'hooks', 'pre-receive')
+FileUtils.mkdir_p(File.dirname(hook))
+File.write(hook, "#!/bin/sh\necho 'refused by a hook' >&2\nexit 1\n")
+File.chmod(0o755, hook)
+report = push(dest)
+check('refused once: reported', report['failure'] != '', report)
+check('refused once: destination unchanged', tip(dest) == old)
+check('refused once: the export line did not move', tip_of_export == old)
+File.delete(hook)
+report = push(dest)
+files = files_of(dest, tip(dest))
+check('after the refusal: pushed', report['failure'] == '', report)
+check('after the refusal: the old top-level files leave',
+      !files.key?('sw-01.txt') && !files.key?("deleted/#{GONE}.txt"), files.keys)
+check('after the refusal: the files are under the folder', files.key?('yagra/sw-01.txt'), files.keys)
 
 exit($failures.zero? ? 0 : 1)

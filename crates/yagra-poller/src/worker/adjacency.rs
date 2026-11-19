@@ -161,7 +161,8 @@ pub(super) async fn execute_vlans(
         tracing::debug!(job_id = %job.job_id, "VLAN walk for a dialect this poller does not know");
         return r;
     }
-    let timeout = vlan_column_timeout(timeout);
+    let job_timeout = timeout;
+    let timeout = vlan_column_timeout(job_timeout);
     let started = std::time::Instant::now();
     match walker
         .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_WALK_ROWS)
@@ -172,7 +173,14 @@ pub(super) async fn execute_vlans(
         // reasoning as the ENTITY index walk in `physical.rs`.
         Ok(walk) if walk.every_column_answered && walk.rows.len() < MAX_VLAN_WALK_ROWS => {
             let ports = crate::vlans::assemble(dialect, &walk.rows);
-            let names = walk_vlan_names(job, transport, dialect, timeout, walker).await;
+            let names = match name_walk_timeout(job_timeout, started.elapsed()) {
+                Some(t) => walk_vlan_names(job, transport, dialect, t, walker).await,
+                None => {
+                    metrics::counter!("yagra_vlan_name_walk_incomplete_total").increment(1);
+                    tracing::debug!(job_id = %job.job_id, "VLAN name walk skipped; no time left");
+                    None
+                }
+            };
             r.vlans = Some(ports.with_names(names));
         }
         Ok(walk) => {
@@ -211,7 +219,6 @@ async fn walk_vlan_names(
     if columns.is_empty() {
         return None;
     }
-    let timeout = vlan_column_timeout(timeout);
     match walker
         .walk_instance_columns(transport, job.target, &columns, timeout, MAX_VLAN_NAME_ROWS)
         .await
@@ -245,8 +252,7 @@ async fn walk_vlan_names(
 /// same habit), and the trunk and hybrid columns carry 256 bytes per port each.
 ///
 /// ⚠️ 40 s is an estimate, not a measurement: the six columns not reached include four of those
-/// heavy ones. It also stays inside `table_plan`'s 60 s single-flight floor, so a one-minute job
-/// queued behind this walk on the same device waits rather than being shed.
+/// heavy ones. The name walk runs after it, so its wait is what is left: [`name_walk_timeout`].
 const VLAN_COLUMN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The wait for the VLAN walks: [`VLAN_COLUMN_TIMEOUT`], or the job's own when that is longer — a
@@ -254,6 +260,29 @@ const VLAN_COLUMN_TIMEOUT: Duration = Duration::from_secs(5);
 fn vlan_column_timeout(job_timeout: Duration) -> Duration {
     job_timeout.max(VLAN_COLUMN_TIMEOUT)
 }
+
+/// The name walk's wait, sized to what the port walk left of `table_plan`'s single-flight floor, or
+/// `None` when too little is left to walk at all.
+///
+/// The two walks run back to back on one device, and a one-minute job queued behind them waits only
+/// 60 s before it is shed. At 5 s each the pair could hold the device for 80 s (the bug hunt for
+/// v0.3.81 found that), so the name walk gets the floor, less the overrun one walk may run past
+/// its deadline, less what the port walk took, spread over its budget's round trips. Never longer
+/// than the port walk's own wait, and never under [`NAME_WALK_MIN_TIMEOUT`]: below that the walk is
+/// skipped and the ports are sent without names, which a surface already reads as "names not read".
+/// They run one after the other, not together, on purpose: the device is slow, and two walks at once
+/// would make each slower (`limiter.rs`'s single-flight rule).
+fn name_walk_timeout(job_timeout: Duration, port_walk_took: Duration) -> Option<Duration> {
+    let left = super::table_plan::SINGLE_FLIGHT_FLOOR
+        .saturating_sub(super::table_plan::SINGLE_FLIGHT_OVERRUN)
+        .saturating_sub(port_walk_took);
+    let per = left / yagra_transport::WALK_BUDGET_TIMEOUTS;
+    (per >= NAME_WALK_MIN_TIMEOUT).then(|| per.min(vlan_column_timeout(job_timeout)))
+}
+
+/// The shortest wait the name walk is given. Under a second a busy agent misses its answer and the
+/// table comes back incomplete anyway.
+const NAME_WALK_MIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// The most rows the name walk may collect: three columns over every usable VLAN ID, under one VTP
 /// domain, is 12,282. A device answering more is out of spec, and its names are not sent.
@@ -801,6 +830,31 @@ mod tests {
             vec![VLAN_COLUMN_TIMEOUT; 2],
             "the port walk and the name walk"
         );
+    }
+
+    /// The name walk gets what the port walk left: the full wait after a quick port walk, a shorter
+    /// one after a slow one, and none when the two together would pass the single-flight floor.
+    #[test]
+    fn the_name_walk_waits_only_for_what_is_left() {
+        let job = Duration::from_secs(2);
+        assert_eq!(
+            name_walk_timeout(job, Duration::ZERO),
+            Some(VLAN_COLUMN_TIMEOUT)
+        );
+        let after_20 = name_walk_timeout(job, Duration::from_secs(20)).expect("time left");
+        assert!(after_20 < VLAN_COLUMN_TIMEOUT && after_20 >= NAME_WALK_MIN_TIMEOUT);
+        assert_eq!(name_walk_timeout(job, Duration::from_secs(40)), None);
+        // Whatever the port walk took, the two budgets together stay inside the floor.
+        for took in 0..=60 {
+            let took = Duration::from_secs(took);
+            if let Some(t) = name_walk_timeout(job, took) {
+                let names = t * yagra_transport::WALK_BUDGET_TIMEOUTS;
+                assert!(
+                    took + names <= super::super::table_plan::SINGLE_FLIGHT_FLOOR,
+                    "{took:?} + {names:?}"
+                );
+            }
+        }
     }
 
     /// A job already more patient than [`VLAN_COLUMN_TIMEOUT`] keeps its own wait.

@@ -46,8 +46,12 @@ pub use meraki_neighbors::MERAKI_NEIGHBOR_FORMAT;
 /// this crate's business. **These types are not.** A walk that was cut before it reached a caller's
 /// columns returned `Ok` with fewer rows, and no caller could tell that from a device that simply
 /// does not implement them (ADR-110 Increment 6); and a caller that sizes its own budget has to be
-/// able to say so, and to be told which column the deadline fell in (Increment 10).
-pub use walk_budget::{ColumnEnd, ColumnReport, TableWalk, Truncation, WalkLimits};
+/// able to say so, and to be told which column the deadline fell in (Increment 10). The budget's
+/// multiple of the timeout is exported too, so a caller running two walks back to back can size the
+/// second to the time the first left (ADR-201 Increment 2).
+pub use walk_budget::{
+    ColumnEnd, ColumnReport, TableWalk, Truncation, WalkLimits, WALK_BUDGET_TIMEOUTS,
+};
 
 pub use yagra_common::{DnsChain, DnsRecordType, HttpAuth, HttpMethod, MerakiTier};
 

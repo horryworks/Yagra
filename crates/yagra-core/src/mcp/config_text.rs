@@ -39,6 +39,9 @@ const SECRET_WORDS: &[&str] = &[
     "passphrase",
     "auth",
     "priv",
+    // VRP's `snmp-agent target-host … params securityname <community>`: on v1/v2c the security
+    // name is the community string.
+    "securityname",
 ];
 
 /// The longest `match` pattern accepted. A model writes it; a long one is a mistake or a probe.
@@ -223,6 +226,8 @@ pub(crate) fn redact_line(line: &str) -> (String, bool) {
 /// a marker line keeps only the marker itself; anything else on it is blanked.
 pub(crate) fn redact_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(String, bool)> {
     let mut in_key = false;
+    // How deep inside FortiGate's `config system snmp community` block the line is; 0 outside it.
+    let mut fgt_community = 0usize;
     let mut out = Vec::new();
     for raw in lines {
         // `str::lines` hands this lines without their ending; a diff's slices keep it.
@@ -243,9 +248,35 @@ pub(crate) fn redact_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<(Str
             out.push((text, true));
             continue;
         }
+        let trimmed = line.trim();
+        if fgt_community > 0 {
+            if trimmed.starts_with("config ") {
+                fgt_community += 1;
+            } else if trimmed == "end" {
+                fgt_community -= 1;
+            } else if let Some(blanked) = fortigate_community_name(line) {
+                out.push((blanked, true));
+                continue;
+            }
+        } else if trimmed == FORTIGATE_COMMUNITY_BLOCK {
+            fgt_community = 1;
+        }
         out.push(redact_line(line));
     }
     out
+}
+
+/// The FortiGate block whose entries name an SNMP community by `set name "<community>"`: the
+/// community string itself, with no secret word in front of it.
+const FORTIGATE_COMMUNITY_BLOCK: &str = "config system snmp community";
+
+/// Inside [`FORTIGATE_COMMUNITY_BLOCK`], `set name <value>` with the value blanked; `None` for any
+/// other line.
+fn fortigate_community_name(line: &str) -> Option<String> {
+    let spans = token_spans(line);
+    let word = |i: usize| spans.get(i).map(|&(s, e)| &line[s..e]);
+    (word(0) == Some("set") && word(1) == Some("name") && spans.len() > 2)
+        .then(|| format!("{}{REDACTED}", &line[..spans[2].0]))
 }
 
 /// Where a PEM private-key header starts on `line`, if it holds one.
@@ -457,6 +488,10 @@ const CASES: &[(&str, &str)] = &[
     ),
     // A community string with no word in front of it
     (
+        "snmp-agent target-host trap address udp-domain 192.0.2.10 params securityname c0mmun1ty v2c",
+        "snmp-agent target-host trap address udp-domain 192.0.2.10 params securityname <redacted>",
+    ),
+    (
         "snmp-server host 192.0.2.10 version 2c c0mmun1ty",
         "snmp-server host <redacted>",
     ),
@@ -564,6 +599,7 @@ mod tests {
             "SH2abcdef",
             "xyz123",
             "c0mmun1ty",
+            "fgtcomm1",
             "Pa55w0rd",
             "55w0rd",
             "secretpw1",
@@ -629,6 +665,37 @@ mod tests {
         // A public certificate is not a secret and stays readable.
         let cert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
         assert!(redact_lines(cert.lines()).iter().all(|(_, c)| !c));
+    }
+
+    /// FortiGate names an SNMP community by `set name` inside its community block, with no secret
+    /// word in front. Only there: a `set name` anywhere else is a name.
+    #[test]
+    fn a_fortigate_community_name_is_blanked_inside_its_block_only() {
+        let text = "config system snmp community
+    edit 1
+        set name \"fgtcomm1\"
+        config hosts
+            edit 1
+                set ip 192.0.2.1 255.255.255.255
+            next
+        end
+        set events cpu-high
+    next
+end
+config firewall address
+    edit \"lan\"
+        set name \"lan\"
+    next
+end";
+        let out: Vec<(String, bool)> = redact_lines(text.lines());
+        assert!(out.iter().all(|(l, _)| !l.contains("fgtcomm1")), "{out:?}");
+        assert_eq!(out[2].0, format!("        set name {REDACTED}"));
+        assert!(
+            out[5].0.contains("192.0.2.1"),
+            "the host block stays readable"
+        );
+        // After the block ends, `set name` is an ordinary name again.
+        assert_eq!(out[13], ("        set name \"lan\"".to_owned(), false));
     }
 
     #[test]
