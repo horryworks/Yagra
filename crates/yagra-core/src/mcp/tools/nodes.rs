@@ -1118,7 +1118,8 @@ impl YagraMcp {
                        `versions` for the list of stored versions and their times. Text comes as \
                        numbered lines with secrets replaced by `<redacted>`: a line naming a \
                        password, secret, community, key, cipher or similar loses everything after \
-                       that word, and stored hashes are blanked wherever they are. Both oxidized's \
+                       that word, and stored hashes and the credentials inside a URL are blanked \
+                       wherever they are. Both oxidized's \
                        filter and Yagra's own can miss a vendor spelling, so treat the text as \
                        sensitive. A diff shows changed lines with 3 lines of context. Pages: \
                        `limit` lines (default 500) from `offset`; `match` keeps only lines \
@@ -1163,6 +1164,11 @@ impl YagraMcp {
             .deny_invisible_node_for(Some(authed.clone()), TOOL, p.node_id)
             .await
         {
+            // A refusal is a read attempt too (decision 86), and the row is how a scoped token
+            // probing for nodes outside its folders shows up.
+            if view.carries_text() {
+                self.audit_config_read(&authed, p.node_id, view, 404).await;
+            }
             return deny;
         }
         let node_id = p.node_id;

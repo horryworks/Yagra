@@ -50,6 +50,11 @@ pub(crate) const DEFAULT_LIMIT: usize = 500;
 /// The most lines one page may carry, whatever the caller asks.
 pub(crate) const MAX_LIMIT: usize = 2_000;
 
+/// Pieces that mark a secret anywhere inside a token, for the vendors that run words together
+/// (FortiGate's `psksecret`, a `wpapassword`). Only pieces that do not occur inside ordinary
+/// configuration words: `pass` alone would take `passive-interface`, `key` would take `keepalive`.
+const SECRET_PIECES: &[&str] = &["secret", "passw", "psk"];
+
 /// Whether `token` names a secret.
 fn names_secret(token: &str) -> bool {
     let t = token
@@ -57,7 +62,73 @@ fn names_secret(token: &str) -> bool {
         .to_ascii_lowercase();
     !t.is_empty()
         && (SECRET_WORDS.contains(&t.as_str())
-            || t.split(['-', '_']).any(|part| SECRET_WORDS.contains(&part)))
+            || t.split(['-', '_']).any(|part| SECRET_WORDS.contains(&part))
+            || SECRET_PIECES.iter().any(|p| t.contains(p)))
+}
+
+/// Whether the token at `i` begins a value that names no secret word before it:
+/// FortiGate's `ENC <value>`, and Cisco's `snmp-server host <address> … <community>`, whose
+/// community string trails the line with no word in front of it.
+fn opens_unnamed_secret(line: &str, spans: &[(usize, usize)], i: usize) -> bool {
+    let token = &line[spans[i].0..spans[i].1];
+    if token == "ENC" {
+        return true;
+    }
+    i == 1
+        && token.eq_ignore_ascii_case("host")
+        && line[spans[0].0..spans[0].1].eq_ignore_ascii_case("snmp-server")
+}
+
+/// `scheme://user:password@host…` with the user and password blanked, or `None` for a token
+/// carrying no credentials in a URL.
+///
+/// The delimiter is the **last** `@` after `://`, not the last one before the first `/`: a
+/// password may hold a `/` itself, and cutting at it would leave the password standing. A path
+/// that happens to hold an `@` loses its host as well, which is the safe direction.
+fn url_userinfo(token: &str) -> Option<String> {
+    let scheme_end = token.find("://")? + 3;
+    let rest = &token[scheme_end..];
+    let at = rest.rfind('@')?;
+    Some(format!("{}{REDACTED}{}", &token[..scheme_end], &rest[at..]))
+}
+
+/// Whether a URL's query names a secret in any parameter (`?key=…`, `&community=…`), which
+/// [`names_secret`] does not see because `key` is a whole word only.
+fn query_names_secret(token: &str) -> bool {
+    token.find('?').is_some_and(|q| {
+        token[q + 1..]
+            .split(['&', ';'])
+            .any(|kv| names_secret(kv.split('=').next().unwrap_or_default()))
+    })
+}
+
+/// A token blanked on its own shape, whatever word precedes it: a stored hash whole, a URL's
+/// credentials.
+fn clean_token(token: &str) -> Option<String> {
+    if looks_encrypted(token) {
+        Some(REDACTED.to_owned())
+    } else {
+        url_userinfo(token)
+    }
+}
+
+/// `line[..upto]` with every token of `spans` (all inside it) put through [`clean_token`], and
+/// whether any was changed. Used for what a secret word leaves standing before it, as well as
+/// for a whole line with no secret word, so nothing kept is kept unexamined.
+fn clean_range(line: &str, spans: &[(usize, usize)], upto: usize) -> (String, bool) {
+    let mut out = String::with_capacity(upto);
+    let mut last = 0;
+    let mut changed = false;
+    for &(s, e) in spans {
+        if let Some(r) = clean_token(&line[s..e]) {
+            out.push_str(&line[last..s]);
+            out.push_str(&r);
+            last = e;
+            changed = true;
+        }
+    }
+    out.push_str(&line[last..upto]);
+    (out, changed)
 }
 
 /// Whether `token` is shaped like a stored hash or an encrypted secret, whatever word precedes it:
@@ -105,37 +176,40 @@ pub(crate) fn redact_line(line: &str) -> (String, bool) {
     let spans = token_spans(line);
     for (i, &(s, e)) in spans.iter().enumerate() {
         let token = &line[s..e];
-        // `password=hunter2`, `key:abc` — the word and its value in one token.
+        let scheme_at = token.find("://");
+        // `password=hunter2`, `key:abc`, `key=ftp://…` — the word and its value in one token.
+        // Checked before the URL rule, so a value shaped like a URL is still a value; the one
+        // separator skipped is a URL's own `scheme:`.
         if let Some(cut) = token.find(['=', ':']) {
-            if names_secret(&token[..cut]) && (cut + 1 < token.len() || i + 1 < spans.len()) {
-                return (format!("{}{REDACTED}", &line[..s + cut + 1]), true);
+            if scheme_at != Some(cut)
+                && names_secret(&token[..cut])
+                && (cut + 1 < token.len() || i + 1 < spans.len())
+            {
+                let (kept, _) = clean_range(line, &spans[..i], s);
+                return (format!("{kept}{}{REDACTED}", &token[..=cut]), true);
             }
         }
-        if names_secret(token) {
+        // A URL naming a secret (`ftp://u:secretpw@h`, `…?key=x`) is a value, not a word to
+        // keep: it goes whole, with the rest of the line.
+        if scheme_at.is_some() {
+            if names_secret(token) || query_names_secret(token) {
+                let (kept, _) = clean_range(line, &spans[..i], s);
+                return (format!("{kept}{REDACTED}"), true);
+            }
+            continue;
+        }
+        if names_secret(token) || opens_unnamed_secret(line, &spans, i) {
             if i + 1 < spans.len() {
-                return (format!("{} {REDACTED}", &line[..e]), true);
+                let (kept, _) = clean_range(line, &spans[..=i], e);
+                return (format!("{kept} {REDACTED}"), true);
             }
             // The word ends the line: nothing follows it to blank.
             continue;
         }
     }
-    // No secret word: blank any token shaped like a stored hash, alone.
-    let mut out = String::with_capacity(line.len());
-    let mut last = 0;
-    let mut changed = false;
-    for (s, e) in spans {
-        if looks_encrypted(&line[s..e]) {
-            out.push_str(&line[last..s]);
-            out.push_str(REDACTED);
-            last = e;
-            changed = true;
-        }
-    }
-    if !changed {
-        return (line.to_owned(), false);
-    }
-    out.push_str(&line[last..]);
-    (out, true)
+    // No secret word: blank any token shaped like a stored hash, alone, and the credentials of a
+    // URL that carries them.
+    clean_range(line, &spans, line.len())
 }
 
 /// A text's lines with their secrets blanked, in order, each with whether it was blanked.
@@ -371,6 +445,55 @@ const CASES: &[(&str, &str)] = &[
         "set security ike policy p pre-shared-key ascii-text \"$9$x\"",
         "set security ike policy p pre-shared-key <redacted>",
     ),
+    // FortiGate: words run together, and `ENC` before a value
+    (
+        "    set psksecret ENC abcd==",
+        "    set psksecret <redacted>",
+    ),
+    ("    set passwd ENC SH2abcdef", "    set passwd <redacted>"),
+    (
+        "    set private-data ENC xyz123",
+        "    set private-data ENC <redacted>",
+    ),
+    // A community string with no word in front of it
+    (
+        "snmp-server host 192.0.2.10 version 2c c0mmun1ty",
+        "snmp-server host <redacted>",
+    ),
+    // Credentials inside a URL
+    (
+        "archive path ftp://backup:Pa55w0rd@198.51.100.7/cfg",
+        "archive path ftp://<redacted>@198.51.100.7/cfg",
+    ),
+    (
+        " url https://example.com/path?q=1",
+        " url https://example.com/path?q=1",
+    ),
+    // A password holding `/`, a URL that is itself the secret word, and a URL before a word
+    (
+        "archive path ftp://backup:Pa/55w0rd@198.51.100.7/cfg",
+        "archive path ftp://<redacted>@198.51.100.7/cfg",
+    ),
+    (
+        "copy ftp://backup:secretpw1@198.51.100.7/cfg startup-config",
+        "copy <redacted>",
+    ),
+    (
+        "fetch https://example.com/x?password=urlpw1 now",
+        "fetch <redacted>",
+    ),
+    // A value shaped like a URL after a word, and a secret named in a query
+    ("key=abc://valpw3", "key=<redacted>"),
+    ("auth:foo://valpw4 more", "auth:<redacted>"),
+    (
+        "fetch https://example.com/x?id=1&key=qpw5",
+        "fetch <redacted>",
+    ),
+    (
+        "kron ftp://ops:urlpw2@192.0.2.9/a key 7 0822",
+        "kron ftp://<redacted>@192.0.2.9/a key <redacted>",
+    ),
+    (" passive-interface default", " passive-interface default"),
     // key=value forms
     ("password=hunter2", "password=<redacted>"),
     ("api_key: abc123", "api_key:<redacted>"),
@@ -437,6 +560,18 @@ mod tests {
             "0822455D0A16",
             "$9$abc",
             "%^%#abcdef",
+            "abcd==",
+            "SH2abcdef",
+            "xyz123",
+            "c0mmun1ty",
+            "Pa55w0rd",
+            "55w0rd",
+            "secretpw1",
+            "urlpw1",
+            "urlpw2",
+            "valpw3",
+            "valpw4",
+            "qpw5",
         ] {
             for (input, _) in CASES {
                 if input.contains(needle) {
