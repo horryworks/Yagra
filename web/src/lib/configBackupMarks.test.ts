@@ -14,6 +14,9 @@ const row = (over: Partial<ConfigBackupRow>): ConfigBackupRow => ({
   last: null,
   last_success_at: null,
   poller: 'ready',
+  auto_save: false,
+  save_supported: true,
+  last_auto_save: null,
   ...over,
 });
 

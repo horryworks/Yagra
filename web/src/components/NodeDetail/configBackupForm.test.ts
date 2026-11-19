@@ -47,6 +47,7 @@ const view = (over: Partial<ConfigBackupView> = {}): ConfigBackupView => ({
   status: null,
   models: ['ios', 'nxos'],
   save_supported: true,
+  auto_save: false,
   saves: [],
   ...over,
 });
@@ -338,6 +339,26 @@ describe('the status card (ADR-240)', () => {
   const now = Date.parse('2026-11-06T12:00:00Z');
   const hoursAgo = (h: number) => new Date(now - h * 3600_000).toISOString();
   const working = view({ enabled: true, readiness: 'ready', login_confirmed: true, credential_id: 'b' });
+
+  it('asks for attention while the last automatic save failed, and only while it is switched on (ADR-222 Inc.11)', () => {
+    const auto = (state: SaveRecord['state']): SaveRecord => ({
+      id: 's',
+      origin: 'auto',
+      state,
+      failure: state === 'failed' ? 'denied' : undefined,
+      requested_at: hoursAgo(1),
+      kept_startup: false,
+    });
+    const person: SaveRecord = { ...auto('saved'), id: 'p', origin: 'person' };
+    expect(cardOf({ ...working, auto_save: true, saves: [auto('failed')] })).toMatchObject({
+      kind: 'fix',
+      line: { key: 'config.card.autoSaveFailed' },
+    });
+    // A person's save after it is not Yagra's own: the failure still stands.
+    expect(cardOf({ ...working, auto_save: true, saves: [person, auto('failed')] }).kind).toBe('fix');
+    expect(cardOf({ ...working, auto_save: true, saves: [auto('saved')] }).kind).toBe('ok');
+    expect(cardOf({ ...working, auto_save: false, saves: [auto('failed')] }).kind).toBe('ok');
+  });
 
   it('is off, then a problem with its one fix, before anything about fetching', () => {
     expect(cardOf(view()).kind).toBe('off');

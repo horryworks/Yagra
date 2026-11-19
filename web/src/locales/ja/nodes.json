@@ -1440,16 +1440,23 @@
       "saved": "保存ファイル · {{n}} 行目から"
     },
     "autoSave": {
-      "title": "自動保存",
-      "on": "オン",
-      "off": "オフ",
-      "warning": "取得で未保存が見つかった機器を、Yagra がその場で保存します。",
-      "lineOn": "自動保存: オン（取得のたび）",
-      "lineOff": "自動保存: オフ",
-      "change": "変更",
-      "err": {
-        "save": "自動保存の設定を保存できませんでした"
-      }
+      "label": "自動保存",
+      "switchOne": "{{name}} の自動保存",
+      "onN_one": "{{count}} 台の自動保存をオン",
+      "onN_other": "{{count}} 台の自動保存をオン",
+      "offN_one": "{{count}} 台の自動保存をオフ",
+      "offN_other": "{{count}} 台の自動保存をオフ",
+      "confirmTitle": "{{what}} の自動保存をオンにしますか？",
+      "confirm": "取得で未保存なら、Yagra がその場で保存します。",
+      "devices_one": "{{count}} 台",
+      "devices_other": "{{count}} 台",
+      "confirmLabel": "オンにする",
+      "none": "まだ保存していません",
+      "saved": "✓ {{at}} に保存",
+      "failed": "✕ {{at}} に失敗 · {{why}}",
+      "failedLine": "自動保存に失敗: {{why}}",
+      "factOn": "自動保存オン",
+      "err": "自動保存を切り替えられませんでした"
     },
     "mcpText": {
       "title": "AI クライアントへの設定の本文",
@@ -1469,6 +1476,7 @@
       "searchingN": "使えるログインを探しています（{{total}} 個中 {{n}} 個目）",
       "stale": "2 日以上取れていません",
       "ok": "バックアップできています",
+      "autoSaveFailed": "自動保存に失敗しました",
       "last": "最後の取得 {{ago}}",
       "next": "次 {{time}}",
       "versions_one": "版 {{count}} 個",

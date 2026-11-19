@@ -4,15 +4,17 @@
 // Both read `GET /api/v1/config-backups`, so the two cannot disagree.
 
 import type { ConfigBackupRow } from '../types/api';
+import { autoSaveFailed } from '../pages/configAutoSave';
 
 /** `ok`: a login works and the last fetch succeeded. `busy`: a fetch is out, or nothing has been
- *  tried yet. `trouble`: the last attempt failed, no login has been found, or no poller can carry
- *  the login (ADR-210 stage 5). */
+ *  tried yet. `trouble`: the last attempt failed, no login has been found, no poller can carry
+ *  the login (ADR-210 stage 5), or the node's last automatic save failed (ADR-222 Inc.11). */
 export const BACKUP_MARKS = ['ok', 'busy', 'trouble'] as const;
 export type BackupMark = (typeof BACKUP_MARKS)[number];
 
 export function markOf(row: ConfigBackupRow): BackupMark {
   if (row.poller !== 'ready') return 'trouble';
+  if (autoSaveFailed(row)) return 'trouble';
   if (row.pending) return 'busy';
   if (!row.last) return 'busy';
   // A cancelled fetch is a person's choice, not trouble: the node stands where it stood before.

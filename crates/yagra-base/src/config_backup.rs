@@ -196,6 +196,8 @@ pub struct BackupTarget {
     /// The node's address no longer matches the one it had when the configuration was saved; the
     /// login is withheld until someone saves it again (migration 0152's `bound_address`).
     pub address_changed: bool,
+    /// Yagra saves this node on its own after a fetch finds it unsaved (ADR-222 Inc.11).
+    pub auto_save: bool,
 }
 
 /// What oxidized last reported for a node.
@@ -260,6 +262,9 @@ pub struct BackupOverview {
     pub rotation: Rotation,
     pub last: Option<Attempt>,
     pub last_success_at: Option<DateTime<Utc>>,
+    /// Yagra saves this node on its own after a fetch finds it unsaved (ADR-222 Inc.11); `false`
+    /// for a node with no settings.
+    pub auto_save: bool,
 }
 
 /// How long attempts are kept.
@@ -300,6 +305,22 @@ fn config_of(r: &sqlx::postgres::PgRow) -> Result<NodeConfigBackup, sqlx::Error>
         model_override: r.try_get("model_override")?,
         scan_mode: ScanMode::from_stored(&r.try_get::<String, _>("scan_mode")?),
     })
+}
+
+/// Keep the deployment-wide switch an older core reads (`config_save_settings.auto_save`) true
+/// while any backed-up node is on (ADR-222 Inc.11 decision 22), so rolling the binary back keeps
+/// saving rather than silently stopping.
+async fn sync_deployment_auto_save<'e, E>(exec: E) -> anyhow::Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(
+        "UPDATE config_save_settings SET auto_save = EXISTS \
+           (SELECT 1 FROM node_config_backup WHERE enabled AND auto_save), updated_at = now()",
+    )
+    .execute(exec)
+    .await?;
+    Ok(())
 }
 
 fn attempt_of(r: &sqlx::postgres::PgRow) -> Result<Attempt, sqlx::Error> {
@@ -362,6 +383,7 @@ impl ConfigBackupRepo {
                 round_started_at, scan_mode) \
              SELECT id, $2, $3, $4, $5, address, now(), $7 FROM nodes WHERE id = $1 \
              ON CONFLICT (node_id) DO UPDATE SET enabled = EXCLUDED.enabled, \
+               auto_save = node_config_backup.auto_save AND EXCLUDED.enabled, \
                login_order = EXCLUDED.login_order, input = EXCLUDED.input, \
                model_override = EXCLUDED.model_override, scan_mode = EXCLUDED.scan_mode, \
                bound_address = EXCLUDED.bound_address, updated_at = now(), \
@@ -382,7 +404,40 @@ impl ConfigBackupRepo {
         .bind(cfg.scan_mode.as_str())
         .execute(&self.pool)
         .await?;
+        if !cfg.enabled {
+            sync_deployment_auto_save(&self.pool).await?;
+        }
         Ok(done.rows_affected() > 0)
+    }
+
+    /// Whether Yagra saves `node` on its own (ADR-222 Inc.11). `false` for a node with no settings.
+    pub async fn auto_save_of(&self, node: Uuid) -> anyhow::Result<bool> {
+        let on: Option<bool> =
+            sqlx::query_scalar("SELECT auto_save FROM node_config_backup WHERE node_id = $1")
+                .bind(node)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(on.unwrap_or(false))
+    }
+
+    /// Switch automatic save on or off for `nodes` (ADR-222 Inc.11). Only a node backed up now is
+    /// switched on (decision 15); whether its model can be saved is the caller's to check, and it
+    /// hands only those. Returns the nodes this call changed, sorted.
+    pub async fn set_auto_save(&self, nodes: &[Uuid], on: bool) -> anyhow::Result<Vec<Uuid>> {
+        let mut tx = self.pool.begin().await?;
+        let mut changed: Vec<Uuid> = sqlx::query_scalar(
+            "UPDATE node_config_backup SET auto_save = $2, updated_at = now() \
+             WHERE node_id = ANY($1) AND auto_save <> $2 AND (enabled OR NOT $2) \
+             RETURNING node_id",
+        )
+        .bind(nodes)
+        .bind(on)
+        .fetch_all(&mut *tx)
+        .await?;
+        sync_deployment_auto_save(&mut *tx).await?;
+        tx.commit().await?;
+        changed.sort_unstable();
+        Ok(changed)
     }
 
     /// Every node switched on, with its address, profile name and rotation.
@@ -400,7 +455,8 @@ impl ConfigBackupRepo {
         let rows = sqlx::query(&format!(
             "SELECT b.node_id, host(n.address) AS address, p.name AS profile_name, \
                     b.enabled, b.login_order, b.input, b.model_override, b.scan_mode, {ROTATION_COLUMNS}, \
-                    (b.bound_address IS DISTINCT FROM n.address) AS address_changed \
+                    (b.bound_address IS DISTINCT FROM n.address) AS address_changed, \
+                    b.auto_save \
              FROM node_config_backup b \
              JOIN nodes n ON n.id = b.node_id \
              LEFT JOIN profiles p ON p.id = n.profile_id \
@@ -421,6 +477,7 @@ impl ConfigBackupRepo {
                     config: config_of(r)?,
                     rotation: rotation_of(r)?,
                     address_changed: r.try_get("address_changed")?,
+                    auto_save: r.try_get("auto_save")?,
                 })
             })
             .collect()
@@ -773,7 +830,7 @@ impl ConfigBackupRepo {
                     b.try_input, \
                     a.credential_id AS a_credential_id, a.outcome AS a_outcome, \
                     a.new_version AS a_new_version, a.at AS a_at, a.input AS a_input, \
-                    s.at AS last_success_at \
+                    s.at AS last_success_at, COALESCE(b.auto_save, false) AS auto_save \
              FROM nodes n \
              LEFT JOIN node_config_backup b ON b.node_id = n.id \
              LEFT JOIN profiles p ON p.id = n.profile_id \
@@ -823,6 +880,7 @@ impl ConfigBackupRepo {
                     rotation: rotation_of(r)?,
                     last,
                     last_success_at: r.try_get("last_success_at")?,
+                    auto_save: r.try_get("auto_save")?,
                 })
             })
             .collect()
@@ -849,7 +907,8 @@ impl ConfigBackupRepo {
         let mut out = SwitchOutcome::default();
         if !enabled {
             out.switched = sqlx::query_scalar(&format!(
-                "UPDATE node_config_backup b SET enabled = false, updated_at = now() \
+                "UPDATE node_config_backup b SET enabled = false, auto_save = false, \
+                   updated_at = now() \
                  FROM nodes n WHERE b.node_id = n.id AND n.id = ANY($1) AND {scope} AND b.enabled \
                  RETURNING b.node_id"
             ))
@@ -857,6 +916,7 @@ impl ConfigBackupRepo {
             .bind(groups)
             .fetch_all(&mut *tx)
             .await?;
+            sync_deployment_auto_save(&mut *tx).await?;
             tx.commit().await?;
             return Ok(out);
         }
@@ -1657,6 +1717,71 @@ mod tests {
         assert!(repo.targets().await.expect("targets").is_empty());
         // A node that does not exist is not configured.
         assert!(!repo.put(Uuid::new_v4(), &cfg, true).await.expect("put"));
+    }
+
+    async fn deployment_auto_save(pool: &PgPool) -> bool {
+        sqlx::query_scalar("SELECT auto_save FROM config_save_settings")
+            .fetch_one(pool)
+            .await
+            .expect("settings")
+    }
+
+    /// Automatic save is per node (ADR-222 Inc.11): only a node backed up can be switched on,
+    /// switching the backup off - by the PUT or the list - switches it off with it and switching
+    /// the backup back on does not bring it back, and the deployment-wide row an older core reads
+    /// says "on" exactly while some node is (decisions 15 and 22).
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn automatic_save_is_switched_per_node_and_only_while_backed_up(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        let a = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let b = crate::pgtest::node(&pool, "sw-02", 2, None).await;
+        let never = crate::pgtest::node(&pool, "sw-03", 3, None).await;
+        let mut cfg = on(BackupInput::Ssh, Some("vrp"));
+        repo.put(a, &cfg, true).await.expect("put a");
+        repo.put(b, &cfg, true).await.expect("put b");
+
+        let changed = repo.set_auto_save(&[a, never], true).await.expect("on");
+        assert_eq!(changed, vec![a], "a node with no backup is not switched on");
+        assert!(repo.auto_save_of(a).await.expect("a"));
+        assert!(!repo.auto_save_of(never).await.expect("never"));
+        assert!(deployment_auto_save(&pool).await);
+        assert!(repo.target(a).await.expect("t").expect("a").auto_save);
+        let listed = repo.overview(None, OverviewState::All).await.expect("list");
+        assert!(listed.iter().any(|r| r.node_id == a && r.auto_save));
+        assert!(listed.iter().any(|r| r.node_id == b && !r.auto_save));
+        // Already on: nothing changes.
+        assert!(repo
+            .set_auto_save(&[a], true)
+            .await
+            .expect("again")
+            .is_empty());
+
+        // The backup switched off by the PUT takes automatic save with it, and back on does not
+        // restore it.
+        cfg.enabled = false;
+        repo.put(a, &cfg, false).await.expect("off");
+        assert!(!repo.auto_save_of(a).await.expect("a"));
+        assert!(!deployment_auto_save(&pool).await);
+        cfg.enabled = true;
+        repo.put(a, &cfg, false).await.expect("back on");
+        assert!(!repo.auto_save_of(a).await.expect("a"));
+
+        // The same through the list's switch.
+        repo.set_auto_save(&[b], true).await.expect("b on");
+        assert!(deployment_auto_save(&pool).await);
+        repo.switch(&[b], None, false, None, None)
+            .await
+            .expect("switch off");
+        assert!(!repo.auto_save_of(b).await.expect("b"));
+        assert!(!deployment_auto_save(&pool).await);
+        // Off is accepted for a node backed up or not.
+        repo.set_auto_save(&[a], true).await.expect("a on");
+        assert_eq!(
+            repo.set_auto_save(&[a, b], false).await.expect("off"),
+            vec![a]
+        );
+        assert!(!deployment_auto_save(&pool).await);
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

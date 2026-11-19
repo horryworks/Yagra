@@ -123,13 +123,12 @@ pub struct SaveRecord {
     pub kept_startup: bool,
 }
 
-/// Whether Yagra saves on its own (decision 8). When it does, a device found unsaved at a fetch is
-/// saved in that same login (decision 13): the backup and the startup configuration agree after
-/// every fetch. The Unsaved configuration alert no longer gates it; it tells a person about devices
-/// Yagra does not save.
+/// Whether Yagra saves any device on its own (decision 8). A node switched on is saved in the same
+/// login when a fetch finds it unsaved (decision 13). Since Inc.11 the switch is per node and this
+/// says only whether at least one backed-up node is on (decision 22).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AutoSave {
-    /// Off by default.
+    /// At least one backed-up node is saved automatically.
     pub enabled: bool,
 }
 
@@ -334,22 +333,23 @@ impl ConfigSaveRepo {
         .bind(SAVES_KEPT)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|r| {
-                let origin: String = r.try_get("origin")?;
-                let state: String = r.try_get("state")?;
-                let failure: Option<String> = r.try_get("failure")?;
-                Ok(SaveRecord {
-                    id: r.try_get("id")?,
-                    origin: SaveOrigin::from_token(&origin).unwrap_or(SaveOrigin::Person),
-                    state: SaveState::from_token(&state).unwrap_or(SaveState::Failed),
-                    failure: failure
-                        .map(|f| SaveFailure::from_token(&f).unwrap_or(SaveFailure::Other)),
-                    requested_at: r.try_get("requested_at")?,
-                    finished_at: r.try_get("finished_at")?,
-                    kept_startup: r.try_get("kept_startup")?,
-                })
-            })
+        rows.iter().map(record_of).collect()
+    }
+
+    /// Every node's newest automatic save, for the fleet-wide list (ADR-222 Inc.11 decision 20). A
+    /// node Yagra has never saved on its own is absent. At most ten rows are kept per node, so this
+    /// reads no more than ten times the nodes ever saved.
+    pub async fn last_auto_saves(&self) -> anyhow::Result<HashMap<Uuid, SaveRecord>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT ON (node_id) node_id, id, origin, state, failure, requested_at, \
+                    finished_at, startup_before IS NOT NULL AS kept_startup \
+             FROM config_saves WHERE origin = 'auto' \
+             ORDER BY node_id, requested_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get("node_id")?, record_of(r)?)))
             .collect()
     }
 
@@ -424,7 +424,9 @@ impl ConfigSaveRepo {
             .collect()
     }
 
-    /// The deployment's automatic-save setting.
+    /// Whether any backed-up node is saved automatically. Since Inc.11 the switch is per node
+    /// (`node_config_backup.auto_save`) and this row is only kept in step with it, for an older core
+    /// to read (decision 22); nothing in this core decides a save from it.
     ///
     /// `config_save_settings.after_hours` is no longer read or written (decision 11). It stays
     /// until a later migration drops it, so a core from before decision 11 can still read the row.
@@ -438,19 +440,6 @@ impl ConfigSaveRepo {
         Ok(AutoSave {
             enabled: r.try_get("auto_save")?,
         })
-    }
-
-    /// Change it.
-    pub async fn set_auto_save(&self, s: AutoSave) -> anyhow::Result<AutoSave> {
-        sqlx::query(
-            "INSERT INTO config_save_settings (id, auto_save, updated_at) \
-             VALUES (TRUE, $1, now()) \
-             ON CONFLICT (id) DO UPDATE SET auto_save = EXCLUDED.auto_save, updated_at = now()",
-        )
-        .bind(s.enabled)
-        .execute(&self.pool)
-        .await?;
-        self.auto_save().await
     }
 
     /// Whether `/mcp` may serve configuration text (ADR-210 stage 10 decision 85). A missing row
@@ -480,21 +469,23 @@ impl ConfigSaveRepo {
         .await?;
         self.mcp_config_text().await
     }
+}
 
-    /// Whether the node's latest save failed. An automatic save waits for a person after one
-    /// (decision 9).
-    pub async fn last_failed(&self, node: Uuid) -> anyhow::Result<bool> {
-        let row = sqlx::query(
-            "SELECT state FROM config_saves WHERE node_id = $1 ORDER BY requested_at DESC LIMIT 1",
-        )
-        .bind(node)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(match row {
-            Some(r) => r.try_get::<String, _>("state")? == "failed",
-            None => false,
-        })
-    }
+/// One `config_saves` row as a screen lists it. An unknown token reads as the safer word: a person's
+/// save, and a failure.
+fn record_of(r: &sqlx::postgres::PgRow) -> anyhow::Result<SaveRecord> {
+    let origin: String = r.try_get("origin")?;
+    let state: String = r.try_get("state")?;
+    let failure: Option<String> = r.try_get("failure")?;
+    Ok(SaveRecord {
+        id: r.try_get("id")?,
+        origin: SaveOrigin::from_token(&origin).unwrap_or(SaveOrigin::Person),
+        state: SaveState::from_token(&state).unwrap_or(SaveState::Failed),
+        failure: failure.map(|f| SaveFailure::from_token(&f).unwrap_or(SaveFailure::Other)),
+        requested_at: r.try_get("requested_at")?,
+        finished_at: r.try_get("finished_at")?,
+        kept_startup: r.try_get("kept_startup")?,
+    })
 }
 
 /// `text` cut to at most `max` bytes on a character boundary.
@@ -561,13 +552,16 @@ mod tests {
             repo.startup_before(node, id).await.unwrap().as_deref(),
             Some("startup")
         );
-        assert!(!repo.last_failed(node).await.unwrap());
+        assert!(repo.last_auto_saves().await.unwrap().is_empty());
     }
 
+    /// An automatic save is recorded finished, and the list reads each node's newest one - a
+    /// person's save after it does not hide it (ADR-222 Inc.11 decision 20).
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn an_automatic_save_is_recorded_finished_and_a_failed_one_stops_the_next(pool: PgPool) {
+    async fn an_automatic_save_is_recorded_finished_and_the_newest_is_listed(pool: PgPool) {
         let node = crate::pgtest::node(&pool, "sw-01", 1, None).await;
+        let other = crate::pgtest::node(&pool, "sw-02", 2, None).await;
         let repo = ConfigSaveRepo::new(pool);
         let id = repo.record_auto(node, None, Some("startup")).await.unwrap();
         let recent = repo.recent(node).await.unwrap();
@@ -575,13 +569,19 @@ mod tests {
         assert_eq!(recent[0].id, id);
         assert_eq!(recent[0].origin, SaveOrigin::Auto);
         assert_eq!(recent[0].state, SaveState::Saved);
-        assert!(!repo.last_failed(node).await.unwrap());
         // Nothing is left pending for the next fetch to claim.
         assert_eq!(repo.claim(node).await.unwrap(), None);
-        repo.record_auto(node, Some(SaveFailure::Denied), None)
+        let failed = repo
+            .record_auto(node, Some(SaveFailure::Denied), None)
             .await
             .unwrap();
-        assert!(repo.last_failed(node).await.unwrap());
+        repo.request(node, SaveOrigin::Person, None).await.unwrap();
+        let last = repo.last_auto_saves().await.unwrap();
+        assert_eq!(last.len(), 1, "a node never saved automatically is absent");
+        assert_eq!(last[&node].id, failed);
+        assert_eq!(last[&node].state, SaveState::Failed);
+        assert_eq!(last[&node].failure, Some(SaveFailure::Denied));
+        assert!(!last.contains_key(&other));
     }
 
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]

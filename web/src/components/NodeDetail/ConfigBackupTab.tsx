@@ -30,6 +30,13 @@ import { Callout, Disclosure, SectionHead } from '../ui/Section';
 import { ScreenLink } from '../ui/ScreenLink';
 import { CredentialPicker } from '../ui/CredentialPicker';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
+import { Switch } from '../ui/Switch';
+import {
+  autoSaveResult,
+  canAutoSave,
+  lastAutoSave,
+  type AutoSaveResult,
+} from '../../pages/configAutoSave';
 import { formatExactTime, relativeTime } from '../../lib/format';
 import { isCliCredentialKind } from '../../lib/credentialKinds';
 import {
@@ -85,6 +92,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
   const canCreds = useCan('manage_credentials');
   const canSave = useCan('save_device_config');
   const [confirmSave, setConfirmSave] = useState(false);
+  const [confirmAuto, setConfirmAuto] = useState(false);
   const [poll, setPoll] = useState<number | undefined>(undefined);
   const view = useLoad(() => api.getConfigBackup(node.id), [node.id], {
     initial: null as ConfigBackupView | null,
@@ -368,6 +376,7 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
                     )}
                     {vers.length > 0 && <span>{t('config.card.versions', { count: vers.length })}</span>}
                     {v.protocol && <span>{t(`config.protocol.${v.protocol}`)}</span>}
+                    {!canSave && canAutoSave(v) && v.auto_save && <span>{t('config.autoSave.factOn')}</span>}
                   </p>
                 )}
               </div>
@@ -392,6 +401,26 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               </div>
               {card.kind === 'fix' && card.fixes.length > 0 && (
                 <div className="cfgb-card-fixes">{card.fixes.map(fixControl)}</div>
+              )}
+              {canSave && canAutoSave(v) && (
+                // The fixes' row shape, one row lower: the name, the switch, the last result.
+                <div className="cfgb-card-fixes">
+                  <span>{t('config.autoSave.label')}</span>
+                  <Switch
+                    checked={v.auto_save}
+                    disabled={busy}
+                    ariaLabel={t('config.autoSave.switchOne', { name: node.name })}
+                    onChange={(next) =>
+                      next
+                        ? setConfirmAuto(true)
+                        : act(
+                            () => api.switchConfigAutoSave({ node_ids: [node.id], enabled: false }),
+                            t('config.autoSave.err'),
+                          )
+                    }
+                  />
+                  <AutoSaveResultText result={autoSaveResult(lastAutoSave(v.saves))} />
+                </div>
               )}
             </section>
           )}
@@ -587,10 +616,51 @@ export function ConfigBackupTab({ node }: { node: NodeDetail }) {
               {t('config.saves.confirm', { node: node.name })}
             </ConfirmDeleteModal>
           )}
+          {confirmAuto && (
+            <ConfirmDeleteModal
+              title={t('config.autoSave.confirmTitle', { what: node.name })}
+              confirmLabel={t('config.autoSave.confirmLabel')}
+              errorFallback={t('config.autoSave.err')}
+              onConfirm={() => api.switchConfigAutoSave({ node_ids: [node.id], enabled: true })}
+              onClose={() => setConfirmAuto(false)}
+              onDone={() => {
+                setConfirmAuto(false);
+                view.reload();
+              }}
+            >
+              {t('config.autoSave.confirm')}
+            </ConfirmDeleteModal>
+          )}
         </Stack>
       )}
     </LoadGate>
   );
+}
+
+/** How the node's last automatic save went, beside its switch (ADR-222 Inc.11 decision 20). */
+function AutoSaveResultText({ result }: { result: AutoSaveResult }) {
+  const { t } = useTranslation('nodes');
+  switch (result.kind) {
+    case 'none':
+      return <span className="cfgb-tone-none">{t('config.autoSave.none')}</span>;
+    case 'busy':
+      return <span className="cfgb-tone-none">{t('config.saves.state.running')}</span>;
+    case 'saved':
+      return (
+        <span className="cfgb-tone-ok">
+          {t('config.autoSave.saved', { at: formatExactTime(result.at) })}
+        </span>
+      );
+    case 'failed':
+      return (
+        <span className="cfgb-tone-bad">
+          {t('config.autoSave.failed', {
+            at: formatExactTime(result.at),
+            why: t(`config.saves.failure.${result.failure}`),
+          })}
+        </span>
+      );
+  }
 }
 
 /** One version's text, or two versions side by side, read when it is opened. */

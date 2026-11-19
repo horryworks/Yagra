@@ -1450,16 +1450,23 @@
       "saved": "Saved file · from line {{n}}"
     },
     "autoSave": {
-      "title": "Automatic save",
-      "on": "On",
-      "off": "Off",
-      "warning": "Yagra saves a backed-up device in the same login as soon as a fetch finds it unsaved.",
-      "lineOn": "Automatic save: on, at every fetch",
-      "lineOff": "Automatic save: off",
-      "change": "Change",
-      "err": {
-        "save": "Could not save the automatic-save setting"
-      }
+      "label": "Auto save",
+      "switchOne": "Automatic save for {{name}}",
+      "onN_one": "Auto save on {{count}}",
+      "onN_other": "Auto save on {{count}}",
+      "offN_one": "Auto save off {{count}}",
+      "offN_other": "Auto save off {{count}}",
+      "confirmTitle": "Turn on automatic save for {{what}}?",
+      "confirm": "Yagra saves a device as soon as a fetch finds it unsaved.",
+      "devices_one": "{{count}} device",
+      "devices_other": "{{count}} devices",
+      "confirmLabel": "Turn on",
+      "none": "Nothing saved yet",
+      "saved": "✓ Saved {{at}}",
+      "failed": "✕ Failed {{at}} · {{why}}",
+      "failedLine": "Automatic save failed: {{why}}",
+      "factOn": "Auto save on",
+      "err": "Could not switch automatic save"
     },
     "mcpText": {
       "title": "Config text for AI clients",
@@ -1479,6 +1486,7 @@
       "searchingN": "Looking for a login that works ({{n}} of {{total}})",
       "stale": "Not fetched for over 2 days",
       "ok": "Backed up",
+      "autoSaveFailed": "Automatic save failed",
       "last": "Last fetched {{ago}}",
       "next": "Next {{time}}",
       "versions_one": "{{count}} version",

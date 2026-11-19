@@ -3649,6 +3649,76 @@
         }
       }
     },
+    "/api/v1/config-backups/auto-save": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "operationId": "switch_auto_save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoSaveSwitchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Switched. A node switched on is saved in the same login right after a fetch finds its running configuration differs from its startup one, outside a maintenance window; a failed save is tried again after the next fetch. Only a node backed up now whose model has a save command is switched on; switching the backup off switches this off too",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoSaveSwitchResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No node, or more than 5,000 (`invalid_auto_save`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/config-backups/switch": {
       "post": {
         "tags": [
@@ -3758,56 +3828,6 @@
           },
           "403": {
             "description": "Role lacks ManageSystem, the caller is an API token (`session_required`), or the caller is restricted to folders (`scope_unsupported`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/config-save-settings": {
-      "put": {
-        "tags": [
-          "nodes"
-        ],
-        "operationId": "put_auto_save",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AutoSave"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Saved. When on, a device that a successful fetch finds unsaved is saved right after that fetch, unless its last save failed or it is in a maintenance window. The Unsaved configuration alert does not gate it",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AutoSave"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -29297,14 +29317,66 @@
       },
       "AutoSave": {
         "type": "object",
-        "description": "Whether Yagra saves on its own (decision 8). When it does, a device found unsaved at a fetch is\nsaved in that same login (decision 13): the backup and the startup configuration agree after\nevery fetch. The Unsaved configuration alert no longer gates it; it tells a person about devices\nYagra does not save.",
+        "description": "Whether Yagra saves any device on its own (decision 8). A node switched on is saved in the same\nlogin when a fetch finds it unsaved (decision 13). Since Inc.11 the switch is per node and this\nsays only whether at least one backed-up node is on (decision 22).",
         "required": [
           "enabled"
         ],
         "properties": {
           "enabled": {
             "type": "boolean",
-            "description": "Off by default."
+            "description": "At least one backed-up node is saved automatically."
+          }
+        }
+      },
+      "AutoSaveSwitchBody": {
+        "type": "object",
+        "description": "Automatic save switched on or off for many nodes at once (Inc.11 decision 14).",
+        "required": [
+          "node_ids",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "AutoSaveSwitchResult": {
+        "type": "object",
+        "description": "What an automatic-save switch did.",
+        "required": [
+          "switched",
+          "unsupported",
+          "unchanged"
+        ],
+        "properties": {
+          "switched": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Switched by this call."
+          },
+          "unchanged": {
+            "type": "integer",
+            "description": "Named but already in that state.",
+            "minimum": 0
+          },
+          "unsupported": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Not switched on: the node is not backed up now, or its model has no save command."
           }
         }
       },
@@ -30968,9 +31040,15 @@
           "configured",
           "login_confirmed",
           "pending",
-          "poller"
+          "poller",
+          "auto_save",
+          "save_supported"
         ],
         "properties": {
+          "auto_save": {
+            "type": "boolean",
+            "description": "Yagra saves it on its own after a fetch finds it unsaved (ADR-222 Inc.11)."
+          },
           "configured": {
             "type": "boolean",
             "description": "Whether it has settings; `false` for a node that was never switched on."
@@ -31009,6 +31087,17 @@
               }
             ]
           },
+          "last_auto_save": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SaveRecord",
+                "description": "The newest save Yagra made on its own; `null` when it has made none. A run that found\nnothing to save leaves no record (decision 13), so this is the last time it actually saved\nor failed to."
+              }
+            ]
+          },
           "last_success_at": {
             "type": [
               "string",
@@ -31038,6 +31127,10 @@
           "poller": {
             "$ref": "#/components/schemas/PollerReach",
             "description": "Whether a poller can carry the node's login session (ADR-210 stage 5 decision 48)."
+          },
+          "save_supported": {
+            "type": "boolean",
+            "description": "Yagra has a save command for its model, so automatic save can be switched on once it is\nbacked up (Inc.11 decision 16)."
           },
           "try_after": {
             "type": [
@@ -31111,7 +31204,7 @@
           },
           "auto_save": {
             "$ref": "#/components/schemas/AutoSave",
-            "description": "Whether Yagra saves on its own a device a fetch finds unsaved (ADR-222 decisions 8 and 13).\nChanged with `PUT /api/v1/config-save-settings`."
+            "description": "Whether Yagra saves any backed-up device on its own (ADR-222 decisions 8 and 13). Since\nInc.11 the switch is per node (`POST /api/v1/config-backups/auto-save`), and this says only\nwhether at least one node is on."
           },
           "concurrency": {
             "type": "integer",
@@ -31198,6 +31291,7 @@
           "models",
           "available",
           "save_supported",
+          "auto_save",
           "saves"
         ],
         "properties": {
@@ -31207,6 +31301,10 @@
               "$ref": "#/components/schemas/AttemptView"
             },
             "description": "The newest attempts, newest first."
+          },
+          "auto_save": {
+            "type": "boolean",
+            "description": "Yagra saves it on its own after a fetch finds it unsaved (ADR-222 Inc.11). Switched with\n`POST /api/v1/config-backups/auto-save`."
           },
           "available": {
             "type": "boolean",

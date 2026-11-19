@@ -10,6 +10,18 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **Automatic save is switched per node, and `PUT /api/v1/config-save-settings` is gone.** The one deployment-wide switch under Config backups is replaced by an **Auto save** switch on each row of the list, beside **Backup**, and on the node's Config tab; select rows to switch many at once. A client that set the deployment-wide switch now calls `POST /api/v1/config-backups/auto-save` with `node_ids` and `enabled`; it needs the same Admin permission and answers which nodes it switched and which it could not. Only a node that is backed up, on a model Yagra can save, can be switched on, and switching its backup off switches automatic save off with it — switching the backup back on does not bring it back. A deployment that had automatic save on keeps it on for every node backed up at the upgrade. `GET /api/v1/config-backup-schedule`'s `auto_save.enabled` now means "at least one node is on" (ADR-222 Inc.11).
+
+### New Features
+
+- **Each node shows how its last automatic save went.** The Config tab's status card says `✓ Saved <time>` or `✕ Failed <time> · <reason>` beside the switch, and a failed one turns the card to needs-attention. In Nodes ▸ Config backups a node whose last automatic save failed reads **Needs attention**, with `Automatic save failed: <reason>` as its last attempt. The list's rows gain `auto_save`, `save_supported` and `last_auto_save`; the node's config backup and MCP's `get_node_status` gain `auto_save` (ADR-222 Inc.11).
+
+### Improvements
+
+- **A failed automatic save no longer stops the next one.** Yagra used to stop saving a node on its own after one failed save until a person saved it; it now tries again right after the next fetch, in the login that fetch used. A failure that does not heal — a read-only login, say — therefore leaves one failed save and one audit row per fetch (ADR-222 Inc.11).
+
 ## v0.3.81 — Read a node's backed-up configuration over MCP, and push config backups into a yagra/ folder that keeps the repository's own files
 
 ### Breaking changes

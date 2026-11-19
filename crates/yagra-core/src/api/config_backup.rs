@@ -179,6 +179,8 @@ pub(crate) struct ConfigBackupSummary {
     last_outcome: Option<AttemptOutcome>,
     /// The newest save Yagra made or was asked to make (ADR-222); `null` ⇒ none.
     last_save: Option<SaveRecord>,
+    /// Yagra saves this node on its own after a fetch finds it unsaved (ADR-222 Inc.11).
+    auto_save: bool,
     /// Running and startup differ, from the last time the save script compared them (Inc.9);
     /// `null` ⇒ they agreed, or this model is not compared over the command line.
     unsaved: Option<UnsavedView>,
@@ -227,6 +229,7 @@ impl ConfigBackupSummary {
                 finished_at: Some(DateTime::<Utc>::UNIX_EPOCH),
                 kept_startup: true,
             }),
+            auto_save: true,
             unsaved: Some(UnsavedView {
                 since: DateTime::<Utc>::UNIX_EPOCH,
                 checked_at: DateTime::<Utc>::UNIX_EPOCH,
@@ -267,6 +270,7 @@ pub(crate) async fn summary_of(
     let last = admin.config_backup.attempts_of(node, 1).await.ok()?;
     let saves = admin.config_saves.recent(node).await.ok()?;
     let unsaved = admin.config_saves.unsaved_of(node).await.ok()?;
+    let auto_save = admin.config_backup.auto_save_of(node).await.ok()?;
     Some(ConfigBackupSummary {
         readiness,
         last_status: status.as_ref().map(|s| s.status.clone()),
@@ -274,6 +278,7 @@ pub(crate) async fn summary_of(
         login_confirmed: row.is_some_and(|(_, r)| r.login_confirmed),
         last_outcome: last.first().map(|a| a.outcome),
         last_save: saves.into_iter().next(),
+        auto_save,
         unsaved: UnsavedView::of(unsaved),
     })
 }
@@ -359,6 +364,9 @@ pub(crate) struct ConfigBackupView {
     /// Whether Yagra can save this node's model (ADR-222): the model it is fetched with has a
     /// save command in Yagra's table.
     save_supported: bool,
+    /// Yagra saves it on its own after a fetch finds it unsaved (ADR-222 Inc.11). Switched with
+    /// `POST /api/v1/config-backups/auto-save`.
+    auto_save: bool,
     /// The newest saves, newest first.
     saves: Vec<SaveRecord>,
     /// Running and startup differ, from the save script's last comparison (Inc.9); `null` ⇒ they
@@ -412,6 +420,10 @@ async fn get_config_backup(
         .await
         .map_err(|e| read_failed(&e))?;
     let logins = rotation::cli_logins(&admin.creds)
+        .await
+        .map_err(|e| read_failed(&e))?;
+    let auto_save = repo
+        .auto_save_of(node_id)
         .await
         .map_err(|e| read_failed(&e))?;
     let (cfg, rot) = row.unwrap_or((
@@ -482,6 +494,7 @@ async fn get_config_backup(
             profile.as_deref(),
         )
         .is_some_and(|m| yagra_common::config_save::commands_for(&m).is_some()),
+        auto_save,
         saves,
         unsaved: UnsavedView::of(unsaved),
     }))
@@ -1135,6 +1148,15 @@ pub(crate) struct ConfigBackupRow {
     last_success_at: Option<DateTime<Utc>>,
     /// Whether a poller can carry the node's login session (ADR-210 stage 5 decision 48).
     poller: PollerReach,
+    /// Yagra saves it on its own after a fetch finds it unsaved (ADR-222 Inc.11).
+    auto_save: bool,
+    /// Yagra has a save command for its model, so automatic save can be switched on once it is
+    /// backed up (Inc.11 decision 16).
+    save_supported: bool,
+    /// The newest save Yagra made on its own; `null` when it has made none. A run that found
+    /// nothing to save leaves no record (decision 13), so this is the last time it actually saved
+    /// or failed to.
+    last_auto_save: Option<SaveRecord>,
 }
 
 /// Whether a node's config-backup login has a poller to go through (ADR-210 stage 5).
@@ -1174,24 +1196,38 @@ pub(crate) async fn config_backup_rows(
         .overview(scope.group_filter(), state)
         .await
         .map_err(|e| read_failed(&e))?;
+    let mut last_auto = admin
+        .config_saves
+        .last_auto_saves()
+        .await
+        .map_err(|e| read_failed(&e))?;
     Ok(rows
         .into_iter()
-        .map(|r| ConfigBackupRow {
-            node_id: r.node_id,
-            enabled: r.config.as_ref().is_some_and(|c| c.enabled),
-            configured: r.config.is_some(),
-            model: oxidized::source::model_of(
+        .map(|r| {
+            let model = oxidized::source::model_of(
                 r.config.as_ref().and_then(|c| c.model_override.as_deref()),
                 r.profile_name.as_deref(),
-            ),
-            input: r.config.as_ref().map(|c| c.input),
-            credential_id: r.rotation.credential_id,
-            login_confirmed: r.rotation.login_confirmed,
-            pending: rotation::in_flight(r.rotation.requested_at, now),
-            try_after: r.rotation.next_try_at.filter(|t| *t > now),
-            last: r.last.map(AttemptView::from),
-            last_success_at: r.last_success_at,
-            poller: PollerReach::from(&admin.config_relay.route(r.node_id)),
+            );
+            let save_supported = model
+                .as_deref()
+                .is_some_and(|m| yagra_common::config_save::commands_for(m).is_some());
+            ConfigBackupRow {
+                node_id: r.node_id,
+                enabled: r.config.as_ref().is_some_and(|c| c.enabled),
+                configured: r.config.is_some(),
+                model,
+                input: r.config.as_ref().map(|c| c.input),
+                credential_id: r.rotation.credential_id,
+                login_confirmed: r.rotation.login_confirmed,
+                pending: rotation::in_flight(r.rotation.requested_at, now),
+                try_after: r.rotation.next_try_at.filter(|t| *t > now),
+                last: r.last.map(AttemptView::from),
+                last_success_at: r.last_success_at,
+                poller: PollerReach::from(&admin.config_relay.route(r.node_id)),
+                auto_save: r.auto_save,
+                save_supported,
+                last_auto_save: last_auto.remove(&r.node_id),
+            }
         })
         .collect())
 }
@@ -1579,8 +1615,9 @@ pub(crate) struct ConfigBackupScheduleView {
     /// known to work. `null` for a caller who does not see the whole fleet.
     done: Option<usize>,
     total: Option<usize>,
-    /// Whether Yagra saves on its own a device a fetch finds unsaved (ADR-222 decisions 8 and 13).
-    /// Changed with `PUT /api/v1/config-save-settings`.
+    /// Whether Yagra saves any backed-up device on its own (ADR-222 decisions 8 and 13). Since
+    /// Inc.11 the switch is per node (`POST /api/v1/config-backups/auto-save`), and this says only
+    /// whether at least one node is on.
     auto_save: yagra_base::config_save::AutoSave,
     /// Whether an MCP client may read configuration text through `get_node_config` (ADR-210
     /// stage 10 decision 85). Changed with `PUT /api/v1/config-mcp-settings`.

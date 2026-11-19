@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// One deployment-wide on/off switch of the config backup (Config backups page): automatic save
-// (ADR-222 decisions 8 and 13) and configuration text for AI clients (ADR-210 stage 10 decision
-// 84). The two dialogs were the same form differing in their words and their request, so they are
-// one component; the danger of switching on is said in the dialog, at the moment it is chosen.
+// A deployment-wide on/off switch of the config backup (Config backups page): configuration text
+// for AI clients (ADR-210 stage 10 decision 84). Automatic save used one too until it became a
+// switch per node (ADR-222 Inc.11); the keys stay a parameter so the next such switch is one line.
+// The danger of switching on is said in the dialog, at the moment it is chosen.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,7 +15,7 @@ import { done } from '../lib/submitState';
 import { useSubmit } from '../lib/useSubmit';
 
 /** The `nodes` key group holding the switch's words: `title`, `on`, `off`, `warning`, `err.save`. */
-type ConfigSwitchKeys = 'config.autoSave' | 'config.mcpText';
+type ConfigSwitchKeys = 'config.mcpText';
 
 interface Props {
   keys: ConfigSwitchKeys;

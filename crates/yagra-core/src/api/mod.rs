@@ -795,12 +795,12 @@ fn changes_monitoring_config(path: &str) -> bool {
         // table and is left dirty, as `PUT …/config-backup` is.
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/cancel"))
         // Asking for a save (ADR-222), switching automatic save, and the config backup schedule
-        // (ADR-210 stage 6): they write `config_saves`, `config_save_settings` and
-        // `config_backup_schedule`, which no rebuild reads - the save script, the schedule loop and
-        // their screens read them afresh each time. Same blind spot as the previews: they demand
-        // SaveDeviceConfig or ManageConfig.
+        // (ADR-210 stage 6): they write `config_saves`, `node_config_backup.auto_save` (with its
+        // mirror in `config_save_settings`, Inc.11) and `config_backup_schedule`, which no rebuild
+        // reads - the save script, the schedule loop and their screens read them afresh each time.
+        // Same blind spot as the previews: they demand SaveDeviceConfig or ManageConfig.
         || (path.starts_with("/api/v1/nodes/") && path.ends_with("/config-backup/save"))
-        || path == "/api/v1/config-save-settings"
+        || path == "/api/v1/config-backups/auto-save"
         || path == "/api/v1/config-backup-schedule"
         // The MCP config-text switch (ADR-210 stage 10) is the same row of `config_save_settings`,
         // read afresh by `get_node_config` at every call.
@@ -2017,7 +2017,9 @@ mod tests {
         assert!(!changes_monitoring_config(
             "/api/v1/nodes/00000000-0000-4000-8000-000000000001/config-backup/save"
         ));
-        assert!(!changes_monitoring_config("/api/v1/config-save-settings"));
+        assert!(!changes_monitoring_config(
+            "/api/v1/config-backups/auto-save"
+        ));
         assert!(!changes_monitoring_config("/api/v1/config-backup-schedule"));
         // ADR-210 stage 4: testing the Git destination writes nothing; saving it stays dirty.
         assert!(!changes_monitoring_config(

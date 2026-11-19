@@ -383,6 +383,7 @@ mod tests {
                 ..Default::default()
             },
             address_changed: moved,
+            auto_save: false,
         }
     }
 

@@ -43,6 +43,7 @@ import type {
   ConfigBackupListState,
   ConfigBackupRow,
   ConfigBackupSwitchResult,
+  ConfigAutoSaveSwitchResult,
   ConfigBackupScheduleBody,
   ConfigBackupScheduleView,
   GitAuth,
@@ -1322,9 +1323,10 @@ export const api = {
   getConfigBackupSchedule: (): Promise<ConfigBackupScheduleView> =>
     apiGet('/api/v1/config-backup-schedule'),
 
-  /** Switch automatic save on or off (ADR-222). When is the Unsaved configuration alert's. */
-  putConfigAutoSave: (body: { enabled: boolean }) =>
-    apiPut('/api/v1/config-save-settings', { body }),
+  /** Switch automatic save on or off for many nodes at once (ADR-222 Inc.11). Only a node backed
+   *  up now, whose model Yagra can save, is switched on. */
+  switchConfigAutoSave: (body: { node_ids: string[]; enabled: boolean }): Promise<ConfigAutoSaveSwitchResult> =>
+    apiPost('/api/v1/config-backups/auto-save', { body }),
 
   /** Whether MCP's get_node_config may hand configuration text to AI clients (ADR-210 stage 10). */
   putConfigMcpText: (body: { enabled: boolean }) =>

@@ -5,7 +5,8 @@
 // Config tab; this list is where to see at a glance which nodes are backed up and which need
 // attention. The state word is `lib/configBackupMarks.ts`, the same one the tree's mark draws.
 // Since ADR-224 it also lists the nodes switched off and those that could be, and switches them on
-// or off one row at a time or many at once; the rules are `configBackupList.ts`.
+// or off one row at a time or many at once; the rules are `configBackupList.ts`. Since ADR-222
+// Inc.11 automatic save is a second switch beside the backup's, per node (`configAutoSave.ts`).
 
 import { useCallback, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -46,6 +47,8 @@ import { ConfigBackupSwitchOnModal } from './ConfigBackupSwitchOnModal';
 import { scheduleLine } from './configBackupSchedule';
 import { ConfigBackupScheduleModal } from './ConfigBackupScheduleModal';
 import { ConfigSwitchModal } from './ConfigSwitchModal';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
+import { autoSaveFailed, autoSaveTargets, canAutoSave } from './configAutoSave';
 import './ConfigBackupsPage.css';
 
 export function ConfigBackupsPage() {
@@ -71,8 +74,9 @@ export function ConfigBackupsPage() {
   const fleetWide = useScope() === 'All';
   const canSave = useCan('save_device_config') && fleetWide;
   const canSystem = useCan('manage_system') && fleetWide;
-  const [autoSaveOpen, setAutoSaveOpen] = useState(false);
   const [mcpTextOpen, setMcpTextOpen] = useState(false);
+  // Turning automatic save on is said at the moment it is chosen (ADR-222 Inc.11 decision 19).
+  const [autoAsk, setAutoAsk] = useState<string[] | null>(null);
   const [editing, setEditing] = useState(false);
   const schedule = useLoad(() => api.getConfigBackupSchedule(), [], {
     initial: null,
@@ -146,6 +150,29 @@ export function ConfigBackupsPage() {
     [filter, nodeName, reload, t],
   );
 
+  /** Switch automatic save for `ids`: off at once, on after the confirm. */
+  const onAutoSave = useCallback(
+    (ids: string[], on: boolean) => {
+      if (ids.length === 0) return;
+      setFilter((p) => p ?? filter);
+      if (on) {
+        setAutoAsk(ids);
+        return;
+      }
+      setSwitching(true);
+      setSwitchError(null);
+      api
+        .switchConfigAutoSave({ node_ids: ids, enabled: false })
+        .then(() => setSelected(new Set()))
+        .catch((e: unknown) => setSwitchError(errMsg(e, t('config.autoSave.err'))))
+        .finally(() => {
+          setSwitching(false);
+          reload();
+        });
+    },
+    [filter, reload, t],
+  );
+
   const columns = useMemo<Column<ConfigBackupRow>[]>(() => {
     const login = (id: string | null | undefined) => {
       const l = loginLabel(id, names, []);
@@ -179,6 +206,23 @@ export function ConfigBackupsPage() {
         },
       },
       {
+        key: 'autoSave',
+        header: t('config.autoSave.label'),
+        width: '96px',
+        render: (r) => {
+          if (!canAutoSave(r)) return '—';
+          if (!canSave) return t(r.auto_save ? 'config.switch.on' : 'config.switch.off');
+          return (
+            <Switch
+              checked={r.auto_save}
+              disabled={switching}
+              ariaLabel={t('config.autoSave.switchOne', { name: nodeName(r.node_id) })}
+              onChange={(next) => onAutoSave([r.node_id], next)}
+            />
+          );
+        },
+      },
+      {
         key: 'state',
         header: t('config.list.cols.state'),
         width: '150px',
@@ -199,6 +243,15 @@ export function ConfigBackupsPage() {
         header: t('config.list.cols.last'),
         width: '1.4fr',
         render: (r) => {
+          if (autoSaveFailed(r) && r.last_auto_save) {
+            return (
+              <span className="cfgbl-mark cfgbl-mark-trouble">
+                {t('config.autoSave.failedLine', {
+                  why: t(`config.saves.failure.${r.last_auto_save.failure ?? 'other'}`),
+                })}
+              </span>
+            );
+          }
           if (!r.last) return '—';
           const line = attemptLine(r.last);
           return t(line.key, { login: login(line.login) });
@@ -227,10 +280,12 @@ export function ConfigBackupsPage() {
         render: (r) => (r.try_after ? <TimeCell iso={r.try_after} /> : '—'),
       },
     ];
-  }, [t, nodeName, names, canCreds, canOff, canOn, switching, onSwitch]);
+  }, [t, nodeName, names, canCreds, canOff, canOn, canSave, switching, onSwitch, onAutoSave]);
 
   const onPlan = planSwitch(picked, true);
   const offPlan = planSwitch(picked, false);
+  const autoOn = autoSaveTargets(picked, true);
+  const autoOff = autoSaveTargets(picked, false);
 
   return (
     <Page layout="list">
@@ -255,20 +310,6 @@ export function ConfigBackupsPage() {
               {canConfig && fleetWide && (
                 <Button onClick={() => setEditing(true)} aria-label={t('config.schedule.title')}>
                   {t('config.schedule.change')}
-                </Button>
-              )}
-            </p>
-          )}
-          {schedule.data && (
-            <p className="cfgbl-sched">
-              <span>
-                {schedule.data.auto_save.enabled
-                  ? t('config.autoSave.lineOn')
-                  : t('config.autoSave.lineOff')}
-              </span>
-              {canSave && (
-                <Button onClick={() => setAutoSaveOpen(true)} aria-label={t('config.autoSave.title')}>
-                  {t('config.autoSave.change')}
                 </Button>
               )}
             </p>
@@ -333,6 +374,16 @@ export function ConfigBackupsPage() {
                   {t('config.list.switchOffN', { count: offPlan.ids.length })}
                 </Button>
               )}
+              {canSave && autoOn.length > 0 && (
+                <Button disabled={switching} onClick={() => onAutoSave(autoOn, true)}>
+                  {t('config.autoSave.onN', { count: autoOn.length })}
+                </Button>
+              )}
+              {canSave && autoOff.length > 0 && (
+                <Button disabled={switching} onClick={() => onAutoSave(autoOff, false)}>
+                  {t('config.autoSave.offN', { count: autoOff.length })}
+                </Button>
+              )}
             </div>
           )}
         </TableToolbar>
@@ -356,17 +407,26 @@ export function ConfigBackupsPage() {
           empty={list.error ?? <EmptyState text={t(`config.list.emptyOf.${filter}`)} />}
         />
       </LoadGate>
-      {autoSaveOpen && schedule.data && (
-        <ConfigSwitchModal
-          keys="config.autoSave"
-          enabled={schedule.data.auto_save.enabled}
-          save={(enabled) => api.putConfigAutoSave({ enabled })}
-          onClose={() => setAutoSaveOpen(false)}
-          onSaved={() => {
-            setAutoSaveOpen(false);
-            schedule.reload();
+      {autoAsk && (
+        <ConfirmDeleteModal
+          title={t('config.autoSave.confirmTitle', {
+            what:
+              autoAsk.length === 1
+                ? nodeName(autoAsk[0])
+                : t('config.autoSave.devices', { count: autoAsk.length }),
+          })}
+          confirmLabel={t('config.autoSave.confirmLabel')}
+          errorFallback={t('config.autoSave.err')}
+          onConfirm={() => api.switchConfigAutoSave({ node_ids: autoAsk, enabled: true })}
+          onClose={() => setAutoAsk(null)}
+          onDone={() => {
+            setAutoAsk(null);
+            setSelected(new Set());
+            reload();
           }}
-        />
+        >
+          {t('config.autoSave.confirm')}
+        </ConfirmDeleteModal>
       )}
       {mcpTextOpen && schedule.data && (
         <ConfigSwitchModal

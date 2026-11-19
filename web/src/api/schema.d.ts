@@ -772,6 +772,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config-backups/auto-save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["switch_auto_save"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config-backups/switch": {
         parameters: {
             query?: never;
@@ -797,22 +813,6 @@ export interface paths {
         };
         get?: never;
         put: operations["put_mcp_config_text"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/config-save-settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put: operations["put_auto_save"];
         post?: never;
         delete?: never;
         options?: never;
@@ -6468,14 +6468,27 @@ export interface components {
             authorize_url: string;
         };
         /**
-         * @description Whether Yagra saves on its own (decision 8). When it does, a device found unsaved at a fetch is
-         *     saved in that same login (decision 13): the backup and the startup configuration agree after
-         *     every fetch. The Unsaved configuration alert no longer gates it; it tells a person about devices
-         *     Yagra does not save.
+         * @description Whether Yagra saves any device on its own (decision 8). A node switched on is saved in the same
+         *     login when a fetch finds it unsaved (decision 13). Since Inc.11 the switch is per node and this
+         *     says only whether at least one backed-up node is on (decision 22).
          */
         AutoSave: {
-            /** @description Off by default. */
+            /** @description At least one backed-up node is saved automatically. */
             enabled: boolean;
+        };
+        /** @description Automatic save switched on or off for many nodes at once (Inc.11 decision 14). */
+        AutoSaveSwitchBody: {
+            enabled: boolean;
+            node_ids: string[];
+        };
+        /** @description What an automatic-save switch did. */
+        AutoSaveSwitchResult: {
+            /** @description Switched by this call. */
+            switched: string[];
+            /** @description Named but already in that state. */
+            unchanged: number;
+            /** @description Not switched on: the node is not backed up now, or its model has no save command. */
+            unsupported: string[];
         };
         /**
          * @description How far back the graph looks. The tokens are the query parameter's values.
@@ -7331,6 +7344,8 @@ export interface components {
         };
         /** @description One node in the fleet-wide list. */
         ConfigBackupRow: {
+            /** @description Yagra saves it on its own after a fetch finds it unsaved (ADR-222 Inc.11). */
+            auto_save: boolean;
             /** @description Whether it has settings; `false` for a node that was never switched on. */
             configured: boolean;
             /**
@@ -7342,6 +7357,7 @@ export interface components {
             enabled: boolean;
             input?: null | components["schemas"]["BackupInput"];
             last?: null | components["schemas"]["AttemptView"];
+            last_auto_save?: null | components["schemas"]["SaveRecord"];
             /**
              * Format: date-time
              * @description When a fetch last succeeded.
@@ -7359,6 +7375,11 @@ export interface components {
             pending: boolean;
             /** @description Whether a poller can carry the node's login session (ADR-210 stage 5 decision 48). */
             poller: components["schemas"]["PollerReach"];
+            /**
+             * @description Yagra has a save command for its model, so automatic save can be switched on once it is
+             *     backed up (Inc.11 decision 16).
+             */
+            save_supported: boolean;
             /**
              * Format: date-time
              * @description When the lockout limits next allow a try, as the leader last worked it out.
@@ -7395,8 +7416,9 @@ export interface components {
             /** Format: int32 */
             at_minute: number;
             /**
-             * @description Whether Yagra saves on its own a device a fetch finds unsaved (ADR-222 decisions 8 and 13).
-             *     Changed with `PUT /api/v1/config-save-settings`.
+             * @description Whether Yagra saves any backed-up device on its own (ADR-222 decisions 8 and 13). Since
+             *     Inc.11 the switch is per node (`POST /api/v1/config-backups/auto-save`), and this says only
+             *     whether at least one node is on.
              */
             auto_save: components["schemas"]["AutoSave"];
             /**
@@ -7444,6 +7466,11 @@ export interface components {
         ConfigBackupView: {
             /** @description The newest attempts, newest first. */
             attempts: components["schemas"]["AttemptView"][];
+            /**
+             * @description Yagra saves it on its own after a fetch finds it unsaved (ADR-222 Inc.11). Switched with
+             *     `POST /api/v1/config-backups/auto-save`.
+             */
+            auto_save: boolean;
             /** @description Whether this deployment has an oxidized at all. */
             available: boolean;
             /**
@@ -19649,6 +19676,66 @@ export interface operations {
             };
         };
     };
+    switch_auto_save: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoSaveSwitchBody"];
+            };
+        };
+        responses: {
+            /** @description Switched. A node switched on is saved in the same login right after a fetch finds its running configuration differs from its startup one, outside a maintenance window; a failed save is tried again after the next fetch. Only a node backed up now whose model has a save command is switched on; switching the backup off switches this off too */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoSaveSwitchResult"];
+                };
+            };
+            /** @description No node, or more than 5,000 (`invalid_auto_save`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     switch_config_backups: {
         parameters: {
             query?: never;
@@ -19741,48 +19828,6 @@ export interface operations {
                 };
             };
             /** @description Role lacks ManageSystem, the caller is an API token (`session_required`), or the caller is restricted to folders (`scope_unsupported`) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    put_auto_save: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AutoSave"];
-            };
-        };
-        responses: {
-            /** @description Saved. When on, a device that a successful fetch finds unsaved is saved right after that fetch, unless its last save failed or it is in a maintenance window. The Unsaved configuration alert does not gate it */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AutoSave"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`) */
             403: {
                 headers: {
                     [name: string]: unknown;

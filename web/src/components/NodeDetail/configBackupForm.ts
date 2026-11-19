@@ -13,6 +13,7 @@ import type {
   ScanMode,
 } from '../../types/api';
 import { BACKUP_INPUTS, SCAN_MODES } from '../../types/api';
+import { lastAutoSave } from '../../pages/configAutoSave';
 
 /** The settings a person edits. `order` is the node's own order of CLI logins, or null for "every
  *  CLI login in the try order"; `model` is '' for "from the profile", because a `<select>` holds
@@ -340,6 +341,11 @@ export function cardOf(view: ConfigBackupView): Card {
         ? { key: 'config.card.searchingN', params: { n, total: view.candidates.length }, tone: 'busy' }
         : { key: 'config.card.searching', tone: 'busy' };
     return { kind: 'busy', line, fixes: [] };
+  }
+  // The backup works but Yagra's own save of the device did not (ADR-222 Inc.11 decision 20). It is
+  // tried again after the next fetch; the unsaved callout below offers the save by hand.
+  if (view.auto_save && lastAutoSave(view.saves)?.state === 'failed') {
+    return { kind: 'fix', line: { key: 'config.card.autoSaveFailed', tone: 'bad' }, fixes: [] };
   }
   return { kind: 'ok', line: { key: 'config.card.ok', tone: 'ok' }, fixes: [] };
 }

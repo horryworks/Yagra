@@ -498,6 +498,7 @@ export type AttemptView = components['schemas']['AttemptView'];
 export type ConfigBackupRow = components['schemas']['ConfigBackupRow'];
 export type ConfigBackupListState = components['schemas']['ListState'];
 export type ConfigBackupSwitchResult = components['schemas']['SwitchResult'];
+export type ConfigAutoSaveSwitchResult = components['schemas']['AutoSaveSwitchResult'];
 export type ConfigBackupScheduleView = components['schemas']['ConfigBackupScheduleView'];
 export type ConfigBackupScheduleBody = components['schemas']['ConfigBackupScheduleBody'];
 

@@ -1575,11 +1575,11 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
-        "PUT",
-        "/api/v1/config-save-settings",
+        "POST",
+        "/api/v1/config-backups/auto-save",
         Global(
-            "the deployment's one automatic-save setting, refused to a caller restricted to \
-             folders",
+            "automatic save writes to devices through the CLI login every folder shares, so it is \
+             refused to a caller restricted to folders",
         ),
         NO_MCP_WRITE,
     ),

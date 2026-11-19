@@ -12,10 +12,11 @@
 //! - `GET …/config-backup/unsaved` — what the device printed the last time the save script found
 //!   running and startup different (Inc.9). `ManageConfig`; on MCP through `get_node_config`
 //!   (`view=unsaved`) since ADR-210 stage 10, behind its switch, blanking and audit.
-//! - `PUT /api/v1/config-save-settings` — automatic save on or off (decision 8): when on, a device
-//!   a fetch finds unsaved is saved right after that fetch (decision 13). `SaveDeviceConfig` and a
-//!   fleet-wide caller: it lets Yagra save every device on its own. Read back in
-//!   `GET /api/v1/config-backup-schedule`.
+//! - `POST /api/v1/config-backups/auto-save` — automatic save on or off for many nodes at once
+//!   (Inc.11 decision 14): a node switched on is saved right after a fetch finds it unsaved
+//!   (decision 13). `SaveDeviceConfig` and a fleet-wide caller, as the button: it lets Yagra write
+//!   to those devices on its own. Only a node backed up now, whose model has a save command, is
+//!   switched on. Read back per node in the config backup list and the node's view.
 //! - `PUT /api/v1/config-mcp-settings` - whether `/mcp`'s `get_node_config` may hand a
 //!   configuration's text to an AI client (ADR-210 stage 10 decision 85). `ManageSystem`, a
 //!   signed-in person (`Caller`, never an API token: a token is what would read the text) and a
@@ -40,14 +41,14 @@ use axum::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_base::config_save::{AutoSave, McpConfigText, SaveFailure, SaveOrigin};
+use yagra_base::config_save::{McpConfigText, SaveFailure, SaveOrigin};
 use yagra_common::config_save::{commands_for, SaveCommands};
 
 use super::config_backup::{check_source_token, oxidized_of, start_fetch};
 use super::error::{ApiError, ApiResult};
 use super::extract::{
-    Admin, Caller, RequireManageConfig, RequireManageSystem, RequireSaveDeviceConfig, Scoped,
-    VisibleNode,
+    Actor, Admin, Caller, RequireManageConfig, RequireManageSystem, RequireSaveDeviceConfig,
+    Scoped, VisibleNode,
 };
 use super::ApiState;
 use crate::oxidized::{self, save::Action};
@@ -58,7 +59,7 @@ use crate::oxidized::{self, save::Action};
     save_now,
     get_startup,
     get_unsaved,
-    put_auto_save,
+    switch_auto_save,
     put_mcp_config_text,
     save_job,
     save_report
@@ -77,10 +78,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/nodes/:node_id/config-backup/unsaved",
             get(get_unsaved),
         )
-        .route(
-            "/api/v1/config-save-settings",
-            axum::routing::put(put_auto_save),
-        )
+        .route("/api/v1/config-backups/auto-save", post(switch_auto_save))
         .route(
             "/api/v1/config-mcp-settings",
             axum::routing::put(put_mcp_config_text),
@@ -262,31 +260,106 @@ pub(crate) async fn unsaved_of(admin: &super::AdminState, node_id: Uuid) -> ApiR
     })
 }
 
+/// The most nodes one automatic-save switch may name, as for the backup's own switch.
+const MAX_AUTO_SAVE_SWITCH: usize = 5_000;
+
+/// Automatic save switched on or off for many nodes at once (Inc.11 decision 14).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(super) struct AutoSaveSwitchBody {
+    node_ids: Vec<Uuid>,
+    enabled: bool,
+}
+
+/// What an automatic-save switch did.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct AutoSaveSwitchResult {
+    /// Switched by this call.
+    switched: Vec<Uuid>,
+    /// Not switched on: the node is not backed up now, or its model has no save command.
+    unsupported: Vec<Uuid>,
+    /// Named but already in that state.
+    unchanged: usize,
+}
+
 #[utoipa::path(
-    put, path = "/api/v1/config-save-settings", tag = "nodes",
-    request_body = AutoSave,
+    post, path = "/api/v1/config-backups/auto-save", tag = "nodes",
+    request_body = AutoSaveSwitchBody,
     responses(
-        (status = 200, description = "Saved. When on, a device that a successful fetch finds unsaved is saved right after that fetch, unless its last save failed or it is in a maintenance window. The Unsaved configuration alert does not gate it", body = AutoSave),
+        (status = 200, description = "Switched. A node switched on is saved in the same login right after a fetch finds its running configuration differs from its startup one, outside a maintenance window; a failed save is tried again after the next fetch. Only a node backed up now whose model has a save command is switched on; switching the backup off switches this off too", body = AutoSaveSwitchResult),
+        (status = 400, description = "No node, or more than 5,000 (`invalid_auto_save`)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks SaveDeviceConfig, the caller is an API token (`token_not_permitted`), or the caller is restricted to folders (`scope_unsupported`)", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
-async fn put_auto_save(
+async fn switch_auto_save(
     _perm: RequireSaveDeviceConfig,
     Scoped(scope): Scoped,
+    Actor(actor): Actor,
     admin: Admin,
-    Json(body): Json<AutoSave>,
-) -> ApiResult<Json<AutoSave>> {
+    Json(body): Json<AutoSaveSwitchBody>,
+) -> ApiResult<Json<AutoSaveSwitchResult>> {
     super::scope::require_fleet_wide(
         &scope,
-        "automatic save acts on every device, so an account restricted to folders cannot set it",
+        "automatic save writes to a device through the CLI login every folder shares, so an \
+         account restricted to folders cannot switch it",
     )?;
-    let saved = admin
-        .config_saves
-        .set_auto_save(body)
+    let bad = |m: &str| ApiError::bad_request("invalid_auto_save", m.to_owned());
+    if body.node_ids.is_empty() {
+        return Err(bad("name at least one node"));
+    }
+    if body.node_ids.len() > MAX_AUTO_SAVE_SWITCH {
+        return Err(bad("too many nodes in one switch"));
+    }
+    let mut ids = body.node_ids;
+    ids.sort_unstable();
+    ids.dedup();
+    let (eligible, unsupported) = if body.enabled {
+        let targets = admin
+            .config_backup
+            .targets()
+            .await
+            .map_err(|e| failed(&e, "config auto-save targets"))?;
+        let saveable: std::collections::HashSet<Uuid> = targets
+            .iter()
+            .filter(|t| can_save_model(t))
+            .map(|t| t.node_id)
+            .collect();
+        ids.iter().partition(|id| saveable.contains(id))
+    } else {
+        (ids.clone(), Vec::new())
+    };
+    let switched = admin
+        .config_backup
+        .set_auto_save(&eligible, body.enabled)
         .await
-        .map_err(|e| failed(&e, "config auto-save setting"))?;
-    Ok(Json(saved))
+        .map_err(|e| failed(&e, "config auto-save switch"))?;
+    // One row per node, beside `audit_mw`'s row for the request, as the backup's switch writes
+    // (ADR-224 decision 9): the path names no node, and switching one on lets Yagra write to it.
+    let who = actor.as_deref().unwrap_or("(unknown)");
+    for id in &switched {
+        super::util::audit_record(
+            &admin.audit,
+            who,
+            &format!("config_backup.auto_save node={id} enabled={}", body.enabled),
+            200,
+        )
+        .await;
+    }
+    Ok(Json(AutoSaveSwitchResult {
+        unchanged: ids.len() - switched.len() - unsupported.len(),
+        switched,
+        unsupported,
+    }))
+}
+
+/// Whether Yagra has a save command for the model a backed-up node is fetched with (decision 16).
+fn can_save_model(t: &yagra_base::config_backup::BackupTarget) -> bool {
+    oxidized::source::model_of(
+        t.config.model_override.as_deref(),
+        t.profile_name.as_deref(),
+    )
+    .is_some_and(|m| commands_for(&m).is_some())
 }
 
 #[utoipa::path(
@@ -318,16 +391,17 @@ async fn put_mcp_config_text(
     Ok(Json(saved))
 }
 
-/// Whether Yagra may save a device on its own at this fetch (decision 13): switched on, the device
-/// is not in maintenance or an upgrade pause, and its last save did not fail - after a failure a
-/// person looks first (decision 9).
+/// Whether Yagra may save a device on its own at this fetch (decision 13): the node is switched
+/// on (Inc.11 decision 14) and is not in maintenance or an upgrade pause. A failed save does not
+/// stop the next one (decision 21, which replaces decision 9): it is tried again after the next
+/// fetch, in the login that fetch just used.
 ///
 /// It saves only what Yagra itself reads as unsaved, never on the Unsaved configuration alert:
 /// threshold rules are `ManageConfig`, an Operator's, and a write to a device is Admin's. A model
 /// that can compare does so in the same login before saving; one read over SNMP needs
 /// `unsaved_secs > 0` here.
-fn auto_save_allowed(setting: AutoSave, in_maintenance: bool, last_failed: bool) -> bool {
-    setting.enabled && !in_maintenance && !last_failed
+fn auto_save_allowed(switched_on: bool, in_maintenance: bool) -> bool {
+    switched_on && !in_maintenance
 }
 
 /// Whether a model read over SNMP is due an automatic save: allowed, and read as unsaved.
@@ -342,18 +416,17 @@ async fn auto_save(
     st: &ApiState,
     admin: &Admin,
     node: Uuid,
+    switched_on: bool,
     can_compare: bool,
 ) -> anyhow::Result<bool> {
     let saves = &admin.config_saves;
-    let setting = saves.auto_save().await?;
-    if !setting.enabled {
+    if !switched_on {
         return Ok(false);
     }
     let in_maintenance = st
         .alerts
         .in_maintenance(node.into(), Utc::now().timestamp_millis());
-    let last_failed = saves.last_failed(node).await?;
-    let allowed = auto_save_allowed(setting, in_maintenance, last_failed);
+    let allowed = auto_save_allowed(switched_on, in_maintenance);
     if !allowed || can_compare {
         return Ok(allowed);
     }
@@ -450,10 +523,11 @@ async fn save_job(
     ) else {
         return nothing();
     };
+    let switched_on = target.auto_save;
     // The login exactly as the source hands it to oxidized: through the node's relay port, and
     // only while it may be handed over at all. Read before an automatic save is asked for, so a
-    // login that cannot be handed over never leaves Yagra a failed save of its own — which would
-    // stop every later automatic save of the node (decision 9) without the device being touched.
+    // login that cannot be handed over never leaves Yagra a failed save of its own for a device it
+    // never touched.
     let ports = admin
         .config_backup
         .relay_ports(&[q.node])
@@ -470,12 +544,18 @@ async fn save_job(
             .next()
             .filter(|n| n.ip != oxidized::source::PARKED_IP);
     let auto = match (&login, commands_for(&model)) {
-        (Some(_), Some(commands)) => auto_save(&st, &admin, q.node, commands.compare.is_some())
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(node = %q.node, error = %e, "config save: automatic save not asked");
-                false
-            }),
+        (Some(_), Some(commands)) => auto_save(
+            &st,
+            &admin,
+            q.node,
+            switched_on,
+            commands.compare.is_some(),
+        )
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(node = %q.node, error = %e, "config save: automatic save not asked");
+            false
+        }),
         _ => false,
     };
     let pending = admin
@@ -898,39 +978,94 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
-    /// Automatic save is switched on by an Admin and read back with the schedule.
+    fn backed_up(model: &str) -> yagra_base::config_backup::NodeConfigBackup {
+        yagra_base::config_backup::NodeConfigBackup {
+            enabled: true,
+            login_order: None,
+            input: yagra_base::config_backup::BackupInput::Ssh,
+            model_override: Some(model.to_owned()),
+            scan_mode: yagra_base::config_backup::ScanMode::Normal,
+        }
+    }
+
+    /// Automatic save is switched per node by an Admin (Inc.11): only a node backed up with a model
+    /// Yagra can save is switched on, the list and the node's view read it back, the schedule's
+    /// deployment-wide flag follows it, and an Operator is refused.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn automatic_save_is_set_and_read_back(pool: sqlx::PgPool) {
+    async fn automatic_save_is_switched_per_node(pool: sqlx::PgPool) {
         let home = ox_state_home();
         let st = with_oxidized(pool.clone(), &home).await;
-        let admin = token(&st, yagra_common::Role::Admin);
+        let repo = yagra_base::config_backup::ConfigBackupRepo::new(pool.clone());
+        let vrp = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        let asa = yagra_base::pgtest::node(&pool, "fw-01", 2, None).await;
+        let off = yagra_base::pgtest::node(&pool, "sw-02", 3, None).await;
+        repo.put(vrp, &backed_up("vrp"), true).await.expect("vrp");
+        repo.put(asa, &backed_up("asa"), true).await.expect("asa");
+        let path = "/api/v1/config-backups/auto-save";
+        let body = serde_json::json!({ "node_ids": [vrp, asa, off], "enabled": true });
+
         let operator = token(&st, yagra_common::Role::Operator);
-        // A client from before decision 11 still sends `after_hours`; it is ignored, not refused.
-        let body = serde_json::json!({ "enabled": true, "after_hours": 12 });
-        let (status, _) = send(
-            &st,
-            "PUT",
-            "/api/v1/config-save-settings",
-            &operator,
-            Some(body.clone()),
-        )
-        .await;
+        let (status, _) = send(&st, "POST", path, &operator, Some(body.clone())).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
-        let (status, saved) = send(
+
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (status, out) = send(&st, "POST", path, &admin, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["switched"], serde_json::json!([vrp]));
+        let mut unsupported = vec![asa.to_string(), off.to_string()];
+        unsupported.sort();
+        assert_eq!(out["unsupported"], serde_json::json!(unsupported));
+        assert_eq!(out["unchanged"], 0);
+        assert!(repo.auto_save_of(vrp).await.expect("vrp"));
+        assert!(!repo.auto_save_of(asa).await.expect("asa"));
+
+        let (_, list) = send(&st, "GET", "/api/v1/config-backups?state=all", &admin, None).await;
+        let row = |id: Uuid| {
+            list.as_array()
+                .expect("rows")
+                .iter()
+                .find(|r| r["node_id"] == id.to_string())
+                .cloned()
+                .expect("row")
+        };
+        assert_eq!(row(vrp)["auto_save"], true);
+        assert_eq!(row(vrp)["save_supported"], true);
+        assert_eq!(row(asa)["auto_save"], false);
+        assert_eq!(row(asa)["save_supported"], false);
+        let (_, view) = send(
             &st,
-            "PUT",
-            "/api/v1/config-save-settings",
+            "GET",
+            &format!("/api/v1/nodes/{vrp}/config-backup"),
             &admin,
-            Some(body),
+            None,
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{saved}");
-        assert_eq!(saved, serde_json::json!({ "enabled": true }));
-        let (status, schedule) =
-            send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
-        assert_eq!(status, StatusCode::OK, "{schedule}");
+        assert_eq!(view["auto_save"], true);
+        let (_, schedule) = send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
         assert_eq!(schedule["auto_save"]["enabled"], true);
+
+        // Again: nothing changes. Off is accepted and written.
+        let (_, out) = send(&st, "POST", path, &admin, Some(body)).await;
+        assert_eq!(out["unchanged"], 1);
+        let off_body = serde_json::json!({ "node_ids": [vrp], "enabled": false });
+        let (status, out) = send(&st, "POST", path, &admin, Some(off_body)).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        assert_eq!(out["switched"], serde_json::json!([vrp]));
+        assert!(!repo.auto_save_of(vrp).await.expect("vrp"));
+        let (_, schedule) = send(&st, "GET", "/api/v1/config-backup-schedule", &admin, None).await;
+        assert_eq!(schedule["auto_save"]["enabled"], false);
+
+        let (status, out) = send(
+            &st,
+            "POST",
+            path,
+            &admin,
+            Some(serde_json::json!({ "node_ids": [], "enabled": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(out["error"]["code"], "invalid_auto_save");
         std::fs::remove_dir_all(&home).ok();
     }
 
@@ -963,15 +1098,14 @@ mod tests {
         std::fs::remove_dir_all(&home).ok();
     }
 
+    /// An automatic save waits for the node's switch and a quiet window, and for nothing else: a
+    /// failed save does not stop the next one (Inc.11 decision 21), so the decision takes no record.
     #[test]
-    fn an_automatic_save_waits_for_the_switch_a_quiet_window_and_a_clean_record() {
-        let on = AutoSave { enabled: true };
-        assert!(auto_save_allowed(on, false, false));
-        assert!(!auto_save_allowed(AutoSave::default(), false, false));
+    fn an_automatic_save_waits_for_the_switch_and_a_quiet_window() {
+        assert!(auto_save_allowed(true, false));
+        assert!(!auto_save_allowed(false, false));
         // A maintenance window or an upgrade pause (`in_maintenance` answers both).
-        assert!(!auto_save_allowed(on, true, false));
-        // After a failed save a person looks first.
-        assert!(!auto_save_allowed(on, false, true));
+        assert!(!auto_save_allowed(true, true));
     }
 
     /// A model read over SNMP is saved only while Yagra reads it as unsaved: a device already
