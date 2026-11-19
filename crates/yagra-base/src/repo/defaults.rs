@@ -74,11 +74,13 @@ const CISCO_WLAN_CONTROLLERS: &[&str] = &["Cisco wireless controller"];
 const FORTINET: &[&str] = &["Fortinet FortiGate"];
 
 // The Huawei profiles fetched with oxidized's `vrp` model, whose running and startup configurations
-// the save script compares (ADR-222). The wireless controller is not one: it has no model.
+// the save script compares (ADR-222). The wireless controller joined in ADR-210 stage 11; migration
+// 0180 adds it to the row an existing deployment already holds.
 const HUAWEI_VRP: &[&str] = &[
     "Huawei NE/AR router",
     "Huawei CloudEngine switch",
     "Huawei USG firewall",
+    "Huawei wireless controller",
 ];
 
 const PANOS: &[&str] = &["Palo Alto PAN-OS firewall"];

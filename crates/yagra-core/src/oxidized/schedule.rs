@@ -213,7 +213,7 @@ pub(crate) fn candidates_of(
             let cands = candidates(t.config.login_order.as_deref(), logins);
             let ready = readiness(
                 Some(&t.config),
-                t.profile_name.as_deref(),
+                &t.platform,
                 !cands.is_empty(),
                 t.address_changed,
                 &relay.route(t.node_id),

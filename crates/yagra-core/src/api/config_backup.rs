@@ -245,13 +245,13 @@ async fn readiness_of(
     node: Uuid,
     cfg: Option<&NodeConfigBackup>,
 ) -> anyhow::Result<Readiness> {
-    let profile = admin.config_backup.profile_name(node).await?;
+    let platform = admin.config_backup.platform(node).await?;
     let moved = admin.config_backup.address_changed(node).await?;
     let logins = rotation::cli_logins(&admin.creds).await?;
     let has = !rotation::candidates(cfg.and_then(|c| c.login_order.as_deref()), &logins).is_empty();
     Ok(oxidized::source::readiness(
         cfg,
-        profile.as_deref(),
+        &platform,
         has,
         moved,
         &admin.config_relay.route(node),
@@ -396,10 +396,7 @@ async fn get_config_backup(
         .get_with_rotation(node_id)
         .await
         .map_err(|e| read_failed(&e))?;
-    let profile = repo
-        .profile_name(node_id)
-        .await
-        .map_err(|e| read_failed(&e))?;
+    let platform = repo.platform(node_id).await.map_err(|e| read_failed(&e))?;
     let status = repo.status(node_id).await.map_err(|e| read_failed(&e))?;
     let saves = admin
         .config_saves
@@ -477,7 +474,7 @@ async fn get_config_backup(
         }),
         scan_mode: cfg.scan_mode,
         model_override: cfg.model_override,
-        profile_model: oxidized::source::model_of(None, profile.as_deref()),
+        profile_model: oxidized::source::model_of(None, &platform),
         readiness,
         status: status.map(|s| BackupStatusView {
             status: s.status,
@@ -489,11 +486,8 @@ async fn get_config_backup(
             .map(|m| (*m).to_owned())
             .collect(),
         available: admin.oxidized.is_some(),
-        save_supported: oxidized::source::model_of(
-            cfg_model_override.as_deref(),
-            profile.as_deref(),
-        )
-        .is_some_and(|m| yagra_common::config_save::commands_for(&m).is_some()),
+        save_supported: oxidized::source::model_of(cfg_model_override.as_deref(), &platform)
+            .is_some_and(|m| yagra_common::config_save::commands_for(&m).is_some()),
         auto_save,
         saves,
         unsaved: UnsavedView::of(unsaved),
@@ -742,12 +736,12 @@ pub(crate) async fn versions_of(
     let Some(cfg) = listed else {
         return Ok(Vec::new());
     };
-    let profile = admin
+    let platform = admin
         .config_backup
-        .profile_name(node_id)
+        .platform(node_id)
         .await
         .map_err(|e| read_failed(&e))?;
-    if oxidized::source::model_of(cfg.model_override.as_deref(), profile.as_deref()).is_none() {
+    if oxidized::source::model_of(cfg.model_override.as_deref(), &platform).is_none() {
         return Ok(Vec::new());
     }
     let versions = ox
@@ -1206,7 +1200,7 @@ pub(crate) async fn config_backup_rows(
         .map(|r| {
             let model = oxidized::source::model_of(
                 r.config.as_ref().and_then(|c| c.model_override.as_deref()),
-                r.profile_name.as_deref(),
+                &r.platform,
             );
             let save_supported = model
                 .as_deref()

@@ -48,11 +48,8 @@ pub(crate) fn decide(model: &str, pending: Option<Uuid>, auto: bool) -> Option<A
 /// clean-up below share.
 #[must_use]
 pub(crate) fn can_save(t: &yagra_base::config_backup::BackupTarget) -> bool {
-    super::source::model_of(
-        t.config.model_override.as_deref(),
-        t.profile_name.as_deref(),
-    )
-    .is_some_and(|m| commands_for(&m).is_some())
+    super::source::model_of(t.config.model_override.as_deref(), &t.platform)
+        .is_some_and(|m| commands_for(&m).is_some())
 }
 
 /// The nodes switched on for automatic save whose model has no save command: carried over from
@@ -106,7 +103,10 @@ mod tests {
         yagra_base::config_backup::BackupTarget {
             node_id: Uuid::new_v4(),
             address: "192.0.2.10".parse().expect("address"),
-            profile_name: profile.map(str::to_owned),
+            platform: yagra_base::config_backup::Platform {
+                profile_name: profile.map(str::to_owned),
+                sys_descr: None,
+            },
             config: yagra_base::config_backup::NodeConfigBackup {
                 enabled: true,
                 login_order: None,

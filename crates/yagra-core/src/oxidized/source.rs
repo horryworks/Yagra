@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
-use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup, Protocol};
+use yagra_base::config_backup::{BackupInput, BackupTarget, NodeConfigBackup, Platform, Protocol};
 use yagra_base::secrets::{CliLoginSecret, CredentialStore, KIND_CLI_LOGIN};
 
 use super::relay::Route;
@@ -41,14 +41,13 @@ pub(crate) enum Readiness {
     RelayRefused,
 }
 
-/// The model a node is fetched with: the person's pick, else its profile's row.
+/// The model a node is fetched with: the person's pick, else what its platform gives — its
+/// profile's row, or for a profile holding two platforms its `sysDescr` (ADR-210 decision 90).
 #[must_use]
-pub(crate) fn model_of(model_override: Option<&str>, profile_name: Option<&str>) -> Option<String> {
+pub(crate) fn model_of(model_override: Option<&str>, platform: &Platform) -> Option<String> {
     match model_override {
         Some(m) => Some(m.to_owned()),
-        None => profile_name
-            .and_then(yagra_common::oxidized_model::model_for_profile)
-            .map(str::to_owned),
+        None => platform.model().map(str::to_owned),
     }
 }
 
@@ -57,7 +56,7 @@ pub(crate) fn model_of(model_override: Option<&str>, profile_name: Option<&str>)
 #[must_use]
 pub(crate) fn readiness(
     cfg: Option<&NodeConfigBackup>,
-    profile_name: Option<&str>,
+    platform: &Platform,
     has_candidates: bool,
     address_changed: bool,
     route: &Route,
@@ -71,7 +70,7 @@ pub(crate) fn readiness(
     if cfg.input == BackupInput::Unknown {
         return Readiness::UnknownInput;
     }
-    if model_of(cfg.model_override.as_deref(), profile_name).is_none() {
+    if model_of(cfg.model_override.as_deref(), platform).is_none() {
         return Readiness::NoModel;
     }
     if !has_candidates {
@@ -183,10 +182,7 @@ pub(crate) async fn source_nodes(
     let mut opened: HashMap<Uuid, Option<CliLoginSecret>> = HashMap::new();
     for t in targets {
         let (Some(model), Some(input)) = (
-            model_of(
-                t.config.model_override.as_deref(),
-                t.profile_name.as_deref(),
-            ),
+            model_of(t.config.model_override.as_deref(), &t.platform),
             input_of(&t),
         ) else {
             continue;
@@ -288,7 +284,15 @@ mod tests {
         profile: Option<&str>,
         has_candidates: bool,
     ) -> Readiness {
-        readiness(cfg, profile, has_candidates, false, &via())
+        readiness(cfg, &on_profile(profile), has_candidates, false, &via())
+    }
+
+    /// A platform named by its profile alone.
+    fn on_profile(profile: Option<&str>) -> Platform {
+        Platform {
+            profile_name: profile.map(str::to_owned),
+            sys_descr: None,
+        }
     }
 
     fn via() -> Route {
@@ -332,17 +336,34 @@ mod tests {
         );
     }
 
+    /// A controller that says what it is has a model without a person's pick (ADR-210 decision
+    /// 90), and the pick still wins over what it says.
+    #[test]
+    fn a_wireless_controller_is_ready_from_what_it_says() {
+        let on = cfg(true, BackupInput::Ssh, None);
+        let aireos = Platform {
+            profile_name: Some("Cisco wireless controller".to_owned()),
+            sys_descr: Some("Cisco Controller".to_owned()),
+        };
+        assert_eq!(
+            readiness(Some(&on), &aireos, true, false, &via()),
+            Readiness::Ready
+        );
+        assert_eq!(model_of(None, &aireos).as_deref(), Some("aireos"));
+        assert_eq!(model_of(Some("ios"), &aireos).as_deref(), Some("ios"));
+    }
+
     #[test]
     fn a_moved_node_has_its_login_withheld() {
         let on = cfg(true, BackupInput::Ssh, Some("ios"));
         assert_eq!(
-            readiness(Some(&on), None, true, true, &via()),
+            readiness(Some(&on), &Platform::default(), true, true, &via()),
             Readiness::AddressChanged
         );
         // Switched off, it is simply off.
         let off = cfg(false, BackupInput::Ssh, Some("ios"));
         assert_eq!(
-            readiness(Some(&off), None, true, true, &via()),
+            readiness(Some(&off), &Platform::default(), true, true, &via()),
             Readiness::Off
         );
     }
@@ -353,19 +374,43 @@ mod tests {
     fn a_node_with_no_poller_to_go_through_says_so() {
         let on = cfg(true, BackupInput::Ssh, Some("ios"));
         assert_eq!(
-            readiness(Some(&on), None, true, false, &Route::NoPoller),
+            readiness(
+                Some(&on),
+                &Platform::default(),
+                true,
+                false,
+                &Route::NoPoller
+            ),
             Readiness::NoPoller
         );
         assert_eq!(
-            readiness(Some(&on), None, true, false, &Route::PollerTooOld),
+            readiness(
+                Some(&on),
+                &Platform::default(),
+                true,
+                false,
+                &Route::PollerTooOld
+            ),
             Readiness::PollerTooOld
         );
         assert_eq!(
-            readiness(Some(&on), None, true, false, &Route::RelayRefused),
+            readiness(
+                Some(&on),
+                &Platform::default(),
+                true,
+                false,
+                &Route::RelayRefused
+            ),
             Readiness::RelayRefused
         );
         assert_eq!(
-            readiness(Some(&on), None, false, false, &Route::NoPoller),
+            readiness(
+                Some(&on),
+                &Platform::default(),
+                false,
+                false,
+                &Route::NoPoller
+            ),
             Readiness::NoCredential
         );
     }
@@ -374,7 +419,7 @@ mod tests {
         BackupTarget {
             node_id: Uuid::from_u128(1),
             address: "192.0.2.10".parse().expect("address"),
-            profile_name: None,
+            platform: Platform::default(),
             config: cfg(true, BackupInput::Ssh, Some("ios")),
             rotation: yagra_base::config_backup::Rotation {
                 credential_id: Some(Uuid::from_u128(2)),

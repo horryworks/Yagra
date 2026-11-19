@@ -370,6 +370,37 @@ mod tests {
         // `repo::defaults::the_seeded_vendor_defaults_target_exactly_the_profiles_that_collect_them`.
     }
 
+    /// Migration `0180` names the unsaved-configuration rule and four Huawei profiles as literals,
+    /// for the reason `0128` does (ADR-210 stage 11).
+    #[test]
+    fn the_ids_migration_0180_names_are_the_unsaved_rule_and_the_four_vrp_profiles() {
+        let sql = include_str!("../../../migrations/0180_unsaved_config_rule_covers_huawei_ac.sql");
+        let profiles = yagra_common::builtin_profiles();
+        let position = |name: &str| {
+            profiles
+                .iter()
+                .position(|p| p.name == name)
+                .unwrap_or_else(|| panic!("{name} is still in the catalog"))
+        };
+        for name in [
+            "Huawei NE/AR router",
+            "Huawei CloudEngine switch",
+            "Huawei USG firewall",
+            "Huawei wireless controller",
+        ] {
+            let id = SeedRange::Profiles.id(position(name));
+            assert!(
+                sql.contains(&id.to_string()),
+                "0180 does not name {name} ({id})"
+            );
+        }
+        let rule = SeedRange::DefaultThresholds.id(36);
+        assert!(
+            sql.contains(&rule.to_string()),
+            "0180 does not name the rule ({rule})"
+        );
+    }
+
     /// The same pairing for the seeded trap rules, which migration `0047` writes as literals.
     #[test]
     fn the_builtin_event_rule_ids_are_the_ones_migration_0047_inserts() {

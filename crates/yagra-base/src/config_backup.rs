@@ -184,13 +184,64 @@ pub struct Rotation {
     pub try_input: Option<Protocol>,
 }
 
+/// What a node's model is looked up from when no person picked one: its profile, and — for a
+/// profile holding two platforms — what the device says it is (ADR-210 decision 90).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Platform {
+    pub profile_name: Option<String>,
+    pub sys_descr: Option<String>,
+}
+
+impl Platform {
+    /// The model these give, or `None` when nothing is confident of one.
+    #[must_use]
+    pub fn model(&self) -> Option<&'static str> {
+        yagra_common::oxidized_model::model_for(
+            self.profile_name.as_deref()?,
+            self.sys_descr.as_deref(),
+        )
+    }
+}
+
+/// The SQL test "this node's profile and `sysDescr` give a model" — the SQL half of
+/// [`Platform::model`], built once from the two tables in `yagra_common::oxidized_model`
+/// (ADR-210 decision 91). `p` is the `profiles` row and `n` the `nodes` row; it binds three
+/// arrays at `$first`, `$first + 1` and `$first + 2` (see [`ModelTables`]). Never NULL.
+fn has_model_sql(first: usize) -> String {
+    let (whole, descr_profile, word) = (first, first + 1, first + 2);
+    format!(
+        "COALESCE(p.name = ANY(${whole}) OR EXISTS (\
+           SELECT 1 FROM unnest(${descr_profile}::text[], ${word}::text[]) AS d(profile, word) \
+           WHERE d.profile = p.name \
+             AND position(d.word IN lower(COALESCE(n.sys_descr, ''))) > 0), false)"
+    )
+}
+
+/// The three arrays [`has_model_sql`] binds, in its order.
+struct ModelTables {
+    whole: Vec<&'static str>,
+    descr_profile: Vec<&'static str>,
+    word: Vec<&'static str>,
+}
+
+impl ModelTables {
+    fn new() -> Self {
+        use yagra_common::oxidized_model::{DESCR_MODELS, PROFILE_MODELS};
+        Self {
+            whole: PROFILE_MODELS.iter().map(|(p, _)| *p).collect(),
+            descr_profile: DESCR_MODELS.iter().map(|(p, _, _)| *p).collect(),
+            word: DESCR_MODELS.iter().map(|(_, w, _)| *w).collect(),
+        }
+    }
+}
+
 /// One configured node with what is needed to hand it to oxidized and to choose its next login.
 #[derive(Debug, Clone)]
 pub struct BackupTarget {
     pub node_id: Uuid,
     pub address: IpAddr,
-    /// The name of the node's profile, from which the model is looked up.
-    pub profile_name: Option<String>,
+    /// What the model is looked up from.
+    pub platform: Platform,
     pub config: NodeConfigBackup,
     pub rotation: Rotation,
     /// The node's address no longer matches the one it had when the configuration was saved; the
@@ -257,8 +308,8 @@ pub struct BackupOverview {
     pub node_id: Uuid,
     /// The node's settings; `None` when it has none yet.
     pub config: Option<NodeConfigBackup>,
-    /// The node's profile, which names its model when no override does.
-    pub profile_name: Option<String>,
+    /// What names its model when no override does.
+    pub platform: Platform,
     pub rotation: Rotation,
     pub last: Option<Attempt>,
     pub last_success_at: Option<DateTime<Utc>>,
@@ -280,6 +331,14 @@ const RELAY_PORT_DRAWS: usize = 64;
 
 const ROTATION_COLUMNS: &str = "b.credential_id, b.login_confirmed, b.round_started_at, \
                                 b.requested_at, b.next_try_at, b.last_version_oid, b.try_input";
+
+/// Reads `profile_name` and `sys_descr`.
+fn platform_of(r: &sqlx::postgres::PgRow) -> Result<Platform, sqlx::Error> {
+    Ok(Platform {
+        profile_name: r.try_get("profile_name")?,
+        sys_descr: r.try_get("sys_descr")?,
+    })
+}
 
 fn rotation_of(r: &sqlx::postgres::PgRow) -> Result<Rotation, sqlx::Error> {
     Ok(Rotation {
@@ -454,7 +513,7 @@ impl ConfigBackupRepo {
     async fn targets_where(&self, node: Option<Uuid>) -> anyhow::Result<Vec<BackupTarget>> {
         let rows = sqlx::query(&format!(
             "SELECT b.node_id, host(n.address) AS address, p.name AS profile_name, \
-                    b.enabled, b.login_order, b.input, b.model_override, b.scan_mode, {ROTATION_COLUMNS}, \
+                    n.sys_descr, b.enabled, b.login_order, b.input, b.model_override, b.scan_mode, {ROTATION_COLUMNS}, \
                     (b.bound_address IS DISTINCT FROM n.address) AS address_changed, \
                     b.auto_save \
              FROM node_config_backup b \
@@ -473,7 +532,7 @@ impl ConfigBackupRepo {
                     address: address.parse().map_err(|e| {
                         anyhow::anyhow!("unparseable node address {address:?}: {e}")
                     })?,
-                    profile_name: r.try_get("profile_name")?,
+                    platform: platform_of(r)?,
                     config: config_of(r)?,
                     rotation: rotation_of(r)?,
                     address_changed: r.try_get("address_changed")?,
@@ -496,15 +555,19 @@ impl ConfigBackupRepo {
         Ok(changed.unwrap_or(false))
     }
 
-    /// The name of a node's profile — what its model is looked up from.
-    pub async fn profile_name(&self, node: Uuid) -> anyhow::Result<Option<String>> {
-        let name = sqlx::query_scalar(
-            "SELECT p.name FROM nodes n JOIN profiles p ON p.id = n.profile_id WHERE n.id = $1",
+    /// What a node's model is looked up from. Empty for a node that does not exist.
+    pub async fn platform(&self, node: Uuid) -> anyhow::Result<Platform> {
+        let row = sqlx::query(
+            "SELECT p.name AS profile_name, n.sys_descr FROM nodes n \
+             LEFT JOIN profiles p ON p.id = n.profile_id WHERE n.id = $1",
         )
         .bind(node)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(name)
+        Ok(match row {
+            Some(r) => platform_of(&r)?,
+            None => Platform::default(),
+        })
     }
 
     /// What oxidized last reported for a node, if it ever has.
@@ -814,14 +877,12 @@ impl ConfigBackupRepo {
         state: OverviewState,
     ) -> anyhow::Result<Vec<BackupOverview>> {
         use OverviewState::{All, Never, Off, On};
-        // The profiles that name a model: a node with no settings is listed only on one of them.
-        let modelled: Vec<&str> = yagra_common::oxidized_model::PROFILE_MODELS
-            .iter()
-            .map(|(profile, _)| *profile)
-            .collect();
+        // A node with no settings is listed only when it has a model.
+        let tables = ModelTables::new();
         // A node with no settings has no rotation, so its columns read as a fresh one's.
         let rows = sqlx::query(&format!(
-            "SELECT n.id AS node_id, p.name AS profile_name, (b.node_id IS NOT NULL) AS configured, \
+            "SELECT n.id AS node_id, p.name AS profile_name, n.sys_descr, \
+                    (b.node_id IS NOT NULL) AS configured, \
                     COALESCE(b.enabled, false) AS enabled, b.login_order, \
                     COALESCE(b.input, 'ssh_then_telnet') AS input, b.model_override, \
                     COALESCE(b.scan_mode, 'normal') AS scan_mode, \
@@ -842,15 +903,18 @@ impl ConfigBackupRepo {
                                 ORDER BY at DESC, id DESC LIMIT 1) s ON true \
              WHERE {} AND (($2 AND b.enabled) \
                            OR ($3 AND b.node_id IS NOT NULL AND NOT b.enabled) \
-                           OR ($4 AND b.node_id IS NULL AND p.name = ANY($5))) \
+                           OR ($4 AND b.node_id IS NULL AND {})) \
              ORDER BY n.name, n.id",
-            crate::repo::scope_predicate(1, "n.group_id")
+            crate::repo::scope_predicate(1, "n.group_id"),
+            has_model_sql(5),
         ))
         .bind(groups)
         .bind(matches!(state, On | All))
         .bind(matches!(state, Off | All))
         .bind(matches!(state, Never | All))
-        .bind(&modelled)
+        .bind(&tables.whole)
+        .bind(&tables.descr_profile)
+        .bind(&tables.word)
         .fetch_all(&self.pool)
         .await?;
         rows.iter()
@@ -876,7 +940,7 @@ impl ConfigBackupRepo {
                     } else {
                         None
                     },
-                    profile_name: r.try_get("profile_name")?,
+                    platform: platform_of(r)?,
                     rotation: rotation_of(r)?,
                     last,
                     last_success_at: r.try_get("last_success_at")?,
@@ -920,37 +984,39 @@ impl ConfigBackupRepo {
             tx.commit().await?;
             return Ok(out);
         }
-        let modelled: Vec<&str> = yagra_common::oxidized_model::PROFILE_MODELS
-            .iter()
-            .map(|(profile, _)| *profile)
-            .collect();
+        let tables = ModelTables::new();
+        let has_model = has_model_sql(3);
         out.no_model = sqlx::query_scalar(&format!(
             "SELECT n.id FROM nodes n \
              LEFT JOIN node_config_backup b ON b.node_id = n.id \
              LEFT JOIN profiles p ON p.id = n.profile_id \
              WHERE n.id = ANY($1) AND {scope} AND NOT COALESCE(b.enabled, false) \
-               AND b.model_override IS NULL AND (p.name IS NULL OR NOT p.name = ANY($3)) \
+               AND b.model_override IS NULL AND NOT {has_model} \
              ORDER BY n.id"
         ))
         .bind(nodes)
         .bind(groups)
-        .bind(&modelled)
+        .bind(&tables.whole)
+        .bind(&tables.descr_profile)
+        .bind(&tables.word)
         .fetch_all(&mut *tx)
         .await?;
         let fresh: Vec<Uuid> = sqlx::query_scalar(&format!(
             "SELECT n.id FROM nodes n JOIN profiles p ON p.id = n.profile_id \
-             WHERE n.id = ANY($1) AND {scope} AND p.name = ANY($3) \
+             WHERE n.id = ANY($1) AND {scope} AND {has_model} \
                AND NOT EXISTS (SELECT 1 FROM node_config_backup b WHERE b.node_id = n.id) \
              ORDER BY n.id"
         ))
         .bind(nodes)
         .bind(groups)
-        .bind(&modelled)
+        .bind(&tables.whole)
+        .bind(&tables.descr_profile)
+        .bind(&tables.word)
         .fetch_all(&mut *tx)
         .await?;
         if fresh.is_empty() {
             return self
-                .switch_on_configured(tx, nodes, groups, &modelled, out)
+                .switch_on_configured(tx, nodes, groups, &tables, out)
                 .await;
         }
         let Some(input) = input else {
@@ -972,7 +1038,7 @@ impl ConfigBackupRepo {
         .fetch_all(&mut *tx)
         .await?;
         let mut out = self
-            .switch_on_configured(tx, nodes, groups, &modelled, out)
+            .switch_on_configured(tx, nodes, groups, &tables, out)
             .await?;
         out.switched.append(&mut added);
         out.switched.sort_unstable();
@@ -985,7 +1051,7 @@ impl ConfigBackupRepo {
         mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
         nodes: &[Uuid],
         groups: Option<&[Uuid]>,
-        modelled: &[&str],
+        tables: &ModelTables,
         mut out: SwitchOutcome,
     ) -> anyhow::Result<SwitchOutcome> {
         // A node with a login that worked keeps it (ADR-224 decision 8); one without starts its
@@ -1000,13 +1066,16 @@ impl ConfigBackupRepo {
                next_try_at = CASE WHEN b.login_confirmed THEN b.next_try_at END \
              FROM nodes n LEFT JOIN profiles p ON p.id = n.profile_id \
              WHERE b.node_id = n.id AND n.id = ANY($1) AND {} AND NOT b.enabled \
-               AND (b.model_override IS NOT NULL OR p.name = ANY($3)) \
+               AND (b.model_override IS NOT NULL OR {}) \
              RETURNING b.node_id",
-            crate::repo::scope_predicate(2, "n.group_id")
+            crate::repo::scope_predicate(2, "n.group_id"),
+            has_model_sql(3),
         ))
         .bind(nodes)
         .bind(groups)
-        .bind(modelled)
+        .bind(&tables.whole)
+        .bind(&tables.descr_profile)
+        .bind(&tables.word)
         .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -1489,6 +1558,80 @@ mod tests {
             .execute(pool)
             .await
             .expect("set profile");
+    }
+
+    /// A wireless controller's model comes from what it says it is (ADR-210 decision 90), and the
+    /// SQL that lists and switches nodes reads the same table the same way as `Platform::model`
+    /// (decision 91): an AireOS and a 9800 have a model, one saying neither has none.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_wireless_controllers_model_comes_from_its_sysdescr_in_sql_too(pool: PgPool) {
+        let repo = ConfigBackupRepo::new(pool.clone());
+        crate::pgtest::repo(pool.clone())
+            .seed_builtin_profiles()
+            .await
+            .expect("seed");
+        let wlc = "Cisco wireless controller";
+        let profile: Uuid = sqlx::query_scalar("SELECT id FROM profiles WHERE name = $1")
+            .bind(wlc)
+            .fetch_one(&pool)
+            .await
+            .expect("seeded profile");
+        let mut nodes = Vec::new();
+        for (i, descr) in [
+            Some("Cisco Controller"),
+            Some(
+                "Cisco IOS Software [Cupertino], C9800 Software (C9800_IOSXE-K9), Version 17.9.4a",
+            ),
+            Some("Cisco Business Wireless"),
+            None,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let n = crate::pgtest::node(&pool, &format!("wlc-{i}"), 10 + i as u8, None).await;
+            sqlx::query("UPDATE nodes SET profile_id = $2, sys_descr = $3 WHERE id = $1")
+                .bind(n)
+                .bind(profile)
+                .bind(descr)
+                .execute(&pool)
+                .await
+                .expect("set platform");
+            nodes.push(n);
+        }
+        let models: Vec<Option<&str>> = {
+            let mut out = Vec::new();
+            for n in &nodes {
+                out.push(repo.platform(*n).await.expect("platform").model());
+            }
+            out
+        };
+        assert_eq!(models, [Some("aireos"), Some("ios"), None, None]);
+
+        let never: Vec<Uuid> = repo
+            .overview(None, OverviewState::Never)
+            .await
+            .expect("never")
+            .into_iter()
+            .map(|r| r.node_id)
+            .collect();
+        assert_eq!(
+            never,
+            nodes[..2],
+            "the SQL lists exactly the two with a model"
+        );
+
+        let done = repo
+            .switch(&nodes, None, true, Some(BackupInput::Ssh), None)
+            .await
+            .expect("switch");
+        assert_eq!(done.switched.len(), 2);
+        assert!(done.switched.contains(&nodes[0]) && done.switched.contains(&nodes[1]));
+        let mut no_model = done.no_model.clone();
+        no_model.sort_unstable();
+        let mut expected = vec![nodes[2], nodes[3]];
+        expected.sort_unstable();
+        assert_eq!(no_model, expected);
     }
 
     /// The list answers each state, and many nodes switch at once: a node with settings keeps them,

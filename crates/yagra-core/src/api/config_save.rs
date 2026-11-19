@@ -136,11 +136,9 @@ async fn save_now(
         .await
         .map_err(|e| failed(&e, "config save target"))?
         .ok_or_else(unsupported)?;
-    let model = oxidized::source::model_of(
-        target.config.model_override.as_deref(),
-        target.profile_name.as_deref(),
-    )
-    .ok_or_else(unsupported)?;
+    let model =
+        oxidized::source::model_of(target.config.model_override.as_deref(), &target.platform)
+            .ok_or_else(unsupported)?;
     if commands_for(&model).is_none() || !target.rotation.login_confirmed {
         return Err(unsupported());
     }
@@ -508,10 +506,9 @@ async fn save_job(
     else {
         return nothing();
     };
-    let Some(model) = oxidized::source::model_of(
-        target.config.model_override.as_deref(),
-        target.profile_name.as_deref(),
-    ) else {
+    let Some(model) =
+        oxidized::source::model_of(target.config.model_override.as_deref(), &target.platform)
+    else {
         return nothing();
     };
     let switched_on = target.auto_save;

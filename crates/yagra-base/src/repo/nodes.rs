@@ -1628,6 +1628,47 @@ impl NodeRepo {
             .collect())
     }
 
+    /// Move each node to the profile a classification rule chose for what it now says it is —
+    /// **only while it sits on "Generic SNMP" and nobody has locked it** (ADR-140 Inc.2 decisions
+    /// 13 and 14). Returns the nodes actually moved, with the name of the profile each went to.
+    ///
+    /// "Generic SNMP" is where the classifier puts a device it could not place, never a person's
+    /// choice, so leaving it decides nothing a person decided. Every other profile is left to
+    /// Nodes ▸ Reclassify. The guard is in the statement: a node someone re-profiled or locked
+    /// between the read and this write is not touched. Callers pass only rule matches, never the
+    /// Generic fallback itself; the last row for a node wins.
+    pub async fn promote_from_generic(
+        &self,
+        moves: &[(Uuid, Uuid)],
+    ) -> anyhow::Result<Vec<ProfilePromoted>> {
+        if moves.is_empty() {
+            return Ok(Vec::new());
+        }
+        let by_node: BTreeMap<Uuid, Uuid> = moves.iter().copied().collect();
+        let ids: Vec<Uuid> = by_node.keys().copied().collect();
+        let to: Vec<Uuid> = by_node.into_values().collect();
+        let sql = format!(
+            "UPDATE nodes n SET profile_id = t.to_profile, updated_at = now() \
+             FROM unnest($1::uuid[], $2::uuid[]) AS t(id, to_profile), \
+                  profiles g, profiles dest \
+             WHERE n.id = t.id AND g.id = n.profile_id AND g.name = $3 \
+               AND dest.id = t.to_profile AND dest.id <> g.id \
+               AND NOT n.profile_locked AND {device} \
+             RETURNING n.id, dest.name",
+            device = Self::DEVICE_NODE_PREDICATE,
+        );
+        let moved: Vec<(Uuid, String)> = sqlx::query_as(&sql)
+            .bind(&ids)
+            .bind(&to)
+            .bind(yagra_common::GENERIC_SNMP_PROFILE)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(moved
+            .into_iter()
+            .map(|(node, to)| ProfilePromoted { node, to })
+            .collect())
+    }
+
     /// Every device node the caller may see, with what Nodes ▸ Reclassify weighs it on (ADR-140),
     /// ordered by name.
     ///
@@ -2254,6 +2295,14 @@ pub struct NameFromDevice {
 pub struct NameFollowed {
     pub node: Uuid,
     pub from: String,
+    pub to: String,
+}
+
+/// A node [`NodeRepo::promote_from_generic`] moved off "Generic SNMP", for the audit row that says
+/// so (ADR-140 Inc.2 decision 15). `to` is the profile's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfilePromoted {
+    pub node: Uuid,
     pub to: String,
 }
 
@@ -2980,6 +3029,89 @@ mod tests {
     ///
     /// 🚨 The node that does move is the half that proves the statement writes at all; without it an
     /// UPDATE whose `WHERE` matched nothing would pass both skips.
+    /// ADR-140 Inc.2: only an unlocked device node still on "Generic SNMP" is moved to the profile
+    /// a rule chose; a locked one, one already elsewhere and a URL monitor are left alone.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn only_an_unlocked_node_on_generic_snmp_is_promoted(pool: sqlx::PgPool) {
+        use crate::seed_ids::SeedRange;
+        let repo = pgtest::repo(pool.clone());
+        repo.seed_builtin_profiles().await.expect("seed");
+        let generic: Uuid = sqlx::query_scalar("SELECT id FROM profiles WHERE name = $1")
+            .bind(yagra_common::GENERIC_SNMP_PROFILE)
+            .fetch_one(&pool)
+            .await
+            .expect("generic profile");
+        let (elsewhere, chosen) = (SeedRange::Profiles.id(0), SeedRange::Profiles.id(1));
+        assert_ne!(chosen, generic);
+        let chosen_name: String = sqlx::query_scalar("SELECT name FROM profiles WHERE id = $1")
+            .bind(chosen)
+            .fetch_one(&pool)
+            .await
+            .expect("chosen name");
+
+        let ready = pgtest::node(&pool, "ready", 1, None).await;
+        let locked = pgtest::node(&pool, "locked", 2, None).await;
+        let placed = pgtest::node(&pool, "placed", 3, None).await;
+        let monitor = pgtest::node(&pool, "monitor", 4, None).await;
+        for (id, profile, lock) in [
+            (ready, generic, false),
+            (locked, generic, true),
+            (placed, elsewhere, false),
+            (monitor, generic, false),
+        ] {
+            sqlx::query("UPDATE nodes SET profile_id = $2, profile_locked = $3 WHERE id = $1")
+                .bind(id)
+                .bind(profile)
+                .bind(lock)
+                .execute(&pool)
+                .await
+                .expect("set profile");
+        }
+        sqlx::query("INSERT INTO url_checks (node_id, url) VALUES ($1, 'https://example.com/')")
+            .bind(monitor)
+            .execute(&pool)
+            .await
+            .expect("a URL monitor");
+
+        let moved = repo
+            .promote_from_generic(&[
+                (ready, chosen),
+                (locked, chosen),
+                (placed, chosen),
+                (monitor, chosen),
+            ])
+            .await
+            .expect("promote");
+        assert_eq!(
+            moved,
+            [ProfilePromoted {
+                node: ready,
+                to: chosen_name
+            }]
+        );
+        let profile_of = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, Option<Uuid>>("SELECT profile_id FROM nodes WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("profile")
+            }
+        };
+        assert_eq!(profile_of(ready).await, Some(chosen));
+        assert_eq!(profile_of(locked).await, Some(generic));
+        assert_eq!(profile_of(placed).await, Some(elsewhere));
+        assert_eq!(profile_of(monitor).await, Some(generic));
+        // Asked again, it has nothing left to move.
+        assert!(repo
+            .promote_from_generic(&[(ready, chosen)])
+            .await
+            .expect("again")
+            .is_empty());
+    }
+
     #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_reclassification_skips_a_node_that_moved_or_was_locked(pool: sqlx::PgPool) {

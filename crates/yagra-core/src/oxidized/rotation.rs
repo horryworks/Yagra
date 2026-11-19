@@ -434,11 +434,11 @@ pub(crate) async fn step_of(
     };
     let logins = cli_logins(creds).await?;
     let cands = candidates(cfg.login_order.as_deref(), &logins);
-    let profile = repo.profile_name(node).await?;
+    let platform = repo.platform(node).await?;
     let moved = repo.address_changed(node).await?;
     if readiness(
         Some(&cfg),
-        profile.as_deref(),
+        &platform,
         !cands.is_empty(),
         moved,
         &relay.route(node),
@@ -551,7 +551,7 @@ async fn tick(
         }
         if readiness(
             Some(&t.config),
-            t.profile_name.as_deref(),
+            &t.platform,
             !cands.is_empty(),
             t.address_changed,
             &relay.route(t.node_id),

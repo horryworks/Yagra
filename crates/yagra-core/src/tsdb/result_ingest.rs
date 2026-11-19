@@ -1309,6 +1309,32 @@ fn rename_audit_action(f: &repo::NameFollowed) -> String {
     )
 }
 
+/// The audit action for a node moved off "Generic SNMP" (ADR-140 Inc.2 decision 15). `{:?}` quotes
+/// the profile name, which holds spaces.
+fn promote_audit_action(p: &repo::ProfilePromoted) -> String {
+    format!(
+        "system.node.reclassify_from_generic node={} to={:?}",
+        p.node, p.to
+    )
+}
+
+/// The profile each identity read's rule chose, for [`NodeRepo::promote_from_generic`] (ADR-140
+/// Inc.2 decision 13). Only a read carrying a `sysObjectID` is judged — the rules are never run on
+/// a `sysDescr` alone, for the reason `discover::reclassify::suggestion` gives — and only a rule's
+/// match counts: the Generic fallback is not a reason to move anything. Whether the node is on
+/// "Generic SNMP" at all is the writer's to check, in its statement.
+fn generic_promotions(
+    classifier: &crate::discover::classification::Classifier,
+    rows: &[(Uuid, Option<String>, Option<String>)],
+) -> Vec<(Uuid, Uuid)> {
+    rows.iter()
+        .filter_map(|(node, oid, descr)| {
+            let m = classifier.classify(Some(oid.as_deref()?), descr.as_deref())?;
+            m.rule_id.map(|_| (*node, m.profile_id))
+        })
+        .collect()
+}
+
 /// Which nodes in this batch read as a different model than the one stored (ADR-208 decision 5):
 /// raise their "device replaced" alert, close it for the ones that read as stored again, and return
 /// the replaced ones, whose identity writes the caller holds.
@@ -1483,6 +1509,26 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     if !snmp_identity_rows.is_empty() {
         if let Err(e) = repo.update_snmp_identity_batch(&snmp_identity_rows).await {
             tracing::warn!(error = %e, "batch node snmp-identity update failed");
+        }
+        // After the identity is stored, and only for nodes not held as replaced (ADR-140 Inc.2).
+        let promotions = generic_promotions(classifier, &snmp_identity_rows);
+        match repo.promote_from_generic(&promotions).await {
+            Ok(moved) => {
+                if !moved.is_empty() {
+                    // The scheduler and the alert rules read a node's profile; tell them.
+                    yagra_base::config_gen::bump();
+                }
+                for p in moved {
+                    tracing::info!(node = %p.node, to = %p.to, "node moved off Generic SNMP by its classification rule");
+                    if let Err(e) = audit
+                        .record(AUDIT_ACTOR, &promote_audit_action(&p), 200)
+                        .await
+                    {
+                        tracing::warn!(node = %p.node, error = %e, "could not record a reclassification in the audit log");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "moving nodes off Generic SNMP failed"),
         }
     }
     if !serial_number_rows.is_empty() {
@@ -1936,6 +1982,49 @@ mod tests {
         let ruled = fill(&Classifier::from_rules(vec![rule], None), Some(stack));
         assert_eq!(ruled.model.as_deref(), Some("Core stack"), "the rule wins");
         assert_eq!(ruled.device_model, None, "so no report may replace it");
+    }
+
+    /// ADR-140 Inc.2 decision 13: a read is a reason to move a node only when it carries a
+    /// `sysObjectID` and a rule — not the Generic fallback — placed it.
+    #[test]
+    fn only_a_rule_match_with_a_sysobjectid_proposes_a_move() {
+        use crate::discover::classification::Classifier;
+        let usg = Uuid::from_u128(0x05C);
+        let generic = Uuid::from_u128(0x9E2E61C);
+        let rule = yagra_common::ClassificationRule {
+            id: Uuid::from_u128(1),
+            priority: 140,
+            sysobjectid_prefix: Some("1.3.6.1.4.1.2011.".to_owned()),
+            sysdescr_regex: Some("(?i)usg|firewall".to_owned()),
+            profile_id: usg.into(),
+            vendor: None,
+            model: None,
+            enabled: true,
+        };
+        let c = Classifier::from_rules(vec![rule], Some(generic));
+        let descr =
+            "Huawei YunShan OS\r\nVersion 1.24.0.1 (USG V600R024C00SPC100)\r\nHUAWEI USG6525F";
+        let (firewall, other, descr_only) = (
+            Uuid::from_u128(10),
+            Uuid::from_u128(11),
+            Uuid::from_u128(12),
+        );
+        let rows = [
+            (
+                firewall,
+                Some("1.3.6.1.4.1.2011.2.321.1.421".to_owned()),
+                Some(descr.to_owned()),
+            ),
+            // Answers SNMP, matches no rule: the Generic fallback, which moves nothing.
+            (
+                other,
+                Some("1.3.6.1.4.1.119.1.126.2.157".to_owned()),
+                Some("Comware Platform Software".to_owned()),
+            ),
+            // No sysObjectID: the rules are not run at all.
+            (descr_only, None, Some(descr.to_owned())),
+        ];
+        assert_eq!(generic_promotions(&c, &rows), [(firewall, usg)]);
     }
 
     /// One result through `ingest_result`, returning everything the alert engine produced.
