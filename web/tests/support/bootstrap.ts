@@ -6,6 +6,7 @@
 import type { components } from '../../src/api/schema';
 import { defaultBodyFor, enumOf, MOCK_PREFIX, type Json } from './openapi';
 import type { Override } from './mockApi';
+import { everyWordIn, searchWords } from '../../src/lib/nodeSearch';
 
 type Schemas = components['schemas'];
 
@@ -339,6 +340,19 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     }
     return body as unknown as Json;
   })(),
+
+  // 🚨 **Search mode answers the term, as core does** (ADR-258). The tree used to re-judge the
+  // search page against each node's name, so a mock that ignored `search=` was harmless; since the
+  // tree takes the server's answer as the matches, a mock that returns its generated node for every
+  // term puts that node on screen under any search. Every word must be in the name or the address;
+  // folders and port addresses are core's to resolve and are not modelled here.
+  '/api/v1/nodes': (url) => {
+    const body = defaultBodyFor('/api/v1/nodes') as Schemas['NodePage'];
+    const words = searchWords(url.searchParams.get('search') ?? '') ?? [];
+    if (words.length === 0) return body as unknown as Json;
+    const nodes = body.nodes.filter((n) => everyWordIn(words, [n.name, n.address ?? '']));
+    return { ...body, nodes, next_cursor: null } as unknown as Json;
+  },
 
   // The generator answers a list with **one** item, which is enough for every screen that renders
   // rows and not enough for the one that operates on a *range* of them. Ctrl / Shift assemble a
