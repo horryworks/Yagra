@@ -1157,6 +1157,18 @@ pub struct SyncReport {
     /// than the moment that run ends, so storing the finish time makes `last_seen_at <
     /// last_sync_at` true for every row the sync just refreshed. Measured: 5 of 5 folders reported
     /// missing immediately after a fully successful sync.
+    ///
+    /// 🚨 **It is also what every row the run refreshes is stamped with**, not a fresh `now()`. A
+    /// row stamped with the time it was written is later than the start only while the clock
+    /// never steps back, and a database host's clock does: measured in the test container, 18
+    /// backward steps in nine minutes, the worst 2.09 s. One such step between the start and a
+    /// write made the run's own sweep delete the prefix it had just stored (three tests failed
+    /// that way, about one run in fifty). Stamped with the start, a refreshed row is never
+    /// older than the run that refreshed it.
+    ///
+    /// 🚨 **And it is later than every stamp an earlier run of this server left**, even when the
+    /// clock reads earlier ([`NetboxRepo::run_start`]). Otherwise a step back between two runs
+    /// makes the second one's sweep and "missing" mark miss the rows the first one stamped.
     pub started_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1275,15 +1287,28 @@ impl NetboxRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// The database's clock. Read before a run starts, stored as `last_sync_at` when it succeeds.
+    /// When a run of this server starts: read before the first write, stamped on every row the run
+    /// refreshes as `last_seen_at`, and stored as `last_sync_at` when it succeeds.
     ///
-    /// The *database's* and not the process's, because it is compared against `last_seen_at`, which
-    /// the same server stamps with `now()`. Two clocks either side of a `<` is a comparison that
-    /// works until the container drifts.
-    async fn db_now(&self) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
-        Ok(sqlx::query_scalar("SELECT now()")
-            .fetch_one(&self.pool)
-            .await?)
+    /// The *database's* clock and not the process's, so every run's stamp comes from one clock
+    /// rather than from whichever core happened to run it. 🚨 **But never earlier than a
+    /// microsecond past any stamp this server already holds.** One clock still steps back
+    /// (measured: up to 2.09 s in the test container), and the sweep and the "missing" mark both
+    /// ask whether a row is older than the run — so each run's start must come after every
+    /// earlier run's, whatever the clock says ([`SyncReport::started_at`]).
+    async fn run_start(&self, server_id: Uuid) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+        Ok(sqlx::query_scalar(
+            "SELECT greatest(now(), \
+               (SELECT max(last_seen_at) FROM netbox_groups WHERE server_id = $1) \
+                 + interval '1 microsecond', \
+               (SELECT max(last_seen_at) FROM node_group_prefixes WHERE netbox_server_id = $1) \
+                 + interval '1 microsecond', \
+               (SELECT last_sync_at FROM netbox_servers WHERE id = $1) \
+                 + interval '1 microsecond')",
+        )
+        .bind(server_id)
+        .fetch_one(&self.pool)
+        .await?)
     }
 
     /// Record a **successful** sync. `at` is the run's start ([`SyncReport::started_at`]).
@@ -1321,9 +1346,15 @@ impl NetboxRepo {
     ///
     /// `COALESCE`: a second press while the first is still waiting or running keeps the first
     /// time, so it is the same request rather than a second run queued behind it.
+    ///
+    /// 🚨 A press while a run is in flight is stamped **after that run's start**, whatever the
+    /// clock reads (ADR-178 decision 8). [`Self::finish_sync`] clears a request no later than the
+    /// start, and a clock that stepped back since the start would make a press the run never
+    /// saw look answered — and drop it.
     pub async fn request_sync(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE netbox_servers SET sync_requested_at = COALESCE(sync_requested_at, now()) \
+            "UPDATE netbox_servers SET sync_requested_at = COALESCE(sync_requested_at, \
+               greatest(now(), sync_started_at + interval '1 microsecond')) \
              WHERE id = $1",
         )
         .bind(id)
@@ -1430,6 +1461,7 @@ impl NetboxRepo {
         longitude: Option<f64>,
         time_zone: Option<&str>,
         order: f64,
+        seen_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<bool> {
         let group_id = kind.group_id(server_id, object_id);
         let mut tx = self.pool.begin().await?;
@@ -1474,14 +1506,15 @@ impl NetboxRepo {
             > 0;
         sqlx::query(
             "INSERT INTO netbox_groups (server_id, object_kind, object_id, group_id, last_seen_at) \
-             VALUES ($1, $2, $3, $4, now()) \
+             VALUES ($1, $2, $3, $4, $5) \
              ON CONFLICT (server_id, object_kind, object_id) DO UPDATE SET \
-               group_id = EXCLUDED.group_id, last_seen_at = now()",
+               group_id = EXCLUDED.group_id, last_seen_at = EXCLUDED.last_seen_at",
         )
         .bind(server_id)
         .bind(kind.as_str())
         .bind(object_id)
         .bind(group_id)
+        .bind(seen_at)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -1515,21 +1548,23 @@ impl NetboxRepo {
         group_id: Uuid,
         prefix: &str,
         description: &str,
+        seen_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO node_group_prefixes \
                (group_id, prefix, description, netbox_server_id, last_seen_at) \
-             VALUES ($1, network($2::inet)::cidr, $3, $4, now()) \
+             VALUES ($1, network($2::inet)::cidr, $3, $4, $5) \
              ON CONFLICT (group_id, prefix) DO UPDATE SET \
                description = EXCLUDED.description, \
                netbox_server_id = EXCLUDED.netbox_server_id, \
-               last_seen_at = now() \
+               last_seen_at = EXCLUDED.last_seen_at \
              WHERE node_group_prefixes.netbox_server_id IS NOT NULL",
         )
         .bind(group_id)
         .bind(prefix)
         .bind(description)
         .bind(server_id)
+        .bind(seen_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1649,7 +1684,7 @@ pub async fn apply(
     site_id: Option<&SiteIdField>,
 ) -> anyhow::Result<SyncReport> {
     // 🚨 Before the first write. See `SyncReport::started_at` for what goes wrong otherwise.
-    let started_at = repo.db_now().await?;
+    let started_at = repo.run_start(server_id).await?;
 
     // Only an active site becomes a folder (decision 11). Split here, before anything else reads
     // the list, so the names, the sibling order, the Site-ID count and the prefix guard below all
@@ -1712,6 +1747,7 @@ pub async fn apply(
                 // A region has no zone of its own in NetBox.
                 None,
                 order_of(&region_order, parent_netbox, r.id),
+                started_at,
             )
             .await?
         {
@@ -1766,6 +1802,7 @@ pub async fn apply(
                 // reads "areas, then places". The offset is large enough that no realistic region
                 // count collides with it.
                 10_000.0 + order_of(&site_order, region_netbox, s.id),
+                started_at,
             )
             .await?
         {
@@ -1819,7 +1856,13 @@ pub async fn apply(
         let group_id = kind.group_id(server_id, object_id);
         // Not `?`: one prefix PostgreSQL refuses costs that prefix, not the sync.
         match repo
-            .upsert_prefix(server_id, group_id, &prefix.prefix, prefix.description())
+            .upsert_prefix(
+                server_id,
+                group_id,
+                &prefix.prefix,
+                prefix.description(),
+                started_at,
+            )
             .await
         {
             Ok(()) => prefixes_stored += 1,
@@ -2545,6 +2588,30 @@ mod tests {
                 .expect("row")
                 .1,
             Some(region_group_id(server, 6))
+        );
+    }
+
+    /// 🚨 A press during a run survives it even when the clock has stepped back since the run
+    /// started (ADR-178 decision 8). The step is staged: the run's start is moved an hour ahead.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_press_after_a_clock_step_back_is_still_after_the_run(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        repo.start_sync(server).await.expect("start");
+        let started: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "UPDATE netbox_servers SET sync_started_at = sync_started_at + interval '1 hour' \
+             WHERE id = $1 RETURNING sync_started_at",
+        )
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .expect("stage the step");
+        assert!(repo.request_sync(server).await.expect("press mid-run"));
+        repo.finish_sync(server, started).await.expect("finish");
+        let row = repo.get(server).await.expect("get").expect("row");
+        assert!(
+            row.sync_requested_at.is_some_and(|at| at > started),
+            "the run never saw this press, so it must not count as answered"
         );
     }
 
@@ -3706,6 +3773,24 @@ mod tests {
         assert!(folder_prefixes(&pool, region_group_id(server, 6))
             .await
             .is_empty());
+
+        // Every row the run refreshed carries the run's start, never the moment it was written:
+        // a clock that steps back between the two would otherwise let the run's own sweep delete
+        // what it had just stored (`SyncReport::started_at`).
+        for table in ["node_group_prefixes", "netbox_groups"] {
+            let (rows, off): (i64, i64) = sqlx::query_as(&format!(
+                "SELECT count(*), count(*) FILTER (WHERE last_seen_at <> $1) FROM {table}"
+            ))
+            .bind(report.started_at)
+            .fetch_one(&pool)
+            .await
+            .expect("read stamps");
+            assert!(rows > 0, "{table} holds no row, so nothing was checked");
+            assert_eq!(
+                off, 0,
+                "{table}: a row stamped with something but the run's start"
+            );
+        }
     }
 
     /// A prefix NetBox has stopped listing is **deleted**, and its neighbours are not disturbed.
@@ -3868,6 +3953,59 @@ mod tests {
         assert!(folder_prefixes(&pool, site_group_id(server, 6))
             .await
             .is_empty());
+    }
+
+    /// 🚨 A clock that has stepped back since the last run still sweeps and marks what that run
+    /// left (ADR-178 decision 8).
+    ///
+    /// The step is staged rather than waited for: the first run's stamps are moved an hour ahead
+    /// of the clock, which is what a run stamped just before a step back looks like to the next.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_clock_that_stepped_back_still_sweeps_the_last_runs_rows(pool: sqlx::PgPool) {
+        let (repo, server) = lab_server(&pool).await;
+        let first = apply(
+            &repo,
+            server,
+            &lab_regions(),
+            &lab_sites(),
+            Some(&lab_prefixes()),
+            None,
+        )
+        .await
+        .expect("first");
+        repo.record_success(server, &first, None)
+            .await
+            .expect("record");
+        for sql in [
+            "UPDATE netbox_groups SET last_seen_at = last_seen_at + interval '1 hour'",
+            "UPDATE node_group_prefixes SET last_seen_at = last_seen_at + interval '1 hour'",
+            "UPDATE netbox_servers SET last_sync_at = last_sync_at + interval '1 hour'",
+        ] {
+            sqlx::query(sql)
+                .execute(&pool)
+                .await
+                .expect("stage the step");
+        }
+
+        // NetBox now lists no prefix and no site: every prefix goes, every site folder is missing.
+        let second = apply(&repo, server, &lab_regions(), &[], Some(&[]), None)
+            .await
+            .expect("second");
+        assert!(
+            second.started_at > first.started_at + chrono::Duration::minutes(59),
+            "the run must start after the stamps the last one left, whatever the clock reads"
+        );
+        assert!(folder_prefixes(&pool, site_group_id(server, 6))
+            .await
+            .is_empty());
+        repo.record_success(server, &second, None)
+            .await
+            .expect("record");
+        assert!(
+            repo.count_missing(server).await.expect("missing") > 0,
+            "the sites the first run stamped must read as missing"
+        );
     }
 
     /// A prefix that reaches no folder is counted, and does not take the sync down with it.

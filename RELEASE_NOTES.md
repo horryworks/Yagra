@@ -29,6 +29,10 @@
 
 - **The Add maintenance window dialog reads the same whatever your browser's language.** The first field is now "What's the work?" and starts empty; left empty, the window is saved under the default name, which the field shows. The start is a year-first date (`2026-11-20`, `2026/11/20` also accepted) with its weekday, and a 24-hour time (`2200` becomes `22:00`); the end is picked as a length (30 min to 8 h), or typed after "Set end". The zone name beside the time (`JST ▾`) changes the clock the times are typed in: your own, the target folder's site zone, recent ones, UTC, or a search such as `new york` or `utc+5`. When it is not your zone, the dialog shows the window on your own clock as well, and a time the clocks skip that day is refused. The zone is stored with the window (migration 0184), and the list shows it beside your own times, e.g. `(22:00–00:00 EST)`. `POST /api/v1/maintenance-windows` and `/bulk` take an optional `time_zone` (an IANA name; an unknown one is refused with `invalid_time_zone`), and the list and MCP `list_suppressions` return it.
 
+### Bug Fixes
+
+- **A NetBox sync no longer deletes the IP ranges it has just written.** When the database server's clock stepped back during a sync, the sync's own clean-up could read a range it had just stored as one NetBox no longer lists and remove it, until the next sync put it back. A folder could likewise be shown as missing from NetBox right after a successful sync. Every row a sync refreshes is now stamped with the time the sync started, and a sync always starts after the previous one, whatever the clock reads. For the same reason, a Sync now pressed while a sync was running could be dropped instead of run next; it is now kept.
+
 ### Security
 
 - **The stored running-vs-startup comparison now goes through Yagra's own secret pass as well as oxidized's**, for every model. oxidized's filters match a line's start, and a diff prefixes every changed line with `+ ` or `- `, so a changed SNMP community or TACACS key could reach the Config tab's Unsaved view. Lines naming a secret now show `<redacted>` after that word.
