@@ -14,7 +14,7 @@ import {
   groupSubtree,
   maintenanceStateIsCurrent,
   MAX_TIMER_DELAY_MS,
-  nextSuppressionExpiry,
+  nextSuppressionChange,
   suppressionRefreshDelayMs,
   PANEL_LABEL_KEYS,
   suppressionPanelRows,
@@ -93,7 +93,7 @@ describe('buildSuppressionIndex', () => {
 
   it('ignores an inactive maintenance window', () => {
     const idx = buildSuppressionIndex(
-      [window({ scope_level: 'group_id', scope_id: 'tokyo', active: false })],
+      [window({ scope_level: 'group_id', scope_id: 'tokyo', enabled: false, active: false })],
       groups,
       nodes,
     );
@@ -264,7 +264,7 @@ describe('causesFor', () => {
   it('ignores an inactive window and another branch of the tree', () => {
     const causes = causesFor(nodeTarget, {
       windows: [
-        window({ id: 'off', scope_level: 'group_id', scope_id: 'tokyo', active: false }),
+        window({ id: 'off', scope_level: 'group_id', scope_id: 'tokyo', enabled: false, active: false }),
         window({ id: 'elsewhere', scope_level: 'group_id', scope_id: 'osaka' }),
       ],
       groups,
@@ -521,13 +521,13 @@ describe('suppression expires on the clock, not on the payload', () => {
   });
 });
 
-describe('nextSuppressionExpiry', () => {
+describe('nextSuppressionChange', () => {
   const T0 = Date.parse('2026-08-12T06:00:00Z');
   const at = (iso: string) => Date.parse(iso);
 
   it('is the earliest expiry still ahead, across both lists', () => {
     expect(
-      nextSuppressionExpiry(
+      nextSuppressionChange(
         [window({ ends_at: '2026-08-12T09:00:00Z' })],
         [exemption({ until_at: '2026-08-12T08:00:00Z' })],
         T0,
@@ -537,7 +537,7 @@ describe('nextSuppressionExpiry', () => {
 
   it('ignores what is already past, so a clock the server disagrees with cannot start a refetch loop', () => {
     expect(
-      nextSuppressionExpiry(
+      nextSuppressionChange(
         [window({ ends_at: '2026-08-12T05:00:00Z' })],
         [exemption({ until_at: '2026-08-12T05:59:00Z' })],
         T0,
@@ -545,14 +545,35 @@ describe('nextSuppressionExpiry', () => {
     ).toBeNull();
   });
 
-  it('ignores an inactive window — it is not marking anything to begin with', () => {
+  it('ignores a switched-off window — it is not marking anything, and will not start to', () => {
     expect(
-      nextSuppressionExpiry([window({ active: false, ends_at: '2026-08-12T07:00:00Z' })], [], T0),
+      nextSuppressionChange(
+        [
+          window({
+            enabled: false,
+            active: false,
+            starts_at: '2026-08-12T06:30:00Z',
+            ends_at: '2026-08-12T07:00:00Z',
+          }),
+        ],
+        [],
+        T0,
+      ),
     ).toBeNull();
   });
 
+  it('wakes for a window starting later, before its end (ADR-261 decision 21)', () => {
+    expect(
+      nextSuppressionChange(
+        [window({ starts_at: '2026-08-12T06:30:00Z', ends_at: '2026-08-12T07:00:00Z' })],
+        [],
+        T0,
+      ),
+    ).toBe(at('2026-08-12T06:30:00Z'));
+  });
+
   it('is null when there is nothing to wait for', () => {
-    expect(nextSuppressionExpiry([], [], T0)).toBeNull();
+    expect(nextSuppressionChange([], [], T0)).toBeNull();
   });
 });
 
@@ -622,7 +643,7 @@ describe('maintenanceStateIsCurrent (ADR-261 decision 18)', () => {
 
   it('ignores a window that has ended or been switched off', () => {
     const idx = buildSuppressionIndex(
-      [window({ scope_level: 'profile', scope_id: 'p1', active: false })],
+      [window({ scope_level: 'profile', scope_id: 'p1', enabled: false, active: false })],
       groups,
       [],
     );
@@ -631,5 +652,37 @@ describe('maintenanceStateIsCurrent (ADR-261 decision 18)', () => {
 
   it('believes the state before the window list has arrived', () => {
     expect(maintenanceStateIsCurrent(undefined, n('p1'))).toBe(true);
+  });
+});
+
+describe('the screen judges a window on its own clock (ADR-261 decision 20)', () => {
+  const now = Date.parse('2026-11-20T16:14:01.000Z');
+
+  it('marks a window the moment it starts, even while the server still says not yet', () => {
+    // The quick action wrote the start on the browser's clock; the database ran a second behind
+    // and answered `active: false` to the read made right after creating it.
+    const w = window({
+      scope_level: 'node',
+      scope_id: 'n1',
+      starts_at: '2026-11-20T16:14:00.900Z',
+      active: false,
+    });
+    expect(buildSuppressionIndex([w], groups, nodes, [], now).maintenanceNodes.has('n1')).toBe(true);
+  });
+
+  it('does not mark a window that has not begun, whatever the server says', () => {
+    const w = window({ scope_level: 'node', scope_id: 'n1', starts_at: '2026-11-20T17:00:00Z' });
+    expect(buildSuppressionIndex([w], groups, nodes, [], now).maintenanceNodes.size).toBe(0);
+    expect(
+      causesFor(
+        { kind: 'node', id: 'n1', name: 'n1' },
+        { windows: [w], groups, node: node('n1', 'tokyo'), now },
+      ),
+    ).toEqual([]);
+  });
+
+  it('falls back to the server for a start it cannot read', () => {
+    const w = window({ scope_level: 'node', scope_id: 'n1', starts_at: 'garbled', active: true });
+    expect(buildSuppressionIndex([w], groups, nodes, [], now).maintenanceNodes.has('n1')).toBe(true);
   });
 });

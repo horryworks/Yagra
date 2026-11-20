@@ -72,7 +72,7 @@ import {
 import { useOnConfigChange } from '../lib/configChanges';
 import {
   buildSuppressionIndex,
-  nextSuppressionExpiry,
+  nextSuppressionChange,
   suppressionRefreshDelayMs,
   suppressionPanelRows,
   releasableRows,
@@ -688,7 +688,7 @@ export function NodesPage() {
     reloadSuppression();
   }, [reloadSuppression]);
 
-  // …and again the moment the next one runs out. Without this the lists were fetched on mount and
+  // …and again the moment the next one starts or runs out (a start since ADR-261 decision 21). Without this the lists were fetched on mount and
   // after an action and never again, so a tab left open kept drawing the wrench for windows that
   // had ended hours earlier. A timer on the earliest expiry costs nothing
   // while nothing is expiring — and it schedules only instants still ahead, so a server whose
@@ -697,7 +697,7 @@ export function NodesPage() {
   // ⚠️ The delay comes from `suppressionRefreshDelayMs`, never from a subtraction here: an expiry
   // more than 24.8 days out overflows `setTimeout`, and that WAS a refetch loop.
   useEffect(() => {
-    const at = nextSuppressionExpiry(windows, exemptions);
+    const at = nextSuppressionChange(windows, exemptions);
     if (at === null) return undefined;
     const h = setTimeout(reloadSuppression, suppressionRefreshDelayMs(at));
     return () => clearTimeout(h);

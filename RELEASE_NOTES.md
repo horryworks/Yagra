@@ -31,7 +31,7 @@
 
 - **Every other date and time box reads the same way too.** The node page's custom time range, a list's custom date range filter, and the times in the config backup schedule, delivery hours, report schedules and Troubleshoot schedules now take a year-first date and a 24-hour time instead of the browser's own boxes, which showed `mm/dd/yyyy` and AM/PM on an American setup. A time that cannot be read is marked and is not saved; a report schedule no longer reads an empty time as midnight.
 
-- **The maintenance marker in the node tree goes as soon as its window is lifted.** It used to stay for two to three minutes, until the alert engine caught up (it re-reads the windows every 30 seconds, then waits for three normal polls). The node's state elsewhere still reads maintenance for those minutes.
+- **The maintenance marker in the node tree comes and goes with its window.** It appears the moment a window starts and goes as soon as one is lifted. Opening one from the tree's right-click could leave the marker off for two to three minutes when the browser's clock ran a second ahead of the server's, and a window set to start later did not show its marker when it began; lifting one left it on for two to three minutes, until the alert engine caught up (it re-reads the windows every 30 seconds, then waits for three normal polls). The node's state elsewhere still reads maintenance for those minutes.
 
 ### Bug Fixes
 

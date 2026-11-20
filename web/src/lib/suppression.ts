@@ -181,7 +181,7 @@ function subtreeFrom(
  * The server filters expired rows out of every list, but the *browser* holds those lists for as
  * long as the page is open, and `active` is a value computed when the payload was built — so a tab
  * left open across a window's end went on drawing the marker forever. Judging against the clock
- * makes the tree self-correcting; {@link nextSuppressionExpiry} is what makes it re-render.
+ * makes the tree self-correcting; {@link nextSuppressionChange} is what makes it re-render.
  *
  * An unparseable timestamp counts as **in force**: dropping a marker is the worse of the two
  * mistakes, since it tells an operator alerts will reach them when they will not.
@@ -192,19 +192,40 @@ function inForce(iso: string, now: number): boolean {
 }
 
 /**
- * When the next thing on this page stops on its own, in epoch ms, or `null` if nothing does.
+ * Whether a window covers `now` on **this screen's** clock (ADR-261 decision 20): switched on,
+ * begun, and not yet over.
+ *
+ * Not the payload's `active`. That is the server's answer on the database's clock, and a window
+ * the tree's own quick action opens starts at the browser's "now" to the millisecond - measured on
+ * a lab box, the browser ran 1.1 s ahead, so the read made right after creating it said "not yet"
+ * and nothing re-read it at the start. Judging the start on the clock that wrote it puts the
+ * marker up the moment the window exists. `active` is kept only for a start that cannot be read.
+ */
+function inEffect(w: MaintenanceWindow, now: number): boolean {
+  if (!w.enabled || !inForce(w.ends_at, now)) return false;
+  const start = Date.parse(w.starts_at);
+  return Number.isNaN(start) ? w.active : start <= now;
+}
+
+/**
+ * When the next thing on this page starts or stops on its own, in epoch ms, or `null` if nothing
+ * does: a switched-on window's start (ADR-261 decision 21 - a window opened for later, or one
+ * whose start is a second ahead of the server's clock, has to appear when it begins), its end, or
+ * a release's expiry.
  *
  * Only instants **strictly in the future** — anything already past is hidden by {@link inForce}
  * and needs no timer, which is also what stops a caller re-fetching in a loop against a server
  * whose clock disagrees.
  */
-export function nextSuppressionExpiry(
+export function nextSuppressionChange(
   windows: MaintenanceWindow[],
   exemptions: SuppressionExemption[],
   now: number = Date.now(),
 ): number | null {
+  const on = windows.filter((w) => w.enabled);
   const at = [
-    ...windows.filter((w) => w.active).map((w) => w.ends_at),
+    ...on.map((w) => w.starts_at),
+    ...on.map((w) => w.ends_at),
     ...maintenanceExemptions(exemptions).map((e) => e.until_at),
   ]
     .map((iso) => Date.parse(iso))
@@ -216,7 +237,7 @@ export function nextSuppressionExpiry(
 export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /**
- * How long to wait before re-reading the suppression lists, given {@link nextSuppressionExpiry}.
+ * How long to wait before re-reading the suppression lists, given {@link nextSuppressionChange}.
  *
  * A second past the expiry, so the row is gone from the server's answer rather than racing it.
  *
@@ -247,7 +268,7 @@ export function buildSuppressionIndex(
 ): SuppressionIndex {
   const index = emptySuppressionIndex();
   // Filtered once, so the second pass over the list below cannot disagree with the first.
-  const live = windows.filter((w) => w.active && inForce(w.ends_at, now));
+  const live = windows.filter((w) => inEffect(w, now));
   for (const e of maintenanceExemptions(exemptions).filter((x) => inForce(x.until_at, now))) {
     index.exemptMaintenanceNodes.add(e.node_id);
   }
@@ -381,7 +402,7 @@ export function causesFor(
   const { groups, node } = ctx;
   const now = ctx.now ?? Date.now();
   // Anything already over explains nothing, however recently the page loaded it (see `inForce`).
-  const windows = ctx.windows.filter((w) => w.active && inForce(w.ends_at, now));
+  const windows = ctx.windows.filter((w) => inEffect(w, now));
   const exemptions = maintenanceExemptions(ctx.exemptions ?? []).filter((e) =>
     inForce(e.until_at, now),
   );
