@@ -496,7 +496,8 @@ test('the selection bar can open a maintenance window over every selected node',
 
   await expect.poll(() => seen.length).toBe(1);
   expect(seen[0].node_ids).toHaveLength(2);
-  expect(seen[0].name).toBe('Maintenance — 2 nodes');
+  // One window per node, each named after its node: the server fills in {node} (ADR-261 decision 26).
+  expect(seen[0].name).toBe('Maintenance — {node}');
   expect(Date.parse(seen[0].ends_at) - Date.parse(seen[0].starts_at)).toBe(2 * 3_600_000);
   expect(seen[0].time_zone).toBeTruthy();
 });
