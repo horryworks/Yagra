@@ -28,7 +28,7 @@ import {
   type RoutingRule,
   type Severity,
 } from '../types/api';
-import { tagOptions, tagsNoNodeCarries } from './routingTags';
+import { tagChoices, tagsNoNodeCarries } from './routingTags';
 import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
@@ -40,8 +40,7 @@ import { Field, TextInput, Select } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Inline, Page, Stack } from '../components/ui/Page';
 import { Badge } from '../components/ui/Badge';
-import { ChipInput } from '../components/ui/ChipInput';
-import { labelsAreValid } from '../components/ui/labelRules';
+import { CheckList } from '../components/ui/CheckList';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -872,13 +871,26 @@ function RuleModal({
   const [name, setName] = useState(rule?.name ?? '');
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
   const [tags, setTags] = useState<string[]>(() => [...(rule?.tags ?? [])]);
-  const options = useMemo(
+  // Built from the rule as it was opened, so unticking a tag no node carries does not make its row
+  // vanish under the pointer.
+  const choices = useMemo(() => tagChoices(rule?.tags ?? [], nodeTags), [rule, nodeTags]);
+  const tagItems = useMemo(
     () =>
-      nodeTags
-        ? tagOptions(nodeTags, (count) => t('routing.ruleModal.tagNodes', { count }))
-        : undefined,
-    [nodeTags, t],
+      choices.map((c) => ({
+        key: c.tag,
+        label: c.tag,
+        mark: c.gone ? <Badge tone="warning">{t('nodes:field.tagNoNode')}</Badge> : undefined,
+        detail:
+          c.nodes === null || c.gone
+            ? undefined
+            : t('routing.ruleModal.tagNodes', { count: c.nodes }),
+      })),
+    [choices, t],
   );
+  const tagSet = useMemo(() => new Set(tags), [tags]);
+  // Ticks keep the list's order, so what is saved does not depend on the order they were made in.
+  const pickTags = (next: Set<string>) =>
+    setTags(choices.map((c) => c.tag).filter((tag) => next.has(tag)));
   // How many nodes the chosen tags reach, asked again whenever they change. `null` while asking or
   // after a failed read, when the line is left out rather than showing a stale number.
   const tagKey = tags.join('\n');
@@ -905,7 +917,7 @@ function RuleModal({
       return next;
     });
 
-  const canAdd = name.trim() !== '' && selected.size > 0 && labelsAreValid(tags);
+  const canAdd = name.trim() !== '' && selected.size > 0;
 
   const submit = () => {
     if (!canAdd) return;
@@ -950,15 +962,12 @@ function RuleModal({
             <option value="info">{severityLabel('info')}</option>
           </Select>
         </Field>
-        {/* Empty reaches every node, which the placeholder says rather than a sentence (ADR-200). */}
+        {/* None ticked reaches every node, which the line under the list says (ADR-200). With no
+            tag on any node there is no list, and that line is all there is. */}
         <FieldGroup label={t('routing.ruleModal.tags')}>
-          <ChipInput
-            value={tags}
-            onChange={setTags}
-            placeholder={t('routing.ruleModal.anyNode')}
-            inputLabel={t('routing.ruleModal.tags')}
-            options={options}
-          />
+          {tagItems.length > 0 && (
+            <CheckList items={tagItems} selected={tagSet} onChange={pickTags} />
+          )}
           {tags.length === 0 ? (
             <p className="form-status">{t('routing.ruleModal.reachAll')}</p>
           ) : (

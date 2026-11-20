@@ -37,7 +37,6 @@
     "tagPlaceholder": "JAPAN",
     "tagRemove": "Remove the tag {{label}}",
     "tagNoNode": "no node",
-    "tagNotCarried": "No node carries “{{tag}}”",
     "tagExclude": "Do not inherit the tag {{label}} on this one",
     "tagsInherited": "Inherited from its folder",
     "tagsInheritedFrom": "From its folder",

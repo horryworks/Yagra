@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { tagOptions, tagsNoNodeCarries } from './routingTags';
+import { tagChoices, tagsNoNodeCarries } from './routingTags';
 
 const carried = {
   tags: [
@@ -9,12 +9,17 @@ const carried = {
   ],
 };
 
-describe('the routing rule tag picker', () => {
-  it('offers every carried tag with its node count', () => {
-    expect(tagOptions(carried, (n) => `${n} nodes`)).toEqual([
-      { value: 'APAC', detail: '388 nodes' },
-      { value: 'TeamA', detail: '214 nodes' },
+describe('the routing rule tag list', () => {
+  it('lists a rule tag no node carries first, then every carried tag with its count', () => {
+    expect(tagChoices(['TeamA', 'KOREA'], carried)).toEqual([
+      { tag: 'KOREA', nodes: 0, gone: true },
+      { tag: 'APAC', nodes: 388, gone: false },
+      { tag: 'TeamA', nodes: 214, gone: false },
     ]);
+  });
+
+  it('keeps the rule tags, unmarked, when the carried tags are unknown', () => {
+    expect(tagChoices(['KOREA'], null)).toEqual([{ tag: 'KOREA', nodes: null, gone: false }]);
   });
 
   it('marks the rule tags no node carries, and nothing when the list is unknown', () => {

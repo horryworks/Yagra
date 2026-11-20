@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
 import {
-  OPTIONS_SHOWN,
-  matchingOptions,
-  resolveOption,
-  valuesWithoutOption,
   LABELS_MAX,
   LABEL_MAX,
   LABEL_PROBLEMS,
@@ -120,45 +116,5 @@ describe('a list of labels', () => {
     expect(firstLabelProblem(['JAPAN', 'x'.repeat(LABEL_MAX + 1)])).toBe('tooLong');
     const over = Array.from({ length: LABELS_MAX + 1 }, (_, i) => `l${i}`);
     expect(firstLabelProblem(over)).toBe('tooMany');
-  });
-});
-
-// ADR-259 Inc.2: a routing rule's tags are picked from the tags nodes carry.
-describe('picking a value from the known options', () => {
-  const opts = [
-    { value: 'APAC', detail: '388 nodes' },
-    { value: 'TeamA', detail: '214 nodes' },
-    { value: 'JAPAN', detail: '214 nodes' },
-    { value: 'core', detail: '46 nodes' },
-  ];
-
-  it('offers matches that start with the draft first, and none already chosen', () => {
-    expect(matchingOptions(opts, [], 'a').map((o) => o.value)).toEqual([
-      'APAC',
-      'TeamA',
-      'JAPAN',
-    ]);
-    expect(matchingOptions(opts, ['APAC'], 'a').map((o) => o.value)).toEqual(['TeamA', 'JAPAN']);
-    expect(matchingOptions(opts, [], '').length).toBe(4);
-    const many = Array.from({ length: OPTIONS_SHOWN + 3 }, (_, i) => ({ value: `t${i}` }));
-    expect(matchingOptions(many, [], '')).toHaveLength(OPTIONS_SHOWN);
-  });
-
-  it('resolves to the option spelling, and refuses a value no option has', () => {
-    expect(resolveOption(opts, ' TeamA ')).toBe('TeamA');
-    expect(resolveOption(opts, 'japan')).toBe('JAPAN');
-    // The typo the increment exists for.
-    expect(resolveOption(opts, 'TeamAA')).toBeNull();
-    expect(resolveOption(opts, '')).toBeNull();
-  });
-
-  it('does not guess between two options differing only in case', () => {
-    const both = [{ value: 'Japan' }, { value: 'JAPAN' }];
-    expect(resolveOption(both, 'japan')).toBeNull();
-    expect(resolveOption(both, 'Japan')).toBe('Japan');
-  });
-
-  it('marks a chosen value no option offers any more', () => {
-    expect([...valuesWithoutOption(['TeamA', 'KOREA'], opts)]).toEqual(['KOREA']);
   });
 });

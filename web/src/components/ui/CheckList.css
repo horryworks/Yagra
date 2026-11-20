@@ -1,0 +1,65 @@
+/* A list of boxes under one "select all" row, in one frame (ADR-256 Inc.3). The rows scroll inside
+   the frame; the head stays at the top of it. */
+
+.checklist {
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.checklist-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.checklist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 28px;
+  padding: var(--space-0-5) var(--space-2);
+  border-top: var(--border-width) solid var(--border-color);
+  cursor: pointer;
+}
+
+.checklist-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.checklist-row input {
+  margin: 0;
+  flex: none;
+}
+
+.checklist-head {
+  border-top: none;
+  background: var(--bg-secondary);
+  font-size: var(--font-sm);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.checklist-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.checklist-head .checklist-label {
+  color: var(--text-secondary);
+}
+
+.checklist-detail {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+html[data-viewport='mobile'] .checklist-row {
+  min-height: var(--touch-target);
+}

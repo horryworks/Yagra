@@ -61,21 +61,19 @@ test('a routing rule saves the tags it was given', async ({ page }) => {
   await ruleRow.hover();
   await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
   const dialog = page.getByRole('dialog');
-  const tags = dialog.getByRole('group', { name: 'Tags' });
+  // Inc.2: the tags are a list of boxes, one per tag nodes carry, so nothing can be typed wrong.
+  // The rule's own tag no node carries is listed first, ticked and marked.
+  const tags = dialog.getByRole('group', { name: 'Tags', exact: true });
   await expect(tags).toBeVisible();
-  const entry = tags.getByRole('textbox', { name: 'Tags' });
-  // Inc.2: the value is picked from the tags nodes carry. A typo is refused and said so; a value
-  // typed in another case becomes the tag as nodes spell it.
-  await entry.fill('TeamAA');
-  await entry.press('Enter');
-  await expect(tags.getByText('No node carries “TeamAA”')).toBeVisible();
-  // Picked from the list itself, so a list that never shows (it once mounted unplaced and
-  // invisible, while Enter still worked) fails here rather than passing on the keyboard.
-  await entry.fill('tea');
-  const option = page.getByRole('listbox', { name: 'Tags' }).getByRole('option', { name: /TeamA/ });
-  await expect(option).toBeVisible();
-  await option.click();
-  await expect(tags.locator('.chipinput-chip', { hasText: 'TeamA' })).toBeVisible();
+  const gone = tags.locator('.checklist-row', { hasText: 'no node' });
+  await expect(gone).toHaveCount(1);
+  await expect(gone.getByRole('checkbox')).toBeChecked();
+  await gone.getByRole('checkbox').uncheck();
+  // Unticked, it stays on the list rather than vanishing under the pointer.
+  await expect(gone).toHaveCount(1);
+  const teamA = tags.locator('.checklist-row', { hasText: 'TeamA' });
+  await expect(teamA).toContainText('3 nodes');
+  await teamA.getByRole('checkbox').check();
   await expect(dialog.getByText('Reaches 3 nodes')).toBeVisible();
   const saved = page.waitForRequest(
     (r) => r.method() === 'PUT' && r.url().includes('/definition'),
@@ -83,8 +81,7 @@ test('a routing rule saves the tags it was given', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Save' }).click();
   const body = (await saved).postDataJSON() as { tags?: unknown };
   expect(Array.isArray(body.tags)).toBe(true);
-  expect(body.tags).toContain('TeamA');
-  expect(body.tags).not.toContain('TeamAA');
+  expect(body.tags).toEqual(['TeamA']);
 });
 
 // Inc.2: a rule naming a tag no node carries matches nothing, so its row says so.

@@ -81,7 +81,6 @@
       "severity": "重大度",
       "anySeverity": "すべての重大度",
       "tags": "タグ",
-      "anyNode": "すべてのノード",
       "tagNodes_other": "{{count}} 台",
       "reach_other": "{{count}} 台に届く",
       "reachAll": "すべてのノードに届く",

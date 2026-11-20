@@ -85,7 +85,6 @@
       "severity": "Severity",
       "anySeverity": "any severity",
       "tags": "Tags",
-      "anyNode": "All nodes",
       "tagNodes_one": "{{count}} node",
       "tagNodes_other": "{{count}} nodes",
       "reach_one": "Reaches {{count}} node",

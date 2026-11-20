@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import type { KeyboardEvent, ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { TextInput, FieldError } from './Field';
 import { IconButton } from './IconButton';
-import { AnchoredPopover } from './AnchoredPopover';
 import {
   LABELS_MAX,
   addLabel,
   labelProblem,
   labelProblems,
-  matchingOptions,
   removeLabel,
-  resolveOption,
   splitPastedLabels,
-  valuesWithoutOption,
-  type ChipOption,
 } from './labelRules';
 import { isImeComposing } from '../../lib/ime';
 import './ChipInput.css';
@@ -52,12 +47,6 @@ interface Props {
    */
   lenient?: boolean;
   disabled?: boolean;
-  /**
-   * Pick from these rather than type freely (ADR-259 Inc.2). Only a value one of them names can be
-   * added — spelled as the option is — and a chosen value none offers is marked, so a typo cannot
-   * be saved and a tag that has since gone from every node is visible. Absent = free entry.
-   */
-  options?: readonly ChipOption[];
 }
 
 export function ChipInput({
@@ -67,16 +56,9 @@ export function ChipInput({
   inputLabel,
   lenient = false,
   disabled = false,
-  options,
 }: Props) {
   const { t } = useTranslation('nodes');
   const [draft, setDraft] = useState('');
-  const [focused, setFocused] = useState(false);
-  const anchorRef = useRef<HTMLDivElement>(null);
-  // A typed value no option names, kept to say so under the box (options mode only).
-  const [unknown, setUnknown] = useState<string | null>(null);
-  const offered = options ? matchingOptions(options, value, draft) : [];
-  const gone = options ? valuesWithoutOption(value, options) : new Set<string>();
 
   // Marked per chip rather than blocking the whole dialog: migration 0109 can hand back a label
   // longer than the rules now allow, and an operator who cannot save *and* cannot see why has no
@@ -85,21 +67,6 @@ export function ChipInput({
   const draftProblem = draft.trim() === '' || lenient ? null : labelProblem(draft, value);
 
   const commit = (raw: string) => {
-    if (options) {
-      // Each pasted or typed value becomes the option it names; one naming none stays in the box,
-      // said under it, and is not added.
-      let next = [...value];
-      let missed: string | null = null;
-      for (const l of splitPastedLabels(raw)) {
-        const hit = resolveOption(options, l);
-        if (hit === null) missed ??= l;
-        else next = addLabel(next, hit);
-      }
-      if (next.length !== value.length) onChange(next);
-      setUnknown(missed);
-      setDraft(missed ?? '');
-      return;
-    }
     const next = lenient
       ? [...value, ...splitPastedLabels(raw).filter((l) => !value.includes(l))]
       : splitPastedLabels(raw).reduce<string[]>((acc, l) => addLabel(acc, l), [...value]);
@@ -114,10 +81,7 @@ export function ChipInput({
     if (e.key === 'Enter' || e.key === ',') {
       // Enter would submit the dialog and `,` would land in the box; both mean "that is one label".
       e.preventDefault();
-      if (draft.trim() === '') return;
-      // In options mode Enter takes the value typed if it names one, else the first offered.
-      const pick = options ? (resolveOption(options, draft) ?? offered[0]?.value) : undefined;
-      commit(pick ?? draft);
+      if (draft.trim() !== '') commit(draft);
       return;
     }
     if (e.key === 'Backspace' && draft === '' && value.length > 0) {
@@ -142,13 +106,10 @@ export function ChipInput({
             return (
               <li
                 key={label}
-                className={
-                  problem || gone.has(label) ? 'chipinput-chip chipinput-chip-bad' : 'chipinput-chip'
-                }
+                className={problem ? 'chipinput-chip chipinput-chip-bad' : 'chipinput-chip'}
                 title={problem ? t(`field.tagErr.${problem}`) : undefined}
               >
                 <span>{label}</span>
-                {gone.has(label) && <span>· {t('field.tagNoNode')}</span>}
                 <IconButton
                   title={t('field.tagRemove', { label })}
                   disabled={disabled}
@@ -161,64 +122,20 @@ export function ChipInput({
           })}
         </ul>
       )}
-      <div ref={anchorRef}>
-        <TextInput
-          value={draft}
-          placeholder={placeholder}
-          aria-label={inputLabel}
-          // The popover finds the box to place itself under by this mark, and a screen reader
-          // learns the box opens a list of choices.
-          aria-haspopup={options ? 'listbox' : undefined}
-          aria-expanded={options ? focused && offered.length > 0 : undefined}
-          disabled={disabled || (!lenient && value.length >= LABELS_MAX)}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setUnknown(null);
-            setFocused(true);
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onFocus={() => setFocused(true)}
-          // Committing on blur as well as on Enter: a half-typed label the operator then clicks Save
-          // on would otherwise be dropped without a word.
-          onBlur={() => {
-            setFocused(false);
-            if (draft.trim() !== '' && draftProblem === null) commit(draft);
-          }}
-        />
-      </div>
-      {/* Floating, not in the flow: a list that pushed the fields down would vanish on blur and
-          pull the dialog's Save button up from under the pointer mid-click. Each choice takes the
-          press on mousedown so the box keeps its focus. */}
-      {options && (
-        <AnchoredPopover
-          open={focused && offered.length > 0}
-          anchorRef={anchorRef}
-          role="listbox"
-          label={inputLabel}
-          align="start"
-          className="chipinput-options"
-          onDismiss={() => setFocused(false)}
-        >
-          {offered.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              role="option"
-              aria-selected={false}
-              className="chipinput-option"
-              onMouseDown={(e) => {
-                e.preventDefault();
-                commit(o.value);
-              }}
-            >
-              <span>{o.value}</span>
-              {o.detail && <span className="muted">{o.detail}</span>}
-            </button>
-          ))}
-        </AnchoredPopover>
-      )}
-      {unknown !== null && <FieldError>{t('field.tagNotCarried', { tag: unknown })}</FieldError>}
+      <TextInput
+        value={draft}
+        placeholder={placeholder}
+        aria-label={inputLabel}
+        disabled={disabled || (!lenient && value.length >= LABELS_MAX)}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={onKeyDown}
+        onPaste={onPaste}
+        // Committing on blur as well as on Enter: a half-typed label the operator then clicks Save
+        // on would otherwise be dropped without a word.
+        onBlur={() => {
+          if (draft.trim() !== '' && draftProblem === null) commit(draft);
+        }}
+      />
       {draftProblem && <FieldError>{t(`field.tagErr.${draftProblem}`)}</FieldError>}
     </div>
   );
