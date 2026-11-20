@@ -31,6 +31,7 @@ import {
   type ScheduleForm,
 } from './scheduleForm';
 import { zoneAbbreviation } from '../lib/timeZone';
+import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 
 interface Props {
   /** The schedule to edit, or null to create one. */
@@ -190,15 +191,13 @@ export function ScheduleModal({ schedule, flowEnabled, onClose, onSaved }: Props
         )}
 
         <Field label={t('reports:schedule.time', { zone: zoneAbbreviation(form.timeZone) })}>
-          <input
-            className="field"
-            type="time"
+          <TimeOfDayInput
             value={timeLabel(form.atHour, form.atMinute)}
-            onChange={(e) => {
-              const [h, m] = e.target.value.split(':').map(Number);
-              if (Number.isFinite(h) && Number.isFinite(m)) {
-                setForm((f) => ({ ...f, atHour: h, atMinute: m }));
-              }
+            onChange={(v) => {
+              // `''` is a box that cannot be read yet: keep the last time that could.
+              if (!v) return;
+              const [h, m] = v.split(':').map(Number);
+              setForm((f) => ({ ...f, atHour: h, atMinute: m }));
             }}
           />
         </Field>

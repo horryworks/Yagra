@@ -183,7 +183,8 @@
     "count": "{{n}} / {{total}}"
   },
   "wallTime": {
-    "pickDate": "日付を選ぶ"
+    "pickDate": "日付を選ぶ",
+    "time": "{{label}}の時刻"
   },
   "zonePicker": {
     "label": "タイムゾーン",

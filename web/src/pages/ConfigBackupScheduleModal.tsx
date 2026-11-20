@@ -13,6 +13,7 @@ import { useSubmit } from '../lib/useSubmit';
 import type { ConfigBackupScheduleView } from '../types/api';
 import { scheduleBody, scheduleDraftTime } from './configBackupSchedule';
 import { scheduleZone, zoneAbbreviation } from '../lib/timeZone';
+import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 
 interface Props {
   schedule: ConfigBackupScheduleView;
@@ -60,13 +61,7 @@ export function ConfigBackupScheduleModal({ schedule, onClose, onSaved }: Props)
         label={t('config.schedule.start', { zone: zoneAbbreviation(zone) })}
         htmlFor="cfgbl-sched-time"
       >
-        <input
-          id="cfgbl-sched-time"
-          className="field"
-          type="time"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-        />
+        <TimeOfDayInput id="cfgbl-sched-time" value={time} onChange={setTime} />
       </Field>
       <Field label={t('config.schedule.atOnce')} htmlFor="cfgbl-sched-count">
         <Select

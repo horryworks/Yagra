@@ -39,6 +39,7 @@ import {
   weekdayName,
   type ScheduleDraft,
 } from './deliveryHours';
+import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 
 export function DeliveryHoursSection({
   canSystem,
@@ -332,19 +333,17 @@ function ScheduleModal({
         </FieldGroup>
         <FieldRow>
           <Field label={t('deliveryHours.modal.start')}>
-            <TextInput
+            <TimeOfDayInput
               id="dh-start"
-              type="time"
               value={draft.start}
-              onChange={(e) => setDraft({ ...draft, start: e.target.value })}
+              onChange={(start) => setDraft({ ...draft, start })}
             />
           </Field>
           <Field label={t('deliveryHours.modal.end')}>
-            <TextInput
+            <TimeOfDayInput
               id="dh-end"
-              type="time"
               value={draft.end}
-              onChange={(e) => setDraft({ ...draft, end: e.target.value })}
+              onChange={(end) => setDraft({ ...draft, end })}
             />
           </Field>
         </FieldRow>

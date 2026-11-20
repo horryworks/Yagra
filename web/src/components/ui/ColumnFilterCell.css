@@ -9,20 +9,10 @@
 
 .dt-f-instants {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--space-1);
   padding: var(--space-1) var(--space-2) var(--space-2);
   border-top: 1px solid var(--border-color);
-}
-
-.dt-f-instant {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--font-xs);
-}
-
-.dt-f-instant-sep {
-  color: var(--text-tertiary);
 }
 
 /* The number kind's body: two bounds, either of which may be blank (ADR-053 Inc.6). */

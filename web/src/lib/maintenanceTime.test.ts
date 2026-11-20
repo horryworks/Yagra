@@ -2,6 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   RECENT_ZONES_MAX,
+  clockValue,
+  joinDateTime,
+  splitDateTime,
   matchZones,
   offsetQuery,
   parseDateText,
@@ -231,6 +234,23 @@ describe('targetZone', () => {
     expect(targetZone(['ny', 'none'], zoneOf)).toBeNull();
     expect(targetZone(['ny', null], zoneOf)).toBeNull();
     expect(targetZone([], zoneOf)).toBeNull();
+  });
+});
+
+describe('the value shapes of the inputs these boxes replace', () => {
+  it('gives a time as <input type="time"> did, or nothing', () => {
+    expect(clockValue('2200')).toBe('22:00');
+    expect(clockValue('9:05')).toBe('09:05');
+    expect(clockValue('')).toBe('');
+    expect(clockValue('10pm')).toBe('');
+  });
+
+  it('splits and joins a datetime-local value', () => {
+    expect(splitDateTime('2026-11-20T22:00')).toEqual({ date: '2026-11-20', time: '22:00' });
+    expect(splitDateTime('')).toEqual({ date: '', time: '' });
+    expect(joinDateTime('2026/1/5', '930')).toBe('2026-01-05T09:30');
+    expect(joinDateTime('2026-11-20', '')).toBe('');
+    expect(joinDateTime('11/20', '22:00')).toBe('');
   });
 });
 

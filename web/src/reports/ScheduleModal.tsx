@@ -16,6 +16,7 @@ import { WEEKDAY_OPTIONS } from '../lib/cadence';
 import { SELECTABLE_CADENCES } from '../lib/cadence';
 import { timeValue } from '../lib/format';
 import { scheduleZone, zoneAbbreviation } from '../lib/timeZone';
+import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 
 interface Props {
   definitions: ReportDefinition[];
@@ -54,10 +55,11 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
       form.refuse(t('schedule.err.chooseFrequency'));
       return;
     }
+    // `''` is a box that cannot be read; `Number('')` is 0, which read it as midnight.
     const [h, m] = time.split(':');
     const at_hour = Number(h);
     const at_minute = Number(m);
-    if (!Number.isFinite(at_hour) || !Number.isFinite(at_minute)) {
+    if (time === '' || !Number.isFinite(at_hour) || !Number.isFinite(at_minute)) {
       form.refuse(t('schedule.err.invalidTime'));
       return;
     }
@@ -151,12 +153,7 @@ export function ScheduleModal({ definitions, schedule, onClose, onSaved }: Props
         )}
 
         <Field label={t('schedule.time', { zone: zoneAbbreviation(zone) })}>
-          <input
-            className="field"
-            type="time"
-            value={time}
-            onChange={(e) => setTime(e.target.value)}
-          />
+          <TimeOfDayInput value={time} onChange={setTime} />
         </Field>
 
         <CheckField checked={enabled} onChange={setEnabled} label={t('schedule.enabled')} />

@@ -14,6 +14,7 @@ import { CalendarIcon } from '../ui/icons';
 import { localInputToUnix, unixToLocalInput } from '../../lib/format';
 import { wallClock } from '../../lib/timeZone';
 import './RangeControl.css';
+import { DateTimeInput } from '../ui/WallTimeInput';
 
 export type Range =
   | { kind: 'relative'; secs: number } // presets and relative quick-picks
@@ -184,24 +185,20 @@ export function RangeControl({ value, onChange }: Props) {
             </div>
           </div>
 
-          <label className="rc-field">
-            <span className="rc-field-label">{t('range.from')}</span>
-            <input
-              className="rc-input"
-              type="datetime-local"
-              value={draftFrom}
-              onChange={(e) => setDraftFrom(e.target.value)}
-            />
-          </label>
-          <label className="rc-field">
-            <span className="rc-field-label">{t('range.to')}</span>
-            <input
-              className="rc-input"
-              type="datetime-local"
-              value={draftTo}
-              onChange={(e) => setDraftTo(e.target.value)}
-            />
-          </label>
+          {/* Not a wrapping <label>: the date box carries a calendar button, which a label
+              around it would take as its control (ADR-261 Inc.2). Each box is named instead. */}
+          <div className="rc-field">
+            <span className="rc-field-label" aria-hidden="true">
+              {t('range.from')}
+            </span>
+            <DateTimeInput value={draftFrom} onChange={setDraftFrom} label={t('range.from')} />
+          </div>
+          <div className="rc-field">
+            <span className="rc-field-label" aria-hidden="true">
+              {t('range.to')}
+            </span>
+            <DateTimeInput value={draftTo} onChange={setDraftTo} label={t('range.to')} />
+          </div>
 
           <div className="rc-pop-foot">
             <button type="button" className="rc-btn" onClick={() => setOpen(false)}>

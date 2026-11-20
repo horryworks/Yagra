@@ -167,22 +167,6 @@
   color: var(--text-tertiary);
 }
 
-.rc-input {
-  height: 30px;
-  padding: 0 var(--space-2);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  font-family: var(--ui-font-family);
-  font-size: var(--font-sm);
-}
-
-.rc-input:focus {
-  outline: none;
-  border-color: var(--accent-color);
-}
-
 .rc-pop-foot {
   display: flex;
   justify-content: flex-end;

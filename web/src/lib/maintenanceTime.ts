@@ -65,6 +65,32 @@ export function timeText(t: TimeParts): string {
   return `${pad2(t.hour)}:${pad2(t.minute)}`;
 }
 
+// ── The value shapes the browser's own inputs used (ADR-261 Inc.2) ─────────────────────────
+// `DateTimeInput` and `TimeOfDayInput` replace `<input type="datetime-local">` and
+// `<input type="time">`, and hand their callers the very strings those inputs produced, so no
+// caller's reading (`localInputToUnix`, `timeToMinutes`, …) had to change.
+
+/** A typed time as `<input type="time">` gave it: `HH:MM`, or `''` when the box is empty or
+ *  cannot be read. */
+export function clockValue(text: string): string {
+  const t = parseTimeText(text);
+  return t && t !== 'invalid' ? timeText(t) : '';
+}
+
+/** `YYYY-MM-DDTHH:MM` (a `datetime-local` value) split into the two boxes' text. */
+export function splitDateTime(value: string): { date: string; time: string } {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(value);
+  return m ? { date: m[1], time: m[2] } : { date: '', time: '' };
+}
+
+/** The two boxes' text joined back into `YYYY-MM-DDTHH:MM`, or `''` unless both can be read. */
+export function joinDateTime(date: string, time: string): string {
+  const d = parseDateText(date);
+  const t = parseTimeText(time);
+  if (!d || d === 'invalid' || !t || t === 'invalid') return '';
+  return `${dateText(d)}T${timeText(t)}`;
+}
+
 /** The instant a date and time name in `tz`: `'gap'` when the clocks skip that time there, else
  *  the earliest instant (an overlap's first occurrence). */
 export function wallToInstant(d: DateParts, t: TimeParts, tz: string): number | 'gap' {

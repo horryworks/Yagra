@@ -28,6 +28,7 @@ import {
 } from '../../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../../lib/filterCondition';
 import './ColumnFilterCell.css';
+import { DateTimeInput } from './WallTimeInput';
 
 interface BodyProps<T> {
   spec: ColumnFilterSpec<T>;
@@ -253,24 +254,15 @@ function RangeBody<T>({
           by the active preset is the control that makes an operator distrust the whole filter. */}
       {spec.custom && current.preset === CUSTOM_RANGE && (
         <div className="dt-f-instants">
-          <input
-            className="field dt-f-instant"
-            type="datetime-local"
+          <DateTimeInput
             value={current.from}
-            aria-label={t('filter.from')}
-            title={t('filter.from')}
-            onChange={(e) => onChange(encodeRange({ ...current, from: e.target.value }))}
+            label={t('filter.from')}
+            onChange={(from) => onChange(encodeRange({ ...current, from }))}
           />
-          <span className="dt-f-instant-sep" aria-hidden="true">
-            –
-          </span>
-          <input
-            className="field dt-f-instant"
-            type="datetime-local"
+          <DateTimeInput
             value={current.to}
-            aria-label={t('filter.to')}
-            title={t('filter.to')}
-            onChange={(e) => onChange(encodeRange({ ...current, to: e.target.value }))}
+            label={t('filter.to')}
+            onChange={(to) => onChange(encodeRange({ ...current, to }))}
           />
         </div>
       )}

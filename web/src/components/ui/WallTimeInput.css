@@ -42,3 +42,11 @@
   opacity: 0;
   pointer-events: none;
 }
+
+/* A date and a time side by side, in place of one datetime-local box (ADR-261 Inc.2). */
+.wt-datetime {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
