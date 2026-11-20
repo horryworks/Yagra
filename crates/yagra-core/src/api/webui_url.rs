@@ -234,6 +234,6 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-        assert_eq!(body["code"], "invalid_webui_url");
+        assert_eq!(body["error"]["code"], "invalid_webui_url");
     }
 }
