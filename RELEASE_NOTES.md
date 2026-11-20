@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.83 — Send a routing rule's alerts only for nodes carrying its tags, link every notification to the node's page in Yagra, and save Cisco Nexus configs
+
 ### Breaking changes
 
 - **A deployment upgraded to this version cannot go back to an earlier core without restoring a backup.** Migration 0182 adds tags to routing rules; an older core would ignore them and send a tagged rule's alerts for every node, so it is kept from starting.
