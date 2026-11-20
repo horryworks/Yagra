@@ -754,7 +754,8 @@ export function NodesPage() {
       api
         .createMaintenanceWindows({
           node_ids: targetNodeIds(target),
-          name: t('maintenanceWindowNameMany', { count: target.nodes.length }),
+          // `{node}` becomes each window's own node name on the server (ADR-261 decision 26).
+          name: t('maintenanceWindowName', { name: '{node}' }),
           starts_at: now.toISOString(),
           ends_at: ends,
         })
@@ -799,8 +800,6 @@ export function NodesPage() {
       switch (a.action) {
         case 'end-window':
           return api.endMaintenanceWindow(a.windowId);
-        case 'release-node':
-          return api.setNodeMaintenanceExemption(a.nodeId, true);
         case 'undo-release':
           return api.setNodeMaintenanceExemption(a.nodeId, false);
         case 'take-out':

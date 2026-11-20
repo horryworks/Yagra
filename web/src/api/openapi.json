@@ -30123,7 +30123,8 @@
             "type": "string"
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "description": "The name every window gets. `{node}` in it is replaced by each window's own node name, so\none request can name each window after its node (`Maintenance — {node}`) instead of after\nthe batch, which read as nonsense on any one window afterwards (ADR-261 decision 26)."
           },
           "node_ids": {
             "type": "array",

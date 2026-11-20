@@ -372,6 +372,9 @@ async fn create_maintenance_window(
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct BulkWindow {
     node_ids: Vec<Uuid>,
+    /// The name every window gets. `{node}` in it is replaced by each window's own node name, so
+    /// one request can name each window after its node (`Maintenance — {node}`) instead of after
+    /// the batch, which read as nonsense on any one window afterwards (ADR-261 decision 26).
     name: String,
     starts_at: String,
     ends_at: String,
@@ -1483,7 +1486,7 @@ mod tests {
             &tok,
             Some(serde_json::json!({
                 "node_ids": [a, b, hidden],
-                "name": "tonight",
+                "name": "tonight — {node}",
                 "starts_at": "2030-01-01T00:00:00Z",
                 "ends_at": "2030-01-01T02:00:00Z",
             })),
@@ -1498,6 +1501,17 @@ mod tests {
         assert_eq!(
             yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
             2
+        );
+        // Each window is named after its own node, not after the batch (ADR-261 decision 26).
+        let mut names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM maintenance_windows ORDER BY name")
+                .fetch_all(&pool)
+                .await
+                .expect("names");
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["tonight — a".to_owned(), "tonight — b".to_owned()]
         );
 
         // A window that ends before it begins suppresses nothing while reading as success — the

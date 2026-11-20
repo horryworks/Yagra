@@ -6796,6 +6796,11 @@ export interface components {
         /** @description Open one window over each of many nodes. */
         BulkWindow: {
             ends_at: string;
+            /**
+             * @description The name every window gets. `{node}` in it is replaced by each window's own node name, so
+             *     one request can name each window after its node (`Maintenance — {node}`) instead of after
+             *     the batch, which read as nonsense on any one window afterwards (ADR-261 decision 26).
+             */
             name: string;
             node_ids: string[];
             starts_at: string;

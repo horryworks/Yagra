@@ -116,8 +116,9 @@ export function AddMaintenanceWindowModal({
         ? (profiles.find((p) => p.id === scopeId)?.name ?? '')
         : (groups.find((g) => g.id === scopeId)?.name ??
           (initialScope?.kind === 'group' ? initialScope.name : ''));
+  // A batch names each window after its own node: `{node}` is filled in by the server.
   const fallbackName = batch
-    ? t('maintenanceForm.defaultNameMany', { count: batch.nodes.length })
+    ? t('maintenanceForm.defaultName', { name: '{node}' })
     : targetName
       ? t('maintenanceForm.defaultName', { name: targetName })
       : '';
@@ -305,7 +306,15 @@ export function AddMaintenanceWindowModal({
 
         <Field
           label={t('maintenanceForm.name')}
-          status={!name.trim() && fallbackName ? t('maintenanceForm.savesAs', { name: fallbackName }) : null}
+          status={
+            !name.trim() && fallbackName
+              ? t('maintenanceForm.savesAs', {
+                  name: batch
+                    ? t('maintenanceForm.defaultName', { name: t('maintenanceForm.eachNode') })
+                    : fallbackName,
+                })
+              : null
+          }
         >
           <TextInput
             placeholder={t('maintenanceForm.namePlaceholder')}

@@ -64,7 +64,7 @@ import {
 import { useTreeTouchedStore } from '../../store';
 import {
   DURATION_PRESETS,
-  maintenanceStateIsCurrent,
+  nodeInMaintenance,
   type ReleaseAction,
   type SuppressionIndex,
   type SuppressionPanelRow,
@@ -748,6 +748,12 @@ export function NodeTree({
       setMenu(null);
     };
     const rows = suppressionRows?.(m.target, m.node) ?? [];
+    // A node's blocks only say what covers it; taking it out is one control for the whole panel,
+    // however many windows cover it (ADR-261 decision 24).
+    const takeOut =
+      m.target.kind === 'node' && m.node && nodeInMaintenance(suppression, m.node)
+        ? m.target.id
+        : null;
     return (
       <div className="ntree-supp-panel">
         {rows.length === 0 ? (
@@ -762,7 +768,7 @@ export function NodeTree({
             const control = r.action;
             return (
               <div className="ntree-supp-cause" key={r.key}>
-                {r.headKey && <div className="ntree-supp-head">{t(r.headKey)}</div>}
+                <div className="ntree-supp-head">{t(r.headKey)}</div>
                 {r.title && <div className="ntree-supp-title">{r.title}</div>}
                 {(r.labelKey || r.endsAt) && (
                   <div className="ntree-supp-meta">
@@ -788,6 +794,15 @@ export function NodeTree({
               </div>
             );
           })
+        )}
+        {onRelease && takeOut && (
+          <div className="ntree-supp-cause">
+            <div className="ntree-supp-act">
+              <button type="button" onClick={() => act({ action: 'take-out', nodeIds: [takeOut] })}>
+                {t('tree.suppression.act.excludeNode')}
+              </button>
+            </div>
+          </div>
         )}
       </div>
     );
@@ -817,7 +832,13 @@ export function NodeTree({
     if (!onSetMaintenance) return null;
     const many = target.kind === 'nodes';
     const count = targetNodeCount(target);
-    const takeOutIds = target.kind === 'nodes' ? suppressedNodeIds(suppression, target.nodes) : [];
+    // What "Release maintenance" takes out: the selection's nodes in maintenance, or this row.
+    const takeOutIds =
+      target.kind === 'nodes'
+        ? suppressedNodeIds(suppression, target.nodes)
+        : rowTarget.kind === 'node' && node
+          ? suppressedNodeIds(suppression, [node])
+          : [];
     const row = (
       label: string,
       manyLabel: string,
@@ -857,20 +878,9 @@ export function NodeTree({
         <div className="ntree-menu-sep" />
         {onSetMaintenance &&
           row(t('tree.maintenance'), t('tree.maintenanceSelected', { count }), onSetMaintenance)}
-        {/* ⚠️ Asks about `rowTarget`, never `target`: the presets above may be acting on the
-            batch, but a release is about what is suppressing *this* row and names it. */}
-        {onRelease && hasSuppression(suppression, rowTarget, node) && (
-          <button
-            type="button"
-            onClick={() =>
-              setMenu({ x: at.x, y: at.y, kind: 'suppress', target: rowTarget, node })
-            }
-          >
-            {t('tree.suppression.act.open')}
-          </button>
-        )}
-        {/* The selection's own release (ADR-261 decision 24): one press takes every selected node
-            that something covers out of maintenance, whatever covers each of them. */}
+        {/* One release, never two (ADR-261 decision 24): it takes the row - or every selected
+            node in maintenance - out at once, whatever covers each. A folder row keeps the panel,
+            because ending a folder's window releases every node under it. */}
         {onRelease && takeOutIds.length > 0 && (
           <button
             type="button"
@@ -879,7 +889,17 @@ export function NodeTree({
               setMenu(null);
             }}
           >
-            {t('tree.suppression.act.takeOutSelected', { count: takeOutIds.length })}
+            {t('tree.suppression.act.releaseSelected')}
+          </button>
+        )}
+        {onRelease && rowTarget.kind === 'group' && hasSuppression(suppression, rowTarget, node) && (
+          <button
+            type="button"
+            onClick={() =>
+              setMenu({ x: at.x, y: at.y, kind: 'suppress', target: rowTarget, node })
+            }
+          >
+            {t('tree.suppression.act.open')}
           </button>
         )}
       </>
@@ -1490,11 +1510,7 @@ export function NodeTree({
           // minutes, so it is consulted only while the row is *not* released and some window in
           // force could still be covering it (ADR-261 decision 18) — otherwise the wrench stays for
           // minutes after the window it stands for has gone.
-          maint:
-            !!suppression?.maintenanceNodes.has(node.id) ||
-            (node.state === 'maintenance' &&
-              !suppression?.exemptMaintenanceNodes.has(node.id) &&
-              maintenanceStateIsCurrent(suppression, node)),
+          maint: nodeInMaintenance(suppression, node),
           releasedMaint: !!suppression?.exemptMaintenanceNodes.has(node.id),
         })}
       </div>

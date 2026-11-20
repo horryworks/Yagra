@@ -9,7 +9,7 @@
 //
 // It lived in `NodeTree.tsx`, so no test could reach it. It can now.
 
-import { maintenanceStateIsCurrent } from '../../lib/suppression';
+import { nodeInMaintenance } from '../../lib/suppression';
 import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression';
 import { actsOnSelection } from './nodeTreeSelect';
 import type { NodeGroup, NodeSummary } from '../../types/api';
@@ -103,30 +103,21 @@ export function hasSuppression(
 ): boolean {
   if (target.kind === 'group') return !!suppression?.maintenanceGroups.has(target.id);
   return (
-    !!suppression?.maintenanceNodes.has(target.id) ||
     !!suppression?.exemptMaintenanceNodes.has(target.id) ||
-    (node?.state === 'maintenance' && maintenanceStateIsCurrent(suppression, node))
+    (node ? nodeInMaintenance(suppression, node) : !!suppression?.maintenanceNodes.has(target.id))
   );
 }
 
 /**
- * The nodes of a selection that something is suppressing - what "Take N selected out of
- * maintenance" acts on and counts (ADR-261 decision 24). Same test as {@link hasSuppression},
- * without the released half: a node already released has nothing left to take out.
+ * The nodes "Release maintenance" takes out - those of the row or the selection that are in
+ * maintenance now ({@link nodeInMaintenance}). A node already released has nothing left to take
+ * out (ADR-261 decision 24).
  */
 export function suppressedNodeIds(
   suppression: SuppressionIndex | undefined,
   nodes: readonly NodeSummary[],
 ): string[] {
-  return nodes
-    .filter(
-      (n) =>
-        !!suppression?.maintenanceNodes.has(n.id) ||
-        (n.state === 'maintenance' &&
-          !suppression?.exemptMaintenanceNodes.has(n.id) &&
-          maintenanceStateIsCurrent(suppression, n)),
-    )
-    .map((n) => n.id);
+  return nodes.filter((n) => nodeInMaintenance(suppression, n)).map((n) => n.id);
 }
 
 /**

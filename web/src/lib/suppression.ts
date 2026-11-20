@@ -83,6 +83,24 @@ export function emptySuppressionIndex(): SuppressionIndex {
 }
 
 /**
+ * Whether a node is in maintenance now, as the tree shows it: a window in force names it or its
+ * folders, or the engine's `maintenance` state can still be explained by one (profile, fleet-wide)
+ * and the node has not been released. **The one answer** the marker, the menu and a selection's
+ * release all use (ADR-261 decision 27) - it used to be written out three times.
+ */
+export function nodeInMaintenance(
+  index: SuppressionIndex | undefined,
+  node: Pick<NodeSummary, 'id' | 'profile_id' | 'state'>,
+): boolean {
+  if (index?.maintenanceNodes.has(node.id)) return true;
+  return (
+    node.state === 'maintenance' &&
+    !index?.exemptMaintenanceNodes.has(node.id) &&
+    maintenanceStateIsCurrent(index, node)
+  );
+}
+
+/**
  * Whether a node's `maintenance` state may still be shown as maintenance (ADR-261 decision 18).
  *
  * The state is the engine's opinion, and it lags a window being lifted: the engine re-reads the
@@ -359,7 +377,6 @@ export interface SuppressionCause {
  */
 export type ReleaseAction =
   | { action: 'end-window'; windowId: string }
-  | { action: 'release-node'; nodeId: string }
   | { action: 'undo-release'; nodeId: string }
   /** Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4): every window naming
    *  them ends and they are carved out of what they inherit, in one request. */
@@ -489,8 +506,7 @@ function windowsMayCover(
 export interface SuppressionPanelRow {
   /** React key. Stable within one render of one row; not an entity id. */
   key: string;
-  /** i18n key for the block's heading — which of the two states this block reports. Empty on the
-   *  closing block that carries only the panel's one control (ADR-261 Inc.4). */
+  /** i18n key for the block's heading — which of the two states this block reports. */
   headKey: string;
   /** The window's name, when there is one to show. */
   title: string;
@@ -514,7 +530,6 @@ export const PANEL_LABEL_KEYS = [
   'tree.suppression.head.maintenance',
   'tree.suppression.head.releasedMaintenance',
   'tree.suppression.act.endNow',
-  'tree.suppression.act.excludeNode',
   'tree.suppression.act.undoMaintenance',
   'tree.suppression.releaseOnAncestor',
 ] as const;
@@ -522,7 +537,6 @@ export const PANEL_LABEL_KEYS = [
 const HEAD_KEY = 'tree.suppression.head.maintenance';
 const RELEASED_HEAD_KEY = 'tree.suppression.head.releasedMaintenance';
 const UNDO_KEY = 'tree.suppression.act.undoMaintenance';
-const EXCLUDE_KEY = 'tree.suppression.act.excludeNode';
 
 /** The control a single cause offers, given who is asking. */
 function actionFor(
@@ -595,20 +609,6 @@ export function suppressionPanelRows(
       ...actionFor(c, target),
     };
   });
-
-  // The one control a node's panel carries, after the blocks that say what covers it.
-  if (target.kind === 'node' && causes.some((c) => !c.released)) {
-    rows.push({
-      key: 'take-out',
-      headKey: '',
-      title: '',
-      endsAt: '',
-      action: {
-        action: { action: 'take-out', nodeIds: [target.id] },
-        labelKey: EXCLUDE_KEY,
-      },
-    });
-  }
 
   for (const e of maintenanceExemptions(ctx.exemptions ?? [])) {
     if (target.kind !== 'node' || e.node_id !== target.id || explained) continue;

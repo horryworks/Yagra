@@ -14,6 +14,7 @@ import {
   groupSubtree,
   maintenanceStateIsCurrent,
   MAX_TIMER_DELAY_MS,
+  nodeInMaintenance,
   nextSuppressionChange,
   suppressionRefreshDelayMs,
   PANEL_LABEL_KEYS,
@@ -306,20 +307,16 @@ describe('suppressionPanelRows', () => {
   const groupWindow = window({ id: 'w1', name: 'DC1 planned', scope_level: 'group_id', scope_id: 'tokyo' });
   const n2 = node('n2', 'edge');
 
-  it('says what covers a node, and offers one way out at the end (ADR-261 decision 24)', () => {
+  // The panel draws its one "take this node out" itself; the blocks only say what covers it.
+  it('says what covers a node, with no button on any block (ADR-261 decision 24)', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [window({ id: 'w', scope_level: 'node', scope_id: 'n2' })],
       groups,
       node: n2,
     });
-    expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
-      ['tree.suppression.head.maintenance', undefined],
-      ['', 'tree.suppression.act.excludeNode'],
+    expect(rows.map((r) => [r.headKey, r.action])).toEqual([
+      ['tree.suppression.head.maintenance', null],
     ]);
-    expect(rows[1].action).toEqual({
-      action: { action: 'take-out', nodeIds: ['n2'] },
-      labelKey: 'tree.suppression.act.excludeNode',
-    });
   });
 
   // The case that made the per-window buttons wrong: a doubled quick action left two windows
@@ -334,11 +331,7 @@ describe('suppressionPanelRows', () => {
       groups,
       node: n2,
     });
-    expect(rows.filter((r) => r.action)).toHaveLength(1);
-    expect(rows.at(-1)?.action).toEqual({
-      action: { action: 'take-out', nodeIds: ['n2'] },
-      labelKey: 'tree.suppression.act.excludeNode',
-    });
+    expect(rows.filter((r) => r.action)).toHaveLength(0);
     expect(rows.filter((r) => r.headKey === 'tree.suppression.head.maintenance')).toHaveLength(3);
   });
 
@@ -359,7 +352,7 @@ describe('suppressionPanelRows', () => {
       node: n2,
       exemptions: [{ ...exemption({ node_id: 'n2' }), kind: 'other' } as unknown as SuppressionExemption],
     });
-    expect(rows.map((r) => r.headKey)).toEqual(['tree.suppression.head.maintenance', '']);
+    expect(rows.map((r) => r.headKey)).toEqual(['tree.suppression.head.maintenance']);
   });
 
   it('offers a node the same way out of coverage it only inherits', () => {
@@ -368,11 +361,7 @@ describe('suppressionPanelRows', () => {
       groups,
       node: n2,
     });
-    expect(rows[0].action).toBeNull();
-    expect(rows.at(-1)?.action).toEqual({
-      action: { action: 'take-out', nodeIds: ['n2'] },
-      labelKey: 'tree.suppression.act.excludeNode',
-    });
+    expect(rows.map((r) => r.action)).toEqual([null]);
   });
 
   // The bug this function exists to make untestable-in-a-.tsx: the panel used to show a live
@@ -420,7 +409,6 @@ describe('suppressionPanelRows', () => {
     expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
       ['tree.suppression.head.maintenance', undefined],
       ['tree.suppression.head.releasedMaintenance', 'tree.suppression.act.undoMaintenance'],
-      ['', 'tree.suppression.act.excludeNode'],
     ]);
   });
 
@@ -722,5 +710,35 @@ describe('the screen judges a window on its own clock (ADR-261 decision 20)', ()
   it('falls back to the server for a start it cannot read', () => {
     const w = window({ scope_level: 'node', scope_id: 'n1', starts_at: 'garbled', active: true });
     expect(buildSuppressionIndex([w], groups, nodes, [], now).maintenanceNodes.has('n1')).toBe(true);
+  });
+});
+
+describe('nodeInMaintenance (ADR-261 decision 27)', () => {
+  const n = (id: string, state: NodeSummary['state'] = 'ok', profile_id: string | null = null) =>
+    ({ id, state, profile_id }) as NodeSummary;
+
+  it('is the window list first, then a state some window in force still explains', () => {
+    const idx = buildSuppressionIndex(
+      [
+        window({ id: 'a', scope_level: 'node', scope_id: 'n1' }),
+        window({ id: 'p', scope_level: 'profile', scope_id: 'p1' }),
+      ],
+      groups,
+      [],
+    );
+    expect(nodeInMaintenance(idx, n('n1'))).toBe(true);
+    expect(nodeInMaintenance(idx, n('n9', 'maintenance', 'p1'))).toBe(true);
+    expect(nodeInMaintenance(idx, n('n9', 'maintenance', 'p2'))).toBe(false);
+    expect(nodeInMaintenance(idx, n('n9', 'ok', 'p1'))).toBe(false);
+  });
+
+  it('is false for a released node the engine still calls maintenance', () => {
+    const idx = buildSuppressionIndex(
+      [window({ scope_level: 'profile', scope_id: 'p1' })],
+      groups,
+      [],
+      [exemption({ node_id: 'n9', kind: 'maintenance' })],
+    );
+    expect(nodeInMaintenance(idx, n('n9', 'maintenance', 'p1'))).toBe(false);
   });
 });

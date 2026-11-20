@@ -73,7 +73,6 @@
       "gap": "{{zone}} ではその日のこの時刻はありません。時計が飛ばします。",
       "backwards": "終了は開始より後にしてください。"
     },
-    "defaultNameMany": "メンテナンス — {{count}} 台",
     "lockedNodes": "選択した次の {{count}} 台。1 台につき 1 つの窓を開きます。",
     "partial": "{{requested}} 台のうち {{created}} 台に窓を開きました。残りは削除済みか、スコープの外です。",
     "savesAs": "「{{name}}」で保存します",
@@ -93,6 +92,7 @@
     "end": "終了",
     "endTime": "終了時刻",
     "ends": "終了 {{at}}",
-    "yourTime": "あなたの時刻: {{range}}"
+    "yourTime": "あなたの時刻: {{range}}",
+    "eachNode": "各ノードの名前"
   }
 }

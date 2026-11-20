@@ -74,7 +74,6 @@
       "gap": "This time does not happen in {{zone}} that day: the clocks skip it.",
       "backwards": "The end must come after the start."
     },
-    "defaultNameMany": "Maintenance — {{count}} nodes",
     "lockedNodes": "These {{count}} selected nodes, each with its own window:",
     "partial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
     "savesAs": "Saved as “{{name}}”",
@@ -94,6 +93,7 @@
     "end": "End",
     "endTime": "End time",
     "ends": "Ends {{at}}",
-    "yourTime": "Your time: {{range}}"
+    "yourTime": "Your time: {{range}}",
+    "eachNode": "each node's name"
   }
 }

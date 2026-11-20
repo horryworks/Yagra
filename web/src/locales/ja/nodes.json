@@ -844,7 +844,7 @@
         "endNow": "メンテナンスを今すぐ終了",
         "excludeNode": "このノードをメンテナンス対象から外す",
         "undoMaintenance": "メンテナンス対象に戻す",
-        "takeOutSelected": "選んだ {{count}} 台をメンテナンス対象から外す"
+        "releaseSelected": "メンテナンスを解除"
       },
       "releaseOnAncestor": "グループ「{{name}}」側で解除してください",
       "none": "現在この行を抑止しているものはありません。"
@@ -1236,7 +1236,6 @@
     "continue": "続きを振り分ける（残り {{count}} 件）",
     "inPlace": "すでに正しいグループにある: {{count}} 件（動かしません）。"
   },
-  "maintenanceWindowNameMany": "メンテナンス — {{count}} 台",
   "moreMenu": {
     "trigger": "その他の操作",
     "moveAllByPrefix": "全ノードを IP レンジで振り分け…"

@@ -256,7 +256,7 @@ impl MaintenanceRepo {
         let res = sqlx::query(&format!(
             "INSERT INTO maintenance_windows \
                     (id, name, scope_level, scope_id, starts_at, ends_at, time_zone) \
-             SELECT t.window_id, $3, 'node', n.id::text, $4, $5, $6 \
+             SELECT t.window_id, replace($3, '{{node}}', n.name), 'node', n.id::text, $4, $5, $6 \
                FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, window_id) \
                JOIN nodes n ON n.id = t.node_id \
               WHERE {}",

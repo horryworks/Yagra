@@ -848,7 +848,7 @@
         "endNow": "End maintenance now",
         "excludeNode": "Take this node out of maintenance",
         "undoMaintenance": "Put back in maintenance",
-        "takeOutSelected": "Take {{count}} selected out of maintenance"
+        "releaseSelected": "Release maintenance"
       },
       "releaseOnAncestor": "Release it on group \"{{name}}\"",
       "none": "Nothing is suppressing this any more."
@@ -1246,7 +1246,6 @@
     "continue": "Continue ({{count}} left)",
     "inPlace": "Already in the right folder: {{count}} (left where they are)."
   },
-  "maintenanceWindowNameMany": "Maintenance — {{count}} nodes",
   "moreMenu": {
     "trigger": "More actions",
     "moveAllByPrefix": "Sort every node by IP range…"
