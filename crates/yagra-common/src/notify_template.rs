@@ -261,14 +261,14 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     TemplateVariable {
         name: "node_url",
         description: "A link to the node's page in Yagra's WebUI. Absent until an administrator \
-                      sets the WebUI address (Settings > System settings), and for an alert \
+                      sets the WebUI address (Settings > Monitoring defaults), and for an alert \
                       that is not about a node.",
         always_present: false,
     },
     TemplateVariable {
         name: "yagra_url",
         description: "The address of Yagra's WebUI, with no trailing slash. Absent until an \
-                      administrator sets it (Settings > System settings).",
+                      administrator sets it (Settings > Monitoring defaults).",
         always_present: false,
     },
 ];

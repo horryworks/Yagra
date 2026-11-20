@@ -164,7 +164,7 @@ export function SystemSettingsPage() {
   );
 }
 
-/** Settings ▸ System settings ▸ Notification links (ADR-260): the address notifications link to.
+/** Settings ▸ Monitoring defaults ▸ Notification links (ADR-260): the address notifications link to.
  *  An empty field clears it, and then no notification carries a link. Judgement in `webuiUrl.ts`. */
 function WebuiUrlCard({ canConfig }: { canConfig: boolean }) {
   const { t } = useTranslation('system');

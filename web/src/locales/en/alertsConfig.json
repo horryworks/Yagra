@@ -275,7 +275,7 @@
         },
         "yagra_url": {
           "label": "Yagra address",
-          "desc": "The WebUI address set in System settings"
+          "desc": "The WebUI address set in Monitoring defaults"
         },
         "node_id": {
           "label": "Node ID",

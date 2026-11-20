@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Settings > System settings > Notification links (ADR-260): what the field shows and what Save
+// Settings > Monitoring defaults > Notification links (ADR-260): what the field shows and what Save
 // sends. The server normalizes and validates the address (`api/webui_url.rs::normalize`); this only
 // turns the field into the body and decides whether anything changed.
 

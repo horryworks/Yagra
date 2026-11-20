@@ -269,7 +269,7 @@
         },
         "yagra_url": {
           "label": "Yagra のアドレス",
-          "desc": "システム設定で入れた WebUI のアドレス"
+          "desc": "監視の既定値の画面で入れた WebUI のアドレス"
         },
         "node_id": {
           "label": "ノード ID",
