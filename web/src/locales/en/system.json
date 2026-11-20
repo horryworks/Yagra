@@ -357,7 +357,8 @@
     },
     "err": {
       "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
-      "save": "failed to save setting"
+      "save": "failed to save setting",
+      "load": "failed to read setting"
     },
     "neighbors": {
       "title": "Discovery walks",

@@ -130,7 +130,14 @@ pub(crate) fn normalize(raw: &str) -> Result<Option<String>, &'static str> {
     }
     // The parser's spelling, not the operator's: it lower-cases the scheme and host and writes a
     // bare origin as `https://host/`, which the trim below turns back into `https://host`.
-    Ok(Some(parsed.as_str().trim_end_matches('/').to_owned()))
+    let stored = parsed.as_str().trim_end_matches('/');
+    // Measured again on what is stored: the parser percent-encodes a path and punycodes a host,
+    // which can multiply a short typed address, and the cap exists for the stored form - a link
+    // past it is cut short in a JSM detail.
+    if stored.chars().count() > MAX_WEBUI_URL_LEN {
+        return Err("the WebUI address is too long");
+    }
+    Ok(Some(stored.to_owned()))
 }
 
 #[cfg(test)]
@@ -189,6 +196,16 @@ mod tests {
         }
         let long = format!("https://example.com/{}", "a".repeat(MAX_WEBUI_URL_LEN));
         assert!(normalize(&long).is_err());
+    }
+
+    /// A path short enough as typed but long once percent-encoded is refused: the cap is on what
+    /// is stored, because that is what a link is built from.
+    #[test]
+    fn the_cap_applies_to_the_stored_spelling() {
+        // 120 three-byte characters: 360 bytes typed, 1,080 characters once encoded.
+        let typed = format!("https://example.com/{}", "\u{3042}".repeat(120));
+        assert!(typed.len() <= MAX_WEBUI_URL_LEN, "{}", typed.len());
+        assert!(normalize(&typed).is_err());
     }
 
     // ── An accepted write (ADR-115) ──────────────────────────────────────────────────

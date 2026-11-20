@@ -817,13 +817,17 @@ async fn set_node_maintenance_exemption(
         return Ok(StatusCode::NO_CONTENT);
     }
     let facts = coverage_facts(&admin, node_id).await?;
-    let windows = admin.maintenance.active_windows().await.map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "load active windows for release",
-            "failed to load maintenance windows",
-        )
-    })?;
+    let windows = admin
+        .maintenance
+        .windows_a_release_answers_to()
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "load active windows for release",
+                "failed to load maintenance windows",
+            )
+        })?;
     let until = inherited_maintenance_end(&windows, &facts)
         .ok_or_else(|| nothing_inherited("maintenance"))?;
     admin
@@ -907,7 +911,7 @@ async fn release_nodes_from_maintenance(
     // those are ended - and must be, for the release to be written in the same transaction.
     let windows = admin
         .maintenance
-        .active_windows()
+        .windows_a_release_answers_to()
         .await
         .map_err(internal("load active windows for release"))?;
     let edges = admin
@@ -915,19 +919,18 @@ async fn release_nodes_from_maintenance(
         .edges()
         .await
         .map_err(internal("load group edges for release"))?;
+    // One read for the whole batch: a node at a time was up to `SUPPRESSION_BATCH_MAX` serial
+    // round trips before the transaction. A node deleted since `visible_node_ids` is simply absent.
     let mut releases = Vec::new();
-    for id in &nodes {
-        let Some(node) = admin
-            .repo
-            .get_node(*id)
-            .await
-            .map_err(internal("load node for release"))?
-        else {
-            continue;
-        };
+    for node in admin
+        .repo
+        .nodes_by_ids(&nodes, scope.group_filter())
+        .await
+        .map_err(internal("load nodes for release"))?
+    {
         let facts = CoverageFacts::of(&node, &edges);
         if let Some(until) = inherited_maintenance_end(&windows, &facts) {
-            releases.push((*id, until));
+            releases.push((node.id.as_uuid(), until));
         }
     }
     let ended = admin
@@ -1619,6 +1622,54 @@ mod tests {
             exempt,
             vec![a],
             "`a` was not carved out of its folder's window"
+        );
+    }
+
+    /// A folder window whose start a browser clock put a few seconds ahead is still released from
+    /// (ADR-261 Inc.4): the release must not miss it, and the reconcile that runs right after must
+    /// not drop the release before the window begins.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_window_a_second_ahead_is_still_released(pool: sqlx::PgPool) {
+        use crate::alerts::maintenance::{reconcile_exemptions, ExemptionKind, MaintenanceRepo};
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let node = yagra_base::pgtest::node(&pool, "a", 1, Some(site)).await;
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = chrono::Utc::now();
+        repo.create_window(
+            "site work",
+            "group_id",
+            &site.to_string(),
+            now + chrono::Duration::seconds(5),
+            now + chrono::Duration::hours(2),
+        )
+        .await
+        .expect("window");
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/maintenance/release",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [node] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["released"], 1, "the folder window was missed: {body}");
+
+        let admin = st.admin.clone().expect("live state");
+        reconcile_exemptions(&repo, &admin.groups, &admin.repo)
+            .await
+            .expect("reconcile");
+        assert_eq!(
+            repo.exempt_nodes(ExemptionKind::Maintenance)
+                .await
+                .expect("exemptions"),
+            vec![node],
+            "the reconcile dropped a release for a window about to begin"
         );
     }
 

@@ -1652,13 +1652,21 @@ impl Notifier {
                     tracing::debug!(subject = %alert.subject, %root, "suppressing downstream alert notification (rolled up under root cause)");
                     return;
                 }
+                let matched = routing.matched(alert.severity, tags_of(facts.as_ref()));
                 if self.side_changed(&alert) {
+                    // Only the channels this fire goes to forget it, so each is paged again. A
+                    // channel the first side reached and no rule matches now - the node lost the
+                    // tag its rule names - is not re-paged, and must stay marked as holding the
+                    // incident, or the close skips it and its incident never closes (ADR-259
+                    // decision 5).
                     let key = alert.dedup_key();
                     if let Some(d) = routing.default.as_ref() {
                         d.mark_resolved(&key).await;
                     }
-                    for d in routing.channels.values() {
-                        d.mark_resolved(&key).await;
+                    for (id, d) in &routing.channels {
+                        if matched.contains(id) {
+                            d.mark_resolved(&key).await;
+                        }
                     }
                 }
                 let notification = with_subject_facts(
@@ -1667,7 +1675,6 @@ impl Notifier {
                 );
                 let text = (!routing.text.is_empty())
                     .then(|| text_notification(&alert, NotifyEvent::Fire, facts.as_ref()));
-                let matched = routing.matched(alert.severity, tags_of(facts.as_ref()));
                 let done = Delivered {
                     alert: &alert,
                     event: NotifyEvent::Fire,
@@ -3722,6 +3729,42 @@ mod delivery_tests {
         n.handle(NotifyAction::Fire(other.clone())).await;
         n.handle(NotifyAction::Fire(other)).await;
         assert_eq!(fires(), (4, 4), "a liveness repeat is still a duplicate");
+    }
+
+    /// A side change after the node lost its rule's tag must not cost the channel the first side
+    /// reached its close (ADR-259 decision 5): the re-fire goes nowhere there, so that channel has
+    /// to stay marked as holding the incident.
+    #[tokio::test]
+    async fn a_side_change_after_the_tag_is_gone_still_closes_where_the_fire_went() {
+        let tagged = log();
+        let n = Notifier::with_default(None);
+        let id_t = Uuid::from_u128(1);
+        let japan = NodeId::new();
+        n.set_facts_source(japan_facts(japan));
+        n.install_routing(
+            vec![built(id_t, Recorder(tagged.clone()))],
+            vec![tagged_rule(id_t, &["JAPAN"])],
+        );
+        let on = |direction| Alert {
+            breach: Some(yagra_alert::Breach {
+                value: 0.0,
+                threshold: Some(1.0),
+                direction,
+            }),
+            ..alert(japan, Severity::Critical, None)
+        };
+        n.handle(NotifyAction::Fire(on(Direction::Above))).await;
+        assert_eq!(tagged.lock().unwrap().kinds(), vec!["fire"]);
+
+        // The label is removed, then the value swings to the other side of the band.
+        n.set_facts_source(japan_facts(NodeId::new()));
+        n.handle(NotifyAction::Fire(on(Direction::Below))).await;
+        n.handle(NotifyAction::Resolve(on(Direction::Below))).await;
+        assert_eq!(
+            tagged.lock().unwrap().kinds(),
+            vec!["fire", "close"],
+            "the incident the first side opened is closed, and nothing is re-paged there"
+        );
     }
 
     /// A JSM or email channel receives the text built-in and a webhook beside it the JSON one, for

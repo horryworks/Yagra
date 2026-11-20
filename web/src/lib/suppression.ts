@@ -380,7 +380,13 @@ export type ReleaseAction =
   | { action: 'undo-release'; nodeId: string }
   /** Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4): every window naming
    *  them ends and they are carved out of what they inherit, in one request. */
-  | { action: 'take-out'; nodeIds: string[] };
+  | {
+      action: 'take-out';
+      nodeIds: string[];
+      /** The ids are the tree's selection, which is then spent - a single row's release leaves
+       *  the selection alone, as a single row's window does. */
+      fromSelection?: boolean;
+    };
 
 /** i18n keys {@link causesFor} can produce, so `i18nEnumKeys.test.ts` can demand both locales
  *  carry them. A key built at runtime is missing from *both* locales when it is forgotten, so

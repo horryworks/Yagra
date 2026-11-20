@@ -133,6 +133,11 @@ pub struct StoredWindow {
     pub time_zone: Option<String>,
 }
 
+/// How far ahead of the database's clock a window may begin and still count as "now" for a
+/// release from maintenance (ADR-261 Inc.4): the WebUI writes a window's start on the browser's
+/// clock, which can run ahead. One value for the windows that name a node and the ones it inherits.
+pub(crate) const RELEASE_START_SLACK_SECS: i64 = 60;
+
 /// PostgreSQL-backed maintenance windows and their exemptions.
 pub struct MaintenanceRepo {
     pool: PgPool,
@@ -361,9 +366,10 @@ impl MaintenanceRepo {
                     SET ends_at = CASE WHEN starts_at <= now() THEN now() ELSE starts_at END \
                   WHERE scope_level = 'node' AND scope_id = ANY($1) \
                     AND enabled AND ends_at > now() \
-                    AND starts_at <= now() + interval '1 minute'",
+                    AND starts_at <= now() + make_interval(secs => $2)",
             )
             .bind(&ids)
+            .bind(RELEASE_START_SLACK_SECS as f64)
             .execute(&mut *tx)
             .await?
             .rows_affected()
@@ -429,10 +435,36 @@ impl MaintenanceRepo {
     pub async fn active_windows(
         &self,
     ) -> anyhow::Result<Vec<(WindowScope, String, DateTime<Utc>)>> {
+        self.windows_covering_within(0).await
+    }
+
+    /// [`Self::active_windows`] plus the switched-on windows due to begin within
+    /// [`RELEASE_START_SLACK_SECS`] - what a release from maintenance answers to (ADR-261 Inc.4).
+    ///
+    /// A window the WebUI opens starts at the browser's "now", which runs ahead of the database's
+    /// (measured: 1.1 s on a lab box). A release pressed in that second would see no coverage,
+    /// carve nothing out, and the node would enter maintenance a moment later; a reconcile run in
+    /// that second would drop the release it had just written. [`Self::release_nodes_now`] gives a
+    /// window naming the node the same minute. The alert engine keeps [`Self::active_windows`]:
+    /// this is only about what an operator's "take it out now" covers.
+    pub async fn windows_a_release_answers_to(
+        &self,
+    ) -> anyhow::Result<Vec<(WindowScope, String, DateTime<Utc>)>> {
+        self.windows_covering_within(RELEASE_START_SLACK_SECS).await
+    }
+
+    /// The one spelling of "covering now": switched on, not yet over, and begun - or beginning
+    /// within `lead_secs`.
+    async fn windows_covering_within(
+        &self,
+        lead_secs: i64,
+    ) -> anyhow::Result<Vec<(WindowScope, String, DateTime<Utc>)>> {
         let rows = sqlx::query(
             "SELECT scope_level, scope_id, ends_at FROM maintenance_windows \
-             WHERE enabled AND starts_at <= now() AND ends_at > now()",
+             WHERE enabled AND starts_at <= now() + make_interval(secs => $1) \
+               AND ends_at > now()",
         )
+        .bind(lead_secs as f64)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
@@ -747,7 +779,9 @@ pub(crate) async fn reconcile_exemptions(
     if rows.is_empty() {
         return Ok(0);
     }
-    let windows = maintenance.active_windows().await?;
+    // What a release answers to, not what the engine applies: a release written for a window due
+    // to begin within the slack must not be dropped in the second before it begins.
+    let windows = maintenance.windows_a_release_answers_to().await?;
     let edges = groups.edges().await?;
     let mut changed = 0;
     for row in rows {

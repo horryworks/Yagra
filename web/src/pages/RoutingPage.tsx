@@ -115,7 +115,9 @@ export function RoutingPage() {
   );
   // The tags nodes carry (ADR-259 Inc.2): what a rule's tags are picked from, and what marks a
   // rule tag nobody carries. Apart from the rule read for the reason the default route is: a
-  // failure leaves it `null`, the field falls back to free entry and nothing is marked.
+  // failure leaves it `null`: nothing is marked, and the rule dialog lists only the tags the rule
+  // already names (so a save keeps them) - there is no free entry, so a NEW tag cannot be picked
+  // until the list reads again.
   const { data: nodeTags } = useLoad<NodeTags | null>(() => api.listNodeTags(), [rules], {
     initial: null,
   });

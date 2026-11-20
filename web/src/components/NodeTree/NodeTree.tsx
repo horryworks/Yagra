@@ -885,7 +885,7 @@ export function NodeTree({
           <button
             type="button"
             onClick={() => {
-              onRelease({ action: 'take-out', nodeIds: takeOutIds });
+              onRelease({ action: 'take-out', nodeIds: takeOutIds, fromSelection: many });
               setMenu(null);
             }}
           >

@@ -181,8 +181,10 @@ function WebuiUrlCard({ canConfig }: { canConfig: boolean }) {
         setStored(v);
         setDraft(webuiUrlDraft(v));
       })
-      .catch(() => undefined);
-  }, []);
+      // Said, not swallowed: an unread address leaves the field disabled, which otherwise reads
+      // as "not permitted" rather than "could not be read".
+      .catch((e: unknown) => setError(errMsg(e, t('settings.err.load'))));
+  }, [t]);
 
   useEffect(() => {
     load();
@@ -207,7 +209,7 @@ function WebuiUrlCard({ canConfig }: { canConfig: boolean }) {
     <Card
       title={t('settings.webui.title')}
       footer={
-        canConfig && (
+        canConfig ? (
           <>
             {error && <SaveNote tone="error">{error}</SaveNote>}
             {ok && <SaveNote tone="ok">{t('settings.saved')}</SaveNote>}
@@ -219,6 +221,8 @@ function WebuiUrlCard({ canConfig }: { canConfig: boolean }) {
               {t('common:actions.save')}
             </Button>
           </>
+        ) : (
+          error && <SaveNote tone="error">{error}</SaveNote>
         )
       }
     >

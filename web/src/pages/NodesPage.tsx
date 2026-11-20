@@ -803,7 +803,9 @@ export function NodesPage() {
         case 'undo-release':
           return api.setNodeMaintenanceExemption(a.nodeId, false);
         case 'take-out':
-          return api.releaseFromMaintenance(a.nodeIds).then(() => clearChecked());
+          return api.releaseFromMaintenance(a.nodeIds).then(() => {
+            if (a.fromSelection) clearChecked();
+          });
       }
     })();
     call.then(reloadSuppression).catch((e: unknown) => scopeError(e, t('err.release')));
