@@ -40,6 +40,10 @@ pub struct Notification {
     /// JSM's `details` ("extra properties", ADR-194). Beside the payload for the reason `tags` is.
     /// Empty when nothing was resolved.
     pub details: Vec<(String, String)>,
+    /// The subject node's page in Yagra's WebUI (ADR-260), for the channel that has a field for a
+    /// link of its own: PagerDuty's `client_url`. Beside the payload for the reason `tags` is.
+    /// `None` when no WebUI address is set, or when the subject is not a node.
+    pub link: Option<String>,
 }
 
 impl Notification {
@@ -60,6 +64,7 @@ impl Notification {
             payload: payload.into(),
             tags: Vec::new(),
             details: Vec::new(),
+            link: None,
         }
     }
 
@@ -74,6 +79,13 @@ impl Notification {
     #[must_use]
     pub fn with_details(mut self, details: Vec<(String, String)>) -> Self {
         self.details = details;
+        self
+    }
+
+    /// The same notification carrying a link to its subject in Yagra's WebUI (ADR-260).
+    #[must_use]
+    pub fn with_link(mut self, link: Option<String>) -> Self {
+        self.link = link;
         self
     }
 }

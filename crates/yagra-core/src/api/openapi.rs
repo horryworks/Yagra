@@ -146,6 +146,7 @@ fn fragments() -> Vec<(&'static str, utoipa::openapi::OpenApi)> {
         ("reports", super::reports::Doc::openapi()),
         ("neighbors", super::neighbors::Doc::openapi()),
         ("retention", super::retention::Doc::openapi()),
+        ("webui_url", super::webui_url::Doc::openapi()),
         ("config_bundle", super::config_bundle::Doc::openapi()),
         ("meraki", super::meraki::Doc::openapi()),
         ("netbox", super::netbox::Doc::openapi()),

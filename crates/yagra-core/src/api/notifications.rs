@@ -499,7 +499,9 @@ async fn test_notification_channel(
             error: Some("the stored SMTP host or addresses could not be parsed".to_owned()),
         }));
     };
-    let notification = crate::alerts::notify::test_notification(kind, &open.template);
+    let webui_url = admin.repo.get_webui_url().await;
+    let notification =
+        crate::alerts::notify::test_notification(kind, &open.template, webui_url.as_deref());
     let started_at = chrono::Utc::now();
     let started = std::time::Instant::now();
     // Spawned, then awaited: a PagerDuty or JSM test opens a real incident and closes it seconds
@@ -863,14 +865,22 @@ pub(super) struct PreviewProblem {
 )]
 async fn preview_notification_template(
     _guard: RequireManageSystem,
+    State(st): State<ApiState>,
     Json(req): Json<PreviewRequest>,
 ) -> Json<PreviewResult> {
+    // The address this deployment links to, so the preview shows the link a real alert would
+    // carry - or none, when none is set (ADR-260). Skeleton mode has no settings and links nowhere.
+    let webui_url = match st.admin.as_ref() {
+        Some(admin) => admin.repo.get_webui_url().await,
+        None => None,
+    };
     let needs_json = crate::alerts::notify_render::body_must_be_json(req.kind);
     // The same sample alert, the same context builder and the same built-in wording the delivery
     // path uses — a preview that agreed only with a second copy of the rules would be worthless.
     let (alert, resolved) = crate::alerts::notify_facts::preview_sample(req.sample);
     let mut facts = crate::alerts::notify_facts::context_for(&alert, req.event, &resolved);
     facts.if_name = crate::alerts::notify_facts::preview_port_name(req.sample);
+    crate::alerts::notify_facts::with_links(&mut facts, &alert, webui_url.as_deref());
     let builtin = crate::alerts::builtin_for_kind(req.kind, &alert, req.event, Some(&facts));
     let template = TemplateBody {
         subject: req.subject,

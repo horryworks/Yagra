@@ -60,6 +60,13 @@ import {
   storeValue,
   type RetentionForm,
 } from './retentionSettings';
+import {
+  isWebuiUrlDirty,
+  webuiUrlBody,
+  webuiUrlDraft,
+  webuiUrlPlaceholder,
+} from './webuiUrl';
+import type { WebuiUrl } from '../types/api';
 import './SystemSettingsPage.css';
 
 // Mirror the backend bounds (yagra-core config.rs MIN/MAX_POLL_INTERVAL_SECS); the server
@@ -148,11 +155,88 @@ export function SystemSettingsPage() {
         </SettingRow>
         {!canConfig && <PermissionHint permission="manage_config" />}
       </Card>
+      <WebuiUrlCard canConfig={canConfig} />
       <NeighborCard canConfig={canConfig} />
       {/* Retention is how long each store keeps data — a deployment decision, not a monitoring
           one, so it asks for ManageSystem while the two cards above stay ManageConfig (ADR-057). */}
       <RetentionCard canSystem={canSystem} />
     </Page>
+  );
+}
+
+/** Settings ▸ System settings ▸ Notification links (ADR-260): the address notifications link to.
+ *  An empty field clears it, and then no notification carries a link. Judgement in `webuiUrl.ts`. */
+function WebuiUrlCard({ canConfig }: { canConfig: boolean }) {
+  const { t } = useTranslation('system');
+  const [stored, setStored] = useState<WebuiUrl | null>(null);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  const load = useCallback(() => {
+    api
+      .getWebuiUrl()
+      .then((v) => {
+        setStored(v);
+        setDraft(webuiUrlDraft(v));
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const save = () => {
+    const body = webuiUrlBody(draft);
+    setBusy(true);
+    setError(null);
+    setOk(false);
+    api
+      .updateWebuiUrl(body)
+      .then(() => {
+        setOk(true);
+        load();
+      })
+      .catch((e: unknown) => setError(errMsg(e, t('settings.err.save'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Card
+      title={t('settings.webui.title')}
+      footer={
+        canConfig && (
+          <>
+            {error && <SaveNote tone="error">{error}</SaveNote>}
+            {ok && <SaveNote tone="ok">{t('settings.saved')}</SaveNote>}
+            <Button
+              variant="primary"
+              onClick={save}
+              disabled={busy || stored === null || !isWebuiUrlDirty(stored, draft)}
+            >
+              {t('common:actions.save')}
+            </Button>
+          </>
+        )
+      }
+    >
+      <SettingRow label={t('settings.webui.name')}>
+        <TextInput
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setOk(false);
+          }}
+          placeholder={webuiUrlPlaceholder(window.location.origin)}
+          inputMode="url"
+          disabled={!canConfig || stored === null || busy}
+          aria-label={t('settings.webui.aria')}
+        />
+      </SettingRow>
+      {!canConfig && <PermissionHint permission="manage_config" />}
+    </Card>
   );
 }
 

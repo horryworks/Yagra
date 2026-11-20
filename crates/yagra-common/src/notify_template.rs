@@ -258,6 +258,19 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
                       up.",
         always_present: false,
     },
+    TemplateVariable {
+        name: "node_url",
+        description: "A link to the node's page in Yagra's WebUI. Absent until an administrator \
+                      sets the WebUI address (Settings > System settings), and for an alert \
+                      that is not about a node.",
+        always_present: false,
+    },
+    TemplateVariable {
+        name: "yagra_url",
+        description: "The address of Yagra's WebUI, with no trailing slash. Absent until an \
+                      administrator sets it (Settings > System settings).",
+        always_present: false,
+    },
 ];
 
 /// The values a notification template renders against.
@@ -344,6 +357,15 @@ pub struct AlertFacts {
     /// That upstream node's display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_cause_name: Option<String>,
+    /// The node's page in the WebUI (ADR-260): `{yagra_url}/nodes/{node_id}`. `None` when no
+    /// WebUI address is set, or when the subject is not a node. Filled by the caller
+    /// (`notify_facts::with_links`), never by `context_for`, which has no settings to read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_url: Option<String>,
+    /// The WebUI address an administrator set (ADR-260), with no trailing slash. `None` until one
+    /// is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yagra_url: Option<String>,
     /// The node's **effective** labels (ADR-135 inc. 2): its own plus every one it inherits from
     /// its inventory folder and that folder's ancestors, minus any it excludes. Empty when it
     /// carries none, or when the subject is not a node.
@@ -422,6 +444,10 @@ impl AlertFacts {
     }
 }
 
+/// The WebUI address the declared samples link to. The preview itself links to the address the
+/// deployment has set, or to nothing; this one only makes the declared sample show every variable.
+pub const SAMPLE_WEBUI_URL: &str = "https://yagra.example.com";
+
 /// A representative alert for previewing a template before it is saved.
 ///
 /// Fixed rather than sampled from live data: the preview has to work on a deployment with no
@@ -471,6 +497,10 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
         flapping: false,
         root_cause_id: Some("d41f8b06-7c25-4e93-b0a8-5f6c2d19e874".to_owned()),
         root_cause_name: Some("edge-rtr-01".to_owned()),
+        node_url: Some(format!(
+            "{SAMPLE_WEBUI_URL}/nodes/6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60"
+        )),
+        yagra_url: Some(SAMPLE_WEBUI_URL.to_owned()),
         // Two, not one: a template that writes `{{ tags | join(', ') }}` or `{{ tags | tojson }}`
         // renders differently for a one-element list than for a real one (the separator), and the
         // preview exists so the operator sees what will actually be sent.
@@ -558,6 +588,8 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         row_name: None,
         root_cause_id: None,
         root_cause_name: None,
+        node_url: None,
+        yagra_url: None,
         // Empty rather than inherited from the sample. `tags` is always *present*, so this is not
         // an "optional fact" in the serialization sense — but a node with no folder is exactly the
         // node that inherits no labels either, and this fixture is what proves

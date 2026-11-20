@@ -19,6 +19,7 @@ export const TEMPLATE_VARIABLE_GROUPS = [
   'numbers',
   'time',
   'upstream',
+  'links',
   'ids',
 ] as const;
 export type TemplateVariableGroup = (typeof TEMPLATE_VARIABLE_GROUPS)[number];
@@ -50,6 +51,8 @@ export const TEMPLATE_VARIABLE_NAMES = [
   'at_unix_ms',
   'root_cause_name',
   'root_cause_id',
+  'node_url',
+  'yagra_url',
   'node_id',
   'check_id',
   'dedup_key',
@@ -84,6 +87,8 @@ export const TEMPLATE_VARIABLE_GROUP_OF: Readonly<Record<TemplateVariableName, T
     at_unix_ms: 'time',
     root_cause_name: 'upstream',
     root_cause_id: 'upstream',
+    node_url: 'links',
+    yagra_url: 'links',
     node_id: 'ids',
     check_id: 'ids',
     dedup_key: 'ids',

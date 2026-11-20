@@ -227,6 +227,7 @@ import type {
   RediscoverApplyBody,
   RediscoverView,
   StartedRediscovery,
+  WebuiUrl,
 } from '../types/api';
 import type { DiscoverySettingsBody } from '../pages/neighborSettings';
 import { filenameFromDisposition } from '../lib/download';
@@ -653,6 +654,12 @@ export const api = {
 
   /** The data-retention policy: the editable windows plus every row of the table (ADR-040). */
   getRetention: (): Promise<RetentionPolicy> => apiGet('/api/v1/settings/retention'),
+
+  /** The WebUI address notifications link to (ADR-260); `url` is null when not set. */
+  getWebuiUrl: (): Promise<WebuiUrl> => apiGet('/api/v1/settings/webui-url'),
+
+  /** Set the WebUI address, or clear it with an empty string. ManageConfig-gated. */
+  updateWebuiUrl: (body: WebuiUrl): Promise<void> => apiPut('/api/v1/settings/webui-url', { body }),
 
   /** Update the retention windows. ManageConfig-gated; applies without a restart. */
   updateRetention: (body: RetentionValues): Promise<void> =>

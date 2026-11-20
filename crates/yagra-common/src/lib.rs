@@ -129,7 +129,7 @@ pub use node_kind::{NodeKind, NodeRows};
 pub use notify_template::sample_row_facts;
 pub use notify_template::{
     minimal_facts, preview_facts, sample_facts, AlertFacts, DerivedFacts, NotifyEvent,
-    PreviewSample, TemplateVariable, TEMPLATE_VARIABLES,
+    PreviewSample, TemplateVariable, SAMPLE_WEBUI_URL, TEMPLATE_VARIABLES,
 };
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};

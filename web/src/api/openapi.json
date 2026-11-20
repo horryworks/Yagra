@@ -24339,6 +24339,117 @@
         }
       }
     },
+    "/api/v1/settings/webui-url": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "operationId": "get_webui_url",
+        "responses": {
+          "200": {
+            "description": "The WebUI address notifications link to, or null when not set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebuiUrl"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "operationId": "set_webui_url",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebuiUrl"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved; notifications sent from the next routing refresh (within 30 seconds) carry links built from it. An empty or null `url` clears it"
+          },
+          "400": {
+            "description": "Not an absolute http/https URL, or it carries a query, a fragment or credentials, or it is too long (`invalid_webui_url`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/shared-dashboard": {
       "get": {
         "tags": [
@@ -50014,6 +50125,19 @@
           "subject": {
             "type": "string",
             "description": "Distinguished name of the certificate's subject."
+          }
+        }
+      },
+      "WebuiUrl": {
+        "type": "object",
+        "description": "The address operators open the WebUI at.",
+        "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An absolute `http`/`https` URL with no query and no fragment, without a trailing `/`\n(for example `https://yagra.example.com`). `null` when not set; notifications then carry no\nlink to Yagra."
           }
         }
       },

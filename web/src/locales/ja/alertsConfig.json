@@ -159,6 +159,7 @@
         "numbers": "測った値",
         "time": "いつ",
         "upstream": "上流の障害",
+        "links": "リンク",
         "ids": "外部ツール向けの ID"
       },
       "vars": {
@@ -261,6 +262,14 @@
         "root_cause_id": {
           "label": "上流ノードの ID",
           "desc": "そのノードの UUID"
+        },
+        "node_url": {
+          "label": "ノード画面へのリンク",
+          "desc": "Yagra のノード画面。WebUI のアドレスを設定するまで空"
+        },
+        "yagra_url": {
+          "label": "Yagra のアドレス",
+          "desc": "システム設定で入れた WebUI のアドレス"
         },
         "node_id": {
           "label": "ノード ID",

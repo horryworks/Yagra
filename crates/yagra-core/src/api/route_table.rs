@@ -2128,6 +2128,21 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/settings/webui-url",
+        Global("the deployment's own WebUI address, the same for every caller; it names no node"),
+        Tool("get_config"),
+    ),
+    (
+        "PUT",
+        "/api/v1/settings/webui-url",
+        Refused(
+            "the WebUI address is one setting for the whole deployment, so an account restricted \
+             to folders is refused rather than allowed to change what every notification links to",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/settings/bus",
         ADMIN_CFG,
         // Same argument as `/settings/tls` below, one component over: this is the deployment's own

@@ -25,7 +25,7 @@ use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, Direction, NotifyEvent,
 use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore, HoursPolicy};
 use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
 use crate::alerts::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
-use crate::alerts::notify_facts::{context_for, node_ids_for, AlertFactsSource};
+use crate::alerts::notify_facts::{context_for, node_ids_for, with_links, AlertFactsSource};
 use crate::alerts::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
 
 use super::NotifyAction;
@@ -413,6 +413,12 @@ fn pagerduty_body(
             "severity": notification.severity.as_str(),
             "custom_details": details,
         });
+        // The incident's "View in Yagra" link (ADR-260). Outside the payload, so it is added
+        // whether the payload is the built-in JSON or an operator's template.
+        if let Some(link) = &notification.link {
+            body["client"] = serde_json::Value::from("Yagra");
+            body["client_url"] = serde_json::Value::from(link.as_str());
+        }
     }
     body
 }
@@ -749,13 +755,21 @@ pub(crate) struct TestDelivery {
 ///   carries no mark in its payload - the dialog says so;
 /// - the check id is new on every call, so PagerDuty's `dedup_key` and JSM's `alias` never fold a
 ///   test into an incident opened by an earlier one.
-pub(crate) fn test_notification(kind: ChannelKind, template: &ChannelTemplate) -> Notification {
+///
+/// `webui_url` is the address the deployment has set, so a test carries the link a real alert
+/// would (ADR-260); `None` sends none, as a real alert would not.
+pub(crate) fn test_notification(
+    kind: ChannelKind,
+    template: &ChannelTemplate,
+    webui_url: Option<&str>,
+) -> Notification {
     let (mut alert, resolved) =
         crate::alerts::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
     alert.check = CheckId::from(Uuid::new_v4());
     let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
     facts.if_name =
         crate::alerts::notify_facts::preview_port_name(yagra_common::PreviewSample::Threshold);
+    with_links(&mut facts, &alert, webui_url);
     let builtin = builtin_for_kind(kind, &alert, NotifyEvent::Fire, Some(&facts));
     let builtin = Notification {
         payload: mark_as_test(kind, &builtin.payload),
@@ -1162,6 +1176,9 @@ pub struct Notifier {
     /// Where a notification outside its node's hours is kept until they open (ADR-226 decision
     /// 7). `None` in skeleton mode and in tests that do not ask, which holds nothing.
     held: RwLock<Option<Arc<dyn HeldStore>>>,
+    /// The WebUI address an administrator set (ADR-260), which every notification links to.
+    /// `None` until one is set, and then nothing a notification carries changes at all.
+    webui_url: RwLock<Option<Arc<str>>>,
 }
 
 impl Notifier {
@@ -1227,6 +1244,7 @@ impl Notifier {
             any_templates: AtomicBool::new(false),
             any_facts_channel: AtomicBool::new(false),
             any_tag_rules: AtomicBool::new(false),
+            webui_url: RwLock::new(None),
             delivery_log: RwLock::new(None),
             sides: std::sync::Mutex::new(HashMap::new()),
             default_kinds,
@@ -1256,6 +1274,23 @@ impl Notifier {
     /// templates render ids instead of names.
     pub fn set_facts_source(&self, source: Arc<dyn AlertFactsSource>) {
         *self.facts.write().expect("notifier facts lock poisoned") = Some(source);
+    }
+
+    /// Replace the WebUI address notifications link to (ADR-260). Read again on every routing
+    /// refresh, so a change reaches the next notification within one refresh.
+    pub fn set_webui_url(&self, url: Option<String>) {
+        *self
+            .webui_url
+            .write()
+            .expect("notifier webui lock poisoned") = url.map(Arc::from);
+    }
+
+    /// The WebUI address, cloned out of the lock — never held across an await.
+    fn webui_url(&self) -> Option<Arc<str>> {
+        self.webui_url
+            .read()
+            .expect("notifier webui lock poisoned")
+            .clone()
     }
 
     /// Replace the DB routing snapshot. Channels that still exist keep their dispatcher (so the
@@ -1399,12 +1434,21 @@ impl Notifier {
     /// template; since ADR-194 a JSM or email channel writes its built-in text from it; and since
     /// ADR-259 a routing rule that names tags is decided from its `tags`. A deployment with none
     /// of those still issues no query at all, which is the property this gate has always been for.
+    ///
+    /// The one exception is a set WebUI address (ADR-260): every channel then carries a link, and
+    /// a link needs only the alert, so a deployment that reads nothing else gets the facts
+    /// `context_for` builds from the alert alone — still without a query.
     async fn context(&self, alert: &Alert, event: NotifyEvent) -> Option<AlertFacts> {
+        let webui = self.webui_url();
         if !self.any_templates.load(Ordering::Relaxed)
             && !self.any_facts_channel.load(Ordering::Relaxed)
             && !self.any_tag_rules.load(Ordering::Relaxed)
         {
-            return None;
+            return webui.map(|base| {
+                let mut facts = context_for(alert, event, &HashMap::new());
+                with_links(&mut facts, alert, Some(&base));
+                facts
+            });
         }
         // Every subject renders through a template now. The vocabulary carries `subject_kind` and
         // an always-present `subject_name` so a template can read correctly for both kinds; a
@@ -1433,6 +1477,7 @@ impl Notifier {
                 facts.node_name = name;
             }
         }
+        with_links(&mut facts, alert, webui.as_deref());
         Some(facts)
     }
 
@@ -1864,7 +1909,8 @@ fn with_subject_facts(n: Notification, facts: Option<&AlertFacts>) -> Notificati
     match facts {
         Some(f) => n
             .with_tags(f.tags.clone())
-            .with_details(crate::alerts::notify_text::details(f)),
+            .with_details(crate::alerts::notify_text::details(f))
+            .with_link(f.node_url.clone()),
         None => n,
     }
 }
@@ -2004,8 +2050,27 @@ fn json_notification(
         }
         (Subject::ConfigRemote, event) => crate::alerts::notify_text::config_remote_title(event),
     };
-    let payload = serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned());
+    let payload = with_node_url(
+        serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned()),
+        facts.and_then(|f| f.node_url.as_deref()),
+    );
     Notification::for_alert(alert, summary, payload)
+}
+
+/// The built-in alert JSON with the node's page added at the top as `node_url` (ADR-260), when
+/// there is one. Without a link the text comes back untouched, byte for byte: a deployment that
+/// has not set a WebUI address sends exactly what it sent before.
+fn with_node_url(payload: String, node_url: Option<&str>) -> String {
+    let Some(url) = node_url else {
+        return payload;
+    };
+    match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(serde_json::Value::Object(mut obj)) => {
+            obj.insert("node_url".to_owned(), serde_json::Value::from(url));
+            serde_json::Value::Object(obj).to_string()
+        }
+        _ => payload,
+    }
 }
 
 /// The built-in subject of a **node** alert, written as a notification template (ADR-039 Inc.2).
@@ -2909,6 +2974,7 @@ mod tests {
             payload: String::new(),
             tags: Vec::new(),
             details: Vec::new(),
+            link: None,
         };
         let node = NodeId::from(Uuid::from_u128(1));
         let url = jsm_close_url("https://api.example/v2", &notification(Subject::Node(node)));
@@ -4011,7 +4077,7 @@ mod test_send_tests {
 
     #[test]
     fn the_built_in_test_is_marked_in_the_subject_and_in_the_json() {
-        let n = test_notification(ChannelKind::Webhook, &ChannelTemplate::default());
+        let n = test_notification(ChannelKind::Webhook, &ChannelTemplate::default(), None);
         assert!(n.summary.starts_with(TEST_SUBJECT_PREFIX), "{}", n.summary);
         let body: serde_json::Value = serde_json::from_str(&n.payload).unwrap();
         assert_eq!(body["test"], true, "{body}");
@@ -4022,7 +4088,7 @@ mod test_send_tests {
     #[test]
     fn the_built_in_test_is_marked_on_the_first_line_of_a_text_body() {
         for kind in [ChannelKind::Jsm, ChannelKind::Email] {
-            let n = test_notification(kind, &ChannelTemplate::default());
+            let n = test_notification(kind, &ChannelTemplate::default(), None);
             assert!(n.summary.starts_with(TEST_SUBJECT_PREFIX), "{}", n.summary);
             assert!(
                 n.payload.starts_with(&format!(
@@ -4048,6 +4114,7 @@ mod test_send_tests {
                 Some("{{ severity }} on {{ node_name }}"),
                 Some("{{ node_name }} is down"),
             ),
+            None,
         );
         assert_eq!(
             n.summary,
@@ -4060,7 +4127,7 @@ mod test_send_tests {
     /// A subject-only template keeps the built-in body, so that body still carries the mark.
     #[test]
     fn a_subject_only_template_keeps_the_marked_built_in_body() {
-        let n = test_notification(ChannelKind::PagerDuty, &template(Some("x"), None));
+        let n = test_notification(ChannelKind::PagerDuty, &template(Some("x"), None), None);
         assert_eq!(n.summary, format!("{TEST_SUBJECT_PREFIX}x"));
         let body: serde_json::Value = serde_json::from_str(&n.payload).unwrap();
         assert_eq!(body["test"], true);
@@ -4073,6 +4140,7 @@ mod test_send_tests {
         let n = test_notification(
             ChannelKind::Webhook,
             &template(None, Some("{{ nope.attr }}")),
+            None,
         );
         let body: serde_json::Value = serde_json::from_str(&n.payload).unwrap();
         assert_eq!(body["test"], true);
@@ -4082,8 +4150,8 @@ mod test_send_tests {
     /// incident, nor into an incident a real alert opened.
     #[test]
     fn every_test_has_its_own_dedup_key() {
-        let a = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
-        let b = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        let a = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default(), None);
+        let b = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default(), None);
         assert_ne!(dedup_string(&a.dedup_key), dedup_string(&b.dedup_key));
         let (sample, _) =
             crate::alerts::notify_facts::preview_sample(yagra_common::PreviewSample::Threshold);
@@ -4130,7 +4198,7 @@ mod test_send_tests {
     #[tokio::test]
     async fn an_incident_channel_is_fired_then_closed() {
         let ch = Fake::new(false, false);
-        let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default(), None);
         let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
         assert_eq!(ch.calls(), ["fire", "close"]);
         assert!(out.delivered);
@@ -4144,7 +4212,7 @@ mod test_send_tests {
     #[tokio::test]
     async fn a_channel_with_no_incident_is_sent_once() {
         let ch = Fake::new(false, false);
-        let n = test_notification(ChannelKind::Webhook, &ChannelTemplate::default());
+        let n = test_notification(ChannelKind::Webhook, &ChannelTemplate::default(), None);
         let out = send_test(&ch, &n, None).await;
         assert_eq!(ch.calls(), ["fire"]);
         assert_eq!(out.closed, None);
@@ -4155,7 +4223,7 @@ mod test_send_tests {
     #[tokio::test]
     async fn a_failed_fire_is_reported_once_and_not_closed() {
         let ch = Fake::new(true, false);
-        let n = test_notification(ChannelKind::Jsm, &ChannelTemplate::default());
+        let n = test_notification(ChannelKind::Jsm, &ChannelTemplate::default(), None);
         let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
         assert_eq!(ch.calls(), ["fire"]);
         assert!(!out.delivered);
@@ -4170,7 +4238,7 @@ mod test_send_tests {
     #[tokio::test]
     async fn a_failed_close_is_reported_as_delivered_but_still_open() {
         let ch = Fake::new(false, true);
-        let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default());
+        let n = test_notification(ChannelKind::PagerDuty, &ChannelTemplate::default(), None);
         let out = send_test(&ch, &n, Some(std::time::Duration::ZERO)).await;
         assert_eq!(ch.calls(), ["fire", "close"]);
         assert!(out.delivered);
@@ -4315,5 +4383,147 @@ mod test_send_tests {
                 .body(body.to_owned())
                 .unwrap(),
         )
+    }
+}
+
+/// ADR-260: the link to the node's page, on every channel kind once an address is set, and
+/// nowhere when none is.
+#[cfg(test)]
+mod webui_link_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use yagra_common::{NodeId, NodeState, PreviewSample};
+
+    const BASE: &str = "https://yagra.example.com";
+
+    /// A channel that keeps what it was handed.
+    struct Keep(Arc<Mutex<Vec<Notification>>>);
+
+    #[async_trait]
+    impl NotifyChannel for Keep {
+        async fn deliver(&self, n: &Notification) -> Result<(), NotifyError> {
+            self.0.lock().unwrap().push(n.clone());
+            Ok(())
+        }
+    }
+
+    fn node_alert(node: NodeId) -> Alert {
+        Alert {
+            subject: Subject::Node(node),
+            check: yagra_alert::rules::check_id(node, "icmp_rtt_ms"),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: "icmp_rtt_ms".to_owned(),
+            breach: None,
+            ifindex: None,
+            row: None,
+            row_name: None,
+            notify_held_until: None,
+        }
+    }
+
+    #[test]
+    fn every_builtin_kind_carries_the_link_once_an_address_is_set() {
+        let (alert, resolved) =
+            crate::alerts::notify_facts::preview_sample(PreviewSample::Liveness);
+        let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+        let mut linked = facts.clone();
+        with_links(&mut linked, &alert, Some(BASE));
+        let url = linked.node_url.clone().expect("a node alert links");
+        for kind in [
+            ChannelKind::Webhook,
+            ChannelKind::PagerDuty,
+            ChannelKind::Jsm,
+            ChannelKind::Email,
+        ] {
+            with_links(&mut facts, &alert, None);
+            let plain = builtin_for_kind(kind, &alert, NotifyEvent::Fire, Some(&facts));
+            assert_eq!(plain.link, None, "{kind:?}");
+            assert!(!plain.payload.contains(BASE), "{kind:?}: {}", plain.payload);
+
+            let with = builtin_for_kind(kind, &alert, NotifyEvent::Fire, Some(&linked));
+            assert_eq!(with.link.as_deref(), Some(url.as_str()), "{kind:?}");
+            assert!(with.payload.contains(&url), "{kind:?}: {}", with.payload);
+        }
+        // The webhook's alert JSON gains one key, at the top, and nothing else changes.
+        let plain = builtin_for_kind(
+            ChannelKind::Webhook,
+            &alert,
+            NotifyEvent::Fire,
+            Some(&facts),
+        );
+        let with = builtin_for_kind(
+            ChannelKind::Webhook,
+            &alert,
+            NotifyEvent::Fire,
+            Some(&linked),
+        );
+        let mut a: serde_json::Value = serde_json::from_str(&plain.payload).unwrap();
+        let b: serde_json::Value = serde_json::from_str(&with.payload).unwrap();
+        assert_eq!(b["node_url"], url.as_str());
+        a["node_url"] = serde_json::Value::from(url.as_str());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pagerduty_shows_the_link_as_its_client_url_on_a_trigger_only() {
+        let (alert, resolved) =
+            crate::alerts::notify_facts::preview_sample(PreviewSample::Threshold);
+        let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+        with_links(&mut facts, &alert, Some(BASE));
+        let n = builtin_for_kind(
+            ChannelKind::PagerDuty,
+            &alert,
+            NotifyEvent::Fire,
+            Some(&facts),
+        );
+        let trigger = pagerduty_body("key", "trigger", &n, true);
+        assert_eq!(trigger["client"], "Yagra");
+        assert_eq!(
+            trigger["client_url"],
+            facts.node_url.clone().unwrap().as_str()
+        );
+        let resolve = pagerduty_body("key", "resolve", &n, false);
+        assert!(resolve.get("client_url").is_none());
+
+        with_links(&mut facts, &alert, None);
+        let n = builtin_for_kind(
+            ChannelKind::PagerDuty,
+            &alert,
+            NotifyEvent::Fire,
+            Some(&facts),
+        );
+        assert!(pagerduty_body("key", "trigger", &n, true)
+            .get("client_url")
+            .is_none());
+    }
+
+    /// A deployment whose only channel is a webhook reads no facts at all; once an address is
+    /// set it still gets the link, built from the alert alone.
+    #[tokio::test]
+    async fn a_webhook_only_deployment_links_without_reading_any_facts() {
+        let kept = Arc::new(Mutex::new(Vec::new()));
+        let n = Notifier::with_default(Some(Arc::new(Keep(kept.clone()))));
+        let node = NodeId::new();
+
+        n.handle(NotifyAction::Fire(node_alert(node))).await;
+        let first = kept.lock().unwrap().pop().expect("delivered");
+        assert_eq!(first.link, None);
+        assert!(!first.payload.contains("node_url"), "{}", first.payload);
+
+        n.set_webui_url(Some(BASE.to_owned()));
+        n.handle(NotifyAction::Resolve(node_alert(node))).await;
+        let mut other = node_alert(NodeId::new());
+        other.check = yagra_alert::rules::check_id(node, "icmp_loss_pct");
+        let other_node = other.node().unwrap();
+        n.handle(NotifyAction::Fire(other)).await;
+        let linked = kept.lock().unwrap().pop().expect("delivered");
+        let want = format!("{BASE}/nodes/{}", other_node.as_uuid());
+        assert_eq!(linked.link.as_deref(), Some(want.as_str()));
+        let body: serde_json::Value = serde_json::from_str(&linked.payload).unwrap();
+        assert_eq!(body["node_url"], want.as_str());
     }
 }

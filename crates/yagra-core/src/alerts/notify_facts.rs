@@ -268,7 +268,30 @@ pub fn context_for(
                 .get(&r)
                 .map_or_else(|| r.to_string(), |f| f.name.clone())
         }),
+        // Pure, so it cannot read the WebUI address: the caller fills both (`with_links`).
+        node_url: None,
+        yagra_url: None,
     }
+}
+
+/// The path of a node's page in the WebUI, before its id (ADR-260).
+///
+/// A second copy of `web/src/lib/entityHref.ts::nodeHref`, which is unavoidable — a notification is
+/// written by core, the page is drawn by the WebUI. `the_node_link_is_the_page_the_webui_draws`
+/// reads that file and fails when the two disagree, because a link that drifts does not fail: it
+/// opens the WebUI's "not found" page from somebody's inbox during an outage.
+pub(crate) const NODE_PAGE_PATH: &str = "/nodes/";
+
+/// Fill the two link variables from the WebUI address an administrator set (ADR-260).
+///
+/// `yagra_url` is the address itself, for every subject. `node_url` is the subject node's page,
+/// only when the alert is about a node: a poller pool or a Meraki organization has no page of that
+/// shape, and a link built from `node_id` there (`pool:<name>`) would be a broken one.
+pub fn with_links(facts: &mut AlertFacts, alert: &Alert, webui_url: Option<&str>) {
+    facts.yagra_url = webui_url.map(str::to_owned);
+    facts.node_url = webui_url
+        .zip(alert.node())
+        .map(|(base, node)| format!("{base}{NODE_PAGE_PATH}{}", node.as_uuid()));
 }
 
 /// The alert the template preview renders against, with its node facts already resolved.
@@ -492,6 +515,7 @@ pub(crate) mod tests {
             for event in NotifyEvent::ALL {
                 let mut facts = context_for(&alert, event, &resolved);
                 facts.if_name = preview_port_name(sample);
+                with_links(&mut facts, &alert, Some(yagra_common::SAMPLE_WEBUI_URL));
                 assert_eq!(
                     facts,
                     yagra_common::preview_facts(event, sample),
@@ -500,6 +524,47 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// The link a notification carries opens the page the WebUI draws for that node. The WebUI's
+    /// side is read as text: `nodeHref` must return the path below followed by the id.
+    #[test]
+    fn the_node_link_is_the_page_the_webui_draws() {
+        let web = include_str!("../../../../web/src/lib/entityHref.ts");
+        let needle = format!("return `{NODE_PAGE_PATH}${{id}}`;");
+        assert!(
+            web.contains(&needle),
+            "web/src/lib/entityHref.ts no longer builds a node page as `{NODE_PAGE_PATH}<id>`; \
+             change NODE_PAGE_PATH with it"
+        );
+    }
+
+    #[test]
+    fn a_link_is_built_only_when_an_address_is_set_and_only_for_a_node() {
+        let (alert, resolved) = preview_sample(PreviewSample::Threshold);
+        let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+        with_links(&mut facts, &alert, None);
+        assert_eq!(
+            (facts.node_url.as_deref(), facts.yagra_url.as_deref()),
+            (None, None)
+        );
+
+        with_links(&mut facts, &alert, Some("https://example.com/yagra"));
+        assert_eq!(
+            facts.yagra_url.as_deref(),
+            Some("https://example.com/yagra")
+        );
+        assert_eq!(
+            facts.node_url,
+            Some(format!("https://example.com/yagra/nodes/{}", facts.node_id))
+        );
+
+        let mut pool = alert.clone();
+        pool.subject = yagra_alert::Subject::Pool("tokyo".to_owned());
+        let mut facts = context_for(&pool, NotifyEvent::Fire, &HashMap::new());
+        with_links(&mut facts, &pool, Some("https://example.com"));
+        assert_eq!(facts.node_url, None, "a pool has no node page");
+        assert_eq!(facts.yagra_url.as_deref(), Some("https://example.com"));
     }
 
     #[test]

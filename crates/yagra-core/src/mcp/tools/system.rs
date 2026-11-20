@@ -184,6 +184,7 @@ pub(super) enum ConfigKind {
     ReportSchedules,
     Retention,
     AdjacencySettings,
+    WebuiUrl,
     Llm,
     Roles,
     Oidc,
@@ -225,6 +226,7 @@ yagra_base::stored_enum::token_enum!(ConfigKind, [
     ReportSchedules => "report_schedules",
     Retention => "retention",
     AdjacencySettings => "adjacency_settings",
+    WebuiUrl => "webui_url",
     Llm => "llm",
     Roles => "roles",
     Oidc => "oidc",
@@ -279,6 +281,7 @@ impl ConfigKind {
             | Self::ReportSchedules
             | Self::Retention
             | Self::AdjacencySettings
+            | Self::WebuiUrl
             | Self::Llm
             | Self::Roles
             | Self::Oidc
@@ -323,6 +326,7 @@ impl ConfigKind {
             Self::ReportSchedules => "report_schedules",
             Self::Retention => "retention",
             Self::AdjacencySettings => "adjacency_settings",
+            Self::WebuiUrl => "webui_url",
             Self::Llm => "llm",
             Self::Roles => "roles",
             Self::Oidc => "oidc",
@@ -347,7 +351,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 38 values.
+    /// Which configuration to read. Required; see the tool description for the 39 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -931,7 +935,8 @@ impl YagraMcp {
                        as Active; the API token \
                        is never included); **forwarding** — forward_destinations; **reports** — \
                        report_definitions, report_schedules; **deployment settings** — retention, \
-                       adjacency_settings, llm, roles, oidc, ldap. \
+                       adjacency_settings, webui_url (the address notifications link to; null \
+                       when not set), llm, roles, oidc, ldap. \
                        **Reading kind=thresholds.** A rule is `{scope_level, scope_ids, metric, \
                        warning_below, critical_below, warning_above, critical_above, \
                        dwell_samples}` and fires when `metric` crosses any bound it names for \
@@ -967,7 +972,7 @@ impl YagraMcp {
                        notification_channels, routing_rules, node_tags, notification_default_route, \
                        delivery_hours, alert_grouping, forward_destinations and llm need manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
                        discovery_candidates, the four meraki kinds, the two report kinds, \
-                       retention, adjacency_settings and roles need view; the rest need \
+                       retention, adjacency_settings, webui_url and roles need view; the rest need \
                        manage-config. This reads configuration only — no tool changes it. No \
                        stored secret is returned: url_check reports whether a credential is \
                        bound, not which one."
@@ -1278,6 +1283,7 @@ impl YagraMcp {
             ConfigKind::AdjacencySettings => {
                 ok_json(TOOL, &crate::api::neighbors::adjacency_config(a).await)
             }
+            ConfigKind::WebuiUrl => ok_json(TOOL, &crate::api::webui_url::current(a).await),
             ConfigKind::Llm => match crate::api::rca::llm_config_view(a).await {
                 Ok(view) => ok_json(TOOL, &view),
                 Err(e) => tool_api_error(TOOL, &e),
@@ -1665,7 +1671,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            38,
+            39,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

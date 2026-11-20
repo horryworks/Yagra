@@ -640,6 +640,12 @@ pub(crate) async fn load_hours(
     cache.key = Some(key);
 }
 
+/// Load the WebUI address notifications link to (ADR-260). A read that fails reads as "not set",
+/// which costs a notification its link rather than pointing it somewhere nobody chose.
+pub(crate) async fn load_webui_url(notifier: &Notifier, repo: &NodeRepo) {
+    notifier.set_webui_url(repo.get_webui_url().await);
+}
+
 /// Load the DB notification channels + routing rules into the notifier. Failures degrade to
 /// the existing snapshot (warn) rather than dropping routing.
 pub(crate) async fn load_routing(notifier: &Notifier, notifications: &NotificationRepo) {

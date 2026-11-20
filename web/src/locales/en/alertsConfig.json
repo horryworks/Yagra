@@ -165,6 +165,7 @@
         "numbers": "Measured values",
         "time": "When",
         "upstream": "Upstream failure",
+        "links": "Links",
         "ids": "IDs for other tools"
       },
       "vars": {
@@ -267,6 +268,14 @@
         "root_cause_id": {
           "label": "Upstream node ID",
           "desc": "That node’s UUID"
+        },
+        "node_url": {
+          "label": "Node page link",
+          "desc": "The node's page in Yagra; empty until the WebUI address is set"
+        },
+        "yagra_url": {
+          "label": "Yagra address",
+          "desc": "The WebUI address set in System settings"
         },
         "node_id": {
           "label": "Node ID",

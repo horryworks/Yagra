@@ -2085,6 +2085,7 @@ export type RetentionRow = components['schemas']['RetentionRow'];
 
 /** The four windows `PUT /api/v1/settings/retention` accepts. */
 export type RetentionValues = components['schemas']['RetentionValues'];
+export type WebuiUrl = components['schemas']['WebuiUrl'];
 
 /** Whether every stored credential still decrypts under the loaded KEK — the assertion a database
  *  restore cannot make on its own, since rows can come back whole while the key did not. */

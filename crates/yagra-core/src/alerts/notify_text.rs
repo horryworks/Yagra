@@ -18,7 +18,7 @@ use yagra_alert::{Alert, Subject};
 use yagra_common::{AlertFacts, NotifyEvent};
 
 /// The longest value put into one JSM `details` entry. JSM caps the whole map at 8,000 characters;
-/// sixteen keys at this length, with their names, stay inside it.
+/// seventeen keys at this length, with their names, stay inside it.
 pub(crate) const DETAIL_VALUE_MAX_CHARS: usize = 450;
 
 /// Prefix of the test notification's text body (ADR-192 decision 1 / ADR-194 decision 5).
@@ -177,6 +177,11 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
     if matches!(alert.subject, Subject::Node(_)) {
         lines.push(("Node ID", facts.node_id.clone()));
     }
+    // Last, so the link is where a reader's eye ends up. Only once a WebUI address is set
+    // (ADR-260), and only for a node: the other subjects have no page of that shape.
+    if let Some(url) = &facts.node_url {
+        lines.push(("Yagra", url.clone()));
+    }
 
     let mut out = subject(alert, facts);
     out.push_str("\n\n");
@@ -187,11 +192,13 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
 }
 
 /// JSM's `details` ("extra properties"), in a fixed order. Keys with no value are left out, and
-/// each value is cut at [`DETAIL_VALUE_MAX_CHARS`].
+/// each value is cut at [`DETAIL_VALUE_MAX_CHARS`] - which a `node_url` never reaches, because the
+/// WebUI address is capped well below it (`api/webui_url.rs::MAX_WEBUI_URL_LEN`), so a link is
+/// never cut into a broken one.
 #[must_use]
 pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
     let num = |v: Option<f64>| v.map(fmt_num);
-    let pairs: [(&str, Option<String>); 16] = [
+    let pairs: [(&str, Option<String>); 17] = [
         ("node", Some(facts.subject_name.clone())),
         ("address", facts.node_address.clone()),
         ("folder", facts.group.clone()),
@@ -208,6 +215,7 @@ pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
         ("state", Some(facts.state.clone())),
         ("node_id", Some(facts.node_id.clone())),
         ("subject_kind", Some(facts.subject_kind.clone())),
+        ("node_url", facts.node_url.clone()),
     ];
     pairs
         .into_iter()
@@ -286,6 +294,7 @@ pub(crate) fn node_body_template(event: NotifyEvent) -> String {
     out.push_str(&when("flapping", "Flapping", "yes"));
     out.push_str(&line("Alert key", "{{ dedup_key }}"));
     out.push_str(&line("Node ID", "{{ node_id }}"));
+    out.push_str(&when("node_url is defined", "Yagra", "{{ node_url }}"));
     // minijinja drops one trailing newline from what it renders, and [`body`] ends in one.
     out.push('\n');
     out
@@ -380,6 +389,32 @@ mod tests {
         for absent in ["address", "folder", "metric", "value", "threshold"] {
             assert!(!keys.iter().any(|k| k == absent), "{absent} in {keys:?}");
         }
+    }
+
+    /// A link appears in the body and the details only once an address is set (ADR-260), so a
+    /// deployment that never sets one reads exactly what it read before.
+    #[test]
+    fn the_link_is_the_last_line_and_a_detail_only_when_an_address_is_set() {
+        let (alert, resolved) = preview_sample(PreviewSample::Threshold);
+        let mut facts = context_for(&alert, NotifyEvent::Fire, &resolved);
+        let without = body(&alert, &facts);
+        assert!(!without.contains("Yagra:"), "{without}");
+        assert!(!details(&facts).iter().any(|(k, _)| k == "node_url"));
+
+        crate::alerts::notify_facts::with_links(&mut facts, &alert, Some("https://example.com"));
+        let url = facts.node_url.clone().expect("a node alert links");
+        let with = body(&alert, &facts);
+        assert_eq!(
+            with.lines().last(),
+            Some(format!("Yagra:     {url}").as_str()),
+            "{with}"
+        );
+        assert!(
+            with.starts_with(without.trim_end()),
+            "only a line is added: {with}"
+        );
+        let d: HashMap<_, _> = details(&facts).into_iter().collect();
+        assert_eq!(d["node_url"], url);
     }
 
     #[test]

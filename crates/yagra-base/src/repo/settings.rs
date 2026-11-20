@@ -361,6 +361,33 @@ impl NodeRepo {
         Ok(())
     }
 
+    /// The address operators open the WebUI at, for links in notifications (ADR-260). `None` when
+    /// no one has set it — and on a read error, which costs one notification its link rather than
+    /// pointing it somewhere the operator never said.
+    pub async fn get_webui_url(&self) -> Option<String> {
+        sqlx::query("SELECT webui_url FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.try_get::<Option<String>, _>("webui_url").ok())
+            .flatten()
+    }
+
+    /// Set (or, with `None`, clear) the WebUI address, upserting the singleton row. The caller has
+    /// already normalized it.
+    pub async fn set_webui_url(&self, url: Option<&str>) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, webui_url, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET webui_url = $1, updated_at = now()",
+        )
+        .bind(url)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Whether this deployment serves the public board to anonymous visitors (ADR-123 decision 1).
     ///
     /// Reads **fail-closed**: a missing row, an unreadable value or any error reports `false`.

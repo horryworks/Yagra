@@ -113,6 +113,7 @@ pub(crate) mod users;
 pub(crate) mod util;
 pub(crate) mod vlans;
 mod webtls;
+pub(crate) mod webui_url;
 pub(crate) mod wireless;
 
 pub(crate) use error::error_response;
@@ -546,6 +547,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(reports::routes())
         .merge(neighbors::routes())
         .merge(retention::routes())
+        .merge(webui_url::routes())
         // Configuration bundle export/import (ADR-040 decision 3): move a configuration between
         // deployments. Admin-only in both directions, and it carries no secrets.
         .merge(config_bundle::routes())

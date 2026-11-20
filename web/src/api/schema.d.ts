@@ -4972,6 +4972,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/webui-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_webui_url"];
+        put: operations["set_webui_url"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/shared-dashboard": {
         parameters: {
             query?: never;
@@ -16591,6 +16607,15 @@ export interface components {
             source: components["schemas"]["TlsCertSource"];
             /** @description Distinguished name of the certificate's subject. */
             subject: string;
+        };
+        /** @description The address operators open the WebUI at. */
+        WebuiUrl: {
+            /**
+             * @description An absolute `http`/`https` URL with no query and no fragment, without a trailing `/`
+             *     (for example `https://yagra.example.com`). `null` when not set; notifications then carry no
+             *     link to Yagra.
+             */
+            url?: string | null;
         };
         /**
          * @description How a maintenance window is scoped: `Node` = node id, `Profile` = device-class id,
@@ -36216,6 +36241,111 @@ export interface operations {
                 };
             };
             /** @description This deployment has no certificate store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_webui_url: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The WebUI address notifications link to, or null when not set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebuiUrl"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_webui_url: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebuiUrl"];
+            };
+        };
+        responses: {
+            /** @description Saved; notifications sent from the next routing refresh (within 30 seconds) carry links built from it. An empty or null `url` clears it */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not an absolute http/https URL, or it carries a query, a fragment or credentials, or it is too long (`invalid_webui_url`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the account is restricted to folders (`scope_unsupported`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

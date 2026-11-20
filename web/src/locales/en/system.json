@@ -350,6 +350,11 @@
       "seconds": "seconds",
       "info": "A device profile's own interval takes precedence over this."
     },
+    "webui": {
+      "title": "Notification links",
+      "name": "WebUI address",
+      "aria": "WebUI address notifications link to"
+    },
     "err": {
       "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
       "save": "failed to save setting"
