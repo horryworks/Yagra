@@ -9,6 +9,7 @@
 //
 // It lived in `NodeTree.tsx`, so no test could reach it. It can now.
 
+import { maintenanceStateIsCurrent } from '../../lib/suppression';
 import type { SuppressionIndex, SuppressionTarget } from '../../lib/suppression';
 import { actsOnSelection } from './nodeTreeSelect';
 import type { NodeGroup, NodeSummary } from '../../types/api';
@@ -104,7 +105,7 @@ export function hasSuppression(
   return (
     !!suppression?.maintenanceNodes.has(target.id) ||
     !!suppression?.exemptMaintenanceNodes.has(target.id) ||
-    node?.state === 'maintenance'
+    (node?.state === 'maintenance' && maintenanceStateIsCurrent(suppression, node))
   );
 }
 

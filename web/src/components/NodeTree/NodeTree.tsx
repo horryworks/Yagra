@@ -64,6 +64,7 @@ import {
 import { useTreeTouchedStore } from '../../store';
 import {
   DURATION_PRESETS,
+  maintenanceStateIsCurrent,
   type ReleaseAction,
   type SuppressionIndex,
   type SuppressionPanelRow,
@@ -1470,12 +1471,15 @@ export function NodeTree({
           target: { kind: 'node', id: node.id, name: node.name },
           node,
           // The index already accounts for a release, including re-adding a window that names the
-          // node. `state` is the engine's rolled-up opinion and lags a release by up to one refresh
-          // (~30s), so it is only consulted while the row is *not* released — otherwise the wrench
-          // would sit next to the struck-through one for half a minute after every release.
+          // node. `state` is the engine's rolled-up opinion and lags a release or a lifted window by
+          // minutes, so it is consulted only while the row is *not* released and some window in
+          // force could still be covering it (ADR-261 decision 18) — otherwise the wrench stays for
+          // minutes after the window it stands for has gone.
           maint:
             !!suppression?.maintenanceNodes.has(node.id) ||
-            (node.state === 'maintenance' && !suppression?.exemptMaintenanceNodes.has(node.id)),
+            (node.state === 'maintenance' &&
+              !suppression?.exemptMaintenanceNodes.has(node.id) &&
+              maintenanceStateIsCurrent(suppression, node)),
           releasedMaint: !!suppression?.exemptMaintenanceNodes.has(node.id),
         })}
       </div>

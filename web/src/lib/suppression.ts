@@ -65,6 +65,11 @@ export interface SuppressionIndex {
   maintenanceNodes: Set<string>;
   maintenanceGroups: Set<string>;
   exemptMaintenanceNodes: Set<string>;
+  /** Profiles a window in force names. The tree does not map these onto rows (the engine's state
+   *  does), but they are what lets that state be believed — see {@link maintenanceStateIsCurrent}. */
+  maintenanceProfiles: Set<string>;
+  /** A fleet-wide (`system`) window is in force — the one an upgrade opens. */
+  fleetWideMaintenance: boolean;
 }
 
 export function emptySuppressionIndex(): SuppressionIndex {
@@ -72,7 +77,33 @@ export function emptySuppressionIndex(): SuppressionIndex {
     maintenanceNodes: new Set(),
     maintenanceGroups: new Set(),
     exemptMaintenanceNodes: new Set(),
+    maintenanceProfiles: new Set(),
+    fleetWideMaintenance: false,
   };
+}
+
+/**
+ * Whether a node's `maintenance` state may still be shown as maintenance (ADR-261 decision 18).
+ *
+ * The state is the engine's opinion, and it lags a window being lifted: the engine re-reads the
+ * windows every 30 seconds, and then waits for the liveness rule's run of normal readings (three
+ * polls by default) before the state moves. The window list the screen holds is current, so the
+ * state is believed only while some window in force could be covering the node — one naming it,
+ * one on its folders (both already in `maintenanceNodes`), one on its profile, or a fleet-wide
+ * one. With none of those, the state is a leftover and the icon goes the moment the window does.
+ *
+ * A node whose profile the screen does not know is covered by any profile window, rather than by
+ * none: guessing "not covered" would hide a window that is in force.
+ */
+export function maintenanceStateIsCurrent(
+  index: SuppressionIndex | undefined,
+  node: Pick<NodeSummary, 'id' | 'profile_id'>,
+): boolean {
+  if (!index) return true;
+  if (index.fleetWideMaintenance || index.maintenanceNodes.has(node.id)) return true;
+  return node.profile_id
+    ? index.maintenanceProfiles.has(node.profile_id)
+    : index.maintenanceProfiles.size > 0;
 }
 
 /** The releases that apply to a maintenance window. A list read from a core older than ADR-234
@@ -234,10 +265,19 @@ export function buildSuppressionIndex(
   };
 
   for (const w of live) {
-    if (w.scope_level === 'node') {
-      index.maintenanceNodes.add(w.scope_id);
-    } else if (w.scope_level === 'group_id') {
-      markSubtree(w.scope_id, index.maintenanceGroups, index.maintenanceNodes);
+    switch (w.scope_level) {
+      case 'node':
+        index.maintenanceNodes.add(w.scope_id);
+        break;
+      case 'group_id':
+        markSubtree(w.scope_id, index.maintenanceGroups, index.maintenanceNodes);
+        break;
+      case 'profile':
+        index.maintenanceProfiles.add(w.scope_id);
+        break;
+      case 'system':
+        index.fleetWideMaintenance = true;
+        break;
     }
   }
 
@@ -379,7 +419,14 @@ export function causesFor(
 
   // Only when nothing else explains it: the engine says this node is in maintenance and no window
   // the browser can see is responsible.
-  if (!isGroup && node?.state === 'maintenance' && out.length === 0) {
+  // ⚠️ And only while a window the screen holds could still be covering it (ADR-261 decision 18):
+  // with none, the state is the engine catching up on a window just lifted, not a cause.
+  if (
+    !isGroup &&
+    node?.state === 'maintenance' &&
+    out.length === 0 &&
+    windowsMayCover(windows, node)
+  ) {
     out.push({
       source: 'unattributed',
       title: '',
@@ -389,6 +436,20 @@ export function causesFor(
     });
   }
   return out;
+}
+
+/** Whether any of `windows` (already narrowed to those in force) could cover `node` beyond what
+ *  the tree maps itself: a profile window (any, when the node's profile is unknown) or a
+ *  fleet-wide one. Node and folder windows are reported as causes of their own. */
+function windowsMayCover(
+  windows: MaintenanceWindow[],
+  node: Pick<NodeSummary, 'profile_id'>,
+): boolean {
+  return windows.some(
+    (w) =>
+      w.scope_level === 'system' ||
+      (w.scope_level === 'profile' && (!node.profile_id || w.scope_id === node.profile_id)),
+  );
 }
 
 /**

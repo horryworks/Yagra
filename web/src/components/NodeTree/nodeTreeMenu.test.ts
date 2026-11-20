@@ -73,13 +73,14 @@ describe('which right-click menus have anything in them', () => {
 });
 
 describe('hasSuppression', () => {
-  const idx = (over: Partial<Record<keyof SuppressionIndex, Set<string>>> = {}) =>
-    ({
-      maintenanceNodes: new Set<string>(),
-      maintenanceGroups: new Set<string>(),
-      exemptMaintenanceNodes: new Set<string>(),
-      ...over,
-    }) as SuppressionIndex;
+  const idx = (over: Partial<SuppressionIndex> = {}): SuppressionIndex => ({
+    maintenanceNodes: new Set<string>(),
+    maintenanceGroups: new Set<string>(),
+    exemptMaintenanceNodes: new Set<string>(),
+    maintenanceProfiles: new Set<string>(),
+    fleetWideMaintenance: false,
+    ...over,
+  });
 
   const node: SuppressionTarget = { kind: 'node', id: 'n1', name: 'edge-1' };
   const group: SuppressionTarget = { kind: 'group', id: 'g1', name: 'site' };
@@ -108,10 +109,20 @@ describe('hasSuppression', () => {
   });
 
   it('accepts the engine’s rolled-up state as one more reason, for a node only', () => {
-    const inMaint = { state: 'maintenance' } as NodeSummary;
-    expect(hasSuppression(idx(), node, inMaint)).toBe(true);
+    const inMaint = { id: 'n1', state: 'maintenance', profile_id: 'p1' } as NodeSummary;
+    const byProfile = idx({ maintenanceProfiles: new Set(['p1']) });
+    expect(hasSuppression(byProfile, node, inMaint)).toBe(true);
+    expect(hasSuppression(idx({ fleetWideMaintenance: true }), node, inMaint)).toBe(true);
     // A group has no state of its own, so passing one must not change the group answer.
-    expect(hasSuppression(idx(), group, inMaint)).toBe(false);
+    expect(hasSuppression(byProfile, group, inMaint)).toBe(false);
+  });
+
+  it('ignores the state once no window in force could be covering the node (ADR-261 decision 18)', () => {
+    // The engine lags a lifted window by minutes; the list the screen holds does not.
+    const inMaint = { id: 'n1', state: 'maintenance', profile_id: 'p1' } as NodeSummary;
+    expect(hasSuppression(idx(), node, inMaint)).toBe(false);
+    // A window on another profile does not cover this node.
+    expect(hasSuppression(idx({ maintenanceProfiles: new Set(['p2']) }), node, inMaint)).toBe(false);
   });
 
   it('does not confuse a group id with a node id', () => {

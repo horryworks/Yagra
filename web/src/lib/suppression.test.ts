@@ -12,6 +12,7 @@ import {
   causesFor,
   groupContainers,
   groupSubtree,
+  maintenanceStateIsCurrent,
   MAX_TIMER_DELAY_MS,
   nextSuppressionExpiry,
   suppressionRefreshDelayMs,
@@ -224,8 +225,9 @@ describe('causesFor', () => {
   // tree never loads, so the state is all the browser has — saying "something else" beats both
   // inventing a cause and showing an empty panel under a lit icon.
   it('reports an unexplained maintenance state rather than an empty panel', () => {
+    // A profile window the tree cannot attribute is in force, so the state is believed.
     const causes = causesFor(nodeTarget, {
-      windows: [],
+      windows: [window({ scope_level: 'profile', scope_id: 'p9' })],
       groups,
       node: { ...node('n2', 'edge'), state: 'maintenance' },
     });
@@ -235,6 +237,18 @@ describe('causesFor', () => {
       labelKey: 'tree.suppression.from.elsewhere',
       endsAt: '',
     });
+  });
+
+  it('reports nothing once no window in force could be covering the node (ADR-261 decision 18)', () => {
+    // The engine is still catching up on a window just lifted: that is not a cause.
+    const inMaint = { ...node('n2', 'edge'), state: 'maintenance' as const, profile_id: 'p1' };
+    expect(causesFor(nodeTarget, { windows: [], groups, node: inMaint })).toEqual([]);
+    const otherProfile = window({ scope_level: 'profile', scope_id: 'p2' });
+    expect(causesFor(nodeTarget, { windows: [otherProfile], groups, node: inMaint })).toEqual([]);
+    const ownProfile = window({ scope_level: 'profile', scope_id: 'p1' });
+    expect(
+      causesFor(nodeTarget, { windows: [ownProfile], groups, node: inMaint }).map((c) => c.source),
+    ).toEqual(['unattributed']);
   });
 
   it('does not add the unexplained cause when a window already accounts for the state', () => {
@@ -275,7 +289,7 @@ describe('causesFor', () => {
       groups,
     });
     const unexplained = causesFor(nodeTarget, {
-      windows: [],
+      windows: [window({ id: 's', scope_level: 'system', scope_id: 'upgrade' })],
       groups,
       node: { ...node('n2', 'edge'), state: 'maintenance' },
     });
@@ -563,5 +577,59 @@ describe('suppressionRefreshDelayMs', () => {
 
   it('is never negative when the expiry has just passed', () => {
     expect(suppressionRefreshDelayMs(T0 - 5, T0)).toBe(1000);
+  });
+});
+
+describe('maintenanceStateIsCurrent (ADR-261 decision 18)', () => {
+  const n = (profile_id: string | null) => ({ id: 'n1', profile_id });
+
+  it('believes the state while a window naming, holding or classing the node is in force', () => {
+    const idx = buildSuppressionIndex(
+      [
+        window({ id: 'p', scope_level: 'profile', scope_id: 'p1' }),
+        window({ id: 's', scope_level: 'system', scope_id: 'upgrade' }),
+      ],
+      groups,
+      [],
+    );
+    expect(idx.maintenanceProfiles).toEqual(new Set(['p1']));
+    expect(idx.fleetWideMaintenance).toBe(true);
+    expect(maintenanceStateIsCurrent(idx, n('p2'))).toBe(true);
+
+    const byProfile = buildSuppressionIndex(
+      [window({ scope_level: 'profile', scope_id: 'p1' })],
+      groups,
+      [],
+    );
+    expect(maintenanceStateIsCurrent(byProfile, n('p1'))).toBe(true);
+    expect(maintenanceStateIsCurrent(byProfile, n('p2'))).toBe(false);
+    // A profile the screen does not know is covered by any profile window, never by none.
+    expect(maintenanceStateIsCurrent(byProfile, n(null))).toBe(true);
+
+    const byNode = buildSuppressionIndex(
+      [window({ scope_level: 'node', scope_id: 'n1' })],
+      groups,
+      [],
+    );
+    expect(maintenanceStateIsCurrent(byNode, n('p1'))).toBe(true);
+  });
+
+  it('stops believing it the moment the last window goes', () => {
+    const idx = buildSuppressionIndex([], groups, []);
+    expect(maintenanceStateIsCurrent(idx, n('p1'))).toBe(false);
+    expect(maintenanceStateIsCurrent(idx, n(null))).toBe(false);
+  });
+
+  it('ignores a window that has ended or been switched off', () => {
+    const idx = buildSuppressionIndex(
+      [window({ scope_level: 'profile', scope_id: 'p1', active: false })],
+      groups,
+      [],
+    );
+    expect(maintenanceStateIsCurrent(idx, n('p1'))).toBe(false);
+  });
+
+  it('believes the state before the window list has arrived', () => {
+    expect(maintenanceStateIsCurrent(undefined, n('p1'))).toBe(true);
   });
 });

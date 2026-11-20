@@ -31,6 +31,8 @@
 
 - **Every other date and time box reads the same way too.** The node page's custom time range, a list's custom date range filter, and the times in the config backup schedule, delivery hours, report schedules and Troubleshoot schedules now take a year-first date and a 24-hour time instead of the browser's own boxes, which showed `mm/dd/yyyy` and AM/PM on an American setup. A time that cannot be read is marked and is not saved; a report schedule no longer reads an empty time as midnight.
 
+- **The maintenance marker in the node tree goes as soon as its window is lifted.** It used to stay for two to three minutes, until the alert engine caught up (it re-reads the windows every 30 seconds, then waits for three normal polls). The node's state elsewhere still reads maintenance for those minutes.
+
 ### Bug Fixes
 
 - **A NetBox sync no longer deletes the IP ranges it has just written.** When the database server's clock stepped back during a sync, the sync's own clean-up could read a range it had just stored as one NetBox no longer lists and remove it, until the next sync put it back. A folder could likewise be shown as missing from NetBox right after a successful sync. Every row a sync refreshes is now stamped with the time the sync started, and a sync always starts after the previous one, whatever the clock reads. For the same reason, a Sync now pressed while a sync was running could be dropped instead of run next; it is now kept.
