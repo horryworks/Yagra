@@ -579,17 +579,23 @@ describe('api client', () => {
     expect(spy.mock.calls[1][1].method).toBe('DELETE');
   });
 
-  it('creates a routing rule with severity + channels', async () => {
+  it('creates a routing rule with severity, tags + channels', async () => {
     const spy = vi
       .fn()
       .mockResolvedValue({ ok: true, status: 201, json: async () => ({ id: 'r1' }) } as Response);
     globalThis.fetch = spy;
-    await api.createRoutingRule({ name: 'crit', severity: 'critical', channel_ids: ['c1', 'c2'] });
+    await api.createRoutingRule({
+      name: 'crit',
+      severity: 'critical',
+      tags: ['TeamA'],
+      channel_ids: ['c1', 'c2'],
+    });
     const [url, init] = spy.mock.calls[0];
     expect(url).toBe('/api/v1/routing-rules');
     expect(JSON.parse(init.body)).toEqual({
       name: 'crit',
       severity: 'critical',
+      tags: ['TeamA'],
       channel_ids: ['c1', 'c2'],
     });
   });

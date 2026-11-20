@@ -52,3 +52,25 @@ test('a routing rule opens for editing with its own values', async ({ page }) =>
   await expect(dialog.locator('input[type="text"], input:not([type])').first()).toHaveValue(name);
   await expect(dialog.getByRole('button', { name: 'Save' })).toBeVisible();
 });
+
+// ADR-259: the rule's tags are edited in the dialog and sent with the rest of its definition, so a
+// save from the screen can never drop them by leaving the field out.
+test('a routing rule saves the tags it was given', async ({ page }) => {
+  await page.goto('/alerts/routing');
+  const ruleRow = section(page, 'Routing rules').locator('.dt-row').first();
+  await ruleRow.hover();
+  await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
+  const dialog = page.getByRole('dialog');
+  const tags = dialog.getByRole('group', { name: 'Tags' });
+  await expect(tags).toBeVisible();
+  const entry = tags.getByRole('textbox', { name: 'Tags' });
+  await entry.fill('TeamA');
+  await entry.press('Enter');
+  const saved = page.waitForRequest(
+    (r) => r.method() === 'PUT' && r.url().includes('/definition'),
+  );
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  const body = (await saved).postDataJSON() as { tags?: unknown };
+  expect(Array.isArray(body.tags)).toBe(true);
+  expect(body.tags).toContain('TeamA');
+});

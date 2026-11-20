@@ -37,6 +37,7 @@
       "cols": {
         "name": "名前",
         "severity": "重大度",
+        "tags": "タグ",
         "channels": "チャネル",
         "status": "状態",
         "actions": "操作"
@@ -44,6 +45,7 @@
       "empty": "ルーティングルールがありません",
       "emptyNoChannels": "先にチャネルを追加してください。",
       "any": "すべて",
+      "anyNode": "すべてのノード",
       "noChannels": "（チャネルなし）",
       "enable": "ルールを有効化",
       "disable": "ルールを無効化",
@@ -78,6 +80,8 @@
       "name": "名前",
       "severity": "重大度",
       "anySeverity": "すべての重大度",
+      "tags": "タグ",
+      "anyNode": "すべてのノード",
       "channels": "チャネル",
       "add": "ルールを追加",
       "editTitle": "ルーティングルールを編集 — {{name}}",

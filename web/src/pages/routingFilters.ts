@@ -88,6 +88,15 @@ export function routingRuleFilters(
       allLabel: t('routing.rules.allSeverities'),
       counts: 'client',
     },
+    // A rule with no tags reaches every node but reads as having none here, so "TeamA" finds
+    // the rules written for that tag rather than every rule that would also page for it (ADR-259).
+    tags: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      readText: (r) => r.tags,
+      containsSemantics: 'substring',
+      placeholder: t('routing.rules.cols.tags'),
+    },
     status: {
       kind: 'enum',
       options: [

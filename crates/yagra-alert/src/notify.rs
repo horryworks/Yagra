@@ -342,6 +342,15 @@ impl<C: NotifyChannel> Dispatcher<C> {
         self.deliver_with_retry(&notification, true).await
     }
 
+    /// Whether this channel was delivered the fire for `dedup_key` and has not been told it closed.
+    ///
+    /// What a close asks so that it reaches a channel the fire went to even when the rule that
+    /// sent it no longer matches - the node lost the tag the rule names, say (ADR-259 decision 5).
+    /// ⚠️ Memory only: after a restart this answers `false` for every key.
+    pub async fn is_active(&self, dedup_key: &DedupKey) -> bool {
+        self.active.lock().await.contains(dedup_key)
+    }
+
     /// Mark an alert resolved so the next occurrence notifies again.
     ///
     /// Async since ADR-104 only because the set moved behind the delivery lock; it takes no I/O

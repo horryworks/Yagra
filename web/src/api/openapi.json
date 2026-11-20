@@ -22822,7 +22822,7 @@
             }
           },
           "400": {
-            "description": "Empty name, or a severity outside critical|warning|info|null",
+            "description": "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character",
             "content": {
               "application/json": {
                 "schema": {
@@ -23007,7 +23007,7 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Replace a rule's name, severity filter and channels. Whether it is switched on is left as it was.",
+        "summary": "Replace a rule's name, severity filter, tags and channels. Whether it is switched on is left as\nit was, and so are its tags when the body omits them.",
         "operationId": "update_routing_rule",
         "parameters": [
           {
@@ -23033,10 +23033,10 @@
         },
         "responses": {
           "204": {
-            "description": "Rule replaced; its enabled switch is unchanged"
+            "description": "Rule replaced; its enabled switch is unchanged, and so are its tags when the body omits them"
           },
           "400": {
-            "description": "Empty name, or a severity outside critical|warning|info|null",
+            "description": "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character",
             "content": {
               "application/json": {
                 "schema": {
@@ -32200,7 +32200,7 @@
       },
       "CreateRule": {
         "type": "object",
-        "description": "Create-rule body: a name, an optional severity filter (absent = any), and target channels.\nEditing a rule takes the same body (ADR-193).",
+        "description": "Create-rule body: a name, an optional severity filter (absent = any), the tags a node must\ncarry one of (ADR-259), and target channels. Editing a rule takes the same body (ADR-193).",
         "required": [
           "name",
           "channel_ids"
@@ -32221,6 +32221,16 @@
               "string",
               "null"
             ]
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Only alerts on a node carrying at least one of these among its effective labels (its own\nplus its folders', minus the ones it refuses) reach the rule's channels. Empty = every\nnode. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —\na client that predates the field must not widen a rule by saving it."
           }
         }
       },
@@ -46174,11 +46184,12 @@
       },
       "RoutingRule": {
         "type": "object",
-        "description": "A routing rule: enabled alerts of `severity` (None = any) fan out to `channel_ids`.",
+        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node carries one of `tags`\n(empty = every node) fan out to `channel_ids`.",
         "required": [
           "id",
           "name",
           "enabled",
+          "tags",
           "channel_ids"
         ],
         "properties": {
@@ -46208,6 +46219,13 @@
                 "$ref": "#/components/schemas/Severity"
               }
             ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The node must carry at least one of these among its effective labels - its own plus the\nones its folders supply, minus the ones it refuses (ADR-259). Empty means every node, and a\nsubject that is not a node (a poller pool, a Meraki organization) matches only an empty\nlist. Compared exactly, case included, the way a node's own labels are stored."
           }
         }
       },

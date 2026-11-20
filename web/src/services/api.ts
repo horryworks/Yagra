@@ -2450,10 +2450,12 @@ export const api = {
   getNotificationDefaultRoute: (): Promise<NotificationDefaultRoute> =>
     apiGet('/api/v1/notification-default-route'),
 
-  /** Create a routing rule. `severity` null ⇒ matches all severities. */
+  /** Create a routing rule. `severity` null ⇒ matches all severities; empty `tags` ⇒ every node
+   *  (ADR-259). */
   createRoutingRule: (body: {
     name: string;
     severity: Severity | null;
+    tags: string[];
     channel_ids: string[];
   }): Promise<{ id: string }> => apiPost('/api/v1/routing-rules', { body }),
 
@@ -2461,11 +2463,11 @@ export const api = {
   setRoutingRuleEnabled: (id: string, enabled: boolean): Promise<void> =>
     apiPut('/api/v1/routing-rules/{id}', { path: { id }, body: { enabled } }),
 
-  /** Replace a rule's name, severity filter and channels; its on/off switch is left alone
-   *  (ADR-193). */
+  /** Replace a rule's name, severity filter, tags and channels; its on/off switch is left alone
+   *  (ADR-193, ADR-259). */
   updateRoutingRule: (
     id: string,
-    body: { name: string; severity: Severity | null; channel_ids: string[] },
+    body: { name: string; severity: Severity | null; tags: string[]; channel_ids: string[] },
   ): Promise<void> => apiPut('/api/v1/routing-rules/{id}/definition', { path: { id }, body }),
 
   /** Delete a routing rule. */

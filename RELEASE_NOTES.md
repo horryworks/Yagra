@@ -10,9 +10,19 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **A deployment upgraded to this version cannot go back to an earlier core without restoring a backup.** Migration 0182 adds tags to routing rules; an older core would ignore them and send a tagged rule's alerts for every node, so it is kept from starting.
+
 ### New Features
 
+- **A routing rule can name tags.** Its channels then receive only the alerts of nodes carrying at least one of them — the node's own tags, or those of any folder above it, less the ones it removes. A rule with no tags still covers every node. Tags are compared exactly, case included. The rule dialog has a Tags field and the list a Tags column; the REST body takes `tags`, and an edit that omits it keeps the rule's tags. A Poller pool or Meraki organization alert never matches a tagged rule.
+
 - **Cisco Nexus (NX-OS) can now be saved.** A Nexus whose configuration is backed up gets the unsaved-configuration check, the Save button and the per-node Auto save switch. Yagra compares with `show running-config diff` after each fetch and saves with `copy running-config startup-config`. The built-in "Unsaved configuration" rule now covers the "Cisco Nexus switch (NX-OS)" profile; an existing deployment gets it through migration 0181 if the rule is still as shipped. The NX-OS commands have not yet been tried on a real Nexus.
+
+### Improvements
+
+- **A recovery now reaches every channel its alert was sent to**, even when the rule that sent it no longer matches — a rule switched off or edited, or a node that lost the tag a rule names. Before, that channel's incident in PagerDuty or JSM stayed open. This holds until core restarts; after a restart, only the channels the rules match now get the recovery.
 
 ### Security
 

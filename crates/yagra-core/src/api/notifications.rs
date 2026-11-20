@@ -1043,19 +1043,34 @@ async fn get_notification_default_route(
     Json(NotificationDefaultRoute::of(&admin.notify_default_route))
 }
 
-/// Create-rule body: a name, an optional severity filter (absent = any), and target channels.
-/// Editing a rule takes the same body (ADR-193).
+/// Create-rule body: a name, an optional severity filter (absent = any), the tags a node must
+/// carry one of (ADR-259), and target channels. Editing a rule takes the same body (ADR-193).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateRule {
     name: String,
     severity: Option<String>,
+    /// Only alerts on a node carrying at least one of these among its effective labels (its own
+    /// plus its folders', minus the ones it refuses) reach the rule's channels. Empty = every
+    /// node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —
+    /// a client that predates the field must not widen a rule by saving it.
+    #[serde(default)]
+    tags: Option<Vec<String>>,
     channel_ids: Vec<Uuid>,
+}
+
+/// A rule's definition after the edge's checks.
+struct ParsedRule<'a> {
+    name: &'a str,
+    severity: Option<Severity>,
+    /// `None` only when the body omitted the field.
+    tags: Option<Vec<String>>,
 }
 
 impl CreateRule {
     /// The checks a rule passes before it is stored, shared by create and edit so the two cannot
-    /// accept different things.
-    fn parse(&self) -> ApiResult<(&str, Option<Severity>)> {
+    /// accept different things. Tags go through the same validator a node's labels do, so a rule
+    /// can name exactly what a node can carry.
+    fn parse(&self) -> ApiResult<ParsedRule<'_>> {
         let name = self.name.trim();
         if name.is_empty() {
             return Err(ApiError::bad_request(
@@ -1069,7 +1084,16 @@ impl CreateRule {
                 "severity must be critical|warning|info or null",
             )
         })?;
-        Ok((name, severity))
+        let tags = self
+            .tags
+            .clone()
+            .map(super::nodes::validated_labels)
+            .transpose()?;
+        Ok(ParsedRule {
+            name,
+            severity,
+            tags,
+        })
     }
 }
 
@@ -1078,7 +1102,7 @@ impl CreateRule {
     request_body = CreateRule,
     responses(
         (status = 201, description = "Rule created", body = CreatedId),
-        (status = 400, description = "Empty name, or a severity outside critical|warning|info|null", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -1089,10 +1113,15 @@ async fn create_routing_rule(
     admin: Admin,
     Json(body): Json<CreateRule>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
-    let (name, severity) = body.parse()?;
+    let rule = body.parse()?;
     let id = admin
         .notifications
-        .create_rule(name, severity, &body.channel_ids)
+        .create_rule(
+            rule.name,
+            rule.severity,
+            &rule.tags.unwrap_or_default(),
+            &body.channel_ids,
+        )
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -1136,14 +1165,15 @@ async fn set_routing_rule_enabled(
     }
 }
 
-/// Replace a rule's name, severity filter and channels. Whether it is switched on is left as it was.
+/// Replace a rule's name, severity filter, tags and channels. Whether it is switched on is left as
+/// it was, and so are its tags when the body omits them.
 #[utoipa::path(
     put, path = "/api/v1/routing-rules/{id}/definition", tag = "notifications",
     params(("id" = Uuid, Path, description = "Routing rule id")),
     request_body = CreateRule,
     responses(
-        (status = 204, description = "Rule replaced; its enabled switch is unchanged"),
-        (status = 400, description = "Empty name, or a severity outside critical|warning|info|null", body = super::error::ErrorBody),
+        (status = 204, description = "Rule replaced; its enabled switch is unchanged, and so are its tags when the body omits them"),
+        (status = 400, description = "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),
@@ -1156,10 +1186,16 @@ async fn update_routing_rule(
     Path(id): Path<Uuid>,
     Json(body): Json<CreateRule>,
 ) -> ApiResult<StatusCode> {
-    let (name, severity) = body.parse()?;
+    let rule = body.parse()?;
     match admin
         .notifications
-        .update_rule(id, name, severity, &body.channel_ids)
+        .update_rule(
+            id,
+            rule.name,
+            rule.severity,
+            rule.tags.as_deref(),
+            &body.channel_ids,
+        )
         .await
     {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
@@ -1963,6 +1999,62 @@ at 2026-08-04T09:41:07+00:00"
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
         assert_eq!(body["error"]["code"], "rule_not_found", "{body}");
+    }
+
+    /// ADR-259: a rule is created with tags (trimmed and de-duplicated the way a node's labels
+    /// are), an edit that omits them keeps them, and a bad tag is refused with the node's code.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_is_created_with_tags_and_an_edit_without_them_keeps_them(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(serde_json::json!({
+                "name": "rice", "severity": null,
+                "tags": [" TeamA ", "TeamA", "APAC"], "channel_ids": [],
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+        let id = created["id"].as_str().unwrap().to_owned();
+        let tags_now = || async {
+            let (status, list) = send(&st, "GET", "/api/v1/routing-rules", &tok, None).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+            list.as_array().unwrap()[0]["tags"].clone()
+        };
+        assert_eq!(tags_now().await, serde_json::json!(["APAC", "TeamA"]));
+
+        let path = format!("/api/v1/routing-rules/{id}/definition");
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "name": "rice", "severity": "critical", "channel_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            tags_now().await,
+            serde_json::json!(["APAC", "TeamA"]),
+            "an edit that did not name tags widened the rule"
+        );
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "name": "rice", "severity": null, "tags": [" "], "channel_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "invalid_tag", "{body}");
     }
 
     /// ADR-200 Inc.28: the default route is reported by kind, and `configured` follows the kinds.

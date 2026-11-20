@@ -995,15 +995,23 @@ struct Routing {
 
 impl Routing {
     /// Channel ids whose enabled routing rule matches this severity (a rule with no severity
-    /// matches any).
+    /// matches any) and these tags (a rule with no tags matches any node, ADR-259).
+    ///
+    /// `tags` is the subject node's effective labels, from the facts lookup; a subject that is not
+    /// a node, or a lookup that found nothing, passes an empty slice and so matches only the rules
+    /// that name no tags - a failure narrows, never widens.
     ///
     /// One function rather than the three verbatim copies the fire / resolve / roll-up paths each
     /// carried — the set has to be identical across them or a resolve would go somewhere its fire
     /// did not (ADR-104 decision 5).
-    fn matched(&self, severity: Severity) -> BTreeSet<Uuid> {
+    fn matched(&self, severity: Severity, tags: &[String]) -> BTreeSet<Uuid> {
         self.rules
             .iter()
-            .filter(|r| r.enabled && rule_matches_severity(r.severity, severity))
+            .filter(|r| {
+                r.enabled
+                    && rule_matches_severity(r.severity, severity)
+                    && rule_matches_tags(&r.tags, tags)
+            })
             .flat_map(|r| r.channel_ids.iter().copied())
             .collect()
     }
@@ -1129,6 +1137,11 @@ pub struct Notifier {
     ///
     /// A deployment with only webhook channels still issues no extra query.
     any_facts_channel: AtomicBool,
+    /// Whether any enabled routing rule names tags (ADR-259 decision 6). Such a rule is decided
+    /// from the node's effective labels, which only the facts lookup knows — left out of the gate
+    /// below, a deployment with only webhook channels would read every node as tagless and the
+    /// rule would match nothing.
+    any_tag_rules: AtomicBool,
     /// Where each delivery is recorded (ADR-195). Recording never waits: see [`DeliveryLog`].
     delivery_log: RwLock<Option<DeliveryLog>>,
     /// The side of its band each open threshold alert was last handed to the channels with.
@@ -1213,6 +1226,7 @@ impl Notifier {
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
             any_facts_channel: AtomicBool::new(false),
+            any_tag_rules: AtomicBool::new(false),
             delivery_log: RwLock::new(None),
             sides: std::sync::Mutex::new(HashMap::new()),
             default_kinds,
@@ -1331,6 +1345,10 @@ impl Notifier {
             .store(!overrides.is_empty(), Ordering::Relaxed);
         self.any_facts_channel
             .store(!fact_channels.is_empty(), Ordering::Relaxed);
+        self.any_tag_rules.store(
+            rules.iter().any(|r| r.enabled && !r.tags.is_empty()),
+            Ordering::Relaxed,
+        );
         *slot = Arc::new(Routing {
             default: slot.default.clone(),
             channels: next,
@@ -1376,14 +1394,15 @@ impl Notifier {
     /// Deliberately **before** the routing snapshot is read: this is the one part of delivery that
     /// touches the database, and there is no reason for it to be inside anything.
     ///
-    /// ⚠️ **Three things read it, not one.** A channel template interpolates it; since ADR-135 a
+    /// ⚠️ **Four things read it, not one.** A channel template interpolates it; since ADR-135 a
     /// PagerDuty or JSM channel puts its `tags` on the wire whether or not anyone wrote a
-    /// template; and since ADR-194 a JSM or email channel writes its built-in text from it. A
-    /// deployment with none of those still issues no query at all, which is the property this
-    /// gate has always been for.
+    /// template; since ADR-194 a JSM or email channel writes its built-in text from it; and since
+    /// ADR-259 a routing rule that names tags is decided from its `tags`. A deployment with none
+    /// of those still issues no query at all, which is the property this gate has always been for.
     async fn context(&self, alert: &Alert, event: NotifyEvent) -> Option<AlertFacts> {
         if !self.any_templates.load(Ordering::Relaxed)
             && !self.any_facts_channel.load(Ordering::Relaxed)
+            && !self.any_tag_rules.load(Ordering::Relaxed)
         {
             return None;
         }
@@ -1603,7 +1622,7 @@ impl Notifier {
                 );
                 let text = (!routing.text.is_empty())
                     .then(|| text_notification(&alert, NotifyEvent::Fire, facts.as_ref()));
-                let matched = routing.matched(alert.severity);
+                let matched = routing.matched(alert.severity, tags_of(facts.as_ref()));
                 let done = Delivered {
                     alert: &alert,
                     event: NotifyEvent::Fire,
@@ -1711,7 +1730,7 @@ impl Notifier {
         let key = alert.dedup_key();
         let notification = with_subject_facts(json_notification(alert, event, facts), facts);
         let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
-        let matched = routing.matched(alert.severity);
+        let matched = routing.matched(alert.severity, tags_of(facts));
         let done = Delivered {
             alert,
             event,
@@ -1725,7 +1744,10 @@ impl Notifier {
             self.after_dispatch(&done, None, None, &report, at, started);
         }
         for (id, d) in &routing.channels {
-            if matched.contains(id) {
+            // A channel the fire reached still gets the close when no rule matches any more — the
+            // node lost the tag the rule names, say — or its remote incident stays open with
+            // nothing left to close it (ADR-259 decision 5).
+            if matched.contains(id) || d.is_active(&key).await {
                 let base = routing.builtin_for(*id, &notification, text.as_ref());
                 let n = for_channel(*id, &routing.overrides, facts, base);
                 let started = std::time::Instant::now();
@@ -1813,6 +1835,12 @@ struct Delivered<'a> {
     facts: Option<&'a AlertFacts>,
     /// The log wording, which an operator greps for and so is kept verbatim (ADR-104 decision 5).
     message: &'static str,
+}
+
+/// The subject node's effective labels, for [`Routing::matched`] — empty when nothing was
+/// resolved, which matches only the rules that name no tags.
+fn tags_of(facts: Option<&AlertFacts>) -> &[String] {
+    facts.map_or(&[], |f| f.tags.as_slice())
 }
 
 /// The notification Yagra sends when a channel has no template — and the fallback when its
@@ -2049,6 +2077,14 @@ fn for_channel(
 #[must_use]
 fn rule_matches_severity(rule_severity: Option<Severity>, alert_severity: Severity) -> bool {
     rule_severity.is_none_or(|s| s == alert_severity)
+}
+
+/// Match a routing rule's tags against the subject node's effective labels (ADR-259): no tags
+/// matches every subject, otherwise one shared tag is enough. Exact comparison, case included,
+/// because that is how a node's labels are stored and shown.
+#[must_use]
+fn rule_matches_tags(rule_tags: &[String], node_tags: &[String]) -> bool {
+    rule_tags.is_empty() || rule_tags.iter().any(|t| node_tags.contains(t))
 }
 
 #[cfg(test)]
@@ -3044,8 +3080,125 @@ mod delivery_tests {
             name: "test rule".to_owned(),
             enabled: true,
             severity,
+            tags: Vec::new(),
             channel_ids: vec![channel],
         }
+    }
+
+    /// An enabled rule sending any severity of a node carrying one of `tags` to one channel.
+    fn tagged_rule(channel: Uuid, tags: &[&str]) -> RoutingRule {
+        RoutingRule {
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            ..rule(channel, None)
+        }
+    }
+
+    /// A facts source that knows one node, carrying the `JAPAN` label, and no other.
+    fn japan_facts(node: NodeId) -> Arc<dyn AlertFactsSource> {
+        Arc::new(crate::alerts::notify_facts::tests::FakeFacts::with(
+            node.as_uuid(),
+            "core-01",
+        ))
+    }
+
+    #[test]
+    fn a_rule_with_tags_needs_one_of_them_and_one_without_needs_none() {
+        let have = ["JAPAN".to_owned(), "core".to_owned()];
+        assert!(rule_matches_tags(&[], &have), "no tags matches every node");
+        assert!(rule_matches_tags(&[], &[]), "…and a subject with none");
+        assert!(rule_matches_tags(
+            &["APAC".to_owned(), "JAPAN".to_owned()],
+            &have
+        ));
+        assert!(!rule_matches_tags(&["APAC".to_owned()], &have));
+        assert!(
+            !rule_matches_tags(&["japan".to_owned()], &have),
+            "exact, case included"
+        );
+        assert!(
+            !rule_matches_tags(&["JAPAN".to_owned()], &[]),
+            "a subject with no tags never matches a rule that names one"
+        );
+    }
+
+    /// The case ADR-259 exists for: a tagged rule pages only for nodes carrying the tag, while an
+    /// untagged rule beside it still pages for both — and it works with no template and no
+    /// JSM/email channel, where the facts would not otherwise be looked up at all.
+    #[tokio::test]
+    async fn a_tagged_rule_pages_only_for_nodes_carrying_the_tag() {
+        let (tagged, every) = (log(), log());
+        let n = Notifier::with_default(None);
+        let (id_t, id_e) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let japan = NodeId::new();
+        n.set_facts_source(japan_facts(japan));
+        n.install_routing(
+            vec![
+                built(id_t, Recorder(tagged.clone())),
+                built(id_e, Recorder(every.clone())),
+            ],
+            vec![tagged_rule(id_t, &["JAPAN"]), rule(id_e, None)],
+        );
+
+        n.handle(NotifyAction::Fire(alert(japan, Severity::Critical, None)))
+            .await;
+        n.handle(NotifyAction::Fire(alert(
+            NodeId::new(),
+            Severity::Critical,
+            None,
+        )))
+        .await;
+
+        assert_eq!(
+            tagged.lock().unwrap().count("fire"),
+            1,
+            "only the node carrying JAPAN reaches the tagged rule's channel"
+        );
+        assert_eq!(
+            every.lock().unwrap().count("fire"),
+            2,
+            "the untagged rule still pages for both"
+        );
+    }
+
+    /// A node that loses the tag after its fire still has its incident closed on the channel the
+    /// fire reached (ADR-259 decision 5); a node that never reached it is not closed there.
+    #[tokio::test]
+    async fn a_close_reaches_the_channel_the_fire_did_after_the_tag_is_gone() {
+        let tagged = log();
+        let n = Notifier::with_default(None);
+        let id_t = Uuid::from_u128(1);
+        let japan = NodeId::new();
+        let other = NodeId::new();
+        n.set_facts_source(japan_facts(japan));
+        n.install_routing(
+            vec![built(id_t, Recorder(tagged.clone()))],
+            vec![tagged_rule(id_t, &["JAPAN"])],
+        );
+        n.handle(NotifyAction::Fire(alert(japan, Severity::Critical, None)))
+            .await;
+        n.handle(NotifyAction::Fire(alert(other, Severity::Critical, None)))
+            .await;
+        assert_eq!(tagged.lock().unwrap().kinds(), vec!["fire"]);
+
+        // The label is removed: the facts no longer know the node at all.
+        n.set_facts_source(japan_facts(NodeId::new()));
+        n.handle(NotifyAction::Resolve(alert(
+            japan,
+            Severity::Critical,
+            None,
+        )))
+        .await;
+        n.handle(NotifyAction::Resolve(alert(
+            other,
+            Severity::Critical,
+            None,
+        )))
+        .await;
+        assert_eq!(
+            tagged.lock().unwrap().kinds(),
+            vec!["fire", "close"],
+            "the fire's close arrives; the node that never paged here is not closed here"
+        );
     }
 
     fn alert(node: NodeId, severity: Severity, root_cause: Option<NodeId>) -> Alert {
@@ -3590,8 +3743,12 @@ mod delivery_tests {
         );
     }
 
+    /// A rule taken away while its incident is open no longer leaves that incident open: the
+    /// channel the fire reached still gets the close (ADR-259 decision 5 — before it, B was
+    /// skipped and its remote incident stayed open with nothing left to close it), and dedup is
+    /// cleared so the alert can page there again.
     #[tokio::test]
-    async fn a_resolve_reaches_the_matched_channel_and_clears_dedup_on_the_rest() {
+    async fn a_resolve_reaches_every_channel_the_fire_did_and_clears_dedup() {
         let (a, b) = (log(), log());
         let n = Notifier::with_default(None);
         let (id_a, id_b) = (Uuid::from_u128(1), Uuid::from_u128(2));
@@ -3613,13 +3770,16 @@ mod delivery_tests {
         assert_eq!(a.lock().unwrap().count("fire"), 1, "deduped");
         assert_eq!(b.lock().unwrap().count("fire"), 1, "deduped");
 
-        // Now only A is routed. The resolve is delivered to A; B is not called, but its dedup must
-        // still be cleared or the alert could never page there again.
+        // Now only A is routed. B was handed the fire, so it is handed the close as well.
         n.install_routing(both(), vec![rule(id_a, None)]);
         n.handle(NotifyAction::Resolve(alert(node, Severity::Critical, None)))
             .await;
         assert_eq!(a.lock().unwrap().count("close"), 1, "A was routed");
-        assert_eq!(b.lock().unwrap().count("close"), 0, "B was not routed");
+        assert_eq!(
+            b.lock().unwrap().count("close"),
+            1,
+            "B opened an incident for this alert, so it is closed there too"
+        );
 
         n.install_routing(both(), vec![rule(id_a, None), rule(id_b, None)]);
         n.handle(fire()).await;
@@ -3631,7 +3791,7 @@ mod delivery_tests {
         assert_eq!(
             b.lock().unwrap().count("fire"),
             2,
-            "B re-pages too — mark_resolved cleared its dedup even though it got no close"
+            "B re-pages too — the close cleared its dedup"
         );
     }
 

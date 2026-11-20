@@ -4716,7 +4716,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Replace a rule's name, severity filter and channels. Whether it is switched on is left as it was. */
+        /**
+         * Replace a rule's name, severity filter, tags and channels. Whether it is switched on is left as
+         *     it was, and so are its tags when the body omits them.
+         */
         put: operations["update_routing_rule"];
         post?: never;
         delete?: never;
@@ -7799,13 +7802,20 @@ export interface components {
             name: string;
         };
         /**
-         * @description Create-rule body: a name, an optional severity filter (absent = any), and target channels.
-         *     Editing a rule takes the same body (ADR-193).
+         * @description Create-rule body: a name, an optional severity filter (absent = any), the tags a node must
+         *     carry one of (ADR-259), and target channels. Editing a rule takes the same body (ADR-193).
          */
         CreateRule: {
             channel_ids: string[];
             name: string;
             severity?: string | null;
+            /**
+             * @description Only alerts on a node carrying at least one of these among its effective labels (its own
+             *     plus its folders', minus the ones it refuses) reach the rule's channels. Empty = every
+             *     node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —
+             *     a client that predates the field must not widen a rule by saving it.
+             */
+            tags?: string[] | null;
         };
         /** @description Create-template body. */
         CreateTemplate: {
@@ -14625,7 +14635,10 @@ export interface components {
         RotatedToken: {
             token: string;
         };
-        /** @description A routing rule: enabled alerts of `severity` (None = any) fan out to `channel_ids`. */
+        /**
+         * @description A routing rule: enabled alerts of `severity` (None = any) whose node carries one of `tags`
+         *     (empty = every node) fan out to `channel_ids`.
+         */
         RoutingRule: {
             channel_ids: string[];
             enabled: boolean;
@@ -14633,6 +14646,13 @@ export interface components {
             id: string;
             name: string;
             severity?: null | components["schemas"]["Severity"];
+            /**
+             * @description The node must carry at least one of these among its effective labels - its own plus the
+             *     ones its folders supply, minus the ones it refuses (ADR-259). Empty means every node, and a
+             *     subject that is not a node (a poller pool, a Meraki organization) matches only an empty
+             *     list. Compared exactly, case included, the way a node's own labels are stored.
+             */
+            tags: string[];
         };
         /**
          * @description The tester's answer. A compile failure is reported **in-band** rather than as a 400: the whole
@@ -34832,7 +34852,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description Empty name, or a severity outside critical|warning|info|null */
+            /** @description Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -35004,14 +35024,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Rule replaced; its enabled switch is unchanged */
+            /** @description Rule replaced; its enabled switch is unchanged, and so are its tags when the body omits them */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description Empty name, or a severity outside critical|warning|info|null */
+            /** @description Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character */
             400: {
                 headers: {
                     [name: string]: unknown;

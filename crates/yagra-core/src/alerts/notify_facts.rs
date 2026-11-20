@@ -590,4 +590,46 @@ pub(crate) mod tests {
         let ctx = context_for(&alert, NotifyEvent::Fire, &HashMap::new());
         assert!(ctx.at.starts_with("1970-01-01"));
     }
+
+    /// A node two folders below the one carrying a label gets that label in its facts, and one
+    /// that refuses it does not (ADR-259: a routing rule naming the label is decided from these,
+    /// so a folder label must reach every node beneath it the way it reaches the JSM tags).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_folder_label_reaches_the_facts_of_every_node_beneath_it(pool: sqlx::PgPool) {
+        use yagra_base::groups::{GroupRepo, GroupType};
+        let groups = GroupRepo::new(pool.clone());
+        let region = groups
+            .create("Japan", GroupType::Region, None, None)
+            .await
+            .expect("region");
+        let site = groups
+            .create("Tokyo", GroupType::Site, Some(region), None)
+            .await
+            .expect("site");
+        assert!(groups
+            .set_tags(region, &["TeamA".to_owned()], &[])
+            .await
+            .expect("tags"));
+        let inherits = yagra_base::pgtest::node(&pool, "core-01", 1, Some(site)).await;
+        let refuses = yagra_base::pgtest::node(&pool, "lab-01", 2, Some(site)).await;
+        sqlx::query("UPDATE nodes SET tags_excluded = $2 WHERE id = $1")
+            .bind(refuses)
+            .bind(vec!["TeamA".to_owned()])
+            .execute(&pool)
+            .await
+            .expect("exclude");
+
+        let source = CachedNodeFacts::new(
+            Arc::new(yagra_base::pgtest::repo(pool.clone())),
+            Arc::new(groups),
+        );
+        let facts = source.facts(&[inherits, refuses]).await;
+        assert_eq!(facts[&inherits].tags, vec!["TeamA".to_owned()]);
+        assert!(
+            facts[&refuses].tags.is_empty(),
+            "{:?}",
+            facts[&refuses].tags
+        );
+    }
 }

@@ -38,6 +38,8 @@ import { Field, TextInput, Select } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Inline, Page, Stack } from '../components/ui/Page';
 import { Badge } from '../components/ui/Badge';
+import { ChipInput } from '../components/ui/ChipInput';
+import { labelsAreValid } from '../components/ui/labelRules';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -640,6 +642,18 @@ function RulesSection({
         ),
       },
       {
+        key: 'tags',
+        header: t('routing.rules.cols.tags'),
+        width: '1fr',
+        sortValue: (r) => r.tags.join(', ') || null,
+        render: (r) =>
+          r.tags.length > 0 ? (
+            <ClippedText text={r.tags.join(', ')} />
+          ) : (
+            <span className="muted">{t('routing.rules.anyNode')}</span>
+          ),
+      },
+      {
         key: 'channels',
         sortValue: (r) => r.channel_ids.map(channelName).join(', ') || null,
         header: t('routing.rules.cols.channels'),
@@ -811,7 +825,7 @@ function RulesSection({
 }
 
 /** Add a routing rule, or — given `rule` — edit one in place (ADR-193). The edit replaces the name,
- *  severity and channels and leaves the rule's on/off switch as it was. */
+ *  severity, tags (ADR-259) and channels and leaves the rule's on/off switch as it was. */
 function RuleModal({
   rule,
   channels,
@@ -826,6 +840,7 @@ function RuleModal({
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState(rule?.name ?? '');
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
+  const [tags, setTags] = useState<string[]>(() => [...(rule?.tags ?? [])]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
   const form = useSubmit({
@@ -841,13 +856,14 @@ function RuleModal({
       return next;
     });
 
-  const canAdd = name.trim() !== '' && selected.size > 0;
+  const canAdd = name.trim() !== '' && selected.size > 0 && labelsAreValid(tags);
 
   const submit = () => {
     if (!canAdd) return;
     const body = {
       name: name.trim(),
       severity: severity === '' ? null : severity,
+      tags,
       channel_ids: [...selected],
     };
     form.submit(() =>
@@ -885,6 +901,15 @@ function RuleModal({
             <option value="info">{severityLabel('info')}</option>
           </Select>
         </Field>
+        {/* Empty reaches every node, which the placeholder says rather than a sentence (ADR-200). */}
+        <FieldGroup label={t('routing.ruleModal.tags')}>
+          <ChipInput
+            value={tags}
+            onChange={setTags}
+            placeholder={t('routing.ruleModal.anyNode')}
+            inputLabel={t('routing.ruleModal.tags')}
+          />
+        </FieldGroup>
         <FieldGroup label={t('routing.ruleModal.channels')}>
           <Inline gap={12}>
             {channels.map((c) => (

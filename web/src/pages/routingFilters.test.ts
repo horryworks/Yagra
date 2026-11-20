@@ -29,6 +29,7 @@ const rule = (over: Partial<RoutingRule> = {}): RoutingRule => ({
   name: 'page on critical',
   severity: 'critical',
   enabled: true,
+  tags: [],
   channel_ids: ['c1'],
   ...over,
 });
@@ -94,5 +95,14 @@ describe('the routing-rules filter row', () => {
     expect(keeps(specs, rule({ enabled: false }), { status: 'enabled' })).toBe(false);
     expect(keeps(specs, rule(), { name: term('CRITICAL') })).toBe(true);
     expect(keeps(specs, rule(), { name: term('warn') })).toBe(false);
+  });
+
+  it('finds the rules written for a tag, and not the ones that name none', () => {
+    // ADR-259: an untagged rule reaches every node, but the question this filter answers is
+    // "which rules were written for TeamA", so it does not list them.
+    const team = rule({ tags: ['APAC', 'TeamA'] });
+    expect(keeps(specs, team, { tags: term('teama') })).toBe(true);
+    expect(keeps(specs, team, { tags: term('EMEA') })).toBe(false);
+    expect(keeps(specs, rule(), { tags: term('TeamA') })).toBe(false);
   });
 });

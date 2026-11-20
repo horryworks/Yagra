@@ -1797,7 +1797,9 @@ pub(crate) const LABELS_MAX: usize = 32;
 ///
 /// **Deliberately unrestricted in character** beyond the length and a ban on control characters: a
 /// label is a word a person reads off a badge (`JAPAN`, a site name in Japanese, `spare parts`) and
-/// carries to a notification; since ADR-229 nothing Yagra judges by matches on it. The old
+/// carries to a notification; since ADR-229 nothing Yagra judges by matches on it, except a
+/// routing rule choosing which channels a node's alerts reach (ADR-259), which validates the tags
+/// it names here too so a rule can name exactly what a node can carry. The old
 /// key/value shape restricted the *key* to `[A-Za-z0-9_.:-]` and left the *value* free; with one
 /// string, the free rule is the one that survives — a badge is prose.
 ///

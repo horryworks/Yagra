@@ -41,6 +41,7 @@
       "cols": {
         "name": "Name",
         "severity": "Severity",
+        "tags": "Tags",
         "channels": "Channels",
         "status": "Status",
         "actions": "Actions"
@@ -48,6 +49,7 @@
       "empty": "No routing rules",
       "emptyNoChannels": "Add a channel first.",
       "any": "any",
+      "anyNode": "All nodes",
       "noChannels": "(no channels)",
       "enable": "Enable rule",
       "disable": "Disable rule",
@@ -82,6 +84,8 @@
       "name": "Name",
       "severity": "Severity",
       "anySeverity": "any severity",
+      "tags": "Tags",
+      "anyNode": "All nodes",
       "channels": "Channels",
       "add": "Add rule",
       "editTitle": "Edit routing rule — {{name}}",
