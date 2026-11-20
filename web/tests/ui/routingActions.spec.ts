@@ -62,15 +62,23 @@ test('a routing rule saves the tags it was given', async ({ page }) => {
   await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
   const dialog = page.getByRole('dialog');
   // Inc.2: the tags are a list of boxes, one per tag nodes carry, so nothing can be typed wrong.
-  // The rule's own tag no node carries is listed first, ticked and marked.
-  const tags = dialog.getByRole('group', { name: 'Tags', exact: true });
+  // Decision 17: a rule with tags opens on "Only these tags"; the boxes show only there.
+  const tags = dialog.getByRole('group', { name: 'Nodes', exact: true });
   await expect(tags).toBeVisible();
+  await expect(tags.getByRole('button', { name: 'Only these tags' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  // The rule's own tag no node carries is listed first, ticked and marked.
   const gone = tags.locator('.checklist-row', { hasText: 'no node' });
   await expect(gone).toHaveCount(1);
   await expect(gone.getByRole('checkbox')).toBeChecked();
   await gone.getByRole('checkbox').uncheck();
   // Unticked, it stays on the list rather than vanishing under the pointer.
   await expect(gone).toHaveCount(1);
+  // Nothing ticked under "Only these tags" reaches no node, and the rule cannot be saved.
+  await expect(dialog.getByText('Reaches 0 nodes')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
   const teamA = tags.locator('.checklist-row', { hasText: 'TeamA' });
   await expect(teamA).toContainText('3 nodes');
   await teamA.getByRole('checkbox').check();

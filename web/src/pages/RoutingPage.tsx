@@ -41,6 +41,7 @@ import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Inline, Page, Stack } from '../components/ui/Page';
 import { Badge } from '../components/ui/Badge';
 import { CheckList } from '../components/ui/CheckList';
+import { Segmented } from '../components/ui/Segmented';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -871,6 +872,8 @@ function RuleModal({
   const [name, setName] = useState(rule?.name ?? '');
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
   const [tags, setTags] = useState<string[]>(() => [...(rule?.tags ?? [])]);
+  // Switching back to every node keeps the ticks, so a second switch restores them.
+  const [onlyTags, setOnlyTags] = useState(() => (rule?.tags.length ?? 0) > 0);
   // Built from the rule as it was opened, so unticking a tag no node carries does not make its row
   // vanish under the pointer.
   const choices = useMemo(() => tagChoices(rule?.tags ?? [], nodeTags), [rule, nodeTags]);
@@ -896,10 +899,10 @@ function RuleModal({
   const tagKey = tags.join('\n');
   const { data: reach } = useLoad<number | null>(
     () =>
-      tags.length > 0
+      onlyTags && tags.length > 0
         ? api.listNodeTags(tags).then((r) => r.reach ?? null)
         : Promise.resolve(null),
-    [tagKey],
+    [tagKey, onlyTags],
     { initial: null },
   );
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
@@ -917,14 +920,14 @@ function RuleModal({
       return next;
     });
 
-  const canAdd = name.trim() !== '' && selected.size > 0;
+  const canAdd = name.trim() !== '' && selected.size > 0 && (!onlyTags || tags.length > 0);
 
   const submit = () => {
     if (!canAdd) return;
     const body = {
       name: name.trim(),
       severity: severity === '' ? null : severity,
-      tags,
+      tags: onlyTags ? tags : [],
       channel_ids: [...selected],
     };
     form.submit(() =>
@@ -962,19 +965,28 @@ function RuleModal({
             <option value="info">{severityLabel('info')}</option>
           </Select>
         </Field>
-        {/* None ticked reaches every node, which the line under the list says (ADR-200). With no
-            tag on any node there is no list, and that line is all there is. */}
-        <FieldGroup label={t('routing.ruleModal.tags')}>
-          {tagItems.length > 0 && (
+        {/* "Every node" is a choice the operator makes, not what an empty list happens to mean
+            (ADR-259 decision 17). The API still spells it as no tags. */}
+        <FieldGroup label={t('routing.ruleModal.nodes')}>
+          <Segmented
+            options={[
+              { value: 'all', label: t('routing.ruleModal.allNodes') },
+              { value: 'tags', label: t('routing.ruleModal.onlyTags') },
+            ]}
+            value={onlyTags ? 'tags' : 'all'}
+            onChange={(v) => setOnlyTags(v === 'tags')}
+          />
+          {onlyTags && tagItems.length > 0 && (
             <CheckList items={tagItems} selected={tagSet} onChange={pickTags} />
           )}
-          {tags.length === 0 ? (
-            <p className="form-status">{t('routing.ruleModal.reachAll')}</p>
-          ) : (
-            reach !== null && (
-              <p className="form-status">{t('routing.ruleModal.reach', { count: reach })}</p>
-            )
-          )}
+          {onlyTags &&
+            (tags.length === 0 ? (
+              <p className="form-status">{t('routing.ruleModal.reach', { count: 0 })}</p>
+            ) : (
+              reach !== null && (
+                <p className="form-status">{t('routing.ruleModal.reach', { count: reach })}</p>
+              )
+            ))}
         </FieldGroup>
         <FieldGroup label={t('routing.ruleModal.channels')}>
           <Inline gap={12}>
