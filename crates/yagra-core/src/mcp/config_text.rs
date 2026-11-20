@@ -4,7 +4,9 @@
 //! oxidized's `remove_secret` already ran over every text this module sees. It works model by
 //! model and can miss a line, which is why ADR-210 decision 16 kept configuration text off `/mcp`
 //! in the first place. Stage 10 reopens it behind three guards, and this file is the second one
-//! (decision 84): Yagra blanks secrets again, by its own rules, on the way out of `/mcp` only.
+//! (decision 84): Yagra blanks secrets again, by its own rules, on the way out of `/mcp`. Since
+//! ADR-222 Inc.12 the save script's comparison also goes through it before it is stored, because a
+//! diff's `+ `/`- ` prefixes defeat oxidized's line-anchored filters.
 //!
 //! ⚠️ **This is a second net, not a guarantee.** It knows the shapes in [`CASES`] and the words in
 //! [`SECRET_WORDS`]; a vendor spelling neither covers still leaks. The guards that make stage 10

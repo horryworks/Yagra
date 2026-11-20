@@ -28689,7 +28689,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter applied. Only a model Yagra compares over the command line has one */
+            /** @description What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter and Yagra's own applied. Only a model Yagra compares over the command line has one */
             200: {
                 headers: {
                     [name: string]: unknown;

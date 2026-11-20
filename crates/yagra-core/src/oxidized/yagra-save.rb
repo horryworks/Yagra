@@ -115,7 +115,14 @@ def unsaved?(node, cmds, form)
   return nil unless cmds['compare']
 
   # `cmd` answers false when the input returned nothing; that reads as different, as it always has.
-  out = (node.model.cmd(cmds['compare']) || '').to_s
+  # It must not reach the pattern: NX-OS's reads an empty comparison as "the same" (ADR-222
+  # Inc.12), so a comparison that never came back would report the device saved.
+  raw = node.model.cmd(cmds['compare'])
+  unless raw
+    form['compare'] = ''
+    return true
+  end
+  out = raw.to_s
   form['compare'] = out
   !out.match?(Regexp.new(cmds['same']))
 end

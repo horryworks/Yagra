@@ -217,7 +217,7 @@ pub(crate) struct UnsavedText {
     get, path = "/api/v1/nodes/{node_id}/config-backup/unsaved", tag = "nodes",
     params(("node_id" = Uuid, Path, description = "Node id")),
     responses(
-        (status = 200, description = "What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter applied. Only a model Yagra compares over the command line has one", body = UnsavedText),
+        (status = 200, description = "What the device printed when the save script last compared its running configuration with its startup configuration, while the two differ, with oxidized's secret filter and Yagra's own applied. Only a model Yagra compares over the command line has one", body = UnsavedText),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such node the caller can see, or it is not read as unsaved with a comparison kept (`config_unsaved_not_found`)", body = super::error::ErrorBody),
@@ -635,6 +635,38 @@ pub(super) struct SaveReport {
     compare: String,
 }
 
+/// The comparison with Yagra's own secret pass applied before it is stored (ADR-222 Inc.12).
+///
+/// oxidized's filters are written for a configuration, and several anchor at the start of a line
+/// (NX-OS's `^(snmp-server community)`). A comparison is a diff, whose lines start with `+ `, `- `
+/// or `! `, so those filters miss exactly the lines that changed. The pass `/mcp` applies to
+/// configuration text matches a secret word anywhere in a line, so it runs here for every model.
+/// ⚠️ It is a second net, not a guarantee (see `mcp/config_text.rs`).
+///
+/// The diff marker is taken off each line before the pass and put back after it: some of its
+/// rules read a token's position (`snmp-server host <address> … <community>` names no secret word,
+/// and is recognised by `host` being the second token), and a leading `+` would shift it.
+fn blank_compare(text: &str) -> String {
+    let (markers, bodies): (Vec<&str>, Vec<&str>) = text.lines().map(split_diff_marker).unzip();
+    crate::mcp::config_text::redact_lines(bodies.into_iter())
+        .into_iter()
+        .zip(markers)
+        .map(|((line, _), marker)| format!("{marker}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A diff line's marker (`+ `, `- `, `! `, or the bare character on a line of its own) and the
+/// rest. `---`/`+++` headings and lines without one come back with an empty marker.
+fn split_diff_marker(line: &str) -> (&str, &str) {
+    let mut chars = line.chars();
+    match (chars.next(), chars.next()) {
+        (Some('+' | '-' | '!'), Some(' ')) => line.split_at(2),
+        (Some('+' | '-' | '!'), None) => line.split_at(1),
+        _ => ("", line),
+    }
+}
+
 fn flag(text: &str) -> Option<bool> {
     match text {
         "true" => Some(true),
@@ -675,9 +707,9 @@ async fn save_report(
         flag(&r.unsaved_before)
     };
     if let Some(unsaved) = unsaved {
-        let compare = Some(r.compare.as_str()).filter(|s| !s.is_empty());
+        let compare = Some(blank_compare(&r.compare)).filter(|s| !s.is_empty());
         saves
-            .record_unsaved(r.node, unsaved, compare)
+            .record_unsaved(r.node, unsaved, compare.as_deref())
             .await
             .map_err(|e| failed(&e, "config unsaved record"))?;
         if !unsaved {
@@ -769,6 +801,42 @@ mod tests {
             startup: String::new(),
             compare: String::new(),
         }
+    }
+
+    /// ADR-222 Inc.12: a diff line oxidized's line-anchored filter misses is blanked before the
+    /// comparison is stored, and a line naming no secret is kept as it came.
+    #[test]
+    fn the_stored_comparison_loses_the_secrets_a_diff_hides_from_oxidized() {
+        let diff = "+ snmp-server community S3cret group network-operator\n\
+                    - tacacs-server key 7 \"0x1234\"\n \
+                    === Current configuration line 9\n+ vlan 30";
+        let stored = blank_compare(diff);
+        assert!(!stored.contains("S3cret"), "{stored}");
+        assert!(!stored.contains("0x1234"), "{stored}");
+        assert!(
+            stored.contains(" === Current configuration line 9"),
+            "{stored}"
+        );
+        assert!(stored.contains("+ vlan 30"), "{stored}");
+        assert_eq!(blank_compare(""), "");
+        // The community trails `snmp-server host` with no secret word before it; the rule that
+        // finds it reads token positions, which the diff marker would otherwise shift.
+        for line in [
+            "+ snmp-server host 192.0.2.10 traps version 2c c0mmun1ty",
+            "- snmp-server host 192.0.2.10 traps version 2c c0mmun1ty",
+            "! snmp-server host 192.0.2.10 traps version 2c c0mmun1ty",
+        ] {
+            let stored = blank_compare(line);
+            assert!(!stored.contains("c0mmun1ty"), "{stored}");
+            assert!(
+                stored.starts_with(&line[..2]),
+                "the marker is kept: {stored}"
+            );
+        }
+        assert_eq!(
+            blank_compare("--- 1,3 ----\n+++  Running-config"),
+            "--- 1,3 ----\n+++  Running-config"
+        );
     }
 
     /// Only a save the device took asks for the polls that close the alert at once: a check, an

@@ -25,5 +25,15 @@
     ],
     "success": "(?i)successfully",
     "denied": "(?i)(error: unrecognized command|permission|insufficient|authority)"
+  },
+  {
+    "model": "nxos",
+    "startup": "show startup-config",
+    "compare": "show running-config diff",
+    "same": "(?i)\\A(?:\\s*(?:\\*+[ \\t\\r]*(?:\\n|\\z)|(?:-{3}|\\+{3})[ \\t]*(?:startup|running)-config[^\\n]*))*\\s*\\z",
+    "save": "copy running-config startup-config",
+    "confirms": [],
+    "success": "(?i)copy complete",
+    "denied": "(?i)(% ?permission denied|% ?invalid command|% ?invalid input|not authorized)"
   }
 ]

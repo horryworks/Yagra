@@ -10,8 +10,9 @@
 //!
 //! The VRP strings were confirmed on a real device (2026-10-31: `compare configuration`, and `save`
 //! with its `[Y/N]` answer). ⚠️ The IOS ones are still taken from the IOS command reference and are
-//! to be confirmed on a real device before they are trusted (ADR-222's remaining work); a model is
-//! added here only with the same care.
+//! to be confirmed on a real device before they are trusted (ADR-222's remaining work), and so are
+//! the NX-OS ones (ADR-222 Inc.12, from the NX-OS command reference); a model is added here only
+//! with the same care.
 
 use serde::Serialize;
 
@@ -66,6 +67,28 @@ pub const SAVE_COMMANDS: &[SaveCommands] = &[
         ],
         success: r"(?i)successfully",
         denied: r"(?i)(error: unrecognized command|permission|insufficient|authority)",
+    },
+    // ADR-222 Inc.12. Unsaved changes are found by comparing over the command line (decision 26):
+    // nothing records that a Nexus answers the CISCO-CONFIG-MAN-MIB pair, and the NX-OS template
+    // does not collect it.
+    SaveCommands {
+        model: "nxos",
+        startup: "show startup-config",
+        compare: Some("show running-config diff"),
+        // Decision 27: the two are the same when the diff prints nothing, or only its headings - a
+        // line of asterisks, `--- Startup-config`, `+++ Running-config`. oxidized's `nxos` model
+        // cuts the echoed command and the prompt (`cmd :all` / `cut_both`), so neither is here.
+        // Any other line, an error included, reads as different. A line of asterisks must end
+        // where it stops, so Ruby cannot split one run between repetitions and backtrack
+        // exponentially over a long diff that does not match.
+        same: Some(
+            r"(?i)\A(?:\s*(?:\*+[ \t\r]*(?:\n|\z)|(?:-{3}|\+{3})[ \t]*(?:startup|running)-config[^\n]*))*\s*\z",
+        ),
+        // `copy running-config startup-config` asks nothing and ends with `Copy complete`.
+        save: "copy running-config startup-config",
+        confirms: &[],
+        success: r"(?i)copy complete",
+        denied: r"(?i)(% ?permission denied|% ?invalid command|% ?invalid input|not authorized)",
     },
 ];
 
@@ -133,6 +156,30 @@ mod tests {
             "scripts/oxidized-script-test/commands.json is stale. Regenerate it with:\n    \
              UPDATE_SAVE_COMMANDS=1 cargo test -p yagra-common the_committed_save_commands_fixture_is_current"
         );
+    }
+
+    /// ADR-222 Inc.12 decision 27: the NX-OS comparison reads as "same" only when it is empty or
+    /// carries the diff's headings alone; a changed line or an error reads as different, so a
+    /// misread can raise a false alert but never hide an unsaved device.
+    #[test]
+    fn the_nxos_comparison_reads_same_only_without_a_changed_line() {
+        let nxos = commands_for("nxos").expect("an nxos row");
+        let same = regex::Regex::new(nxos.same.expect("nxos compares")).expect("compiles");
+        let headings = "*******************\n---  Startup-config\n+++  Running-config\n";
+        for text in ["", "\n", "  \r\n", headings, "\r\n*******************\r\n"] {
+            assert!(same.is_match(text), "should read as same: {text:?}");
+        }
+        let changed = format!(
+            "{headings}***************\n*** 1,3 ****\n  hostname sw-01\n--- 1,4 ----\n  hostname sw-01\n+ vlan 30\n"
+        );
+        for text in [
+            changed.as_str(),
+            "% Invalid command at '^' marker.",
+            "% Permission denied for the role",
+            "*******************\n+ vlan 30",
+        ] {
+            assert!(!same.is_match(text), "should read as different: {text:?}");
+        }
     }
 
     /// A compare command always comes with the pattern that reads it, and the reverse.

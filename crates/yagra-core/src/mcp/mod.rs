@@ -29,8 +29,9 @@
 //! device-configuration tools** (monitoring lane, ADR-015/029), and no credential/secret is ever
 //! placed in a tool result (ADR-018; enforced structurally in [`dto`] + its canary test).
 
-// What `get_node_config` does to a configuration before a client sees it (ADR-210 stage 10).
-mod config_text;
+// What `get_node_config` does to a configuration before a client sees it (ADR-210 stage 10), and
+// since ADR-222 Inc.12 what the save report's comparison goes through before it is stored.
+pub(crate) mod config_text;
 mod dto;
 pub(crate) mod folded;
 // Test-only, like `api/route_table.rs`: the one accessor every source-text check reads the tool

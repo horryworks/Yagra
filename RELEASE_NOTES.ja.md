@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### 新機能
+
+- **Cisco Nexus（NX-OS）を保存できるようになった。** 設定をバックアップしている Nexus に、未保存の印・保存ボタン・ノードごとの Auto save のスイッチが出る。取得のたびに `show running-config diff` で比べ、`copy running-config startup-config` で保存する。組み込みの「Unsaved configuration」ルールの対象に「Cisco Nexus switch (NX-OS)」プロファイルを足した。今の配備には、ルールが出荷のままなら migration 0181 が足す。NX-OS のコマンドは、まだ本物の Nexus で試していない。
+
+### セキュリティ
+
+- **保存してある running と startup の比較に、oxidized の秘密フィルタに加えて Yagra 自身の消し込みもかけるようにした**（全機種）。oxidized のフィルタは行の頭で合わせるが、差分は変わった行の頭に `+ ` や `- ` を付けるので、変わった SNMP コミュニティや TACACS の鍵が Config タブの Unsaved の表示に出うる状態だった。秘密の語を含む行は、その語より後ろが `<redacted>` になる。
+
 ## v0.3.82 — 自動保存をノードごとに切り替える。ノードの検索はスペースで区切った複数の語で、どのアドレスでもフォルダ名でも探せる
 
 ### 破壊的変更

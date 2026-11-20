@@ -73,14 +73,16 @@ const CISCO_WLAN_CONTROLLERS: &[&str] = &["Cisco wireless controller"];
 
 const FORTINET: &[&str] = &["Fortinet FortiGate"];
 
-// The Huawei profiles fetched with oxidized's `vrp` model, whose running and startup configurations
-// the save script compares (ADR-222). The wireless controller joined in ADR-210 stage 11; migration
-// 0180 adds it to the row an existing deployment already holds.
-const HUAWEI_VRP: &[&str] = &[
+// The profiles fetched with a model whose running and startup configurations the save script
+// compares (ADR-222): the Huawei ones on `vrp`, and since ADR-222 Inc.12 the Nexus on `nxos`. The
+// wireless controller joined in ADR-210 stage 11 and the Nexus in Inc.12; migrations 0180 and 0181
+// add each to the row an existing deployment already holds, so a new entry here goes at the end.
+const UNSAVED_BY_CLI: &[&str] = &[
     "Huawei NE/AR router",
     "Huawei CloudEngine switch",
     "Huawei USG firewall",
     "Huawei wireless controller",
+    "Cisco Nexus switch (NX-OS)",
 ];
 
 const PANOS: &[&str] = &["Palo Alto PAN-OS firewall"];
@@ -526,7 +528,7 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 37] = [
     // noticed only at the next fetch; it is then added to each SNMP poll. The four hours are the same.
     (
         36,
-        HUAWEI_VRP,
+        UNSAVED_BY_CLI,
         yagra_common::config_unsaved::METRIC,
         "above",
         Some(14400.0),

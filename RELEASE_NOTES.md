@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### New Features
+
+- **Cisco Nexus (NX-OS) can now be saved.** A Nexus whose configuration is backed up gets the unsaved-configuration check, the Save button and the per-node Auto save switch. Yagra compares with `show running-config diff` after each fetch and saves with `copy running-config startup-config`. The built-in "Unsaved configuration" rule now covers the "Cisco Nexus switch (NX-OS)" profile; an existing deployment gets it through migration 0181 if the rule is still as shipped. The NX-OS commands have not yet been tried on a real Nexus.
+
+### Security
+
+- **The stored running-vs-startup comparison now goes through Yagra's own secret pass as well as oxidized's**, for every model. oxidized's filters match a line's start, and a diff prefixes every changed line with `+ ` or `- `, so a changed SNMP community or TACACS key could reach the Config tab's Unsaved view. Lines naming a secret now show `<redacted>` after that word.
+
 ## v0.3.82 — Switch automatic save per node, and search the inventory by several words, any address or folder
 
 ### Breaking changes

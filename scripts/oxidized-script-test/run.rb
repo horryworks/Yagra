@@ -12,6 +12,11 @@
 # step (ADR-210 stage 7): one that lands a login in privileged mode (`sw-01#`) must never be sent
 # `enable`, and one that lands in user mode (`sw-01>`) must be, with its enable password.
 #
+# A third speaks like Cisco NX-OS (ADR-222 Inc.12): `show running-config diff` prints nothing when
+# running and startup agree and a context diff when they do not, and `copy running-config
+# startup-config` asks nothing. It runs through oxidized's own `nxos` model, whose output trimming
+# is what the comparison's `same` pattern relies on.
+#
 # Usage: ruby run.rb <path to yagra-save.rb> <path to yagra-enable.rb>
 
 require 'json'
@@ -25,6 +30,7 @@ ENABLE_SCRIPT = ARGV.fetch(1)
 COMMANDS = JSON.parse(File.read(File.join(__dir__, 'commands.json')))
 VRP = COMMANDS.find { |c| c['model'] == 'vrp' } or abort 'no vrp row in commands.json'
 IOS = COMMANDS.find { |c| c['model'] == 'ios' } or abort 'no ios row in commands.json'
+NXOS = COMMANDS.find { |c| c['model'] == 'nxos' } or abort 'no nxos row in commands.json'
 NODE = '00000000-0000-4000-8000-000000000222'
 TOKEN = 'T0ken'
 DEVICE_PORT = 2323
@@ -142,6 +148,62 @@ class FakeIos
         break
       else
         client.write("\r\n% Invalid input detected at '^' marker.\r\n#{prompt}")
+      end
+    end
+  ensure
+    client.close rescue nil
+  end
+end
+
+# A device that speaks like Cisco NX-OS. `:already_saved` starts it with nothing to save, `:denied`
+# refuses the save as a role without the right does, and `:headings` prints the diff's headings even
+# when there is nothing under them.
+class FakeNxos
+  attr_reader :heard
+
+  PROMPT = 'sw-01#'
+
+  def initialize(mode)
+    @mode = mode
+    @heard = []
+    @saved = mode == :already_saved
+  end
+
+  def diff
+    heads = "*******************\r\n---  Startup-config\r\n+++  Running-config\r\n"
+    return (@mode == :headings ? heads : '') if @saved
+
+    "#{heads}***************\r\n*** 1,2 ****\r\n  hostname sw-01\r\n--- 1,3 ----\r\n" \
+      "  hostname sw-01\r\n+ vlan 30\r\n+ snmp-server community S3cret group network-operator\r\n"
+  end
+
+  def serve(client)
+    client.write("\r\nUser Access Verification\r\nsw-01 login: ")
+    client.gets
+    client.write("\r\nPassword: ")
+    client.gets
+    client.write("\r\n#{PROMPT}")
+    while (line = client.gets)
+      cmd = line.strip
+      @heard << cmd
+      case cmd
+      when '', 'terminal length 0'
+        client.write("\r\n#{PROMPT}")
+      when 'show running-config diff'
+        client.write("\r\n#{diff}#{PROMPT}")
+      when 'show startup-config'
+        client.write("\r\n!Command: show startup-config\r\nhostname sw-01\r\n#{PROMPT}")
+      when 'copy running-config startup-config'
+        if @mode == :denied
+          client.write("\r\n% Permission denied for the role\r\n#{PROMPT}")
+        else
+          @saved = true
+          client.write("\r\n[########################################] 100%\r\nCopy complete.\r\n#{PROMPT}")
+        end
+      when 'exit'
+        break
+      else
+        client.write("\r\n% Invalid command at '^' marker.\r\n#{PROMPT}")
       end
     end
   ensure
@@ -331,6 +393,36 @@ check.call('a login that lands in > saves after enable', r['failure'] == '', r)
 r, heard = run(home, 'ios, no enable password', nil, device: FakeIos.new(:privileged), model: IOS)
 check.call('a login with no enable password sends no enable', !heard.include?('enable'), heard)
 check.call('a login with no enable password saves', r['failure'] == '', r)
+
+# ADR-222 Inc.12: NX-OS, through oxidized's own `nxos` model.
+r, heard = run(home, 'nxos, check', nil, action: 'check', device: FakeNxos.new(:ok), model: NXOS)
+check.call('nxos: a changed running configuration reads as unsaved', r['unsaved_before'] == 'true', r)
+check.call('nxos: a check sends no save', !heard.include?('copy running-config startup-config'), heard)
+check.call('nxos: the comparison carries neither the command echo nor the prompt',
+           !r['compare'].to_s.include?('sw-01#') && !r['compare'].to_s.include?('show running-config diff'), r)
+# oxidized's NX-OS filter anchors at the start of a line, so it misses a diff's `+ snmp-server
+# community` line; core blanks it with its own pass before storing (`api/config_save.rs`).
+check.call('nxos: the comparison carries the changed lines', r['compare'].to_s.include?('+ vlan 30'), r)
+
+r, heard = run(home, 'nxos, saved', nil, action: 'check', device: FakeNxos.new(:already_saved), model: NXOS)
+check.call('nxos: an empty comparison reads as saved', r['unsaved_before'] == 'false', r)
+
+r, = run(home, 'nxos, headings only', nil, action: 'check', device: FakeNxos.new(:headings), model: NXOS)
+check.call('nxos: a comparison of headings alone reads as saved', r['unsaved_before'] == 'false', r)
+
+r, heard = run(home, 'nxos, auto', nil, action: 'auto', device: FakeNxos.new(:ok), model: NXOS)
+check.call('nxos: automatic save saves and reads saved after',
+           r['failure'] == '' && r['unsaved_before'] == 'true' && r['unsaved_after'] == 'false', r)
+check.call('nxos: the startup it replaced comes back', r['startup'].to_s.include?('hostname sw-01'), r)
+check.call('nxos: the save is copy running-config startup-config',
+           heard.include?('copy running-config startup-config'), heard)
+
+r, heard = run(home, 'nxos, auto, saved', nil, action: 'auto', device: FakeNxos.new(:already_saved), model: NXOS)
+check.call('nxos: automatic save never writes to a saved device',
+           !heard.include?('copy running-config startup-config') && r['failure'].to_s.empty?, [r, heard])
+
+r, = run(home, 'nxos, denied', nil, device: FakeNxos.new(:denied), model: NXOS)
+check.call('nxos: a refused save is reported as denied', r['failure'] == 'denied', r)
 
 puts failures.empty? ? 'ALL PASS' : "#{failures.size} FAILED"
 exit(failures.empty? ? 0 : 1)

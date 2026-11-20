@@ -401,6 +401,38 @@ mod tests {
         );
     }
 
+    /// Migration `0181` names the same rule, the four profiles 0180 left it with and the Nexus
+    /// profile as literals (ADR-222 Inc.12).
+    #[test]
+    fn the_ids_migration_0181_names_are_the_unsaved_rule_and_the_profiles_it_compares() {
+        let sql = include_str!("../../../migrations/0181_unsaved_config_rule_covers_nexus.sql");
+        let profiles = yagra_common::builtin_profiles();
+        let position = |name: &str| {
+            profiles
+                .iter()
+                .position(|p| p.name == name)
+                .unwrap_or_else(|| panic!("{name} is still in the catalog"))
+        };
+        for name in [
+            "Huawei NE/AR router",
+            "Huawei CloudEngine switch",
+            "Huawei USG firewall",
+            "Huawei wireless controller",
+            "Cisco Nexus switch (NX-OS)",
+        ] {
+            let id = SeedRange::Profiles.id(position(name));
+            assert!(
+                sql.contains(&id.to_string()),
+                "0181 does not name {name} ({id})"
+            );
+        }
+        let rule = SeedRange::DefaultThresholds.id(36);
+        assert!(
+            sql.contains(&rule.to_string()),
+            "0181 does not name the rule ({rule})"
+        );
+    }
+
     /// The same pairing for the seeded trap rules, which migration `0047` writes as literals.
     #[test]
     fn the_builtin_event_rule_ids_are_the_ones_migration_0047_inserts() {
