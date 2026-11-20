@@ -212,6 +212,16 @@ pub struct NodeFacts {
     pub group_id: Option<Uuid>,
 }
 
+/// The three columns a node's effective labels are folded from, for [`NodeRepo::label_rows`].
+/// Raw, like [`NodeFacts::tags`] as the repository returns it: the folder chain's part is
+/// resolved by the caller.
+#[derive(Debug, Clone)]
+pub struct NodeLabelRow {
+    pub group_id: Option<Uuid>,
+    pub tags: Vec<String>,
+    pub tags_excluded: Vec<String>,
+}
+
 /// One pre-validated node to bulk-import (borrows from the request to avoid copies).
 ///
 /// The caller does **not** need to check whether the address is already monitored:

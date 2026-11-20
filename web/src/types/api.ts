@@ -823,6 +823,7 @@ export type ChannelConfigInput = components['schemas']['ChannelConfig'];
 /** A routing rule (`GET /api/v1/routing-rules`): alerts of `severity` (null = any) fan out
  *  to `channel_ids`. */
 export type RoutingRule = components['schemas']['RoutingRule'];
+export type NodeTags = components['schemas']['NodeTags'];
 
 /** The env-configured default notification route (`GET /api/v1/notification-default-route`):
  *  whether it exists and which kinds of channel it sends every alert to (ADR-200 Inc.28). */

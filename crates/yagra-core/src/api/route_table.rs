@@ -2060,6 +2060,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         Tool("get_config"),
     ),
+    ("GET", "/api/v1/node-tags", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/routing-rules", ADMIN_CFG, NO_MCP_WRITE),
     (
         "DELETE",

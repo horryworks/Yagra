@@ -124,3 +124,55 @@ export function labelProblems(list: readonly string[]): Map<string, LabelProblem
   });
   return out;
 }
+
+/**
+ * One value a chip field may be given when it picks from a known set (ADR-259 Inc.2): the routing
+ * rule's tags, picked from the tags nodes carry, with how many carry each as `detail`.
+ */
+export interface ChipOption {
+  value: string;
+  /** A short note shown beside the value in the list (a node count). */
+  detail?: string;
+}
+
+/** How many options the list under the box shows at once. */
+export const OPTIONS_SHOWN = 8;
+
+/**
+ * The options to offer for `draft`: not already chosen, containing the draft case-insensitively,
+ * those that start with it first. An empty draft offers the first few, so the list can be browsed.
+ */
+export function matchingOptions(
+  options: readonly ChipOption[],
+  chosen: readonly string[],
+  draft: string,
+): ChipOption[] {
+  const want = normalizeLabel(draft).toLowerCase();
+  const open = options.filter((o) => !chosen.includes(o.value));
+  const hits = open.filter((o) => o.value.toLowerCase().includes(want));
+  const starts = hits.filter((o) => o.value.toLowerCase().startsWith(want));
+  const rest = hits.filter((o) => !o.value.toLowerCase().startsWith(want));
+  return [...starts, ...rest].slice(0, OPTIONS_SHOWN);
+}
+
+/**
+ * The option `raw` names, spelled as the option is: an exact match first, otherwise the one option
+ * equal to it ignoring case. `null` when it names none, or when ignoring case leaves a tie — two
+ * tags differing only in case are two tags, and guessing between them would pick one silently.
+ */
+export function resolveOption(options: readonly ChipOption[], raw: string): string | null {
+  const label = normalizeLabel(raw);
+  if (label === '') return null;
+  if (options.some((o) => o.value === label)) return label;
+  const folded = options.filter((o) => o.value.toLowerCase() === label.toLowerCase());
+  return folded.length === 1 ? folded[0].value : null;
+}
+
+/** The chosen values no option offers any more — a tag no node carries now. */
+export function valuesWithoutOption(
+  chosen: readonly string[],
+  options: readonly ChipOption[],
+): Set<string> {
+  const known = new Set(options.map((o) => o.value));
+  return new Set(chosen.filter((c) => !known.has(c)));
+}

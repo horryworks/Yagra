@@ -73,7 +73,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
   nav: [2660, 1210], // + the Investigate menu item, its description and the Analyses group heading; the description now names a site too (ADR-251 Inc.2, 2026-11-09)
-  nodes: [16409, 9387], // + the config-text-for-AI switch: its state line and the warning said when it is switched on (ADR-210 stage 10, 2026-11-19)
+  nodes: [16409, 9403], // + the tag picker's state words: a tag no node carries, and "no node" on a chip (ADR-259 Inc.2, 2026-11-20)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

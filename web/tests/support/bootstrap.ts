@@ -72,6 +72,18 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // account with no pins is the honest start; `treePinned.spec.ts` brings its own.
   '/api/v1/pins': { group_ids: [], nodes: [] } satisfies Schemas['Pins'] as unknown as Json,
 
+  // The tags nodes carry (ADR-259 Inc.2). The generator answers one tag named `string`, which is
+  // also what it puts on the sample routing rule — so the rule's tag would read as carried and the
+  // "no node" mark could never be seen. Two real-looking tags, neither the rule's, give the picker
+  // something to offer and leave the rule's tag marked.
+  '/api/v1/node-tags': {
+    tags: [
+      { tag: 'APAC', nodes: 5 },
+      { tag: 'TeamA', nodes: 3 },
+    ],
+    reach: 3,
+  } satisfies Schemas['NodeTags'] as unknown as Json,
+
   // What is not being watched (ADR-227). The generator answers every integer with `1`, which reads
   // as "the one pool-polled node has no live poller" — the shell's nothing-is-polled sentence on
   // every screen the walk visits. A fleet that is fully watched is the honest start.

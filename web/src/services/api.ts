@@ -155,6 +155,7 @@ import type {
   RoleMatrix,
   NotificationDefaultRoute,
   RoutingRule,
+  NodeTags,
   DeliveryHoursConfig,
   HeldNotification,
   ChannelKind,
@@ -2458,6 +2459,14 @@ export const api = {
     tags: string[];
     channel_ids: string[];
   }): Promise<{ id: string }> => apiPost('/api/v1/routing-rules', { body }),
+
+  /** The tags nodes carry, with how many carry each — what a routing rule's tags are picked from
+   *  (ADR-259 Inc.2). `reach` adds how many nodes carry at least one of those tags. Newline-joined,
+   *  because a tag cannot hold a control character and may hold a comma. */
+  listNodeTags: (reach?: readonly string[]): Promise<NodeTags> =>
+    apiGet('/api/v1/node-tags', {
+      query: reach && reach.length > 0 ? { reach: reach.join('\n') } : undefined,
+    }),
 
   /** Enable/disable a rule. */
   setRoutingRuleEnabled: (id: string, enabled: boolean): Promise<void> =>

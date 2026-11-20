@@ -155,6 +155,7 @@ pub(super) enum ConfigKind {
     EventSources,
     NotificationChannels,
     RoutingRules,
+    NodeTags,
     NotificationDefaultRoute,
     DeliveryHours,
     AlertGrouping,
@@ -195,6 +196,7 @@ yagra_base::stored_enum::token_enum!(ConfigKind, [
     EventSources => "event_sources",
     NotificationChannels => "notification_channels",
     RoutingRules => "routing_rules",
+    NodeTags => "node_tags",
     NotificationDefaultRoute => "notification_default_route",
     DeliveryHours => "delivery_hours",
     AlertGrouping => "alert_grouping",
@@ -256,6 +258,7 @@ impl ConfigKind {
             | Self::EventSources
             | Self::NotificationChannels
             | Self::RoutingRules
+            | Self::NodeTags
             | Self::NotificationDefaultRoute
             | Self::DeliveryHours
             | Self::AlertGrouping
@@ -291,6 +294,7 @@ impl ConfigKind {
             Self::EventSources => "event_sources",
             Self::NotificationChannels => "notification_channels",
             Self::RoutingRules => "routing_rules",
+            Self::NodeTags => "node_tags",
             Self::NotificationDefaultRoute => "notification_default_route",
             Self::DeliveryHours => "delivery_hours",
             Self::AlertGrouping => "alert_grouping",
@@ -343,7 +347,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 37 values.
+    /// Which configuration to read. Required; see the tool description for the 38 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -879,7 +883,10 @@ impl YagraMcp {
                        `scope_level` / `direction` / `scope_id`), event_rules (with `node_id`, only the \
                        rules that reach that node: every-node rules, rules on its folders, and \
                        rules on the node itself), event_sources, \
-                       notification_channels, routing_rules, notification_default_route (the \
+                       notification_channels, routing_rules (each with the `tags` a node must \
+                       carry one of; empty = every node), node_tags (every tag some node carries \
+                       among its effective labels, with how many nodes carry it — the names a \
+                       routing rule can usefully name), notification_default_route (the \
                        route set by the core's environment, which every alert is sent to whatever \
                        the routing rules say: whether it is configured and which kinds of channel \
                        — webhook, email — it sends to, never where), delivery_hours (the \
@@ -957,7 +964,7 @@ impl YagraMcp {
                        get_interface_thresholds; for what a metric measures use \
                        kind=metric_meanings. \
                        Kinds require different permissions: oidc and ldap need manage-users; \
-                       notification_channels, routing_rules, notification_default_route, \
+                       notification_channels, routing_rules, node_tags, notification_default_route, \
                        delivery_hours, alert_grouping, forward_destinations and llm need manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
                        discovery_candidates, the four meraki kinds, the two report kinds, \
                        retention, adjacency_settings and roles need view; the rest need \
@@ -1084,6 +1091,12 @@ impl YagraMcp {
             ConfigKind::RoutingRules => match a.notifications.list_rules().await {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_error(TOOL, "list routing rules", &e),
+            },
+            // No `reach` here: the count per tag answers what a model asks, and the de-duplicated
+            // union is arithmetic for the rule dialog (ADR-259 Inc.2).
+            ConfigKind::NodeTags => match crate::api::notifications::node_tags_in(a, None).await {
+                Ok(t) => ok_json(TOOL, &t),
+                Err(e) => tool_api_error(TOOL, &e),
             },
             ConfigKind::NotificationDefaultRoute => ok_json(
                 TOOL,
@@ -1652,7 +1665,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            37,
+            38,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

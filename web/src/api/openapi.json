@@ -12583,6 +12583,71 @@
         }
       }
     },
+    "/api/v1/node-tags": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that\nexists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective\nlabels, the same set a rule is matched against. `reach` adds how many nodes carry at least one\nof the named tags.",
+        "operationId": "list_node_tags",
+        "parameters": [
+          {
+            "name": "reach",
+            "in": "query",
+            "description": "Tags whose reach to count: how many nodes carry at least one of them. Separated by a\nnewline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma\nis legal inside one. Absent = no reach in the reply.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tags in use, most-carried first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeTags"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes": {
       "get": {
         "tags": [
@@ -41912,6 +41977,51 @@
               "null"
             ],
             "description": "Descriptive maker/model for the \"name (addr) (vendor) (model)\" display."
+          }
+        }
+      },
+      "NodeTag": {
+        "type": "object",
+        "description": "One tag some node carries, and on how many nodes.",
+        "required": [
+          "tag",
+          "nodes"
+        ],
+        "properties": {
+          "nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes carry it among their effective labels (their own plus their folders',\nminus the ones they refuse).",
+            "minimum": 0
+          },
+          "tag": {
+            "type": "string",
+            "description": "The tag as nodes carry it, case included."
+          }
+        }
+      },
+      "NodeTags": {
+        "type": "object",
+        "description": "The tags in use on this deployment's nodes (ADR-259 Inc.2).",
+        "required": [
+          "tags"
+        ],
+        "properties": {
+          "reach": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many nodes carry at least one of the `reach` tags, each node counted once. Absent when\nthe request named none.",
+            "minimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeTag"
+            },
+            "description": "Every tag at least one node carries, most-carried first, then by name."
           }
         }
       },

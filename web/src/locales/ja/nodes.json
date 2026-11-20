@@ -36,6 +36,8 @@
     "tags": "タグ",
     "tagPlaceholder": "JAPAN",
     "tagRemove": "タグ {{label}} を削除",
+    "tagNoNode": "ノードなし",
+    "tagNotCarried": "{{tag}} を持つノードなし",
     "tagExclude": "このノードではタグ {{label}} を継承しない",
     "tagsInherited": "グループから継承",
     "tagsInheritedFrom": "グループから",

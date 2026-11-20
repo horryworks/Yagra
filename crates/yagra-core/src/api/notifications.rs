@@ -40,6 +40,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     list_template_variables,
     get_builtin_template,
     list_routing_rules,
+    list_node_tags,
     get_notification_default_route,
     create_routing_rule,
     set_routing_rule_enabled,
@@ -96,6 +97,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/routing-rules",
             get(list_routing_rules).post(create_routing_rule),
         )
+        .route("/api/v1/node-tags", get(list_node_tags))
         .route(
             "/api/v1/routing-rules/:id",
             put(set_routing_rule_enabled).delete(delete_routing_rule),
@@ -996,6 +998,111 @@ async fn list_routing_rules(
         )
     })?;
     Ok(Json(list))
+}
+
+/// The tags nodes carry, for the routing rule's tag picker (ADR-259 Inc.2).
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub(super) struct NodeTagsQuery {
+    /// Tags whose reach to count: how many nodes carry at least one of them. Separated by a
+    /// newline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma
+    /// is legal inside one. Absent = no reach in the reply.
+    reach: Option<String>,
+}
+
+/// One tag some node carries, and on how many nodes.
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct NodeTag {
+    /// The tag as nodes carry it, case included.
+    tag: String,
+    /// How many nodes carry it among their effective labels (their own plus their folders',
+    /// minus the ones they refuse).
+    nodes: u64,
+}
+
+/// The tags in use on this deployment's nodes (ADR-259 Inc.2).
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct NodeTags {
+    /// Every tag at least one node carries, most-carried first, then by name.
+    tags: Vec<NodeTag>,
+    /// How many nodes carry at least one of the `reach` tags, each node counted once. Absent when
+    /// the request named none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reach: Option<u64>,
+}
+
+/// Count the effective tags over every node, and the reach of `reach`. Pure, so the counting is
+/// tested without a database.
+fn count_node_tags(
+    rows: &[yagra_base::repo::NodeLabelRow],
+    resolver: &crate::inventory::tagres::TagResolver,
+    reach: Option<&[String]>,
+) -> NodeTags {
+    let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut reached = 0u64;
+    for row in rows {
+        let tags = resolver.effective_parts(row.group_id, &row.tags, &row.tags_excluded);
+        if reach.is_some_and(|want| want.iter().any(|w| tags.contains(w))) {
+            reached += 1;
+        }
+        for t in tags {
+            *counts.entry(t).or_default() += 1;
+        }
+    }
+    let mut tags: Vec<NodeTag> = counts
+        .into_iter()
+        .map(|(tag, nodes)| NodeTag { tag, nodes })
+        .collect();
+    tags.sort_by(|a, b| b.nodes.cmp(&a.nodes).then_with(|| a.tag.cmp(&b.tag)));
+    NodeTags {
+        tags,
+        reach: reach.map(|_| reached),
+    }
+}
+
+/// The `reach` parameter split into tags: trimmed, blanks dropped.
+fn reach_tags(raw: &str) -> Vec<String> {
+    raw.split('\n')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that
+/// exists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective
+/// labels, the same set a rule is matched against. `reach` adds how many nodes carry at least one
+/// of the named tags.
+#[utoipa::path(
+    get, path = "/api/v1/node-tags", tag = "notifications",
+    params(NodeTagsQuery),
+    responses(
+        (status = 200, description = "Tags in use, most-carried first", body = NodeTags),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_node_tags(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Query(q): Query<NodeTagsQuery>,
+) -> ApiResult<Json<NodeTags>> {
+    Ok(Json(node_tags_in(&admin, q.reach.as_deref()).await?))
+}
+
+/// What `GET /api/v1/node-tags` answers, shared with the MCP `get_config(kind=node_tags)`.
+pub(crate) async fn node_tags_in(
+    admin: &super::AdminState,
+    reach: Option<&str>,
+) -> ApiResult<NodeTags> {
+    let fail = |e: anyhow::Error| {
+        ApiError::from_internal(e.as_ref(), "list node tags", "failed to list node tags")
+    };
+    let rows = admin.repo.label_rows().await.map_err(fail)?;
+    let folders = admin.groups.tag_rows().await.map_err(fail)?;
+    let resolver = crate::inventory::tagres::TagResolver::build(folders);
+    let reach = reach.map(reach_tags);
+    Ok(count_node_tags(&rows, &resolver, reach.as_deref()))
 }
 
 /// The env-configured default notification route (ADR-200 Inc.28): whether it exists, and which
@@ -2055,6 +2162,89 @@ at 2026-08-04T09:41:07+00:00"
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_tag", "{body}");
+    }
+
+    /// ADR-259 Inc.2: a tag is counted once per node that carries it among its effective labels —
+    /// inherited from a folder two levels up counts, a node that refuses it does not — and the
+    /// reach of several tags counts each node once.
+    #[test]
+    fn node_tags_count_effective_labels_and_reach_counts_each_node_once() {
+        use yagra_base::repo::NodeLabelRow;
+        let (region, site) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let resolver = crate::inventory::tagres::TagResolver::build(vec![
+            (region, None, vec!["TeamA".to_owned()], vec![]),
+            (site, Some(region), vec![], vec![]),
+        ]);
+        let row = |group, own: &[&str], refused: &[&str]| NodeLabelRow {
+            group_id: group,
+            tags: own.iter().map(|s| (*s).to_owned()).collect(),
+            tags_excluded: refused.iter().map(|s| (*s).to_owned()).collect(),
+        };
+        let rows = [
+            row(Some(site), &["core"], &[]),
+            row(Some(site), &[], &[]),
+            row(Some(site), &[], &["TeamA"]),
+            row(None, &["core"], &[]),
+        ];
+        let reach = ["TeamA".to_owned(), "core".to_owned()];
+        let got = count_node_tags(&rows, &resolver, Some(&reach));
+        assert_eq!(
+            got.tags,
+            vec![
+                NodeTag {
+                    tag: "TeamA".to_owned(),
+                    nodes: 2
+                },
+                NodeTag {
+                    tag: "core".to_owned(),
+                    nodes: 2
+                },
+            ],
+            "most-carried first, then by name"
+        );
+        assert_eq!(
+            got.reach,
+            Some(3),
+            "the node carrying both counts once; the one refusing TeamA and carrying nothing else counts none"
+        );
+        assert_eq!(count_node_tags(&rows, &resolver, None).reach, None);
+        assert_eq!(
+            reach_tags(" TeamA \n\ncore\n"),
+            vec!["TeamA".to_owned(), "core".to_owned()]
+        );
+    }
+
+    /// ADR-259 Inc.2: the tag list is served to an Admin with the reach it was asked for, and
+    /// refused to an Operator — the routing screen's own permission.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn node_tags_are_listed_for_an_admin_and_refused_to_an_operator(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let folder = yagra_base::pgtest::group(&pool, "Tokyo").await;
+        assert!(yagra_base::groups::GroupRepo::new(pool.clone())
+            .set_tags(folder, &["TeamA".to_owned()], &[])
+            .await
+            .expect("tags"));
+        yagra_base::pgtest::node(&pool, "core-01", 1, Some(folder)).await;
+        yagra_base::pgtest::node(&pool, "edge-01", 2, None).await;
+        let st = live_state(pool).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let (status, body) = send(
+            &st,
+            "GET",
+            "/api/v1/node-tags?reach=TeamA%0Acore",
+            &admin,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(
+            body,
+            serde_json::json!({ "tags": [{ "tag": "TeamA", "nodes": 1 }], "reach": 1 })
+        );
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, _) = send(&st, "GET", "/api/v1/node-tags", &operator, None).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
     }
 
     /// ADR-200 Inc.28: the default route is reported by kind, and `configured` follows the kinds.

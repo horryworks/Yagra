@@ -68,3 +68,32 @@
 .chipinput-chip button:hover {
   opacity: 1;
 }
+
+/* The values a picking field offers (ADR-259 Inc.2): a floating list under the box, one row per
+   option, the count beside it in the secondary ink. The surface itself is the popover's. */
+.chipinput-options {
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: var(--space-1) 0;
+}
+
+.chipinput-option {
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--font-sm);
+  gap: var(--space-3);
+  justify-content: space-between;
+  padding: var(--space-1-5) var(--space-3);
+  text-align: left;
+  width: 100%;
+}
+
+.chipinput-option:hover,
+.chipinput-option:focus-visible {
+  background: var(--bg-tertiary);
+}

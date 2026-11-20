@@ -2200,6 +2200,26 @@ impl NodeRepo {
             .collect()
     }
 
+    /// Every node's own labels, the ones it refuses and its folder, unscoped - the three columns a
+    /// node's effective labels are folded from (ADR-135 Inc.2). Read whole by the routing rule's
+    /// tag picker, which counts how many nodes carry each tag (ADR-259 Inc.2); an Admin-only read,
+    /// so there is no scope to apply. Narrow on purpose: three columns per node keeps a 50,000-node
+    /// fleet a few megabytes.
+    pub async fn label_rows(&self) -> anyhow::Result<Vec<NodeLabelRow>> {
+        let rows = sqlx::query("SELECT group_id, tags, tags_excluded FROM nodes")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(NodeLabelRow {
+                    group_id: row.try_get("group_id")?,
+                    tags: row.try_get("tags")?,
+                    tags_excluded: row.try_get("tags_excluded")?,
+                })
+            })
+            .collect()
+    }
+
     /// The folder each of these nodes is filed in (`None` = ungrouped), unscoped. A node that does not
     /// exist is absent. Read by the map to tell which site a node and its default gateway are in
     /// (ADR-191 Inc.10).

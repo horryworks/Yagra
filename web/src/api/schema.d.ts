@@ -2588,6 +2588,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that
+         *     exists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective
+         *     labels, the same set a rule is matched against. `reach` adds how many nodes carry at least one
+         *     of the named tags.
+         */
+        get: operations["list_node_tags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes": {
         parameters: {
             query?: never;
@@ -12700,6 +12722,28 @@ export interface components {
             state: components["schemas"]["NodeState"];
             /** @description Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
             vendor?: string | null;
+        };
+        /** @description One tag some node carries, and on how many nodes. */
+        NodeTag: {
+            /**
+             * Format: int64
+             * @description How many nodes carry it among their effective labels (their own plus their folders',
+             *     minus the ones they refuse).
+             */
+            nodes: number;
+            /** @description The tag as nodes carry it, case included. */
+            tag: string;
+        };
+        /** @description The tags in use on this deployment's nodes (ADR-259 Inc.2). */
+        NodeTags: {
+            /**
+             * Format: int64
+             * @description How many nodes carry at least one of the `reach` tags, each node counted once. Absent when
+             *     the request named none.
+             */
+            reach?: number | null;
+            /** @description Every tag at least one node carries, most-carried first, then by name. */
+            tags: components["schemas"]["NodeTag"][];
         };
         /** @description One VLAN of a node (ADR-257). */
         NodeVlan: {
@@ -26751,6 +26795,60 @@ export interface operations {
             };
             /** @description Role lacks the View permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_node_tags: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Tags whose reach to count: how many nodes carry at least one of them. Separated by a
+                 *     newline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma
+                 *     is legal inside one. Absent = no reach in the reply.
+                 */
+                reach?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tags in use, most-carried first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeTags"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

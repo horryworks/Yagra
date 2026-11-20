@@ -24,9 +24,11 @@ import {
   type ChannelTestResult,
   type NotificationChannel,
   type NotificationDefaultRoute,
+  type NodeTags,
   type RoutingRule,
   type Severity,
 } from '../types/api';
+import { tagOptions, tagsNoNodeCarries } from './routingTags';
 import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
@@ -111,6 +113,12 @@ export function RoutingPage() {
     [],
     { initial: null },
   );
+  // The tags nodes carry (ADR-259 Inc.2): what a rule's tags are picked from, and what marks a
+  // rule tag nobody carries. Apart from the rule read for the reason the default route is: a
+  // failure leaves it `null`, the field falls back to free entry and nothing is marked.
+  const { data: nodeTags } = useLoad<NodeTags | null>(() => api.listNodeTags(), [rules], {
+    initial: null,
+  });
 
   // The delivery log's filters live here rather than in its section so a channel row can narrow
   // the log to that channel (ADR-195). In the URL under `log.`.
@@ -140,6 +148,7 @@ export function RoutingPage() {
         />
         <RulesSection
           rules={rules}
+          nodeTags={nodeTags}
           defaultRoute={defaultRoute}
           channels={channels}
           canSystem={canSystem}
@@ -593,6 +602,7 @@ function AddChannelModal({
 
 function RulesSection({
   rules,
+  nodeTags,
   defaultRoute,
   channels,
   canSystem,
@@ -601,6 +611,7 @@ function RulesSection({
   onError,
 }: {
   rules: RoutingRule[];
+  nodeTags: NodeTags | null;
   defaultRoute: NotificationDefaultRoute | null;
   channels: NotificationChannel[];
   canSystem: boolean;
@@ -646,12 +657,28 @@ function RulesSection({
         header: t('routing.rules.cols.tags'),
         width: '1fr',
         sortValue: (r) => r.tags.join(', ') || null,
-        render: (r) =>
-          r.tags.length > 0 ? (
-            <ClippedText text={r.tags.join(', ')} />
+        render: (r) => {
+          if (r.tags.length === 0) {
+            return <span className="muted">{t('routing.rules.anyNode')}</span>;
+          }
+          // A tag no node carries matches nothing, silently — say so on the row (ADR-259 Inc.2).
+          const gone = tagsNoNodeCarries(r.tags, nodeTags);
+          return gone && gone.size > 0 ? (
+            <Inline gap={4}>
+              {r.tags.map((tag) =>
+                gone.has(tag) ? (
+                  <Badge key={tag} tone="warning">
+                    {tag} · {t('nodes:field.tagNoNode')}
+                  </Badge>
+                ) : (
+                  <span key={tag}>{tag}</span>
+                ),
+              )}
+            </Inline>
           ) : (
-            <span className="muted">{t('routing.rules.anyNode')}</span>
-          ),
+            <ClippedText text={r.tags.join(', ')} />
+          );
+        },
       },
       {
         key: 'channels',
@@ -707,7 +734,7 @@ function RulesSection({
     return cols;
     // `channelName` and `toggle` are rebuilt every render; what they read is listed instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, canSystem, channels]);
+  }, [t, canSystem, channels, nodeTags]);
 
   // In the URL, under `rules.` — see the channels table above.
   const filtering = useClientFilters(columns, rules, { prefix: ROUTING_RULE_FILTER_PREFIX });
@@ -783,6 +810,7 @@ function RulesSection({
       {adding && (
         <RuleModal
           channels={channels}
+          nodeTags={nodeTags}
           onClose={() => setAdding(false)}
           onDone={() => {
             setAdding(false);
@@ -794,6 +822,7 @@ function RulesSection({
         <RuleModal
           rule={editing}
           channels={channels}
+          nodeTags={nodeTags}
           onClose={() => setEditing(null)}
           onDone={() => {
             setEditing(null);
@@ -829,11 +858,13 @@ function RulesSection({
 function RuleModal({
   rule,
   channels,
+  nodeTags,
   onClose,
   onDone,
 }: {
   rule?: RoutingRule;
   channels: NotificationChannel[];
+  nodeTags: NodeTags | null;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -841,6 +872,24 @@ function RuleModal({
   const [name, setName] = useState(rule?.name ?? '');
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
   const [tags, setTags] = useState<string[]>(() => [...(rule?.tags ?? [])]);
+  const options = useMemo(
+    () =>
+      nodeTags
+        ? tagOptions(nodeTags, (count) => t('routing.ruleModal.tagNodes', { count }))
+        : undefined,
+    [nodeTags, t],
+  );
+  // How many nodes the chosen tags reach, asked again whenever they change. `null` while asking or
+  // after a failed read, when the line is left out rather than showing a stale number.
+  const tagKey = tags.join('\n');
+  const { data: reach } = useLoad<number | null>(
+    () =>
+      tags.length > 0
+        ? api.listNodeTags(tags).then((r) => r.reach ?? null)
+        : Promise.resolve(null),
+    [tagKey],
+    { initial: null },
+  );
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
   const form = useSubmit({
@@ -908,7 +957,15 @@ function RuleModal({
             onChange={setTags}
             placeholder={t('routing.ruleModal.anyNode')}
             inputLabel={t('routing.ruleModal.tags')}
+            options={options}
           />
+          {tags.length === 0 ? (
+            <p className="form-status">{t('routing.ruleModal.reachAll')}</p>
+          ) : (
+            reach !== null && (
+              <p className="form-status">{t('routing.ruleModal.reach', { count: reach })}</p>
+            )
+          )}
         </FieldGroup>
         <FieldGroup label={t('routing.ruleModal.channels')}>
           <Inline gap={12}>
