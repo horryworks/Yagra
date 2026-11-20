@@ -309,6 +309,82 @@ impl MaintenanceRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// The ids among `node_ids` that name a node the caller may see, de-duplicated (ADR-261 Inc.4).
+    /// A node deleted since the page loaded, or one outside `scope`, is simply absent — the two are
+    /// deliberately indistinguishable, as in [`Self::create_windows_for_nodes`].
+    pub async fn visible_node_ids(
+        &self,
+        node_ids: &[Uuid],
+        scope: Option<&[Uuid]>,
+    ) -> anyhow::Result<Vec<Uuid>> {
+        if node_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(&format!(
+            "SELECT DISTINCT n.id FROM nodes n WHERE n.id = ANY($1) AND {}",
+            scope_predicate(2, "n.group_id"),
+        ))
+        .bind(node_ids)
+        .bind(scope)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| r.try_get::<Uuid, _>("id").map_err(Into::into))
+            .collect()
+    }
+
+    /// Take `nodes` out of maintenance now, in one transaction (ADR-261 decisions 22 and 23).
+    /// Returns how many windows were ended.
+    ///
+    /// ⑴ Every switched-on window that **names** one of `nodes` and has not ended stops: one that
+    /// has begun ends now, and one due to begin within the next minute is made zero-length. The
+    /// minute is for a window whose start was written on a browser clock running ahead of the
+    /// database's — the tree's quick action does exactly that, and without it "take this node out
+    /// now", pressed in the first second, would leave the window to start a moment later. A window
+    /// planned further ahead is left alone: it is not "now".
+    ///
+    /// ⑵ Each `(node, until)` in `releases` carves the node out of coverage it inherits until
+    /// `until`, the same row [`Self::set_exemption`] writes. The caller derives `until` from the
+    /// coverage in force; a node that inherits nothing has no entry.
+    pub async fn release_nodes_now(
+        &self,
+        nodes: &[Uuid],
+        releases: &[(Uuid, DateTime<Utc>)],
+    ) -> anyhow::Result<u64> {
+        let mut tx = self.pool.begin().await?;
+        let ids: Vec<String> = nodes.iter().map(Uuid::to_string).collect();
+        let ended = if ids.is_empty() {
+            0
+        } else {
+            sqlx::query(
+                "UPDATE maintenance_windows \
+                    SET ends_at = CASE WHEN starts_at <= now() THEN now() ELSE starts_at END \
+                  WHERE scope_level = 'node' AND scope_id = ANY($1) \
+                    AND enabled AND ends_at > now() \
+                    AND starts_at <= now() + interval '1 minute'",
+            )
+            .bind(&ids)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+        };
+        for (node, until) in releases {
+            sqlx::query(
+                "INSERT INTO suppression_exemptions (id, kind, node_id, until_at) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (kind, node_id) DO UPDATE SET until_at = EXCLUDED.until_at",
+            )
+            .bind(Uuid::new_v4())
+            .bind(ExemptionKind::Maintenance.as_str())
+            .bind(node)
+            .bind(until)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(ended)
+    }
+
     /// Delete a window. Returns whether a row was removed.
     pub async fn delete_window(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM maintenance_windows WHERE id = $1")

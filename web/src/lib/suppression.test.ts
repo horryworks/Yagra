@@ -306,16 +306,48 @@ describe('suppressionPanelRows', () => {
   const groupWindow = window({ id: 'w1', name: 'DC1 planned', scope_level: 'group_id', scope_id: 'tokyo' });
   const n2 = node('n2', 'edge');
 
-  it('offers to end a window that names the row', () => {
+  it('says what covers a node, and offers one way out at the end (ADR-261 decision 24)', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [window({ id: 'w', scope_level: 'node', scope_id: 'n2' })],
       groups,
       node: n2,
     });
     expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
-      ['tree.suppression.head.maintenance', 'tree.suppression.act.endNow'],
+      ['tree.suppression.head.maintenance', undefined],
+      ['', 'tree.suppression.act.excludeNode'],
     ]);
-    expect(rows[0].action?.action).toEqual({ action: 'end-window', windowId: 'w' });
+    expect(rows[1].action).toEqual({
+      action: { action: 'take-out', nodeIds: ['n2'] },
+      labelKey: 'tree.suppression.act.excludeNode',
+    });
+  });
+
+  // The case that made the per-window buttons wrong: a doubled quick action left two windows
+  // naming one node, the panel drew two "End maintenance now", and ending one left the other.
+  it('offers one way out however many windows name the node', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [
+        window({ id: 'a', scope_level: 'node', scope_id: 'n2' }),
+        window({ id: 'b', scope_level: 'node', scope_id: 'n2' }),
+        groupWindow,
+      ],
+      groups,
+      node: n2,
+    });
+    expect(rows.filter((r) => r.action)).toHaveLength(1);
+    expect(rows.at(-1)?.action).toEqual({
+      action: { action: 'take-out', nodeIds: ['n2'] },
+      labelKey: 'tree.suppression.act.excludeNode',
+    });
+    expect(rows.filter((r) => r.headKey === 'tree.suppression.head.maintenance')).toHaveLength(3);
+  });
+
+  it('still offers to end a window that names a group row', () => {
+    const rows = suppressionPanelRows(groupTarget, {
+      windows: [window({ id: 'g', scope_level: 'group_id', scope_id: 'edge' })],
+      groups,
+    });
+    expect(rows.map((r) => r.action?.action)).toEqual([{ action: 'end-window', windowId: 'g' }]);
   });
 
   // Exemptions of any other kind come only from a core older than ADR-234; they release nothing a
@@ -327,17 +359,18 @@ describe('suppressionPanelRows', () => {
       node: n2,
       exemptions: [{ ...exemption({ node_id: 'n2' }), kind: 'other' } as unknown as SuppressionExemption],
     });
-    expect(rows.map((r) => r.headKey)).toEqual(['tree.suppression.head.maintenance']);
+    expect(rows.map((r) => r.headKey)).toEqual(['tree.suppression.head.maintenance', '']);
   });
 
-  it('offers a node its own way out of coverage it only inherits', () => {
+  it('offers a node the same way out of coverage it only inherits', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [groupWindow],
       groups,
       node: n2,
     });
-    expect(rows[0].action).toEqual({
-      action: { action: 'release-node', nodeId: 'n2' },
+    expect(rows[0].action).toBeNull();
+    expect(rows.at(-1)?.action).toEqual({
+      action: { action: 'take-out', nodeIds: ['n2'] },
       labelKey: 'tree.suppression.act.excludeNode',
     });
   });
@@ -385,8 +418,9 @@ describe('suppressionPanelRows', () => {
       exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
     });
     expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
-      ['tree.suppression.head.maintenance', 'tree.suppression.act.endNow'],
+      ['tree.suppression.head.maintenance', undefined],
       ['tree.suppression.head.releasedMaintenance', 'tree.suppression.act.undoMaintenance'],
+      ['', 'tree.suppression.act.excludeNode'],
     ]);
   });
 
@@ -441,6 +475,10 @@ describe('suppressionPanelRows', () => {
         exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
       }),
       suppressionPanelRows(groupTarget, { windows: [groupWindow], groups }),
+      suppressionPanelRows(groupTarget, {
+        windows: [window({ id: 'g', scope_level: 'group_id', scope_id: 'edge' })],
+        groups,
+      }),
     ];
     const produced = new Set(
       cases

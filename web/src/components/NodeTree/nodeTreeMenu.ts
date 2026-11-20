@@ -110,6 +110,26 @@ export function hasSuppression(
 }
 
 /**
+ * The nodes of a selection that something is suppressing - what "Take N selected out of
+ * maintenance" acts on and counts (ADR-261 decision 24). Same test as {@link hasSuppression},
+ * without the released half: a node already released has nothing left to take out.
+ */
+export function suppressedNodeIds(
+  suppression: SuppressionIndex | undefined,
+  nodes: readonly NodeSummary[],
+): string[] {
+  return nodes
+    .filter(
+      (n) =>
+        !!suppression?.maintenanceNodes.has(n.id) ||
+        (n.state === 'maintenance' &&
+          !suppression?.exemptMaintenanceNodes.has(n.id) &&
+          maintenanceStateIsCurrent(suppression, n)),
+    )
+    .map((n) => n.id);
+}
+
+/**
  * Whether a node's menu can offer "move to the folder whose IP range contains this address"
  * (ADR-124 decision 6).
  *

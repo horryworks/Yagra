@@ -1830,6 +1830,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4).
+         * @description One request does what the release panel used to ask for window by window: every window that
+         *     names a node ends, and a node covered by a window it inherits is carved out of it until that
+         *     window ends - both in one transaction. A node with nothing covering it is accepted and counted
+         *     in `requested` only: the operator's intent ("not in maintenance") already holds.
+         *
+         *     It replaces nothing on the wire: ending one window and releasing one node keep their routes.
+         */
+        post: operations["release_nodes_from_maintenance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meraki/import": {
         parameters: {
             query?: never;
@@ -14237,6 +14262,10 @@ export interface components {
             /** @description `waiting` and `reading` say nothing about the device yet — never "nothing changed". */
             state: components["schemas"]["RediscoverState"];
         };
+        /** @description Which nodes to take out of maintenance now. */
+        ReleaseBody: {
+            node_ids: string[];
+        };
         /**
          * @description A release the operator could move to, with the direction and the verdict already decided by the
          *     server — the comparison is semver, and it is the same rule that decides whether a rollback is
@@ -14250,6 +14279,22 @@ export interface components {
             direction: components["schemas"]["OfferDirection"];
             /** @description The release tag. */
             tag: string;
+        };
+        /** @description What taking nodes out of maintenance did. */
+        ReleaseResult: {
+            /**
+             * Format: int64
+             * @description Windows naming one of those nodes that were ended (or, starting within the minute,
+             *     cancelled).
+             */
+            ended: number;
+            /** @description Nodes carved out of a folder, profile or fleet-wide window they inherit. */
+            released: number;
+            /**
+             * @description Distinct nodes the request named that the caller may see. A node deleted since the page
+             *     loaded, or one outside the caller's scope, is not counted - the two are not distinguished.
+             */
+            requested: number;
         };
         /** @description The run id, so the page can tell its own request from one another admin started. */
         RelocationAccepted: {
@@ -24047,6 +24092,66 @@ export interface operations {
             };
             /** @description No such maintenance window, or it is not currently active (disabled, already over, or not yet started) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    release_nodes_from_maintenance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseBody"];
+            };
+        };
+        responses: {
+            /** @description What was ended and released */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseResult"];
+                };
+            };
+            /** @description More ids than one request may carry */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageMaintenance */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

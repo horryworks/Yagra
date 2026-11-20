@@ -847,7 +847,8 @@
         "open": "Release maintenance…",
         "endNow": "End maintenance now",
         "excludeNode": "Take this node out of maintenance",
-        "undoMaintenance": "Put back in maintenance"
+        "undoMaintenance": "Put back in maintenance",
+        "takeOutSelected": "Take {{count}} selected out of maintenance"
       },
       "releaseOnAncestor": "Release it on group \"{{name}}\"",
       "none": "Nothing is suppressing this any more."

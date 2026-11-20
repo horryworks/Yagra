@@ -101,6 +101,7 @@ import {
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  suppressedNodeIds,
   nodeActionItems,
   nodeDeleteItems,
   nodeMoveItems,
@@ -761,7 +762,7 @@ export function NodeTree({
             const control = r.action;
             return (
               <div className="ntree-supp-cause" key={r.key}>
-                <div className="ntree-supp-head">{t(r.headKey)}</div>
+                {r.headKey && <div className="ntree-supp-head">{t(r.headKey)}</div>}
                 {r.title && <div className="ntree-supp-title">{r.title}</div>}
                 {(r.labelKey || r.endsAt) && (
                   <div className="ntree-supp-meta">
@@ -816,6 +817,7 @@ export function NodeTree({
     if (!onSetMaintenance) return null;
     const many = target.kind === 'nodes';
     const count = targetNodeCount(target);
+    const takeOutIds = target.kind === 'nodes' ? suppressedNodeIds(suppression, target.nodes) : [];
     const row = (
       label: string,
       manyLabel: string,
@@ -865,6 +867,19 @@ export function NodeTree({
             }
           >
             {t('tree.suppression.act.open')}
+          </button>
+        )}
+        {/* The selection's own release (ADR-261 decision 24): one press takes every selected node
+            that something covers out of maintenance, whatever covers each of them. */}
+        {onRelease && takeOutIds.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              onRelease({ action: 'take-out', nodeIds: takeOutIds });
+              setMenu(null);
+            }}
+          >
+            {t('tree.suppression.act.takeOutSelected', { count: takeOutIds.length })}
           </button>
         )}
       </>

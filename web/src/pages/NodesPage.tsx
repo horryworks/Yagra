@@ -803,6 +803,8 @@ export function NodesPage() {
           return api.setNodeMaintenanceExemption(a.nodeId, true);
         case 'undo-release':
           return api.setNodeMaintenanceExemption(a.nodeId, false);
+        case 'take-out':
+          return api.releaseFromMaintenance(a.nodeIds).then(() => clearChecked());
       }
     })();
     call.then(reloadSuppression).catch((e: unknown) => scopeError(e, t('err.release')));

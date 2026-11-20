@@ -2754,6 +2754,13 @@ export const api = {
     time_zone?: string;
   }): Promise<{ id: string }> => apiPost('/api/v1/maintenance-windows', { body }),
 
+  /** Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4): every window naming
+   *  them ends and they are carved out of what they inherit, in one transaction. */
+  releaseFromMaintenance: (
+    nodeIds: string[],
+  ): Promise<{ requested: number; ended: number; released: number }> =>
+    apiPost('/api/v1/maintenance/release', { body: { node_ids: nodeIds } }),
+
   /** Enable/disable a maintenance window. */
   setMaintenanceWindowEnabled: (id: string, enabled: boolean): Promise<void> =>
     apiPut('/api/v1/maintenance-windows/{id}', { path: { id }, body: { enabled } }),

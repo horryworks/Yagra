@@ -360,7 +360,10 @@ export interface SuppressionCause {
 export type ReleaseAction =
   | { action: 'end-window'; windowId: string }
   | { action: 'release-node'; nodeId: string }
-  | { action: 'undo-release'; nodeId: string };
+  | { action: 'undo-release'; nodeId: string }
+  /** Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4): every window naming
+   *  them ends and they are carved out of what they inherit, in one request. */
+  | { action: 'take-out'; nodeIds: string[] };
 
 /** i18n keys {@link causesFor} can produce, so `i18nEnumKeys.test.ts` can demand both locales
  *  carry them. A key built at runtime is missing from *both* locales when it is forgotten, so
@@ -486,7 +489,8 @@ function windowsMayCover(
 export interface SuppressionPanelRow {
   /** React key. Stable within one render of one row; not an entity id. */
   key: string;
-  /** i18n key for the block's heading — which of the two states this block reports. */
+  /** i18n key for the block's heading — which of the two states this block reports. Empty on the
+   *  closing block that carries only the panel's one control (ADR-261 Inc.4). */
   headKey: string;
   /** The window's name, when there is one to show. */
   title: string;
@@ -533,6 +537,10 @@ function actionFor(
       },
     };
   }
+  // A node's blocks only say what covers it: taking it out is one control for the whole panel,
+  // whatever covers it and however many windows do (ADR-261 decision 24). Two windows naming one
+  // node used to draw two "End maintenance now", and ending one left the node in the other.
+  if (target.kind === 'node') return { action: null };
   if (cause.source === 'direct' && cause.id) {
     // A window is ended, not deleted — the label says so, because the row it leaves behind on the
     // Maintenance page is the difference.
@@ -540,14 +548,6 @@ function actionFor(
       action: {
         action: { action: 'end-window', windowId: cause.id },
         labelKey: 'tree.suppression.act.endNow',
-      },
-    };
-  }
-  if (target.kind === 'node') {
-    return {
-      action: {
-        action: { action: 'release-node', nodeId: target.id },
-        labelKey: EXCLUDE_KEY,
       },
     };
   }
@@ -595,6 +595,20 @@ export function suppressionPanelRows(
       ...actionFor(c, target),
     };
   });
+
+  // The one control a node's panel carries, after the blocks that say what covers it.
+  if (target.kind === 'node' && causes.some((c) => !c.released)) {
+    rows.push({
+      key: 'take-out',
+      headKey: '',
+      title: '',
+      endsAt: '',
+      action: {
+        action: { action: 'take-out', nodeIds: [target.id] },
+        labelKey: EXCLUDE_KEY,
+      },
+    });
+  }
 
   for (const e of maintenanceExemptions(ctx.exemptions ?? [])) {
     if (target.kind !== 'node' || e.node_id !== target.id || explained) continue;

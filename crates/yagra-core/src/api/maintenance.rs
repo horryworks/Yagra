@@ -35,7 +35,8 @@ use uuid::Uuid;
     end_maintenance_window,
     delete_maintenance_window,
     list_suppression_exemptions,
-    set_node_maintenance_exemption
+    set_node_maintenance_exemption,
+    release_nodes_from_maintenance
 ))]
 pub(super) struct Doc;
 
@@ -70,6 +71,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/suppression-exemptions",
             get(list_suppression_exemptions),
+        )
+        .route(
+            "/api/v1/maintenance/release",
+            post(release_nodes_from_maintenance),
         )
 }
 
@@ -832,6 +837,119 @@ async fn set_node_maintenance_exemption(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Which nodes to take out of maintenance now.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ReleaseBody {
+    node_ids: Vec<Uuid>,
+}
+
+/// What taking nodes out of maintenance did.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct ReleaseResult {
+    /// Distinct nodes the request named that the caller may see. A node deleted since the page
+    /// loaded, or one outside the caller's scope, is not counted - the two are not distinguished.
+    requested: usize,
+    /// Windows naming one of those nodes that were ended (or, starting within the minute,
+    /// cancelled).
+    ended: u64,
+    /// Nodes carved out of a folder, profile or fleet-wide window they inherit.
+    released: usize,
+}
+
+/// Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4).
+///
+/// One request does what the release panel used to ask for window by window: every window that
+/// names a node ends, and a node covered by a window it inherits is carved out of it until that
+/// window ends - both in one transaction. A node with nothing covering it is accepted and counted
+/// in `requested` only: the operator's intent ("not in maintenance") already holds.
+///
+/// It replaces nothing on the wire: ending one window and releasing one node keep their routes.
+#[utoipa::path(
+    post, path = "/api/v1/maintenance/release", tag = "maintenance",
+    request_body = ReleaseBody,
+    responses(
+        (status = 200, description = "What was ended and released", body = ReleaseResult),
+        (status = 400, description = "More ids than one request may carry", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageMaintenance", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn release_nodes_from_maintenance(
+    _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    admin: Admin,
+    Json(body): Json<ReleaseBody>,
+) -> ApiResult<Json<ReleaseResult>> {
+    if body.node_ids.len() > SUPPRESSION_BATCH_MAX {
+        return Err(ApiError::bad_request(
+            "too_many_nodes",
+            format!(
+                "at most {SUPPRESSION_BATCH_MAX} nodes may be released in one request, got {}",
+                body.node_ids.len()
+            ),
+        ));
+    }
+    let internal = |what: &'static str| {
+        move |e: anyhow::Error| {
+            ApiError::from_internal(e.as_ref(), what, "failed to take nodes out of maintenance")
+        }
+    };
+    let nodes = admin
+        .maintenance
+        .visible_node_ids(&body.node_ids, scope.group_filter())
+        .await
+        .map_err(internal("resolve nodes to release"))?;
+    // Inherited coverage does not depend on the windows that name a node, so it can be read before
+    // those are ended - and must be, for the release to be written in the same transaction.
+    let windows = admin
+        .maintenance
+        .active_windows()
+        .await
+        .map_err(internal("load active windows for release"))?;
+    let edges = admin
+        .groups
+        .edges()
+        .await
+        .map_err(internal("load group edges for release"))?;
+    let mut releases = Vec::new();
+    for id in &nodes {
+        let Some(node) = admin
+            .repo
+            .get_node(*id)
+            .await
+            .map_err(internal("load node for release"))?
+        else {
+            continue;
+        };
+        let facts = CoverageFacts::of(&node, &edges);
+        if let Some(until) = inherited_maintenance_end(&windows, &facts) {
+            releases.push((*id, until));
+        }
+    }
+    let ended = admin
+        .maintenance
+        .release_nodes_now(&nodes, &releases)
+        .await
+        .map_err(internal("release nodes from maintenance"))?;
+    if ended > 0 {
+        // Ending a window can shorten a release carved out of it elsewhere.
+        reconcile_after_coverage_change(&admin).await;
+    }
+    // The audit middleware records method and path only; say how much this did.
+    tracing::info!(
+        requested = nodes.len(),
+        ended,
+        released = releases.len(),
+        "nodes taken out of maintenance"
+    );
+    Ok(Json(ReleaseResult {
+        requested: nodes.len(),
+        ended,
+        released: releases.len(),
+    }))
+}
+
 #[utoipa::path(
     get, path = "/api/v1/suppression-exemptions", tag = "maintenance",
     responses(
@@ -1399,6 +1517,95 @@ mod tests {
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
         assert_eq!(body["error"]["code"], "invalid_window", "{body}");
+    }
+
+    /// Taking nodes out of maintenance ends every window that names them - two at once included,
+    /// and one whose start a browser clock put a few seconds ahead - carves them out of a folder
+    /// window they inherit, and leaves planned maintenance and other nodes alone (ADR-261 Inc.4).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn releasing_nodes_takes_them_out_of_every_window(pool: sqlx::PgPool) {
+        use crate::alerts::maintenance::{ExemptionKind, MaintenanceRepo};
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(site)).await;
+        let b = yagra_base::pgtest::node(&pool, "b", 2, None).await;
+        let bystander = yagra_base::pgtest::node(&pool, "c", 3, None).await;
+        let repo = MaintenanceRepo::new(pool.clone());
+        let now = chrono::Utc::now();
+        let hour = chrono::Duration::hours(1);
+        let window = |name: &'static str, level: &'static str, id: Uuid, from, to| {
+            let repo = &repo;
+            async move {
+                repo.create_window(name, level, &id.to_string(), from, to)
+                    .await
+                    .expect("window")
+            }
+        };
+        // Two windows naming `a`, as a doubled bulk action leaves, and one whose start is a few
+        // seconds ahead of the database's clock.
+        window("twice 1", "node", a, now - hour, now + hour).await;
+        window("twice 2", "node", a, now - hour, now + hour).await;
+        let skewed = window(
+            "browser ahead",
+            "node",
+            a,
+            now + chrono::Duration::seconds(5),
+            now + hour,
+        )
+        .await;
+        // The folder `a` sits in, which it inherits.
+        window("site work", "group_id", site, now - hour, now + hour * 2).await;
+        // Planned for later on `b`, and running on a node nobody asked about.
+        let planned = window("tomorrow", "node", b, now + hour * 20, now + hour * 21).await;
+        let other = window("other", "node", bystander, now - hour, now + hour).await;
+
+        let (status, body) = send(
+            &st,
+            "POST",
+            "/api/v1/maintenance/release",
+            &tok,
+            Some(serde_json::json!({ "node_ids": [a, b, a, Uuid::new_v4()] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        assert_eq!(body["requested"], 2, "{body}");
+        assert_eq!(body["ended"], 3, "{body}");
+        assert_eq!(body["released"], 1, "only `a` inherits anything: {body}");
+
+        let windows = repo.list_windows().await.expect("list");
+        // Still covers some time from here on: ends after both its own start and now (a second of
+        // slack for the two clocks in this test). A window made zero-length covers nothing.
+        let ts = |s: &str| chrono::DateTime::parse_from_rfc3339(s).expect("ts");
+        let covers = |w: &StoredWindow| {
+            let end = ts(&w.ends_at);
+            end > ts(&w.starts_at) && end > now + chrono::Duration::seconds(1)
+        };
+        let still_running = |id: Uuid| covers(windows.iter().find(|w| w.id == id).expect("kept"));
+        assert!(
+            !windows
+                .iter()
+                .filter(|w| w.scope_id == a.to_string())
+                .any(covers),
+            "a window naming `a` still covers time: {windows:?}"
+        );
+        assert!(
+            !still_running(skewed),
+            "the skewed window was left to start"
+        );
+        assert!(still_running(planned), "planned maintenance was cancelled");
+        assert!(still_running(other), "another node's window was ended");
+        let exempt = repo
+            .exempt_nodes(ExemptionKind::Maintenance)
+            .await
+            .expect("exemptions");
+        assert_eq!(
+            exempt,
+            vec![a],
+            "`a` was not carved out of its folder's window"
+        );
     }
 
     /// A Viewer does not hold `ManageMaintenance`, so the bulk route refuses before touching the store.

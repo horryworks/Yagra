@@ -917,6 +917,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/maintenance/release",
+        // Names a set of nodes and narrows it to the caller's scope in SQL before writing, the same
+        // shape as the bulk create above (ADR-261 Inc.4).
+        GroupFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
         "DELETE",
         "/api/v1/maintenance-windows/:id",
         NodeScoped,

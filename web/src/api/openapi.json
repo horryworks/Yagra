@@ -9148,6 +9148,78 @@
         }
       }
     },
+    "/api/v1/maintenance/release": {
+      "post": {
+        "tags": [
+          "maintenance"
+        ],
+        "summary": "Take nodes out of maintenance now, whatever covers them (ADR-261 Inc.4).",
+        "description": "One request does what the release panel used to ask for window by window: every window that\nnames a node ends, and a node covered by a window it inherits is carved out of it until that\nwindow ends - both in one transaction. A node with nothing covering it is accepted and counted\nin `requested` only: the operator's intent (\"not in maintenance\") already holds.\n\nIt replaces nothing on the wire: ending one window and releasing one node keep their routes.",
+        "operationId": "release_nodes_from_maintenance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What was ended and released",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "More ids than one request may carry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageMaintenance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meraki/import": {
       "post": {
         "tags": [
@@ -45272,6 +45344,22 @@
           }
         }
       },
+      "ReleaseBody": {
+        "type": "object",
+        "description": "Which nodes to take out of maintenance now.",
+        "required": [
+          "node_ids"
+        ],
+        "properties": {
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
       "ReleaseOffer": {
         "type": "object",
         "description": "A release the operator could move to, with the direction and the verdict already decided by the\nserver — the comparison is semver, and it is the same rule that decides whether a rollback is\nsafe.",
@@ -45305,6 +45393,33 @@
           "tag": {
             "type": "string",
             "description": "The release tag."
+          }
+        }
+      },
+      "ReleaseResult": {
+        "type": "object",
+        "description": "What taking nodes out of maintenance did.",
+        "required": [
+          "requested",
+          "ended",
+          "released"
+        ],
+        "properties": {
+          "ended": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Windows naming one of those nodes that were ended (or, starting within the minute,\ncancelled).",
+            "minimum": 0
+          },
+          "released": {
+            "type": "integer",
+            "description": "Nodes carved out of a folder, profile or fleet-wide window they inherit.",
+            "minimum": 0
+          },
+          "requested": {
+            "type": "integer",
+            "description": "Distinct nodes the request named that the caller may see. A node deleted since the page\nloaded, or one outside the caller's scope, is not counted - the two are not distinguished.",
+            "minimum": 0
           }
         }
       },

@@ -7,6 +7,7 @@ import {
   canRunDiscovery,
   groupMenuHasItems,
   hasSuppression,
+  suppressedNodeIds,
   nodeActionItems,
   nodeDeleteItems,
   nodeMoveItems,
@@ -129,6 +130,33 @@ describe('hasSuppression', () => {
     // Both sets are keyed by uuid and the two id spaces are different tables.
     expect(hasSuppression(idx({ maintenanceGroups: new Set(['n1']) }), node)).toBe(false);
     expect(hasSuppression(idx({ maintenanceNodes: new Set(['g1']) }), group)).toBe(false);
+  });
+});
+
+describe('suppressedNodeIds (ADR-261 decision 24)', () => {
+  const idx = (over: Partial<SuppressionIndex> = {}): SuppressionIndex => ({
+    maintenanceNodes: new Set<string>(),
+    maintenanceGroups: new Set<string>(),
+    exemptMaintenanceNodes: new Set<string>(),
+    maintenanceProfiles: new Set<string>(),
+    fleetWideMaintenance: false,
+    ...over,
+  });
+  const n = (id: string, state: NodeSummary['state'] = 'ok', profile_id: string | null = null) =>
+    ({ id, state, profile_id }) as NodeSummary;
+
+  it('takes the selected nodes something covers, in selection order', () => {
+    const index = idx({
+      maintenanceNodes: new Set(['b', 'a']),
+      maintenanceProfiles: new Set(['p1']),
+    });
+    const picked = [n('a'), n('c'), n('b'), n('d', 'maintenance', 'p1')];
+    expect(suppressedNodeIds(index, picked)).toEqual(['a', 'b', 'd']);
+  });
+
+  it('leaves out a node already released, and a stale engine state', () => {
+    const index = idx({ exemptMaintenanceNodes: new Set(['x']) });
+    expect(suppressedNodeIds(index, [n('x', 'maintenance'), n('y', 'maintenance')])).toEqual([]);
   });
 });
 
