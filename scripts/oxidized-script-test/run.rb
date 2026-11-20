@@ -166,7 +166,7 @@ class FakeNxos
   def initialize(mode)
     @mode = mode
     @heard = []
-    @saved = mode == :already_saved
+    @saved = %i[already_saved headings].include?(mode)
   end
 
   def diff
@@ -178,7 +178,8 @@ class FakeNxos
   end
 
   def serve(client)
-    client.write("\r\nUser Access Verification\r\nsw-01 login: ")
+    # oxidized's `nxos` model waits for `/^login:/`, so the question starts its line.
+    client.write("\r\nUser Access Verification\r\nlogin: ")
     client.gets
     client.write("\r\nPassword: ")
     client.gets
