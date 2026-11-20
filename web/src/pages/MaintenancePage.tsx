@@ -31,6 +31,8 @@ import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintena
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
 import { formatScheduleTime } from '../lib/format';
+import { displayTimeZone } from '../lib/timeZone';
+import { requesterClock } from '../lib/maintenanceTime';
 import { isEnded, windowStatus } from './maintenanceStatus';
 import { windowFilters } from './suppressionFilters';
 import './MaintenancePage.css';
@@ -194,12 +196,13 @@ export function MaintenancePage() {
         key: 'range',
         sortValue: (w) => Date.parse(w.starts_at) || null,
         header: t('maintenance.cols.range'),
-        width: '230px',
-        render: (w) => (
-          <span className="mono">
-            {formatScheduleTime(w.starts_at)} → {formatScheduleTime(w.ends_at)}
-          </span>
-        ),
+        width: '320px',
+        render: (w) => {
+          // A window asked for on another clock also shows that clock (ADR-261 decision 10).
+          const asked = requesterClock(w.starts_at, w.ends_at, w.time_zone, displayTimeZone());
+          const text = `${formatScheduleTime(w.starts_at)} → ${formatScheduleTime(w.ends_at)}`;
+          return <ClippedText className="mono" text={asked ? `${text} (${asked})` : text} />;
+        },
       },
       {
         key: 'actions',

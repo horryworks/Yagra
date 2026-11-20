@@ -2737,6 +2737,8 @@ export const api = {
     name: string;
     starts_at: string;
     ends_at: string;
+    /** The IANA zone the times were typed in (ADR-261); recorded, never used to place them. */
+    time_zone?: string;
   }): Promise<{ requested: number; created: number }> =>
     apiPost('/api/v1/maintenance-windows/bulk', { body }),
 
@@ -2748,6 +2750,8 @@ export const api = {
     scope_id: string;
     starts_at: string;
     ends_at: string;
+    /** The IANA zone the times were typed in (ADR-261). */
+    time_zone?: string;
   }): Promise<{ id: string }> => apiPost('/api/v1/maintenance-windows', { body }),
 
   /** Enable/disable a maintenance window. */

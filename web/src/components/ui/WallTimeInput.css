@@ -1,0 +1,44 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The year-first date box and the 24-hour time box (ADR-261). */
+
+.wt-date {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 12em;
+  min-width: 0;
+}
+
+.wt-date .field-affix {
+  flex: 1;
+  min-width: 0;
+}
+
+.wt-date .field-affix .field {
+  width: 100%;
+  font-family: var(--font-family);
+}
+
+/* Two classes deep so a dialog's `.modal-field .field { width: 100% }` does not stretch it and
+   push the zone onto a line of its own. */
+.field.wt-time {
+  flex: none;
+  width: 6em; /* fits HH:MM in the monospace face */
+  font-family: var(--font-family);
+  text-align: center;
+}
+
+/* The browser's date picker opens over this input, so it is laid out (a hidden element cannot
+   open one) but takes no room and cannot be seen or reached. */
+.wt-native {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}

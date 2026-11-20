@@ -454,9 +454,15 @@ test('a maintenance preset on a lone row still writes the single-node window', a
 test('the selection bar can open a maintenance window over every selected node', async ({
   page,
 }) => {
-  const seen: { node_ids: string[]; name: string }[] = [];
+  const seen: {
+    node_ids: string[];
+    name: string;
+    starts_at: string;
+    ends_at: string;
+    time_zone?: string;
+  }[] = [];
   await page.route('**/api/v1/maintenance-windows/bulk', async (route) => {
-    const body = route.request().postDataJSON() as { node_ids: string[]; name: string };
+    const body = route.request().postDataJSON() as (typeof seen)[number];
     seen.push(body);
     await route.fulfill({
       status: 200,
@@ -481,13 +487,18 @@ test('the selection bar can open a maintenance window over every selected node',
   // The scope controls are locked and the nodes are listed, so what is about to be written is on
   // screen before the operator presses the button.
   await expect(dialog.locator('.form-targets li')).toHaveCount(2);
-  const boxes = dialog.locator('input[type="datetime-local"]');
-  await boxes.nth(0).fill('2030-01-01T00:00');
-  await boxes.nth(1).fill('2030-01-01T02:00');
+  // ADR-261: a year-first date, a 24-hour time typed without its colon, and the length buttons
+  // (two hours by default). The work field is left blank, so the default name is what is sent.
+  await dialog.getByLabel('Start', { exact: true }).fill('2030/01/01');
+  await dialog.getByLabel('Start time', { exact: true }).fill('0900');
+  await expect(dialog.locator('.form-status', { hasText: 'Ends 2030-01-01 Tue 11:00' })).toBeVisible();
   await dialog.getByRole('button', { name: 'Add window', exact: true }).click();
 
   await expect.poll(() => seen.length).toBe(1);
   expect(seen[0].node_ids).toHaveLength(2);
+  expect(seen[0].name).toBe('Maintenance — 2 nodes');
+  expect(Date.parse(seen[0].ends_at) - Date.parse(seen[0].starts_at)).toBe(2 * 3_600_000);
+  expect(seen[0].time_zone).toBeTruthy();
 });
 
 test('Poll now covers the whole selection and reports what it queued', async ({ page }) => {

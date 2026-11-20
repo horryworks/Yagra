@@ -51,8 +51,8 @@
     "title": "メンテナンスウィンドウを追加",
     "submit": "ウィンドウを追加",
     "defaultName": "メンテナンス — {{name}}",
-    "name": "名前",
-    "namePlaceholder": "例: コアスイッチのファームウェア更新",
+    "name": "作業内容",
+    "namePlaceholder": "ファームウェア更新、チケット CHG-1234",
     "scope": "スコープ",
     "scopeLevel": "スコープの種類",
     "lockedNode": "ノード",
@@ -67,10 +67,32 @@
     "pickProfile": "（プロファイルを選択）",
     "pickGroup": "（グループを選択）",
     "err": {
-      "add": "ウィンドウの追加に失敗しました"
+      "add": "ウィンドウの追加に失敗しました",
+      "date": "日付は 2026-11-20 のように年から書いてください。",
+      "time": "時刻は 22:00 のように 24 時間制で書いてください。",
+      "gap": "{{zone}} ではその日のこの時刻はありません。時計が飛ばします。",
+      "backwards": "終了は開始より後にしてください。"
     },
     "defaultNameMany": "メンテナンス — {{count}} 台",
     "lockedNodes": "選択した次の {{count}} 台。1 台につき 1 つの窓を開きます。",
-    "partial": "{{requested}} 台のうち {{created}} 台に窓を開きました。残りは削除済みか、スコープの外です。"
+    "partial": "{{requested}} 台のうち {{created}} 台に窓を開きました。残りは削除済みか、スコープの外です。",
+    "savesAs": "「{{name}}」で保存します",
+    "start": "開始",
+    "startTime": "開始時刻",
+    "now": "今すぐ",
+    "tonight": "今夜 {{time}}",
+    "length": "長さ",
+    "lengths": {
+      "30m": "30 分",
+      "1h": "1 時間",
+      "2h": "2 時間",
+      "4h": "4 時間",
+      "8h": "8 時間",
+      "custom": "その他"
+    },
+    "end": "終了",
+    "endTime": "終了時刻",
+    "ends": "終了 {{at}}",
+    "yourTime": "あなたの時刻: {{range}}"
   }
 }

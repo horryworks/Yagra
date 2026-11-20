@@ -426,7 +426,7 @@ export function NodeDetail({
     groups,
   );
   /** The node as the suppression and pool dialogs name their target. */
-  const self = { kind: 'node' as const, id: node.id, name: node.name };
+  const self = { kind: 'node' as const, id: node.id, name: node.name, groupId: node.group_id };
   const moreItem = (key: NodeHeaderMore): ActionMenuItem => {
     switch (key) {
       case 'openDetail':

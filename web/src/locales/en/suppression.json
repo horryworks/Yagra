@@ -52,8 +52,8 @@
     "title": "Add maintenance window",
     "submit": "Add window",
     "defaultName": "Maintenance — {{name}}",
-    "name": "Name",
-    "namePlaceholder": "e.g. core switch firmware",
+    "name": "What's the work?",
+    "namePlaceholder": "Firmware upgrade, ticket CHG-1234",
     "scope": "Scope",
     "scopeLevel": "Scope type",
     "lockedNode": "Node",
@@ -68,10 +68,32 @@
     "pickProfile": "(pick a profile)",
     "pickGroup": "(pick a group)",
     "err": {
-      "add": "failed to add window"
+      "add": "failed to add window",
+      "date": "Write the date year first, like 2026-11-20.",
+      "time": "Write the time in 24 hours, like 22:00.",
+      "gap": "This time does not happen in {{zone}} that day: the clocks skip it.",
+      "backwards": "The end must come after the start."
     },
     "defaultNameMany": "Maintenance — {{count}} nodes",
     "lockedNodes": "These {{count}} selected nodes, each with its own window:",
-    "partial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope."
+    "partial": "Opened a window over {{created}} of {{requested}} nodes. The rest have been deleted, or are outside your scope.",
+    "savesAs": "Saved as “{{name}}”",
+    "start": "Start",
+    "startTime": "Start time",
+    "now": "Now",
+    "tonight": "Tonight {{time}}",
+    "length": "Length",
+    "lengths": {
+      "30m": "30 min",
+      "1h": "1 h",
+      "2h": "2 h",
+      "4h": "4 h",
+      "8h": "8 h",
+      "custom": "Set end"
+    },
+    "end": "End",
+    "endTime": "End time",
+    "ends": "Ends {{at}}",
+    "yourTime": "Your time: {{range}}"
   }
 }

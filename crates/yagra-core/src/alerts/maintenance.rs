@@ -125,6 +125,12 @@ pub struct StoredWindow {
     pub enabled: bool,
     /// Whether the window covers "now" (computed at read time for the UI).
     pub active: bool,
+    /// The IANA zone the times were typed in (ADR-261), e.g. `America/New_York` — a record of the
+    /// clock the request came in, never an input to when the window runs: `starts_at` / `ends_at`
+    /// are the instants. Absent for windows that recorded none (every window before ADR-261, and
+    /// those opened over MCP or by an upgrade).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
 }
 
 /// PostgreSQL-backed maintenance windows and their exemptions.
@@ -141,7 +147,7 @@ impl MaintenanceRepo {
     /// All windows, newest first (the UI lists past windows too until deleted).
     pub async fn list_windows(&self) -> anyhow::Result<Vec<StoredWindow>> {
         let rows = sqlx::query(
-            "SELECT id, name, scope_level, scope_id, starts_at, ends_at, enabled, \
+            "SELECT id, name, scope_level, scope_id, starts_at, ends_at, enabled, time_zone, \
                     (enabled AND starts_at <= now() AND ends_at > now()) AS active \
              FROM maintenance_windows ORDER BY starts_at DESC",
         )
@@ -160,6 +166,7 @@ impl MaintenanceRepo {
                     ends_at: ends.to_rfc3339(),
                     enabled: row.try_get("enabled")?,
                     active: row.try_get("active")?,
+                    time_zone: row.try_get("time_zone")?,
                 })
             })
             .collect()
@@ -174,10 +181,26 @@ impl MaintenanceRepo {
         starts_at: DateTime<Utc>,
         ends_at: DateTime<Utc>,
     ) -> anyhow::Result<Uuid> {
+        self.create_window_in(name, scope_level, scope_id, starts_at, ends_at, None)
+            .await
+    }
+
+    /// [`Self::create_window`], recording the zone the times were typed in (ADR-261). The zone is
+    /// validated and canonicalised at the API edge; it changes nothing about when the window runs.
+    pub async fn create_window_in(
+        &self,
+        name: &str,
+        scope_level: &str,
+        scope_id: &str,
+        starts_at: DateTime<Utc>,
+        ends_at: DateTime<Utc>,
+        time_zone: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO maintenance_windows (id, name, scope_level, scope_id, starts_at, ends_at) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO maintenance_windows \
+                    (id, name, scope_level, scope_id, starts_at, ends_at, time_zone) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(id)
         .bind(name)
@@ -185,6 +208,7 @@ impl MaintenanceRepo {
         .bind(scope_id)
         .bind(starts_at)
         .bind(ends_at)
+        .bind(time_zone)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -216,6 +240,7 @@ impl MaintenanceRepo {
         name: &str,
         starts_at: DateTime<Utc>,
         ends_at: DateTime<Utc>,
+        time_zone: Option<&str>,
         scope: Option<&[Uuid]>,
     ) -> anyhow::Result<(usize, u64)> {
         let mut seen = std::collections::HashSet::new();
@@ -229,18 +254,20 @@ impl MaintenanceRepo {
         }
         let window_ids: Vec<Uuid> = ids.iter().map(|_| Uuid::new_v4()).collect();
         let res = sqlx::query(&format!(
-"INSERT INTO maintenance_windows (id, name, scope_level, scope_id, starts_at, ends_at) \
-             SELECT t.window_id, $3, 'node', n.id::text, $4, $5 \
+            "INSERT INTO maintenance_windows \
+                    (id, name, scope_level, scope_id, starts_at, ends_at, time_zone) \
+             SELECT t.window_id, $3, 'node', n.id::text, $4, $5, $6 \
                FROM unnest($1::uuid[], $2::uuid[]) AS t(node_id, window_id) \
                JOIN nodes n ON n.id = t.node_id \
               WHERE {}",
-scope_predicate(6, "n.group_id"),
-))
+            scope_predicate(7, "n.group_id"),
+        ))
         .bind(&ids)
         .bind(&window_ids)
         .bind(name)
         .bind(starts_at)
         .bind(ends_at)
+        .bind(time_zone)
         .bind(scope)
         .execute(&self.pool)
         .await?;

@@ -6774,6 +6774,8 @@ export interface components {
             name: string;
             node_ids: string[];
             starts_at: string;
+            /** @description The IANA zone the times were typed in (ADR-261); recorded on every window opened. */
+            time_zone?: string | null;
         };
         /** @description One note, with the table it concerns and how many rows it covers. */
         BundleNote: {
@@ -7889,6 +7891,12 @@ export interface components {
             scope_id: string;
             scope_level: string;
             starts_at: string;
+            /**
+             * @description The IANA zone the operator typed the times in (ADR-261), recorded so the list can show the
+             *     requester's clock. It does not change when the window runs — `starts_at` / `ends_at` are
+             *     the instants. Omit (or send empty) to record none.
+             */
+            time_zone?: string | null;
         };
         /**
          * @description The one and only response carrying a usable token.
@@ -15530,6 +15538,13 @@ export interface components {
             scope_id: string;
             scope_level: components["schemas"]["WindowScope"];
             starts_at: string;
+            /**
+             * @description The IANA zone the times were typed in (ADR-261), e.g. `America/New_York` — a record of the
+             *     clock the request came in, never an input to when the window runs: `starts_at` / `ends_at`
+             *     are the instants. Absent for windows that recorded none (every window before ADR-261, and
+             *     those opened over MCP or by an upgrade).
+             */
+            time_zone?: string | null;
         };
         /**
          * @description Which kind of thing an alert is about: a monitored `node`; a poller `pool`, when Yagra is
@@ -23709,7 +23724,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description Empty name/scope_id, an unknown scope_level, or bounds that are not RFC 3339 or end at or before they start */
+            /** @description Empty name/scope_id, an unknown scope_level, bounds that are not RFC 3339 or end at or before they start, or a time_zone that is not an IANA zone name */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -23837,7 +23852,7 @@ export interface operations {
                     "application/json": components["schemas"]["BulkSuppressionResult"];
                 };
             };
-            /** @description Empty name, unparseable or backwards bounds, or more ids than one request may carry */
+            /** @description Empty name, unparseable or backwards bounds, an unknown time_zone, or more ids than one request may carry */
             400: {
                 headers: {
                     [name: string]: unknown;

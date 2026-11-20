@@ -1,0 +1,89 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The zone name beside a time, and the panel it opens (ADR-261). */
+
+.zp {
+  display: inline-flex;
+}
+
+.zp-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-color);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.zp-tag:hover,
+.zp-tag:focus-visible,
+.zp-tag[aria-expanded='true'] {
+  background: var(--bg-tertiary);
+}
+
+.zp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 340px; /* fits the longest zone name with its offset */
+  padding: var(--space-2);
+}
+
+.zp-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 280px; /* about eight rows, then the list scrolls */
+  overflow-y: auto;
+}
+
+.zp-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.zp-row:hover,
+.zp-row:focus-visible {
+  background: var(--bg-tertiary);
+}
+
+.zp-row[aria-pressed='true'] {
+  color: var(--accent-color);
+}
+
+.zp-row-tag {
+  color: var(--text-tertiary);
+}
+
+.zp-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zp-row-abbr {
+  color: var(--text-secondary);
+  font-family: var(--font-family);
+  white-space: nowrap;
+}
+
+.zp-empty {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}

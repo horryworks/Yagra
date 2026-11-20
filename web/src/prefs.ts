@@ -8,6 +8,7 @@ import type { ColumnWidthDoc } from './lib/columnWidths';
 import { withRememberedCredentials, type DiscoveryScanMemory } from './pages/discoveryScans';
 import { withModalSize, type ModalResizeId, type ModalSize } from './lib/modalSize';
 import type { GeoPlace } from './pages/geoProjection';
+import { pushRecentZone } from './lib/maintenanceTime';
 
 // localStorage when available (browser), else a no-op — keeps the store working in the Vitest
 // node env (no localStorage) without a persist warning. localStorage (not sessionStorage) so UI
@@ -179,6 +180,9 @@ interface PrefsStore {
   /** Whether the notification-template dialog wraps long lines (ADR-198 decision 4). `true` by
    *  default — wrapping is how the dialog always drew them. */
   templateWrap: boolean;
+  /** The zones last picked for a maintenance window's times, newest first (ADR-261). Local-only:
+   *  a convenience of this browser, with no reason to follow the account (ADR-074). */
+  recentZones: readonly string[];
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -236,6 +240,8 @@ interface PrefsStore {
   setModalSize: (id: ModalResizeId, size: ModalSize) => void;
   /** Wrap or stop wrapping long lines in the notification-template dialog. */
   setTemplateWrap: (on: boolean) => void;
+  /** Put a zone at the front of [`recentZones`]. */
+  rememberZone: (zone: string) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -285,6 +291,8 @@ export const usePrefsStore = create<PrefsStore>()(
       // Same again: absent before ADR-198, read as `{}` / `true`, no migration owed.
       modalSizes: {},
       templateWrap: true,
+      // Absent before ADR-261, read as `[]`, no migration owed.
+      recentZones: [],
       // 🚨 `applyTheme` here, and not only in `App.tsx`'s effect, because **a child's effect runs
       // before its parent's**. `MetricChart` rebuilds its uPlot instance when the theme changes and
       // resolves every colour with `getComputedStyle` — it is deep in the tree, so its effect fired
@@ -328,6 +336,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setGeoMapPlace: (geoMapPlace) => set({ geoMapPlace }),
       setModalSize: (id, size) => set((s) => ({ modalSizes: withModalSize(s.modalSizes, id, size) })),
       setTemplateWrap: (templateWrap) => set({ templateWrap }),
+      rememberZone: (zone) => set((s) => ({ recentZones: pushRecentZone(s.recentZones, zone) })),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

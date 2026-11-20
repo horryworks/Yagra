@@ -1746,6 +1746,7 @@ mod tests {
                 ends_at: "1970-01-01T01:00:00Z".to_owned(),
                 enabled: true,
                 active: false,
+                time_zone: Some("America/New_York".to_owned()),
             }],
             exemptions: vec![crate::alerts::maintenance::StoredExemption {
                 id: uuid::Uuid::new_v4(),

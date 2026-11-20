@@ -161,6 +161,20 @@ function offsetAt(t: number, tz: string): number {
   return asUtc(wallClock(t, tz)) - Math.floor(t / 1000) * 1000;
 }
 
+/** The instants `year-month-day hour:minute` names in `tz`: none (a daylight-saving gap), one, or
+ *  two (an overlap), earliest first. For a form that must refuse a time that never happens rather
+ *  than read it the way core reads a schedule (ADR-261 decision 9). */
+export function wallInstants(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  tz: string,
+): number[] {
+  return instantsOf(Date.UTC(year, month - 1, day, hour, minute, 0), tz);
+}
+
 /** The instants a wall time names in `tz`: none (a gap), one, or two (an overlap), earliest first. */
 function instantsOf(wall: number, tz: string): number[] {
   const offsets = new Set([

@@ -2631,7 +2631,12 @@ export function NodeTree({
               {/* The presets act on the batch when this row carries it (Inc.11); the release
                   panel below them stays about the row, so it is passed the row's own node. */}
               {suppressionMenu(
-                batchTarget ?? { kind: 'node', id: menu.node.id, name: menu.node.name },
+                batchTarget ?? {
+                  kind: 'node',
+                  id: menu.node.id,
+                  name: menu.node.name,
+                  groupId: menu.node.group_id,
+                },
                 { kind: 'node', id: menu.node.id, name: menu.node.name },
                 menu.node,
                 menu,

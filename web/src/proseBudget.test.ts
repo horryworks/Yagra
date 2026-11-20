@@ -86,7 +86,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   'settings-tls': [1592, 857],
   'settings-tokens': [812, 442],
   'settings-upgrade': [3291, 1856], // the JA term sweep: one word per concept, longer in places (ADR-209, 2026-10-21)
-  suppression: [514, 333], // - the mute list page and the add-mute dialog (ADR-234, 2026-11-03)
+  suppression: [697, 444], // + maintenanceForm.err.{date,time,gap,backwards}: errors shown only on a wrong date or time (ADR-261, 2026-11-20)
   system: [14178, 7939], // the sweep limit field's out-of-range error (ADR-219, 2026-10-28)
   topology: [1811, 1051], // + the unresolved count names ports shared through a hub, which it now counts (ADR-043 Inc.5, 2026-11-11)
   troubleshoot: [4017, 2067], // + Investigate: question cards, the four ways to pick a target and the folder answer's counts and three state sentences (ADR-251 Inc.2, 2026-11-09)

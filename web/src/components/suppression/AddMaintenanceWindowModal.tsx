@@ -4,8 +4,13 @@
 // group (the operator already picked the target); otherwise the scope is chosen here (node /
 // folder group / device profile). A folder group is `group_id`, recursive incl. subgroups
 // (ADR-022); the old label-scoped windows were deleted by migration 0164 (ADR-229).
+//
+// The time fields follow ADR-261: the target comes first, then what the work is (blank saves the
+// default name), then a year-first start date and a 24-hour start time in a zone the operator can
+// change from its name beside the time, then the length. The reading of all of that is
+// `lib/maintenanceTime.ts`; the zone the times were typed in is sent with the window and stored.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import type { MaintenanceScopeLevel, NodeGroup, ProfileSummary } from '../../types/api';
@@ -15,14 +20,33 @@ import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Field, TextInput, Select } from '../ui/Field';
 import { FieldGroup, Fields } from '../ui/FormLayout';
+import { Inline, Stack } from '../ui/Page';
+import { Button } from '../ui/Button';
+import { Segmented } from '../ui/Segmented';
+import { DateInput, TimeInput } from '../ui/WallTimeInput';
+import { ZonePicker } from '../ui/ZonePicker';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
-import { localTimeZone } from '../../lib/format';
+import { displayTimeZone, zoneAbbreviation } from '../../lib/timeZone';
 import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
-import { localInputToIso } from '../../lib/format';
+import {
+  DEFAULT_WINDOW_LENGTH,
+  TONIGHT_HOUR,
+  WINDOW_LENGTHS,
+  dateText,
+  instantToWall,
+  rangeLine,
+  targetZone,
+  timeText,
+  tonightStart,
+  wallLine,
+  windowName,
+  windowTimes,
+  type WindowLengthKey,
+} from '../../lib/maintenanceTime';
+import { usePrefsStore } from '../../prefs';
 
-const TZ = localTimeZone();
 /** Scope choices when not locked to a right-click target. */
 type CreateScope = 'node' | 'group_id' | 'profile';
 
@@ -50,13 +74,9 @@ export function AddMaintenanceWindowModal({
   // so the scope controls below are locked exactly as they are for a single target.
   const batch = initialScope?.kind === 'nodes' ? initialScope : null;
   const names = initialScope ? targetNodeNames(initialScope) : [];
-  const [name, setName] = useState(
-    batch
-      ? t('maintenanceForm.defaultNameMany', { count: batch.nodes.length })
-      : initialScope && initialScope.kind !== 'nodes'
-        ? t('maintenanceForm.defaultName', { name: initialScope.name })
-        : '',
-  );
+  // Blank on purpose (ADR-261 decision 2): the field asks what the work is, and saving it blank
+  // falls back to the name below, which the field shows while it is blank.
+  const [name, setName] = useState('');
   const [scope, setScope] = useState<CreateScope>(
     initialScope && initialScope.kind === 'group' ? 'group_id' : 'node',
   );
@@ -68,8 +88,15 @@ export function AddMaintenanceWindowModal({
   const [nodeLabel, setNodeLabel] = useState(
     initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
   );
-  const [startsAt, setStartsAt] = useState('');
-  const [endsAt, setEndsAt] = useState('');
+  const mine = displayTimeZone();
+  const [zone, setZone] = useState(mine);
+  const [startDate, setStartDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [length, setLength] = useState<WindowLengthKey>(DEFAULT_WINDOW_LENGTH);
+  const [endDate, setEndDate] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const recentZones = usePrefsStore((s) => s.recentZones);
+  const rememberZone = usePrefsStore((s) => s.rememberZone);
   const form = useSubmit({
     errorFallback: t('maintenanceForm.err.add'),
     onDone: () => {
@@ -79,13 +106,73 @@ export function AddMaintenanceWindowModal({
   });
 
   const groupItems = groupOptions(groups);
-  // A batch supplies its targets as ids, so there is no single `scopeId` to require.
-  const startsIso = localInputToIso(startsAt);
-  const endsIso = localInputToIso(endsAt);
-  const ready = !!name.trim() && (!!batch || !!scopeId.trim()) && !!startsIso && !!endsIso;
+
+  // The name the window gets when the work field is left blank: the target's own name.
+  const targetName = batch
+    ? null
+    : scope === 'node'
+      ? nodeLabel
+      : scope === 'profile'
+        ? (profiles.find((p) => p.id === scopeId)?.name ?? '')
+        : (groups.find((g) => g.id === scopeId)?.name ??
+          (initialScope?.kind === 'group' ? initialScope.name : ''));
+  const fallbackName = batch
+    ? t('maintenanceForm.defaultNameMany', { count: batch.nodes.length })
+    : targetName
+      ? t('maintenanceForm.defaultName', { name: targetName })
+      : '';
+  const savedName = windowName(name, fallbackName);
+
+  // The zone the target's site keeps (decision 6): a folder's own, a node's folder's, or the one
+  // every selected node shares. A profile names a class, not a place, so it has none.
+  const site = useMemo(() => {
+    const zoneOf = (id: string) => groups.find((g) => g.id === id)?.effective_time_zone;
+    if (batch) return targetZone(batch.nodes.map((n) => n.group_id), zoneOf);
+    if (scope === 'group_id') return scopeId ? targetZone([scopeId], zoneOf) : null;
+    if (scope === 'node' && initialScope?.kind === 'node') {
+      return targetZone([initialScope.groupId], zoneOf);
+    }
+    return null;
+  }, [batch, scope, scopeId, initialScope, groups]);
+
+  const times = windowTimes({ startDate, startTime, length, endDate, endTime, zone });
+  // What the abbreviations are read at: the start once it is known, else now.
+  const at = times.kind === 'ok' ? times.startMs : Date.now();
+
+  const fieldError = (field: 'startDate' | 'startTime' | 'endDate' | 'endTime') =>
+    times.kind === 'invalid' && times.field === field
+      ? field.endsWith('Date')
+        ? t('maintenanceForm.err.date')
+        : t('maintenanceForm.err.time')
+      : null;
+  const startError =
+    fieldError('startDate') ??
+    fieldError('startTime') ??
+    (times.kind === 'gap' && times.field === 'start'
+      ? t('maintenanceForm.err.gap', { zone })
+      : null);
+  const endError =
+    fieldError('endDate') ??
+    fieldError('endTime') ??
+    (times.kind === 'gap' && times.field === 'end'
+      ? t('maintenanceForm.err.gap', { zone })
+      : times.kind === 'backwards'
+        ? t('maintenanceForm.err.backwards')
+        : null);
+
+  const ready =
+    !!savedName && (!!batch || !!scopeId.trim()) && times.kind === 'ok';
+
+  const setStart = (w: { date: { year: number; month: number; day: number }; time: { hour: number; minute: number } }) => {
+    setStartDate(dateText(w.date));
+    setStartTime(timeText(w.time));
+  };
 
   const submit = () => {
-    if (!ready || !startsIso || !endsIso) return;
+    if (!ready || times.kind !== 'ok') return;
+    const startsAt = new Date(times.startMs).toISOString();
+    const endsAt = new Date(times.endMs).toISOString();
+    if (zone !== mine) rememberZone(zone);
     form.submit(() => {
       if (batch) {
         // 🚨 A shortfall keeps the dialog open. Closing on `created < requested` would read as
@@ -94,9 +181,10 @@ export function AddMaintenanceWindowModal({
         return api
           .createMaintenanceWindows({
             node_ids: batch.nodes.map((n) => n.id),
-            name: name.trim(),
-            starts_at: startsIso,
-            ends_at: endsIso,
+            name: savedName,
+            starts_at: startsAt,
+            ends_at: endsAt,
+            time_zone: zone,
           })
           .then((r) =>
             partialOutcome(
@@ -110,15 +198,21 @@ export function AddMaintenanceWindowModal({
       }
       return api
         .createMaintenanceWindow({
-          name: name.trim(),
+          name: savedName,
           scope_level: scope as MaintenanceScopeLevel,
           scope_id: scopeId.trim(),
-          starts_at: startsIso,
-          ends_at: endsIso,
+          starts_at: startsAt,
+          ends_at: endsAt,
+          time_zone: zone,
         })
         .then(() => done());
     });
   };
+
+  const lengthOptions = [
+    ...WINDOW_LENGTHS.map((l) => ({ value: l.key, label: t(`maintenanceForm.lengths.${l.key}`) })),
+    { value: 'custom', label: t('maintenanceForm.lengths.custom') },
+  ];
 
   return (
     <Modal
@@ -135,15 +229,6 @@ export function AddMaintenanceWindowModal({
       }
     >
       <Fields>
-        <Field label={t('maintenanceForm.name')}>
-          <TextInput
-            placeholder={t('maintenanceForm.namePlaceholder')}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            autoFocus
-          />
-        </Field>
-
         {batch ? (
           // A group: the scope here is a list of nodes, not one control.
           <FieldGroup label={t('maintenanceForm.scope')}>
@@ -218,22 +303,103 @@ export function AddMaintenanceWindowModal({
           </>
         )}
 
-        <Field label={t('common:range.from')}>
+        <Field
+          label={t('maintenanceForm.name')}
+          status={!name.trim() && fallbackName ? t('maintenanceForm.savesAs', { name: fallbackName }) : null}
+        >
           <TextInput
-            type="datetime-local"
-            suffix={TZ}
-            value={startsAt}
-            onChange={(e) => setStartsAt(e.target.value)}
+            placeholder={t('maintenanceForm.namePlaceholder')}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
           />
         </Field>
-        <Field label={t('common:range.to')}>
-          <TextInput
-            type="datetime-local"
-            suffix={TZ}
-            value={endsAt}
-            onChange={(e) => setEndsAt(e.target.value)}
+
+        <Field label={t('maintenanceForm.start')} htmlFor="maint-start-date" error={startError}>
+          <Stack gap={6}>
+            <Inline gap={8}>
+              <DateInput
+                id="maint-start-date"
+                value={startDate}
+                onChange={setStartDate}
+                invalid={times.kind === 'invalid' && times.field === 'startDate'}
+              />
+              <TimeInput
+                value={startTime}
+                onChange={setStartTime}
+                invalid={times.kind === 'invalid' && times.field === 'startTime'}
+                aria-label={t('maintenanceForm.startTime')}
+              />
+              <ZonePicker
+                zone={zone}
+                onChange={setZone}
+                at={at}
+                mine={mine}
+                site={site}
+                recent={recentZones}
+              />
+            </Inline>
+            <Inline gap={6}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setStart(instantToWall(Date.now(), zone))}
+              >
+                {t('maintenanceForm.now')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setStart(tonightStart(Date.now(), zone))}
+              >
+                {t('maintenanceForm.tonight', { time: timeText({ hour: TONIGHT_HOUR, minute: 0 }) })}
+              </Button>
+            </Inline>
+          </Stack>
+        </Field>
+
+        <Field
+          label={t('maintenanceForm.length')}
+          htmlFor="maint-length"
+          status={
+            times.kind === 'ok' && length !== 'custom'
+              ? t('maintenanceForm.ends', { at: wallLine(times.endMs, zone) })
+              : null
+          }
+        >
+          <Segmented
+            options={lengthOptions}
+            value={length}
+            onChange={(v) => setLength(v as WindowLengthKey)}
+            ariaLabel={t('maintenanceForm.length')}
           />
         </Field>
+
+        {length === 'custom' && (
+          <Field label={t('maintenanceForm.end')} htmlFor="maint-end-date" error={endError}>
+            <Inline gap={8}>
+              <DateInput
+                id="maint-end-date"
+                value={endDate}
+                onChange={setEndDate}
+                invalid={times.kind === 'invalid' && times.field === 'endDate'}
+              />
+              <TimeInput
+                value={endTime}
+                onChange={setEndTime}
+                invalid={times.kind === 'invalid' && times.field === 'endTime'}
+                aria-label={t('maintenanceForm.endTime')}
+              />
+              <span className="form-status">{zoneAbbreviation(zone, at)}</span>
+            </Inline>
+          </Field>
+        )}
+
+        {times.kind === 'ok' && zone !== mine && (
+          <p className="form-status">
+            {t('maintenanceForm.yourTime', { range: rangeLine(times.startMs, times.endMs, mine) })}
+          </p>
+        )}
         <FormError form={form} />
       </Fields>
     </Modal>

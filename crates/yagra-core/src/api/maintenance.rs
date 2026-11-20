@@ -264,6 +264,11 @@ pub(super) struct CreateWindow {
     scope_id: String,
     starts_at: String,
     ends_at: String,
+    /// The IANA zone the operator typed the times in (ADR-261), recorded so the list can show the
+    /// requester's clock. It does not change when the window runs — `starts_at` / `ends_at` are
+    /// the instants. Omit (or send empty) to record none.
+    #[serde(default)]
+    time_zone: Option<String>,
 }
 
 #[utoipa::path(
@@ -271,7 +276,7 @@ pub(super) struct CreateWindow {
     request_body = CreateWindow,
     responses(
         (status = 201, description = "Window created", body = CreatedId),
-        (status = 400, description = "Empty name/scope_id, an unknown scope_level, or bounds that are not RFC 3339 or end at or before they start", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name/scope_id, an unknown scope_level, bounds that are not RFC 3339 or end at or before they start, or a time_zone that is not an IANA zone name", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
         (status = 404, description = "A group_id scope naming a group that does not exist", body = super::error::ErrorBody),
@@ -336,14 +341,16 @@ async fn create_maintenance_window(
         }
     }
     let (starts, ends) = window_bounds(&body.starts_at, &body.ends_at)?;
+    let zone = window_zone(body.time_zone.as_deref())?;
     let id = admin
         .maintenance
-        .create_window(
+        .create_window_in(
             body.name.trim(),
             &body.scope_level,
             body.scope_id.trim(),
             starts,
             ends,
+            zone.as_deref(),
         )
         .await
         .map_err(|e| {
@@ -363,6 +370,17 @@ pub(super) struct BulkWindow {
     name: String,
     starts_at: String,
     ends_at: String,
+    /// The IANA zone the times were typed in (ADR-261); recorded on every window opened.
+    #[serde(default)]
+    time_zone: Option<String>,
+}
+
+/// The zone a creation body names, canonicalised — or `None` when it names none. A name this
+/// build does not know is refused rather than stored, because the list would then show a clock
+/// nobody can read the times against.
+fn window_zone(name: Option<&str>) -> Result<Option<String>, ApiError> {
+    Ok(super::util::parse_time_zone(name)?
+        .map(|tz| yagra_base::wall_clock::zone_name(&tz).to_owned()))
 }
 
 /// What a bulk maintenance write actually did.
@@ -392,7 +410,7 @@ pub(super) struct BulkSuppressionResult {
     request_body = BulkWindow,
     responses(
         (status = 200, description = "How many windows were opened", body = BulkSuppressionResult),
-        (status = 400, description = "Empty name, unparseable or backwards bounds, or more ids than one request may carry", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name, unparseable or backwards bounds, an unknown time_zone, or more ids than one request may carry", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageMaintenance", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -422,6 +440,7 @@ async fn create_maintenance_windows_bulk(
     // The same bounds check every creation path makes, including the MCP tool: a window that ends
     // before it begins suppresses nothing while reading as success.
     let (starts, ends) = window_bounds(&body.starts_at, &body.ends_at)?;
+    let zone = window_zone(body.time_zone.as_deref())?;
     let (requested, created) = admin
         .maintenance
         .create_windows_for_nodes(
@@ -429,6 +448,7 @@ async fn create_maintenance_windows_bulk(
             body.name.trim(),
             starts,
             ends,
+            zone.as_deref(),
             scope.group_filter(),
         )
         .await
@@ -965,6 +985,7 @@ mod tests {
             ends_at: "2026-08-02T00:00:00Z".to_owned(),
             enabled: true,
             active: true,
+            time_zone: None,
         }
     }
 
@@ -1247,6 +1268,77 @@ mod tests {
             yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
             1
         );
+    }
+
+    /// The zone the times were typed in is stored canonical and read back on the list (ADR-261),
+    /// a window that named none reads back without one, and a zone this build does not know is
+    /// refused rather than stored.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_window_keeps_the_zone_it_was_asked_in(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node = yagra_base::pgtest::node(&pool, "remote-site", 2, None).await;
+        let body = |name: &str, zone: serde_json::Value| {
+            serde_json::json!({
+                "name": name,
+                "scope_level": "node",
+                "scope_id": node.to_string(),
+                "starts_at": "2030-01-02T03:00:00Z",
+                "ends_at": "2030-01-02T05:00:00Z",
+                "time_zone": zone,
+            })
+        };
+        for (name, zone) in [
+            (
+                "asked in new york",
+                serde_json::json!("  America/New_York "),
+            ),
+            ("no zone", serde_json::Value::Null),
+            ("empty zone", serde_json::json!("")),
+        ] {
+            let (status, out) = send(
+                &st,
+                "POST",
+                "/api/v1/maintenance-windows",
+                &tok,
+                Some(body(name, zone)),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::CREATED, "{name}: {out}");
+        }
+        let (status, out) = send(
+            &st,
+            "POST",
+            "/api/v1/maintenance-windows",
+            &tok,
+            Some(body(
+                "abbreviation",
+                serde_json::json!("EST5EDT-not-a-zone"),
+            )),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{out}");
+        assert_eq!(out["error"]["code"], "invalid_time_zone", "{out}");
+
+        let (status, list) = send(&st, "GET", "/api/v1/maintenance-windows", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+        let zone_of = |name: &str| {
+            list.as_array()
+                .expect("a list")
+                .iter()
+                .find(|w| w["name"] == name)
+                .unwrap_or_else(|| panic!("{name} missing: {list}"))
+                .get("time_zone")
+                .cloned()
+        };
+        assert_eq!(
+            zone_of("asked in new york"),
+            Some(serde_json::json!("America/New_York"))
+        );
+        assert_eq!(zone_of("no zone"), None);
+        assert_eq!(zone_of("empty zone"), None);
     }
 
     /// One window per selected node, and a node the caller cannot see gets none.

@@ -20,6 +20,9 @@ export interface SuppressionTarget {
   kind: 'node' | 'group';
   id: string;
   name: string;
+  /** A node's folder, when the caller knows it — the maintenance dialog reads the folder's time
+   *  zone from it to offer the site's clock (ADR-261). Absent for a folder target. */
+  groupId?: string | null;
 }
 
 /** Metric names to suggest where the operator types one by hand and nothing better is available.

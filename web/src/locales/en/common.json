@@ -190,5 +190,19 @@
     "column": "Select",
     "row": "Select {{name}}",
     "count": "{{n}} / {{total}}"
+  },
+  "wallTime": {
+    "pickDate": "Pick a date"
+  },
+  "zonePicker": {
+    "label": "Time zone",
+    "change": "Time zone {{zone}}, change",
+    "search": "Search time zones",
+    "none": "No time zone matches.",
+    "tag": {
+      "mine": "Mine",
+      "site": "Site",
+      "recent": "Recent"
+    }
   }
 }
