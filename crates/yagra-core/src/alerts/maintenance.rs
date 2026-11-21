@@ -133,6 +133,17 @@ pub struct StoredWindow {
     pub time_zone: Option<String>,
 }
 
+/// What an operator says about a window: everything but its id and whether it is switched on.
+/// Already validated at the API edge (`api::maintenance::checked_definition`).
+pub struct WindowDefinition<'a> {
+    pub name: &'a str,
+    pub scope_level: &'a str,
+    pub scope_id: &'a str,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub time_zone: Option<&'a str>,
+}
+
 /// How far ahead of the database's clock a window may begin and still count as "now" for a
 /// release from maintenance (ADR-261 Inc.4): the WebUI writes a window's start on the browser's
 /// clock, which can run ahead. One value for the windows that name a node and the ones it inherits.
@@ -277,6 +288,36 @@ impl MaintenanceRepo {
         .execute(&self.pool)
         .await?;
         Ok((ids.len(), res.rows_affected()))
+    }
+
+    /// Replace what a window says — its name, target, bounds and the zone they were typed in
+    /// (ADR-261 Inc.5). Returns whether a row moved.
+    ///
+    /// ⚠️ **The fleet-wide upgrade window is never edited** (`scope_level <> 'system'`): its end is
+    /// the upgrade path's to decide (ADR-050). The handler refuses it first with its own code; this
+    /// predicate is what makes that true of any caller. `enabled` is left alone — switching a
+    /// window off and on is its own route.
+    pub async fn update_window(
+        &self,
+        id: Uuid,
+        def: &WindowDefinition<'_>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE maintenance_windows \
+                SET name = $2, scope_level = $3, scope_id = $4, starts_at = $5, ends_at = $6, \
+                    time_zone = $7 \
+              WHERE id = $1 AND scope_level <> 'system'",
+        )
+        .bind(id)
+        .bind(def.name)
+        .bind(def.scope_level)
+        .bind(def.scope_id)
+        .bind(def.starts_at)
+        .bind(def.ends_at)
+        .bind(def.time_zone)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// Enable/disable a window. Returns whether it exists.

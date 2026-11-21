@@ -16,6 +16,7 @@ import {
   tonightStart,
   wallLine,
   weekdayOf,
+  windowFields,
   windowName,
   windowTimes,
   type WindowTimeInput,
@@ -273,5 +274,37 @@ describe('windowName', () => {
   it('saves what was typed, or the default when nothing was', () => {
     expect(windowName('  Firmware CHG-1 ', 'Maintenance — sw-01')).toBe('Firmware CHG-1');
     expect(windowName('   ', 'Maintenance — sw-01')).toBe('Maintenance — sw-01');
+  });
+});
+
+describe('windowFields', () => {
+  it('reads a stored window back on the clock it was asked in, end as a picked end', () => {
+    expect(
+      windowFields('2030-01-02T13:00:00+00:00', '2030-01-02T17:30:00+00:00', 'Asia/Tokyo'),
+    ).toEqual({
+      startDate: '2030-01-02',
+      startTime: '22:00',
+      endDate: '2030-01-03',
+      endTime: '02:30',
+    });
+  });
+
+  it('round-trips through windowTimes to the same instants', () => {
+    const f = windowFields('2030-03-09T06:15:00Z', '2030-03-09T09:00:00Z', 'America/New_York');
+    const t = windowTimes({ ...f, length: 'custom', zone: 'America/New_York' });
+    expect(t).toEqual({
+      kind: 'ok',
+      startMs: Date.parse('2030-03-09T06:15:00Z'),
+      endMs: Date.parse('2030-03-09T09:00:00Z'),
+    });
+  });
+
+  it('leaves an unreadable bound empty rather than inventing one', () => {
+    expect(windowFields('soon', '2030-01-01T00:00:00Z', 'UTC')).toEqual({
+      startDate: '',
+      startTime: '',
+      endDate: '2030-01-01',
+      endTime: '00:00',
+    });
   });
 });

@@ -2770,6 +2770,21 @@ export const api = {
   ): Promise<{ requested: number; ended: number; released: number }> =>
     apiPost('/api/v1/maintenance/release', { body: { node_ids: nodeIds } }),
 
+  /** Replace what a maintenance window says — name, target, bounds and zone, all of them
+   *  (ADR-261 Inc.5). Whether it is switched on is left alone. `409` for the upgrade's window. */
+  updateMaintenanceWindow: (
+    id: string,
+    body: {
+      name: string;
+      scope_level: MaintenanceScopeLevel;
+      scope_id: string;
+      starts_at: string;
+      ends_at: string;
+      time_zone?: string;
+    },
+  ): Promise<void> =>
+    apiPut('/api/v1/maintenance-windows/{id}/definition', { path: { id }, body }),
+
   /** Enable/disable a maintenance window. */
   setMaintenanceWindowEnabled: (id: string, enabled: boolean): Promise<void> =>
     apiPut('/api/v1/maintenance-windows/{id}', { path: { id }, body: { enabled } }),

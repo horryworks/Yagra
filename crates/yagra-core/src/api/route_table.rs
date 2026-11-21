@@ -947,6 +947,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         NO_MCP_WRITE,
     ),
+    (
+        "PUT",
+        "/api/v1/maintenance-windows/:id/definition",
+        // The row as it is (`require_visible_window`) and the target it will have (the create
+        // path's node / folder check) must both be the caller's (ADR-261 Inc.5).
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
     ("POST", "/api/v1/meraki/import", MERAKI_WRITE, NO_MCP_WRITE),
     (
         "GET",

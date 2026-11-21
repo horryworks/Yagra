@@ -1830,6 +1830,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance-windows/{id}/definition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace what a window says (ADR-261 Inc.5). The body is the create body: name, target, bounds
+         *     and zone, all of them — `enabled` keeps its own route.
+         */
+        put: operations["update_maintenance_window"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/maintenance-windows/{id}/end": {
         parameters: {
             query?: never;
@@ -24166,6 +24186,85 @@ export interface operations {
             };
             /** @description No such maintenance window */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_maintenance_window: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Maintenance window id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWindow"];
+            };
+        };
+        responses: {
+            /** @description Window updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The same refusals as creating a window: empty name/scope_id, an unknown scope_level, bounds that are not RFC 3339 or end at or before they start, or an unknown time_zone */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the ManageMaintenance permission, or a group-scoped caller named a profile */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such maintenance window, or a group_id scope naming a group that does not exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The fleet-wide window an upgrade opened (`window_not_editable`); its end is the upgrade's to decide */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

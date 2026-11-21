@@ -9015,6 +9015,102 @@
         }
       }
     },
+    "/api/v1/maintenance-windows/{id}/definition": {
+      "put": {
+        "tags": [
+          "maintenance"
+        ],
+        "summary": "Replace what a window says (ADR-261 Inc.5). The body is the create body: name, target, bounds\nand zone, all of them — `enabled` keeps its own route.",
+        "operationId": "update_maintenance_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Maintenance window id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWindow"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Window updated"
+          },
+          "400": {
+            "description": "The same refusals as creating a window: empty name/scope_id, an unknown scope_level, bounds that are not RFC 3339 or end at or before they start, or an unknown time_zone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageMaintenance permission, or a group-scoped caller named a profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such maintenance window, or a group_id scope naming a group that does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The fleet-wide window an upgrade opened (`window_not_editable`); its end is the upgrade's to decide",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/maintenance-windows/{id}/end": {
       "post": {
         "tags": [

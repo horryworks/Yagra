@@ -9,11 +9,19 @@
 // default name), then a year-first start date and a 24-hour start time in a zone the operator can
 // change from its name beside the time, then the length. The reading of all of that is
 // `lib/maintenanceTime.ts`; the zone the times were typed in is sent with the window and stored.
+//
+// The same dialog edits a window that exists (ADR-261 Inc.5): every field starts from the window,
+// the end as a picked end on the window's own clock, and Save replaces all of it.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
-import type { MaintenanceScopeLevel, NodeGroup, ProfileSummary } from '../../types/api';
+import type {
+  MaintenanceScopeLevel,
+  MaintenanceWindow,
+  NodeGroup,
+  ProfileSummary,
+} from '../../types/api';
 import { done, partialOutcome } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { Modal } from '../ui/Modal';
@@ -41,6 +49,7 @@ import {
   timeText,
   tonightStart,
   wallLine,
+  windowFields,
   windowName,
   windowTimes,
   type WindowLengthKey,
@@ -57,6 +66,8 @@ interface Props {
   /** When set, the scope is fixed to this node, folder or working set (the All Nodes right-click
    *  "Custom…" path, and the selection bar's More… menu since ADR-124 Inc.11). */
   initialScope?: ActionTarget;
+  /** A window to edit instead of adding one, with its target's display name (ADR-261 Inc.5). */
+  editing?: { win: MaintenanceWindow; scopeName: string };
   onClose: () => void;
   onSaved: () => void;
 }
@@ -65,6 +76,7 @@ export function AddMaintenanceWindowModal({
   groups,
   profiles = [],
   initialScope,
+  editing,
   onClose,
   onSaved,
 }: Props) {
@@ -76,29 +88,42 @@ export function AddMaintenanceWindowModal({
   const names = initialScope ? targetNodeNames(initialScope) : [];
   // Blank on purpose (ADR-261 decision 2): the field asks what the work is, and saving it blank
   // falls back to the name below, which the field shows while it is blank.
-  const [name, setName] = useState('');
+  const win = editing?.win;
+  const [name, setName] = useState(win?.name ?? '');
   const [scope, setScope] = useState<CreateScope>(
-    initialScope && initialScope.kind === 'group' ? 'group_id' : 'node',
+    win
+      ? (win.scope_level as CreateScope)
+      : initialScope && initialScope.kind === 'group'
+        ? 'group_id'
+        : 'node',
   );
   const [scopeId, setScopeId] = useState(
-    initialScope && initialScope.kind !== 'nodes' ? initialScope.id : '',
+    win ? win.scope_id : initialScope && initialScope.kind !== 'nodes' ? initialScope.id : '',
   );
   // Resolved name for the node picker's trigger (typeahead over the lazily-loaded inventory, so it
   // scales past the old flat <select> of the first 100 nodes — S12).
   const [nodeLabel, setNodeLabel] = useState(
-    initialScope?.kind === 'node' ? (initialScope.name ?? '') : '',
+    win?.scope_level === 'node'
+      ? (editing?.scopeName ?? '')
+      : initialScope?.kind === 'node'
+        ? (initialScope.name ?? '')
+        : '',
   );
   const mine = displayTimeZone();
-  const [zone, setZone] = useState(mine);
-  const [startDate, setStartDate] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [length, setLength] = useState<WindowLengthKey>(DEFAULT_WINDOW_LENGTH);
-  const [endDate, setEndDate] = useState('');
-  const [endTime, setEndTime] = useState('');
+  // An edited window keeps the clock it was asked in; one that recorded none reads on mine.
+  const [zone, setZone] = useState(win?.time_zone ?? mine);
+  const [initial] = useState(() =>
+    win ? windowFields(win.starts_at, win.ends_at, win.time_zone ?? mine) : null,
+  );
+  const [startDate, setStartDate] = useState(initial?.startDate ?? '');
+  const [startTime, setStartTime] = useState(initial?.startTime ?? '');
+  const [length, setLength] = useState<WindowLengthKey>(win ? 'custom' : DEFAULT_WINDOW_LENGTH);
+  const [endDate, setEndDate] = useState(initial?.endDate ?? '');
+  const [endTime, setEndTime] = useState(initial?.endTime ?? '');
   const recentZones = usePrefsStore((s) => s.recentZones);
   const rememberZone = usePrefsStore((s) => s.rememberZone);
   const form = useSubmit({
-    errorFallback: t('maintenanceForm.err.add'),
+    errorFallback: win ? t('maintenanceForm.err.edit') : t('maintenanceForm.err.add'),
     onDone: () => {
       onSaved();
       onClose();
@@ -197,16 +222,18 @@ export function AddMaintenanceWindowModal({
             ),
           );
       }
-      return api
-        .createMaintenanceWindow({
-          name: savedName,
-          scope_level: scope as MaintenanceScopeLevel,
-          scope_id: scopeId.trim(),
-          starts_at: startsAt,
-          ends_at: endsAt,
-          time_zone: zone,
-        })
-        .then(() => done());
+      const body = {
+        name: savedName,
+        scope_level: scope as MaintenanceScopeLevel,
+        scope_id: scopeId.trim(),
+        starts_at: startsAt,
+        ends_at: endsAt,
+        time_zone: zone,
+      };
+      return (win
+        ? api.updateMaintenanceWindow(win.id, body)
+        : api.createMaintenanceWindow(body).then(() => undefined)
+      ).then(() => done());
     });
   };
 
@@ -217,14 +244,14 @@ export function AddMaintenanceWindowModal({
 
   return (
     <Modal
-      title={t('maintenanceForm.title')}
+      title={win ? t('maintenanceForm.editTitle') : t('maintenanceForm.title')}
       onClose={onClose}
       footer={
         <FormFooter
           form={form}
           onClose={onClose}
           onSubmit={submit}
-          submitLabel={t('maintenanceForm.submit')}
+          submitLabel={win ? t('common:actions.save') : t('maintenanceForm.submit')}
           canSubmit={ready}
         />
       }

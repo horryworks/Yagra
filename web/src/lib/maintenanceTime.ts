@@ -107,6 +107,26 @@ export function instantToWall(ms: number, tz: string): { date: DateParts; time: 
   };
 }
 
+/** The time fields of the dialog for a window that already exists (ADR-261 Inc.5): its start and
+ *  its end as clocks in `tz` read them. The end is always a picked end rather than a length, so an
+ *  edit shows the end the window has instead of rounding it to a button. A bound that does not
+ *  parse leaves both of its fields empty, which the dialog reports as a missing value. */
+export function windowFields(
+  startsAt: string,
+  endsAt: string,
+  tz: string,
+): { startDate: string; startTime: string; endDate: string; endTime: string } {
+  const read = (iso: string) => {
+    const ms = Date.parse(iso);
+    if (!Number.isFinite(ms)) return { date: '', time: '' };
+    const w = instantToWall(ms, tz);
+    return { date: dateText(w.date), time: timeText(w.time) };
+  };
+  const start = read(startsAt);
+  const end = read(endsAt);
+  return { startDate: start.date, startTime: start.time, endDate: end.date, endTime: end.time };
+}
+
 /** The length buttons (ADR-261 decision 5), in minutes. `custom` is "pick the end yourself". */
 export const WINDOW_LENGTHS = [
   { key: '30m', minutes: 30 },

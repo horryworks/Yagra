@@ -6,7 +6,7 @@
 //
 // Data-table standard v2: an action row (count + "+ Add window") over the shared `DataTable`, with
 // the narrowing controls in the filter row under the header (ADR-053 Inc.5).
-// Add and delete both go through modals; enable/disable is an immediate row action.
+// Add, edit (ADR-261 Inc.5) and delete go through modals; enable/disable is an immediate row action.
 
 import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -26,7 +26,7 @@ import { columnLabels } from '../lib/listToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
 import { useClientSort } from '../lib/useClientSort';
-import { PowerIcon, TrashIcon } from '../components/ui/icons';
+import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName } from '../components/ui/EntityName';
 import { useEntityNames } from '../components/ui/entityNames';
@@ -108,6 +108,7 @@ export function MaintenancePage() {
   const canMaintenance = useCan('manage_maintenance');
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<MaintenanceWindow | null>(null);
   const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
   const [clearing, setClearing] = useState(false);
 
@@ -214,6 +215,17 @@ export function MaintenancePage() {
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
+                  // The upgrade's fleet-wide window is the upgrade's to end (ADR-050), so it is not
+                  // offered; the server refuses it too.
+                  ...(w.scope_level === 'system'
+                    ? []
+                    : [
+                        {
+                          label: t('common:actions.edit'),
+                          icon: <EditIcon />,
+                          onClick: () => setEditing(w),
+                        },
+                      ]),
                   {
                     label: w.enabled
                       ? t('maintenance.actions.disable')
@@ -319,6 +331,15 @@ export function MaintenancePage() {
           groups={groups}
           profiles={profiles}
           onClose={() => setAdding(false)}
+          onSaved={load}
+        />
+      )}
+      {editing && (
+        <AddMaintenanceWindowModal
+          groups={groups}
+          profiles={profiles}
+          editing={{ win: editing, scopeName: scopeLabel(editing) }}
+          onClose={() => setEditing(null)}
           onSaved={load}
         />
       )}

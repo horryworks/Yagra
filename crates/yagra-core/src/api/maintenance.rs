@@ -32,6 +32,7 @@ use uuid::Uuid;
     create_maintenance_windows_bulk,
     clear_ended_maintenance_windows,
     set_maintenance_window_enabled,
+    update_maintenance_window,
     end_maintenance_window,
     delete_maintenance_window,
     list_suppression_exemptions,
@@ -56,6 +57,10 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/maintenance-windows/:id/end",
             post(end_maintenance_window),
+        )
+        .route(
+            "/api/v1/maintenance-windows/:id/definition",
+            put(update_maintenance_window),
         )
         .route(
             "/api/v1/maintenance-windows/bulk",
@@ -295,6 +300,36 @@ async fn create_maintenance_window(
     admin: Admin,
     Json(body): Json<CreateWindow>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    let (starts, ends, zone) = checked_definition(&st, &scope, &admin, &body).await?;
+    let id = admin
+        .maintenance
+        .create_window_in(
+            body.name.trim(),
+            &body.scope_level,
+            body.scope_id.trim(),
+            starts,
+            ends,
+            zone.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "create maintenance window",
+                "failed to create maintenance window",
+            )
+        })?;
+    Ok((StatusCode::CREATED, Json(CreatedId { id })))
+}
+
+/// Validate what a window says — shared by creating one and editing one (ADR-261 Inc.5), so an
+/// edit cannot store what a create would refuse. Returns the instants and the canonical zone.
+async fn checked_definition(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+    body: &CreateWindow,
+) -> Result<(DateTime<Utc>, DateTime<Utc>, Option<String>), ApiError> {
     if body.name.trim().is_empty()
         || body.scope_id.trim().is_empty()
         || !WINDOW_SCOPE_LEVELS.contains(&body.scope_level.as_str())
@@ -308,7 +343,7 @@ async fn create_maintenance_window(
         ));
     }
     if body.scope_level == "group_id" {
-        validate_group_scope(&admin, &body.scope_id).await?;
+        validate_group_scope(admin, &body.scope_id).await?;
     }
     // A window names its target in the body, and `ManageMaintenance` is an operator permission, so
     // a scoped caller must not open a window over something outside their scope. The `profile` level names a
@@ -320,13 +355,13 @@ async fn create_maintenance_window(
                 let node = body.scope_id.parse::<Uuid>().map_err(|_| {
                     ApiError::bad_request("invalid_window", "scope_id must be a node uuid")
                 })?;
-                super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(node))?;
+                super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(node))?;
             }
             "group_id" => {
                 let gid = body.scope_id.parse::<Uuid>().map_err(|_| {
                     ApiError::bad_request("invalid_window", "scope_id must be a group uuid")
                 })?;
-                super::scope::require_visible_group(&scope, gid)?;
+                super::scope::require_visible_group(scope, gid)?;
             }
             // Reached by `profile`, which names a *class* of node with no honestly-bounded version
             // for a scoped caller.
@@ -347,25 +382,90 @@ async fn create_maintenance_window(
     }
     let (starts, ends) = window_bounds(&body.starts_at, &body.ends_at)?;
     let zone = window_zone(body.time_zone.as_deref())?;
-    let id = admin
+    Ok((starts, ends, zone))
+}
+
+/// Replace what a window says (ADR-261 Inc.5). The body is the create body: name, target, bounds
+/// and zone, all of them — `enabled` keeps its own route.
+#[utoipa::path(
+    put, path = "/api/v1/maintenance-windows/{id}/definition", tag = "maintenance",
+    params(("id" = Uuid, Path, description = "Maintenance window id")),
+    request_body = CreateWindow,
+    responses(
+        (status = 204, description = "Window updated"),
+        (status = 400, description = "The same refusals as creating a window: empty name/scope_id, an unknown scope_level, bounds that are not RFC 3339 or end at or before they start, or an unknown time_zone", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission, or a group-scoped caller named a profile", body = super::error::ErrorBody),
+        (status = 404, description = "No such maintenance window, or a group_id scope naming a group that does not exist", body = super::error::ErrorBody),
+        (status = 409, description = "The fleet-wide window an upgrade opened (`window_not_editable`); its end is the upgrade's to decide", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn update_maintenance_window(
+    _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<CreateWindow>,
+) -> ApiResult<StatusCode> {
+    // The caller must see the window as it is AND the target it will have, or an edit would be a
+    // way to take a window off someone else's node (or to put one on a node they cannot see).
+    require_visible_window(&st, &scope, &admin, id).await?;
+    refuse_upgrade_window(&admin, id).await?;
+    let (starts, ends, zone) = checked_definition(&st, &scope, &admin, &body).await?;
+    let def = crate::alerts::maintenance::WindowDefinition {
+        name: body.name.trim(),
+        scope_level: &body.scope_level,
+        scope_id: body.scope_id.trim(),
+        starts_at: starts,
+        ends_at: ends,
+        time_zone: zone.as_deref(),
+    };
+    let found = admin
         .maintenance
-        .create_window_in(
-            body.name.trim(),
-            &body.scope_level,
-            body.scope_id.trim(),
-            starts,
-            ends,
-            zone.as_deref(),
-        )
+        .update_window(id, &def)
         .await
         .map_err(|e| {
             ApiError::from_internal(
                 e.as_ref(),
-                "create maintenance window",
-                "failed to create maintenance window",
+                "update maintenance window",
+                "failed to update maintenance window",
             )
         })?;
-    Ok((StatusCode::CREATED, Json(CreatedId { id })))
+    if !found {
+        return Err(ApiError::not_found(
+            "window_not_found",
+            format!("no maintenance window {id}"),
+        ));
+    }
+    // An edit can end coverage sooner or move it off a node, so a release carved out of the old
+    // window must be re-derived — the same as ending, disabling or deleting one.
+    reconcile_after_coverage_change(&admin).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `409` for the fleet-wide window an upgrade opened (ADR-050): its end belongs to the upgrade.
+/// An id that names no window passes here and is answered by the write.
+async fn refuse_upgrade_window(admin: &super::AdminState, id: Uuid) -> Result<(), ApiError> {
+    use crate::alerts::maintenance::WindowScope;
+    let windows = admin.maintenance.list_windows().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "load maintenance window for edit",
+            "failed to load maintenance windows",
+        )
+    })?;
+    if windows
+        .iter()
+        .any(|w| w.id == id && matches!(w.level, WindowScope::System))
+    {
+        return Err(ApiError::conflict(
+            "window_not_editable",
+            "the fleet-wide window an upgrade opened cannot be edited",
+        ));
+    }
+    Ok(())
 }
 
 /// Open one window over each of many nodes.
@@ -1392,6 +1492,224 @@ mod tests {
             yagra_base::pgtest::rows(&pool, "maintenance_windows").await,
             1
         );
+    }
+
+    /// A window is edited in place: every field the create body carries is replaced, the switch
+    /// is left alone, and an edit is held to what a create would accept (ADR-261 Inc.5).
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn editing_a_maintenance_window_replaces_what_it_says(pool: sqlx::PgPool) {
+        use crate::alerts::maintenance::MaintenanceRepo;
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let site = yagra_base::pgtest::group(&pool, "site").await;
+        let node = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let repo = MaintenanceRepo::new(pool.clone());
+        let start = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .expect("ts")
+            .with_timezone(&Utc);
+        let id = repo
+            .create_window(
+                "firmware",
+                "node",
+                &node.to_string(),
+                start,
+                start + chrono::Duration::hours(1),
+            )
+            .await
+            .expect("window");
+        repo.set_window_enabled(id, false)
+            .await
+            .expect("switch off");
+        let path = format!("/api/v1/maintenance-windows/{id}/definition");
+
+        let (status, out) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "  core swap ",
+                "scope_level": "group_id",
+                "scope_id": site.to_string(),
+                "starts_at": "2030-01-02T22:00:00+09:00",
+                "ends_at": "2030-01-03T02:00:00+09:00",
+                "time_zone": "Asia/Tokyo",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{out}");
+        let w = repo
+            .list_windows()
+            .await
+            .expect("list")
+            .into_iter()
+            .find(|w| w.id == id)
+            .expect("still there");
+        assert_eq!(w.name, "core swap");
+        assert_eq!(
+            w.level,
+            crate::alerts::maintenance::WindowScope::FolderGroup
+        );
+        assert_eq!(w.scope_id, site.to_string());
+        assert_eq!(w.starts_at, "2030-01-02T13:00:00+00:00");
+        assert_eq!(w.ends_at, "2030-01-02T17:00:00+00:00");
+        assert_eq!(w.time_zone.as_deref(), Some("Asia/Tokyo"));
+        assert!(!w.enabled, "an edit switched the window back on");
+
+        // Backwards bounds are refused here exactly as on create, and nothing moves.
+        let (status, out) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "backwards",
+                "scope_level": "node",
+                "scope_id": node.to_string(),
+                "starts_at": "2030-01-01T02:00:00Z",
+                "ends_at": "2030-01-01T00:00:00Z",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{out}");
+        assert_eq!(out["error"]["code"], "invalid_window", "{out}");
+
+        // An id that names no window is a 404, not a silent 204.
+        let (status, out) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/maintenance-windows/{}/definition", Uuid::new_v4()),
+            &tok,
+            Some(serde_json::json!({
+                "name": "n", "scope_level": "node", "scope_id": node.to_string(),
+                "starts_at": "2030-01-01T00:00:00Z", "ends_at": "2030-01-01T01:00:00Z",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{out}");
+    }
+
+    /// The fleet-wide window an upgrade opens is not edited: its end belongs to the upgrade.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_upgrade_window_cannot_be_edited(pool: sqlx::PgPool) {
+        use crate::alerts::maintenance::MaintenanceRepo;
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let node = yagra_base::pgtest::node(&pool, "a", 1, None).await;
+        let now = Utc::now();
+        let id = MaintenanceRepo::new(pool.clone())
+            .create_window(
+                "upgrade",
+                "system",
+                "",
+                now,
+                now + chrono::Duration::minutes(15),
+            )
+            .await
+            .expect("window");
+        let (status, out) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/maintenance-windows/{id}/definition"),
+            &tok,
+            Some(serde_json::json!({
+                "name": "mine now", "scope_level": "node", "scope_id": node.to_string(),
+                "starts_at": "2030-01-01T00:00:00Z", "ends_at": "2030-01-01T01:00:00Z",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CONFLICT, "{out}");
+        assert_eq!(out["error"]["code"], "window_not_editable", "{out}");
+        let name: String = sqlx::query_scalar("SELECT name FROM maintenance_windows WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("row");
+        assert_eq!(name, "upgrade");
+    }
+
+    /// A folder-scoped caller can edit a window over its own node, but cannot move it onto a node
+    /// it cannot see, nor touch a window over one.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_scoped_caller_edits_only_inside_its_scope(pool: sqlx::PgPool) {
+        use crate::alerts::maintenance::MaintenanceRepo;
+        use crate::api::tests_support::{live_state, scoped_token, send};
+        let st = live_state(pool.clone()).await;
+        let mine = yagra_base::pgtest::group(&pool, "mine").await;
+        let theirs = yagra_base::pgtest::group(&pool, "theirs").await;
+        let a = yagra_base::pgtest::node(&pool, "a", 1, Some(mine)).await;
+        let hidden = yagra_base::pgtest::node(&pool, "hidden", 2, Some(theirs)).await;
+        // The window scope check asks the alert engine which folder a node is in, and a live
+        // state's engine has not read the inventory yet.
+        {
+            use crate::alerts::{AlertConfig, NodeMeta};
+            let meta = [(a, mine), (hidden, theirs)]
+                .into_iter()
+                .map(|(n, g)| {
+                    (
+                        yagra_common::NodeId::from(n),
+                        NodeMeta {
+                            folder_group: Some(g),
+                            ..NodeMeta::default()
+                        },
+                    )
+                })
+                .collect();
+            st.alerts.set_config(AlertConfig::new(Vec::new(), meta));
+        }
+        let tok = scoped_token(&st, &[mine]);
+        let repo = MaintenanceRepo::new(pool.clone());
+        let start = Utc::now() + chrono::Duration::days(1);
+        let end = start + chrono::Duration::hours(1);
+        let own = repo
+            .create_window("own", "node", &a.to_string(), start, end)
+            .await
+            .expect("window");
+        let other = repo
+            .create_window("other", "node", &hidden.to_string(), start, end)
+            .await
+            .expect("window");
+        let body = |target: Uuid| {
+            serde_json::json!({
+                "name": "edited", "scope_level": "node", "scope_id": target.to_string(),
+                "starts_at": "2030-01-01T00:00:00Z", "ends_at": "2030-01-01T01:00:00Z",
+            })
+        };
+        let put = |id: Uuid, target: Uuid| {
+            let st = &st;
+            let tok = &tok;
+            async move {
+                send(
+                    st,
+                    "PUT",
+                    &format!("/api/v1/maintenance-windows/{id}/definition"),
+                    tok,
+                    Some(body(target)),
+                )
+                .await
+            }
+        };
+        let (status, out) = put(own, hidden).await;
+        assert_ne!(
+            status,
+            axum::http::StatusCode::NO_CONTENT,
+            "moved onto a hidden node: {out}"
+        );
+        let (status, out) = put(other, a).await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{out}");
+        let (status, out) = put(own, a).await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{out}");
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM maintenance_windows ORDER BY name")
+                .fetch_all(&pool)
+                .await
+                .expect("names");
+        assert_eq!(names, vec!["edited".to_owned(), "other".to_owned()]);
     }
 
     /// The zone the times were typed in is stored canonical and read back on the list (ADR-261),

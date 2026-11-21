@@ -50,6 +50,7 @@
   },
   "maintenanceForm": {
     "title": "Add maintenance window",
+    "editTitle": "Edit maintenance window",
     "submit": "Add window",
     "defaultName": "Maintenance — {{name}}",
     "name": "What's the work?",
@@ -69,6 +70,7 @@
     "pickGroup": "(pick a group)",
     "err": {
       "add": "failed to add window",
+      "edit": "failed to save window",
       "date": "Write the date year first, like 2026-11-20.",
       "time": "Write the time in 24 hours, like 22:00.",
       "gap": "This time does not happen in {{zone}} that day: the clocks skip it.",
