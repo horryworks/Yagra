@@ -512,9 +512,11 @@ pub struct NodeStatusDto {
     /// The IANA zone this node's site keeps time in, after inheritance; `null` ⇒ no folder above
     /// it names one (ADR-252). Mirrors `NodeDetail.time_zone`, from the same function.
     pub time_zone: Option<String>,
-    /// Where an alert about this node goes right now, and until when; `null` ⇒ to no channel
-    /// (ADR-252, ADR-262). Mirrors `NodeDetail.delivery`, from the same function. A held
-    /// notification is not lost: it goes out when a rule opens if its alert is still open.
+    /// Whether an alert about this node goes out right now, and until when; `null` ⇒ to no
+    /// channel (ADR-252, ADR-262). Mirrors `NodeDetail.delivery`, from the same function, except
+    /// that `channels` is always empty here: which channels is routing, read with
+    /// `get_config(kind=routing_coverage)`. A held notification is not lost: it goes out when a
+    /// rule opens if its alert is still open.
     pub delivery: Option<yagra_base::groups::DeliveryNow>,
     /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
     ///

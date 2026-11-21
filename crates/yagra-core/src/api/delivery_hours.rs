@@ -431,6 +431,15 @@ mod tests {
         });
         assert_eq!(row(&groups, &site)["delivery"], always_open);
         assert_eq!(row(&groups, &region)["delivery"], always_open);
+        // A viewer may see that an alert goes out, not to which channel: that is routing, which
+        // is ManageSystem (ADR-057).
+        let viewer = token(&st, Role::Viewer);
+        let (_, groups) = send(&st, "GET", "/api/v1/node-groups", &viewer, None).await;
+        assert_eq!(row(&groups, &site)["delivery"]["open"], true);
+        assert_eq!(
+            row(&groups, &site)["delivery"]["channels"],
+            serde_json::json!([])
+        );
 
         let scoped =
             crate::api::tests_support::scoped_token(&st, &[Uuid::parse_str(&site).unwrap()]);

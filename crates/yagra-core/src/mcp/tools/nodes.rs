@@ -770,7 +770,9 @@ impl YagraMcp {
             None => None,
         };
         // The site's zone and delivery state, from the function the REST detail calls (ADR-252).
-        let local_time = crate::api::nodes::local_time_of(admin, &node).await;
+        // Channel names are withheld here whatever the caller holds: a client that may read
+        // routing reads them from `get_config(kind=routing_rules / routing_coverage)` (ADR-262).
+        let local_time = crate::api::nodes::local_time_of(admin, &node, false).await;
         // The node's VLANs, from the function `GET /nodes/{id}/vlans` calls, narrowed to the same
         // scope (ADR-257). Best effort like the interface list: a failed read leaves it empty.
         let node_vlans = crate::api::vlans::node_vlans(admin, p.node_id, |n| {
@@ -933,7 +935,7 @@ impl YagraMcp {
         // `visible_groups` keeps the caller's subtree *and* the ancestors above it. This DTO carries
         // `parent_id`, so a filter that dropped the ancestors would leave every visible root
         // pointing at a group that is not in the list.
-        let groups = match crate::api::groups::visible_groups(admin, scope).await {
+        let groups = match crate::api::groups::visible_groups(admin, scope, false).await {
             Ok(g) => g,
             Err(e) => return tool_api_error(TOOL, &e),
         };

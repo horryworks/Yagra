@@ -343,6 +343,20 @@ impl PlaceRoutes {
     /// is woken for: a rule written for warnings only does not change what this line says.
     #[must_use]
     pub fn at(&self, group: Uuid, tags: &[String], now: DateTime<Utc>) -> Option<DeliveryNow> {
+        self.at_memo(group, tags, now, &mut PlaceMemo::new())
+    }
+
+    /// [`Self::at`] for many places at once: places with the same matching rules and the same
+    /// zone share one judgement, because the judgement steps a minute at a time for up to eight
+    /// days and a folder list holds as many folders as a deployment has sites.
+    #[must_use]
+    pub fn at_memo(
+        &self,
+        group: Uuid,
+        tags: &[String],
+        now: DateTime<Utc>,
+        memo: &mut PlaceMemo,
+    ) -> Option<DeliveryNow> {
         let mut chain = vec![group];
         chain.extend(yagra_base::groups::group_ancestors(&self.edges, group));
         let matched: Vec<&RoutingRule> = self
@@ -357,6 +371,13 @@ impl PlaceRoutes {
                         || r.group_ids.iter().any(|g| chain.contains(g)))
             })
             .collect();
+        let key = (
+            matched.iter().map(|r| r.id).collect::<Vec<Uuid>>(),
+            self.zones.get(&group).map(|(_, owner)| *owner),
+        );
+        if let Some(hit) = memo.get(&key) {
+            return hit.clone();
+        }
         let zone = self
             .zones
             .get(&group)
@@ -365,7 +386,7 @@ impl PlaceRoutes {
         let route = route_at(&matched, &self.catch_all, &clock, None, now);
         let until = next_change(&matched, &self.catch_all, &clock, None, now);
         let name_of = |id: &Uuid| self.names.get(id).cloned();
-        match route {
+        let answer = match route {
             RouteNow::Rules(c) => Some(DeliveryNow {
                 open: true,
                 closes_at: until,
@@ -388,8 +409,23 @@ impl PlaceRoutes {
                 catch_all: false,
             }),
             RouteNow::Nowhere => None,
-        }
+        };
+        memo.insert(key, answer.clone());
+        answer
     }
+}
+
+/// What [`PlaceRoutes::at_memo`] has already judged: by the matching rules and the folder whose
+/// zone applies.
+pub type PlaceMemo = HashMap<(Vec<Uuid>, Option<Uuid>), Option<DeliveryNow>>;
+
+/// Take the routing facts out of an answer for a caller who may not read routing (ADR-057): where
+/// an alert goes stays (open, held, until when), which channels does not.
+#[must_use]
+pub fn without_names(mut d: DeliveryNow) -> DeliveryNow {
+    d.channels.clear();
+    d.catch_all = false;
+    d
 }
 
 #[cfg(test)]

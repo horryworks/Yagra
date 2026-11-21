@@ -96,9 +96,10 @@ const MAX_PREFIX_DESCRIPTION: usize = 200;
 async fn list_node_groups(
     _guard: RequireView,
     Scoped(scope): Scoped,
+    super::extract::ReadsRouting(names): super::extract::ReadsRouting,
     admin: Admin,
 ) -> ApiResult<Json<Vec<yagra_base::groups::GroupSummary>>> {
-    Ok(Json(visible_groups(&admin, &scope).await?))
+    Ok(Json(visible_groups(&admin, &scope, names).await?))
 }
 
 /// The folder tree the caller may see: their subtree **and the ancestors above it**.
@@ -117,11 +118,15 @@ async fn list_node_groups(
 /// refused — so they are cleared on exactly the rows `allows_group` rejects. That is the same
 /// split `scope::require_visible_group` makes, for the same reason: a folder may be named without
 /// being reachable.
+///
+/// `names` says whether the caller may read notification routing: without it, each folder's
+/// delivery says whether and until when, not to which channels (ADR-262 decision 9).
 pub(crate) async fn visible_groups(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
+    names: bool,
 ) -> ApiResult<Vec<yagra_base::groups::GroupSummary>> {
-    visible_groups_with(admin, scope, true).await
+    visible_groups_with(admin, scope, Some(names)).await
 }
 
 /// [`visible_groups`] without each folder's delivery state, for a caller that never reads it (the
@@ -130,13 +135,13 @@ pub(crate) async fn visible_groups_without_delivery(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
 ) -> ApiResult<Vec<yagra_base::groups::GroupSummary>> {
-    visible_groups_with(admin, scope, false).await
+    visible_groups_with(admin, scope, None).await
 }
 
 async fn visible_groups_with(
     admin: &super::AdminState,
     scope: &super::scope::NodeScope,
-    with_delivery: bool,
+    with_delivery: Option<bool>,
 ) -> ApiResult<Vec<yagra_base::groups::GroupSummary>> {
     let list = admin.groups.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
@@ -144,7 +149,7 @@ async fn visible_groups_with(
     // Where an alert about each folder's nodes goes now, judged by the function the notifier
     // routes with (ADR-262 decision 9). One query when no channel is switched on.
     let delivery: std::collections::HashMap<uuid::Uuid, yagra_base::groups::DeliveryNow> =
-        if with_delivery {
+        if let Some(names) = with_delivery {
             let routes = crate::api::notifications::place_routes(admin)
                 .await
                 .map_err(|e| {
@@ -158,11 +163,23 @@ async fn visible_groups_with(
                 Some(routes) => {
                     let tags = super::util::tag_resolver(admin).await;
                     let now = chrono::Utc::now();
+                    let mut memo = crate::alerts::rule_time::PlaceMemo::new();
+                    // Only the folders the caller may reach carry a delivery state, so only they
+                    // are judged.
                     list.iter()
+                        .filter(|g| scope.allows_group(Some(g.id)))
                         .filter_map(|g| {
                             let own: Vec<String> =
                                 tags.for_group(Some(g.id)).iter().cloned().collect();
-                            Some((g.id, routes.at(g.id, &own, now)?))
+                            let d = routes.at_memo(g.id, &own, now, &mut memo)?;
+                            Some((
+                                g.id,
+                                if names {
+                                    d
+                                } else {
+                                    crate::alerts::rule_time::without_names(d)
+                                },
+                            ))
                         })
                         .collect()
                 }

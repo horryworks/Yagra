@@ -568,6 +568,23 @@ impl std::ops::Deref for Events {
 /// [`crate::api::public_access`]'s property 2.
 pub struct Scoped(pub super::scope::NodeScope);
 
+/// Whether the caller may read notification routing (`ManageSystem`, ADR-057), for a `View` read
+/// that carries routing facts beside what anyone may see: the channels an alert about a site goes
+/// to (ADR-262 decision 9) are named only to a caller who could read the rules that send there.
+/// Never refuses; an anonymous or public-board caller reads `false`.
+pub struct ReadsRouting(pub bool);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for ReadsRouting {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _: &ApiState) -> Result<Self, Self::Rejection> {
+        Ok(Self(parts.extensions.get::<Authenticated>().is_some_and(
+            |auth| auth.principal().can(Permission::ManageSystem),
+        )))
+    }
+}
+
 #[async_trait]
 impl FromRequestParts<ApiState> for Scoped {
     type Rejection = ApiError;
