@@ -52,8 +52,11 @@ NET=${NET:-yagra-flash-net}
 # Both are removed on every exit path, including a failed test run: the container holds a port and
 # ~30 MB of tmpfs, and a leftover one makes the next run's `docker run --name` fail rather than
 # reusing it. The network goes last because the container is attached to it.
+# `-v` is load-bearing: the postgres image declares a VOLUME for its data directory, so every
+# `docker run` creates an anonymous volume, and `docker rm -f` alone leaves it behind. Before the
+# flag was added this leaked one ~170 MB volume per run — hundreds of them, ~40 GB, on the build host.
 cleanup() {
-  docker rm -f "$PG" >/dev/null 2>&1 || true
+  docker rm -fv "$PG" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT

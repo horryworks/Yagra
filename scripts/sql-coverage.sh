@@ -34,7 +34,7 @@ NET=${NET:-yagra-sqlcov-net}
 mkdir -p "$OUT"
 
 cleanup() {
-  docker rm -f "$PG" >/dev/null 2>&1 || true
+  docker rm -fv "$PG" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
