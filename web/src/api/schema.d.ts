@@ -20,7 +20,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/alert-grouping/folders/{group_id}": {
+    "/api/v1/alert-grouping/exceptions": {
         parameters: {
             query?: never;
             header?: never;
@@ -28,9 +28,25 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put: operations["set_folder_grouping_level"];
+        put?: never;
+        post: operations["create_grouping_exception"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/alert-grouping/exceptions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["update_grouping_exception"];
         post?: never;
-        delete: operations["clear_folder_grouping_level"];
+        delete: operations["delete_grouping_exception"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4764,8 +4780,8 @@ export interface paths {
         };
         get?: never;
         /**
-         * Replace a rule's name, severity filter, tags and channels. Whether it is switched on is left as
-         *     it was, and so are its tags when the body omits them.
+         * Replace a rule's name, severity filter, tags, folders and channels. Whether it is switched on is
+         *     left as it was, and so are its tags and folders when the body omits them.
          */
         put: operations["update_routing_rule"];
         post?: never;
@@ -6046,9 +6062,10 @@ export interface components {
             severity: string;
             state: string;
         };
-        /** @description The deployment's level, every folder's own, and the preview. */
+        /** @description The deployment's level, its exceptions, and the preview. */
         AlertGroupingConfig: {
-            folders: components["schemas"]["FolderGroupingLevel"][];
+            /** @description Oldest first. */
+            exceptions: components["schemas"]["GroupingException"][];
             last_7_days?: null | components["schemas"]["GroupingReplay"];
             level: components["schemas"]["GroupingLevel"];
             now: components["schemas"]["GroupingPreview"];
@@ -7872,11 +7889,18 @@ export interface components {
             name: string;
         };
         /**
-         * @description Create-rule body: a name, an optional severity filter (absent = any), the tags a node must
-         *     carry one of (ADR-259), and target channels. Editing a rule takes the same body (ADR-193).
+         * @description Create-rule body: a name, an optional severity filter (absent = any), the folders and tags a
+         *     node must be inside or carry one of (ADR-259, ADR-262), and target channels. Editing a rule
+         *     takes the same body (ADR-193).
          */
         CreateRule: {
             channel_ids: string[];
+            /**
+             * @description Only alerts on a node inside one of these folders, at any depth, reach the rule's channels
+             *     (or on a node carrying one of `tags`: either is enough, ADR-262). Both empty = every node.
+             *     Omitted on an edit, the rule keeps the folders it has.
+             */
+            group_ids?: string[] | null;
             name: string;
             severity?: string | null;
             /**
@@ -7945,6 +7969,11 @@ export interface components {
             surfaces: components["schemas"]["TokenSurface"][];
             /** @description The raw bearer token, returned **once**. Never stored, never logged. */
             token: string;
+        };
+        /** @description The id of a created exception. */
+        CreatedException: {
+            /** Format: uuid */
+            id: string;
         };
         /**
          * @description The id of a freshly created resource — the whole body of a `201`.
@@ -8982,6 +9011,12 @@ export interface components {
             target: number;
             verdict: components["schemas"]["Verdict"];
         };
+        /** @description What an exception applies to and its level. Names at least one folder or tag. */
+        ExceptionBody: {
+            group_ids?: string[];
+            level: components["schemas"]["GroupingLevel"];
+            tags?: string[];
+        };
         /** @description What took an overlap out of the open list. */
         Exclusion: {
             /** @enum {string} */
@@ -9289,12 +9324,6 @@ export interface components {
              * @description Packets.
              */
             packets: number;
-        };
-        /** @description One folder's own level, which beats the deployment's for everything beneath it. */
-        FolderGroupingLevel: {
-            /** Format: uuid */
-            group_id: string;
-            level: components["schemas"]["GroupingLevel"];
         };
         /** @description The answer to one question about a folder. */
         FolderInvestigateReport: {
@@ -9773,6 +9802,18 @@ export interface components {
             time_zone?: string | null;
         };
         /**
+         * @description One exception to the deployment's level (ADR-262 decision 2): every node inside one of
+         *     `group_ids` (at any depth) or carrying one of `tags` groups at `level`. When several reach one
+         *     node, the weakest level wins.
+         */
+        GroupingException: {
+            group_ids: string[];
+            /** Format: uuid */
+            id: string;
+            level: components["schemas"]["GroupingLevel"];
+            tags: string[];
+        };
+        /**
          * @description How strongly alerts are grouped, weakest first (ADR-236 decision 2).
          * @enum {string}
          */
@@ -9783,7 +9824,7 @@ export interface components {
             down: number;
             /**
              * @description How many of them would page on their own with the deployment at each level, weakest first
-             *     (`off`, `certain`, `links`, `site`), every folder keeping its own level.
+             *     (`off`, `certain`, `links`, `site`), every exception keeping its own level.
              */
             notified: number[];
         };
@@ -12792,8 +12833,8 @@ export interface components {
         NodeTags: {
             /**
              * Format: int64
-             * @description How many nodes carry at least one of the `reach` tags, each node counted once. Absent when
-             *     the request named none.
+             * @description How many nodes carry at least one of the `reach` tags or sit inside one of the
+             *     `reach_groups` folders, each node counted once. Absent when the request named neither.
              */
             reach?: number | null;
             /** @description Every tag at least one node carries, most-carried first, then by name. */
@@ -14754,12 +14795,19 @@ export interface components {
             token: string;
         };
         /**
-         * @description A routing rule: enabled alerts of `severity` (None = any) whose node carries one of `tags`
-         *     (empty = every node) fan out to `channel_ids`.
+         * @description A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
+         *     `group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.
          */
         RoutingRule: {
             channel_ids: string[];
             enabled: boolean;
+            /**
+             * @description Folders the node must be inside, at any depth (ADR-262 decision 1). A node inside one of
+             *     these **or** carrying one of `tags` matches; with both empty the rule covers every node. A
+             *     folder that no longer exists reaches nothing. A subject that is not a node matches only a
+             *     rule that names neither.
+             */
+            group_ids?: string[];
             /** Format: uuid */
             id: string;
             name: string;
@@ -16881,7 +16929,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The deployment's grouping level, each folder's own, and what each level would do to the outage open now */
+            /** @description The deployment's grouping level, its exceptions, and what each level would do to the outage open now */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16919,28 +16967,36 @@ export interface operations {
             };
         };
     };
-    set_folder_grouping_level: {
+    create_grouping_exception: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                /** @description The folder */
-                group_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["LevelBody"];
+                "application/json": components["schemas"]["ExceptionBody"];
             };
         };
         responses: {
-            /** @description The folder's own grouping level is set */
-            204: {
+            /** @description The exception is added */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CreatedException"];
+                };
+            };
+            /** @description Names no folder or tag, or a tag is not a valid label */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
             };
             /** @description No valid bearer token */
             401: {
@@ -16960,7 +17016,75 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description No such folder */
+            /** @description Not a grouping level (the body framework's own rejection, plain text) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_grouping_exception: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The exception */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExceptionBody"];
+            };
+        };
+        responses: {
+            /** @description The exception is replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Names no folder or tag, or a tag is not a valid label */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such exception */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -16987,19 +17111,19 @@ export interface operations {
             };
         };
     };
-    clear_folder_grouping_level: {
+    delete_grouping_exception: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description The folder */
-                group_id: string;
+                /** @description The exception */
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The folder follows the deployment's level again */
+            /** @description The exception is removed; the nodes it reached follow the deployment's level or another exception */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -17024,7 +17148,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The folder had no level of its own */
+            /** @description No such exception */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -26963,6 +27087,11 @@ export interface operations {
                  *     is legal inside one. Absent = no reach in the reply.
                  */
                 reach?: string | null;
+                /**
+                 * @description Folders whose reach to count with `reach`: a node inside one of them, at any depth, counts
+                 *     too (ADR-262). Comma-separated ids; one that does not parse is ignored.
+                 */
+                reach_groups?: string | null;
             };
             header?: never;
             path?: never;
@@ -35272,7 +35401,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Rule replaced; its enabled switch is unchanged, and so are its tags when the body omits them */
+            /** @description Rule replaced; its enabled switch is unchanged, and so are its tags and folders when the body omits them */
             204: {
                 headers: {
                     [name: string]: unknown;

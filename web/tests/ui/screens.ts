@@ -189,6 +189,7 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/topology/geo': { kind: 'locator', sel: `[data-testid="${TEST_IDS.geoMapPin}"]` },
   '/alerts': MARKER,
   '/alerts/history': MARKER,
+  '/alerts/deliveries': MARKER,
   '/events': MARKER,
   '/alerts/rules': MARKER,
   '/alerts/routing': MARKER,

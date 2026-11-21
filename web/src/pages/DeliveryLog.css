@@ -1,0 +1,31 @@
+/* The delivery log's opened row (ADR-195): which side failed, every attempt, and the start of
+   what the receiving service answered. */
+.routing-log-detail {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  font-size: var(--font-sm);
+}
+
+.routing-log-verdict {
+  margin: 0 0 var(--space-1-5);
+  font-weight: var(--weight-medium);
+}
+
+.routing-log-line {
+  margin: 0 0 var(--space-1-5);
+  overflow-wrap: anywhere;
+}
+
+.routing-log-response {
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1-5) var(--space-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+}
+
+.routing-log-attempts {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}

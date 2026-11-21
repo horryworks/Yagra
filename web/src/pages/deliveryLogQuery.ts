@@ -30,10 +30,14 @@ import {
 } from '../types/api';
 import { appendPage, nextCursorFrom } from '../lib/keysetPage';
 
-/** URL-key prefix for this table. The route already has `channels.` and `rules.`, and all three
- *  would otherwise share a `status`-style key; `filterSpecRegistry.test.ts` checks they are
- *  disjoint (ADR-153 decision 3). */
-export const DELIVERY_FILTER_PREFIX = 'log.';
+/** Where the delivery log lives (ADR-262 decision 7): its own page under Alerts ▸ Monitor. Alone
+ *  on its route, so its filter keys carry no prefix. */
+export const DELIVERY_LOG_PATH = '/alerts/deliveries';
+
+/** The delivery log narrowed to one channel: where a channel row's "Delivery log" goes. */
+export function deliveryLogFor(channelId: string): string {
+  return `${DELIVERY_LOG_PATH}?${new URLSearchParams({ channel: channelId }).toString()}`;
+}
 
 /** Rows per request: the backend's default, under its 500 ceiling, so a short page means the end. */
 export const PAGE_SIZE = 100;

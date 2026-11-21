@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The third section of Alerts ▸ Notification delivery: the delivery log (ADR-195). One row per
+// Alerts ▸ Delivery log (ADR-195; its own page under Monitor since ADR-262 decision 7). One row per
 // notification sent to a channel, newest first, saying whether it arrived and - when it did not -
 // whether Yagra, the network or the receiving service failed. A row opens in place to show every
 // attempt and the start of what the receiving service answered.
@@ -7,7 +7,7 @@
 // Server-side filters and keyset paging, like the audit log: the log grows with the fleet. The
 // query logic is `deliveryLogQuery.ts`; this file is layout.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
@@ -20,9 +20,14 @@ import { EntityName } from '../components/ui/EntityName';
 import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { TimeCell } from '../components/ui/tableCells';
-import { Stack } from '../components/ui/Page';
+import { Page } from '../components/ui/Page';
+import { PageHeader } from '../components/ui/PageHeader';
+import { LoadGate } from '../components/ui/LoadGate';
+import { useLoad } from '../lib/useLoad';
+import { useFilterParams } from '../lib/useFilterParams';
+import './DeliveryLog.css';
 import { serverToolbarFilters } from '../lib/listToolbar';
-import { isAnyFiltered, specColumns, type FilterState } from '../lib/columnFilter';
+import { isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import {
   appendPage,
@@ -35,13 +40,6 @@ import {
   subjectText,
   type DeliveryCursor,
 } from './deliveryLogQuery';
-
-/** The filter state the page holds for this table (lifted so a channel row can narrow it). */
-export interface DeliveryLogFilters {
-  filters: FilterState;
-  setFilters: (next: FilterState) => void;
-  nowMs: number;
-}
 
 function columnsFor(
   t: TFunction,
@@ -169,18 +167,29 @@ function DeliveryDetail({ row }: { row: DeliveryRow }) {
   );
 }
 
-export function DeliveryLog({
-  channels,
-  filterState,
-  sectionRef,
-}: {
-  channels: NotificationChannel[];
-  filterState: DeliveryLogFilters;
-  sectionRef?: Ref<HTMLElement>;
-}) {
+/** Alerts ▸ Delivery log. The channel list is what the channel filter offers; a channel row on
+ *  Notification delivery links here with `?channel=<id>` (`deliveryLogFor`). */
+export function DeliveryLogPage() {
+  const { t } = useTranslation('alertsConfig');
+  const channels = useLoad<NotificationChannel[]>(() => api.listNotificationChannels(), [], {
+    initial: [],
+  });
+  return (
+    <Page layout="list">
+      <PageHeader
+        title={t('nav:alerts.deliveries')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.deliveries') }]}
+      />
+      <LoadGate load={channels} permission="manage_system">
+        <DeliveryLog channels={channels.data} />
+      </LoadGate>
+    </Page>
+  );
+}
+
+function DeliveryLog({ channels }: { channels: NotificationChannel[] }) {
   const { t } = useTranslation('alertsConfig');
   const { nodeName } = useEntityNames();
-  const { filters, setFilters, nowMs } = filterState;
   const [rows, setRows] = useState<DeliveryRow[]>([]);
   const [cursor, setCursor] = useState<DeliveryCursor | null>(null);
   const [loading, setLoading] = useState(true);
@@ -196,6 +205,7 @@ export function DeliveryLog({
   // name resolver. The fetch reads the specs only, so a name resolving does not refetch the log.
   const specs = useMemo(() => deliveryFilters(t, channels), [t, channels]);
   const filterCols = useMemo(() => specColumns(specs), [specs]);
+  const { filters, setFilters, nowMs } = useFilterParams(filterCols);
   const columns = useMemo(() => columnsFor(t, specs, nodeName), [t, specs, nodeName]);
   const filtered = isAnyFiltered(filterCols, filters);
 
@@ -238,13 +248,9 @@ export function DeliveryLog({
 
   const reload = () => setReloadNonce((n) => n + 1);
 
-  // The `section` carries the ref a channel row scrolls to (`Stack` takes none), so the parts sit
-  // in a `Stack` inside it.
   return (
-    <section ref={sectionRef}>
-      <Stack gap={12}>
+    <>
         <ListToolbar
-          title={t('routing.log.title')}
           list={serverToolbarFilters(filterCols, { filters, setFilters })}
           labels={{
             range: t('routing.log.cols.time'),
@@ -260,7 +266,6 @@ export function DeliveryLog({
           </Button>
         </ListToolbar>
         {error && <p className="form-error">{error}</p>}
-        <Stack className="routing-log-table">
           <DataTable
             tableId="settings.notificationDeliveries"
             rows={rows}
@@ -275,8 +280,6 @@ export function DeliveryLog({
             loading={loading}
             empty={filtered ? t('common:filter.noMatch') : t('routing.log.empty')}
           />
-        </Stack>
-      </Stack>
-    </section>
+    </>
   );
 }

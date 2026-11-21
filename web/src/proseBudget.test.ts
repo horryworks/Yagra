@@ -65,14 +65,14 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [248, 140], // + the "config backup not fetched for 2 days" alert's name (ADR-240, 2026-11-06)
   alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
-  alertsConfig: [9350, 4970], // + the two link variables' names and meanings in the template editor (ADR-260, 2026-11-20); + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03); + the wait switch, the last-7-days line in three states and one refusal (ADR-236 Inc.2, 2026-11-05)
+  alertsConfig: [9507, 5038], // + the exceptions' ⓘ (the weakest reaching a node wins) and their empty state (ADR-262 Inc.2, 2026-11-21); + the two link variables' names and meanings in the template editor (ADR-260, 2026-11-20); + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03); + the wait switch, the last-7-days line in three states and one refusal (ADR-236 Inc.2, 2026-11-05)
   auth: [79, 43],
   common: [1040, 596], // + sortable.*, what a screen reader is told while a list is dragged; never drawn (ADR-255, 2026-11-12)
   dashboard: [6280, 3469],
   format: [0, 0],
   metrics: [127, 65],
   monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
-  nav: [2660, 1210], // + the Investigate menu item, its description and the Analyses group heading; the description now names a site too (ADR-251 Inc.2, 2026-11-09)
+  nav: [2706, 1224], // + the Delivery log menu item and its description: the log became its own page under Monitor (ADR-262 Inc.1, 2026-11-21)
   nodes: [16415, 9415], // + the selection's "take N selected out of maintenance" menu item (ADR-261 Inc.4, 2026-11-21)
   rca: [1022, 528],
   reports: [643, 402],
@@ -162,7 +162,7 @@ const PAGE_NOTES: Record<string, PageNote> = {
 // press 16 (ADR-228): the Interfaces headers sort when pressed, so their three ⓘ went.
 // tip 26, press 15 (ADR-236): the set-parent dialog, the poller anchor and the two comparison
 // verdicts went with the dependency screen; the grouping level gained one ⓘ.
-const INFO_COUNT = { tip: 26, press: 16 };
+const INFO_COUNT = { tip: 27, press: 16 }; // + the grouping exceptions' ⓘ: which of two exceptions wins is not visible on the screen (ADR-262)
 
 /** The files whose `<InfoPress` takes `text=` instead of an `.info` key, with the reason. Their
  *  text is not counted, capped or held to a key here, so each one says why that is right. Checked

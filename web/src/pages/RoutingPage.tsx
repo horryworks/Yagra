@@ -4,17 +4,17 @@
 // server-side and never returned) and routing RULES (which alerts, by severity, fan out to
 // which channels). The notifier snapshots these (refreshed ~30s) so edits take effect live;
 // any env-configured channel stays an always-on default route, shown as one line above the rules
-// (ADR-200 Inc.28). The third section is the delivery
-// log (ADR-195, `DeliveryLog.tsx`): what each delivery did, and on whose side a failure was.
-// Between the rules and the log sit the alert grouping (ADR-236, `AlertGroupingSection.tsx`) and
-// the delivery hours (ADR-226, `DeliveryHoursSection.tsx`).
+// (ADR-200 Inc.28). After the rules sit the alert grouping (ADR-236, `AlertGroupingSection.tsx`)
+// and the delivery hours (ADR-226, `DeliveryHoursSection.tsx`). The delivery log is its own page
+// under Alerts ▸ Monitor since ADR-262 (`DeliveryLog.tsx`); a channel row links to it.
 //
 // A `sections` page (ADR-246): each list is its toolbar, which carries the section's title, the
 // count and "+ Add …" on one row, then its table, grouped in one `Stack`. Add via modal; enable/disable and delete sit in the row's
 // menu; delete confirms in a modal. Channel kind and rule severity are neutral/status chips
 // (categorical vs status).
 
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
@@ -24,11 +24,11 @@ import {
   type ChannelTestResult,
   type NotificationChannel,
   type NotificationDefaultRoute,
+  type NodeGroup,
   type NodeTags,
   type RoutingRule,
   type Severity,
 } from '../types/api';
-import { tagChoices, tagsNoNodeCarries } from './routingTags';
 import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
 import { ClippedText } from '../components/ui/ClippedText';
@@ -40,8 +40,14 @@ import { Field, TextInput, Select } from '../components/ui/Field';
 import { CheckField, FieldGroup, Fields } from '../components/ui/FormLayout';
 import { Inline, Page, Stack } from '../components/ui/Page';
 import { Badge } from '../components/ui/Badge';
-import { CheckList } from '../components/ui/CheckList';
-import { Segmented } from '../components/ui/Segmented';
+import { AppliesToCell, AppliesToPicker } from '../components/AppliesTo/AppliesTo';
+import {
+  appliesToBody,
+  appliesToFrom,
+  namesNothing,
+  type AppliesTo,
+} from '../components/AppliesTo/appliesToTarget';
+import { groupOptions } from '../lib/nodeTree';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { columnLabels } from '../lib/listToolbar';
@@ -66,13 +72,10 @@ import { done, step } from '../lib/submitState';
 import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTest';
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
-import { DeliveryLog } from './DeliveryLog';
 import { AlertGroupingSection } from './AlertGroupingSection';
 import { DeliveryHoursSection } from './DeliveryHoursSection';
 import { defaultRouteChannels } from './defaultRoute';
-import { DELIVERY_FILTER_PREFIX, deliveryFilters } from './deliveryLogQuery';
-import { specColumns } from '../lib/columnFilter';
-import { useFilterParams } from '../lib/useFilterParams';
+import { deliveryLogFor } from './deliveryLogQuery';
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {
@@ -121,16 +124,15 @@ export function RoutingPage() {
   const { data: nodeTags } = useLoad<NodeTags | null>(() => api.listNodeTags(), [rules], {
     initial: null,
   });
+  // The folders a rule may name (ADR-262), apart for the same reason: a failure leaves the list
+  // empty, so the dialog offers no folder and the list shows a named one as gone.
+  const { data: groups } = useLoad<NodeGroup[]>(() => api.listNodeGroups(), [rules], {
+    initial: [],
+  });
 
-  // The delivery log's filters live here rather than in its section so a channel row can narrow
-  // the log to that channel (ADR-195). In the URL under `log.`.
-  const logCols = useMemo(() => specColumns(deliveryFilters(t, channels)), [t, channels]);
-  const logFilters = useFilterParams(logCols, DELIVERY_FILTER_PREFIX);
-  const logRef = useRef<HTMLElement>(null);
-  const showLog = (channelId: string) => {
-    logFilters.setFilters({ ...logFilters.filters, channel: channelId });
-    logRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  // A channel row opens the delivery log narrowed to that channel (ADR-262 decision 7).
+  const navigate = useNavigate();
+  const showLog = (channelId: string) => navigate(deliveryLogFor(channelId));
 
   return (
     <Page layout="sections">
@@ -151,6 +153,7 @@ export function RoutingPage() {
         <RulesSection
           rules={rules}
           nodeTags={nodeTags}
+          groups={groups}
           defaultRoute={defaultRoute}
           channels={channels}
           canSystem={canSystem}
@@ -160,7 +163,6 @@ export function RoutingPage() {
         />
         <AlertGroupingSection canSystem={canSystem} onError={setError} />
         <DeliveryHoursSection canSystem={canSystem} onError={setError} />
-        <DeliveryLog channels={channels} filterState={logFilters} sectionRef={logRef} />
       </LoadGate>
     </Page>
   );
@@ -605,6 +607,7 @@ function AddChannelModal({
 function RulesSection({
   rules,
   nodeTags,
+  groups,
   defaultRoute,
   channels,
   canSystem,
@@ -614,6 +617,7 @@ function RulesSection({
 }: {
   rules: RoutingRule[];
   nodeTags: NodeTags | null;
+  groups: NodeGroup[];
   defaultRoute: NotificationDefaultRoute | null;
   channels: NotificationChannel[];
   canSystem: boolean;
@@ -636,7 +640,9 @@ function RulesSection({
 
   // Client-side, same reason as the channels table above.
   const columns = useMemo<Column<RoutingRule>[]>(() => {
-    const specs = routingRuleFilters(t, severityLabel);
+    const paths = new Map(groupOptions(groups).map((o) => [o.id, o.path]));
+    const folderPath = (id: string) => paths.get(id) ?? id;
+    const specs = routingRuleFilters(t, severityLabel, folderPath);
     const cols: Column<RoutingRule>[] = [
       {
         key: 'name',
@@ -655,32 +661,19 @@ function RulesSection({
         ),
       },
       {
-        key: 'tags',
-        header: t('routing.rules.cols.tags'),
-        width: '1fr',
-        sortValue: (r) => r.tags.join(', ') || null,
-        render: (r) => {
-          if (r.tags.length === 0) {
-            return <span className="muted">{t('routing.rules.anyNode')}</span>;
-          }
-          // A tag no node carries matches nothing, silently — say so on the row (ADR-259 Inc.2).
-          const gone = tagsNoNodeCarries(r.tags, nodeTags);
-          return gone && gone.size > 0 ? (
-            <Inline gap={4}>
-              {r.tags.map((tag) =>
-                gone.has(tag) ? (
-                  <Badge key={tag} tone="warning">
-                    {tag} · {t('nodes:field.tagNoNode')}
-                  </Badge>
-                ) : (
-                  <span key={tag}>{tag}</span>
-                ),
-              )}
-            </Inline>
-          ) : (
-            <ClippedText text={r.tags.join(', ')} />
-          );
-        },
+        key: 'target',
+        header: t('appliesTo.title'),
+        width: '1.2fr',
+        sortValue: (r) =>
+          [...(r.group_ids ?? []).map(folderPath), ...r.tags].join(', ') || null,
+        render: (r) => (
+          <AppliesToCell
+            groupIds={r.group_ids ?? []}
+            tags={r.tags}
+            groups={groups}
+            nodeTags={nodeTags}
+          />
+        ),
       },
       {
         key: 'channels',
@@ -736,7 +729,7 @@ function RulesSection({
     return cols;
     // `channelName` and `toggle` are rebuilt every render; what they read is listed instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, canSystem, channels, nodeTags]);
+  }, [t, canSystem, channels, nodeTags, groups]);
 
   // In the URL, under `rules.` — see the channels table above.
   const filtering = useClientFilters(columns, rules, { prefix: ROUTING_RULE_FILTER_PREFIX });
@@ -813,6 +806,7 @@ function RulesSection({
         <RuleModal
           channels={channels}
           nodeTags={nodeTags}
+          groups={groups}
           onClose={() => setAdding(false)}
           onDone={() => {
             setAdding(false);
@@ -825,6 +819,7 @@ function RulesSection({
           rule={editing}
           channels={channels}
           nodeTags={nodeTags}
+          groups={groups}
           onClose={() => setEditing(null)}
           onDone={() => {
             setEditing(null);
@@ -856,57 +851,31 @@ function RulesSection({
 }
 
 /** Add a routing rule, or — given `rule` — edit one in place (ADR-193). The edit replaces the name,
- *  severity, tags (ADR-259) and channels and leaves the rule's on/off switch as it was. */
+ *  severity, the folders and tags it applies to (ADR-259, ADR-262) and channels, and leaves the
+ *  rule's on/off switch as it was. */
 function RuleModal({
   rule,
   channels,
   nodeTags,
+  groups,
   onClose,
   onDone,
 }: {
   rule?: RoutingRule;
   channels: NotificationChannel[];
   nodeTags: NodeTags | null;
+  groups: NodeGroup[];
   onClose: () => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const [name, setName] = useState(rule?.name ?? '');
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
-  const [tags, setTags] = useState<string[]>(() => [...(rule?.tags ?? [])]);
-  // Switching back to every node keeps the ticks, so a second switch restores them.
-  const [onlyTags, setOnlyTags] = useState(() => (rule?.tags.length ?? 0) > 0);
-  // Built from the rule as it was opened, so unticking a tag no node carries does not make its row
-  // vanish under the pointer.
-  const choices = useMemo(() => tagChoices(rule?.tags ?? [], nodeTags), [rule, nodeTags]);
-  const tagItems = useMemo(
-    () =>
-      choices.map((c) => ({
-        key: c.tag,
-        label: c.tag,
-        mark: c.gone ? <Badge tone="warning">{t('nodes:field.tagNoNode')}</Badge> : undefined,
-        detail:
-          c.nodes === null || c.gone
-            ? undefined
-            : t('routing.ruleModal.tagNodes', { count: c.nodes }),
-      })),
-    [choices, t],
+  // Built once from the rule as it was opened, so a row unticked under the pointer stays put.
+  const [initial] = useState<AppliesTo>(() =>
+    appliesToFrom(rule?.group_ids ?? [], rule?.tags ?? []),
   );
-  const tagSet = useMemo(() => new Set(tags), [tags]);
-  // Ticks keep the list's order, so what is saved does not depend on the order they were made in.
-  const pickTags = (next: Set<string>) =>
-    setTags(choices.map((c) => c.tag).filter((tag) => next.has(tag)));
-  // How many nodes the chosen tags reach, asked again whenever they change. `null` while asking or
-  // after a failed read, when the line is left out rather than showing a stale number.
-  const tagKey = tags.join('\n');
-  const { data: reach } = useLoad<number | null>(
-    () =>
-      onlyTags && tags.length > 0
-        ? api.listNodeTags(tags).then((r) => r.reach ?? null)
-        : Promise.resolve(null),
-    [tagKey, onlyTags],
-    { initial: null },
-  );
+  const [target, setTarget] = useState<AppliesTo>(initial);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
   const form = useSubmit({
@@ -922,14 +891,14 @@ function RuleModal({
       return next;
     });
 
-  const canAdd = name.trim() !== '' && selected.size > 0 && (!onlyTags || tags.length > 0);
+  const canAdd = name.trim() !== '' && selected.size > 0 && !namesNothing(target);
 
   const submit = () => {
     if (!canAdd) return;
     const body = {
       name: name.trim(),
       severity: severity === '' ? null : severity,
-      tags: onlyTags ? tags : [],
+      ...appliesToBody(target),
       channel_ids: [...selected],
     };
     form.submit(() =>
@@ -968,28 +937,16 @@ function RuleModal({
           </Select>
         </Field>
         {/* "Every node" is a choice the operator makes, not what an empty list happens to mean
-            (ADR-259 decision 17). The API still spells it as no tags. */}
-        <FieldGroup label={t('routing.ruleModal.nodes')}>
-          <Segmented
-            options={[
-              { value: 'all', label: t('routing.ruleModal.allNodes') },
-              { value: 'tags', label: t('routing.ruleModal.onlyTags') },
-            ]}
-            value={onlyTags ? 'tags' : 'all'}
-            onChange={(v) => setOnlyTags(v === 'tags')}
-          />
-          {onlyTags && tagItems.length > 0 && (
-            <CheckList items={tagItems} selected={tagSet} onChange={pickTags} />
-          )}
-          {onlyTags &&
-            (tags.length === 0 ? (
-              <p className="form-status">{t('routing.ruleModal.reach', { count: 0 })}</p>
-            ) : (
-              reach !== null && (
-                <p className="form-status">{t('routing.ruleModal.reach', { count: reach })}</p>
-              )
-            ))}
-        </FieldGroup>
+            (ADR-259 decision 17). The API still spells it as no folders and no tags. */}
+        <AppliesToPicker
+          label={t('appliesTo.title')}
+          value={target}
+          onChange={setTarget}
+          groups={groups}
+          nodeTags={nodeTags}
+          initial={initial}
+          allowAll
+        />
         <FieldGroup label={t('routing.ruleModal.channels')}>
           <Inline gap={12}>
             {channels.map((c) => (

@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **A deployment upgraded to this version cannot go back to an earlier core without restoring a backup.** Migration 0185 lets a routing rule name folders; an older core would ignore them and send such a rule's alerts for every node, so it is kept from starting.
+- **Alert grouping's per-folder levels are now exceptions, and the weakest one reaching a node wins.** Each folder level became an exception naming that folder. A node inside nested folders used to take the nearest folder's level; it now takes the weakest of every exception that reaches it, so a weaker parent now wins over a stronger child and more notifications go out where that was set up. `PUT`/`DELETE /api/v1/alert-grouping/folders/{group_id}` are gone; use `POST /api/v1/alert-grouping/exceptions` and `PUT`/`DELETE /api/v1/alert-grouping/exceptions/{id}`, and read `exceptions` (each with `group_ids`, `tags`, `level`) instead of `folders` from `GET /api/v1/alert-grouping` and MCP `get_config(kind=alert_grouping)`.
+
+### New Features
+
+- **A routing rule and an alert-grouping exception pick their nodes the same way: by folders and tags, mixed.** The dialog's **Applies to** offers **All nodes** or **Only these**, and under the second a list of folders (each reaching every folder beneath it) and a list of tags; a node inside one of the folders or carrying one of the tags is reached. A line says how many nodes the choice reaches. The rule list and the exceptions list show one chip per folder and tag, and mark a folder that was deleted. REST: a rule takes `group_ids` beside `tags` (omitted on an edit, the rule keeps them); `GET /api/v1/node-tags` takes `reach_groups=` beside `reach=`.
+- **An alert-grouping exception can name tags**, so a level can be set for, say, every device carrying `no-lldp`, wherever it is filed. The exceptions sit under the level they change, in the Alert grouping section.
+
+### Improvements
+
+- **The delivery log is its own page, Alerts ▸ Delivery log** (under Monitor, beside History). It used to sit at the foot of Notification delivery. A channel's **Show delivery log** now opens that page narrowed to the channel (`/alerts/deliveries?channel=<id>`). The log's filters keep their names but lose the `log.` prefix in the address, so a link saved from the old place opens Notification delivery without the log.
+
 ## v0.3.83 — Send a routing rule's alerts only for nodes carrying its tags, link every notification to the node's page in Yagra, and save Cisco Nexus configs
 
 ### Breaking changes

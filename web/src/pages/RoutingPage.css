@@ -37,6 +37,13 @@
   white-space: nowrap;
 }
 
+/* The exceptions sit indented under the level they change, so they read as part of the grouping
+   rather than as a setting of their own (ADR-262 decision 2). */
+.routing-grouping-exceptions {
+  padding-left: var(--space-4);
+  border-left: var(--border-width) solid var(--border-color);
+}
+
 /* Send-a-test dialog (ADR-192). The warnings say what the test will do before it is sent; the
    result line says what it did. No --status-* colour here: those mean network state (tokens.css),
    and a delivered test is not a healthy device. A failure uses the shared .form-error instead.
@@ -49,40 +56,4 @@
 .routing-test-result {
   margin: 0;
   overflow-wrap: anywhere;
-}
-
-/* The delivery log (ADR-195). An explicit height: a `sections` page is not a full-height column,
-   so the virtualized table needs a bounded box to scroll inside. */
-.routing-log-table {
-  height: 520px;
-}
-
-.routing-log-detail {
-  padding: var(--space-2) var(--space-4) var(--space-3);
-  font-size: var(--font-sm);
-}
-
-.routing-log-verdict {
-  margin: 0 0 var(--space-1-5);
-  font-weight: var(--weight-medium);
-}
-
-.routing-log-line {
-  margin: 0 0 var(--space-1-5);
-  overflow-wrap: anywhere;
-}
-
-.routing-log-response {
-  margin: var(--space-1) 0 0;
-  padding: var(--space-1-5) var(--space-2);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
-}
-
-.routing-log-attempts {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-4);
 }

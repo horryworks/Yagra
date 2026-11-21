@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! How strongly an outage's alerts are grouped: the deployment's level and each folder's own
-//! (ADR-236, migration 0169). The grouping itself is `yagra_topology::grouping`; this is where the
+//! How strongly an outage's alerts are grouped: the deployment's level and its exceptions
+//! (ADR-236, migration 0169; exceptions by folder and tag since ADR-262, migration 0185). The grouping itself is `yagra_topology::grouping`; this is where the
 //! operator's choice is kept.
 
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_topology::grouping::Level;
 
-/// A folder's own level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FolderLevel {
-    pub group: Uuid,
+/// One exception to the deployment's level (ADR-262 decision 2, the former per-folder level): the
+/// nodes inside one of `group_ids` or carrying one of `tags` group at `level` instead. Never names
+/// neither.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GroupingException {
+    pub id: Uuid,
+    pub group_ids: Vec<Uuid>,
+    pub tags: Vec<String>,
     pub level: Level,
 }
 
@@ -81,51 +85,137 @@ impl GroupingRepo {
         Ok(())
     }
 
-    /// Every folder's own level.
-    pub(crate) async fn folder_levels(&self) -> anyhow::Result<Vec<FolderLevel>> {
-        let rows = sqlx::query("SELECT group_id, level FROM alert_grouping_overrides")
-            .fetch_all(&self.pool)
-            .await?;
+    /// Every exception to the deployment's level (ADR-262 decision 2), oldest first.
+    pub(crate) async fn exceptions(&self) -> anyhow::Result<Vec<GroupingException>> {
+        let rows = sqlx::query(
+            "SELECT id, group_ids, tags, level FROM alert_grouping_exceptions ORDER BY created_at, id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.into_iter()
             .map(|r| {
-                Ok(FolderLevel {
-                    group: r.try_get("group_id")?,
+                Ok(GroupingException {
+                    id: r.try_get("id")?,
+                    group_ids: r.try_get("group_ids")?,
+                    tags: r.try_get("tags")?,
                     level: level_from(r.try_get("level")?),
                 })
             })
             .collect()
     }
 
-    /// Give a folder its own level. `false` when the folder does not exist.
-    pub(crate) async fn set_folder_level(&self, group: Uuid, level: Level) -> anyhow::Result<bool> {
-        let res = sqlx::query(
-            "INSERT INTO alert_grouping_overrides (group_id, level) VALUES ($1, $2) \
-             ON CONFLICT (group_id) DO UPDATE SET level = $2",
+    /// Add an exception. The caller has checked it names at least one folder or tag (the table's
+    /// CHECK refuses one that names neither).
+    pub(crate) async fn create_exception(
+        &self,
+        group_ids: &[Uuid],
+        tags: &[String],
+        level: Level,
+    ) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO alert_grouping_exceptions (id, group_ids, tags, level) \
+             VALUES ($1, $2, $3, $4)",
         )
-        .bind(group)
+        .bind(id)
+        .bind(group_ids)
+        .bind(tags)
         .bind(i16::from(level.as_u8()))
         .execute(&self.pool)
-        .await;
-        match res {
-            Ok(_) => Ok(true),
-            Err(sqlx::Error::Database(db)) if db.is_foreign_key_violation() => Ok(false),
-            Err(e) => Err(e.into()),
-        }
+        .await?;
+        Ok(id)
     }
 
-    /// Take a folder's own level away. `false` when it had none.
-    pub(crate) async fn clear_folder_level(&self, group: Uuid) -> anyhow::Result<bool> {
-        let res = sqlx::query("DELETE FROM alert_grouping_overrides WHERE group_id = $1")
-            .bind(group)
+    /// Replace what an exception applies to and its level. `false` when there is no such exception.
+    pub(crate) async fn update_exception(
+        &self,
+        id: Uuid,
+        group_ids: &[Uuid],
+        tags: &[String],
+        level: Level,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE alert_grouping_exceptions SET group_ids = $2, tags = $3, level = $4 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(group_ids)
+        .bind(tags)
+        .bind(i16::from(level.as_u8()))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Remove an exception. `false` when there was none.
+    pub(crate) async fn delete_exception(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query("DELETE FROM alert_grouping_exceptions WHERE id = $1")
+            .bind(id)
             .execute(&self.pool)
             .await?;
         Ok(res.rows_affected() > 0)
     }
 }
 
+/// The level that holds for one node (ADR-262 decision 2): the **weakest** of the exceptions that
+/// reach it, else `None` (the deployment's level holds). An exception reaches the node when one of
+/// its folders is in `folder_chain` (the node's own folder and every folder above it) or the node
+/// carries one of its tags. Weakest, not nearest: a grouping too strong hides a real outage, and
+/// one too weak only sends more notifications.
+#[must_use]
+pub(crate) fn weakest_level(
+    exceptions: &[GroupingException],
+    folder_chain: &[Uuid],
+    tags: &[String],
+) -> Option<Level> {
+    exceptions
+        .iter()
+        .filter(|e| {
+            e.group_ids.iter().any(|g| folder_chain.contains(g))
+                || e.tags.iter().any(|t| tags.contains(t))
+        })
+        .map(|e| e.level)
+        .min()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn exception(group_ids: &[Uuid], tags: &[&str], level: Level) -> GroupingException {
+        GroupingException {
+            id: Uuid::new_v4(),
+            group_ids: group_ids.to_vec(),
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            level,
+        }
+    }
+
+    #[test]
+    fn the_weakest_exception_reaching_a_node_wins() {
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let list = [
+            exception(&[parent], &[], Level::Site),
+            exception(&[child], &[], Level::Certain),
+            exception(&[], &["no-lldp"], Level::Off),
+            exception(&[other], &[], Level::Off),
+        ];
+        // Nested folders: the parent's Site and the child's Certain both reach - the weaker wins,
+        // not the nearer (ADR-236 decision 4, overruled by ADR-262 decision 2).
+        assert_eq!(
+            weakest_level(&list, &[child, parent], &[]),
+            Some(Level::Certain)
+        );
+        // A tag reaches too, and Off beats every folder.
+        assert_eq!(
+            weakest_level(&list, &[child, parent], &["no-lldp".to_owned()]),
+            Some(Level::Off)
+        );
+        // A folder alone, and nothing at all.
+        assert_eq!(weakest_level(&list, &[parent], &[]), Some(Level::Site));
+        assert_eq!(weakest_level(&list, &[], &["core".to_owned()]), None);
+    }
 
     #[test]
     fn an_unreadable_stored_level_changes_nothing() {
@@ -136,7 +226,7 @@ mod tests {
 
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
-    async fn levels_round_trip_and_a_folder_takes_its_level_with_it(pool: PgPool) {
+    async fn levels_and_exceptions_round_trip(pool: PgPool) {
         let repo = GroupingRepo::new(pool.clone());
         assert_eq!(repo.level().await.expect("level"), Level::Off);
         repo.set_level(Level::Certain).await.expect("set");
@@ -151,24 +241,33 @@ mod tests {
         );
 
         let site = yagra_base::pgtest::group(&pool, "Site A").await;
-        assert!(repo.set_folder_level(site, Level::Site).await.expect("set"));
-        assert!(!repo
-            .set_folder_level(Uuid::new_v4(), Level::Site)
+        let id = repo
+            .create_exception(&[site], &["core".to_owned()], Level::Site)
             .await
-            .expect("set"));
+            .expect("create");
         assert_eq!(
-            repo.folder_levels().await.expect("list"),
-            vec![FolderLevel {
-                group: site,
+            repo.exceptions().await.expect("list"),
+            vec![GroupingException {
+                id,
+                group_ids: vec![site],
+                tags: vec!["core".to_owned()],
                 level: Level::Site
             }]
         );
-        sqlx::query("DELETE FROM node_groups WHERE id = $1")
-            .bind(site)
-            .execute(&pool)
+        assert!(repo
+            .update_exception(id, &[], &["edge".to_owned()], Level::Off)
             .await
-            .expect("delete folder");
-        assert!(repo.folder_levels().await.expect("list").is_empty());
-        assert!(!repo.clear_folder_level(site).await.expect("clear"));
+            .expect("update"));
+        assert_eq!(repo.exceptions().await.expect("list")[0].level, Level::Off);
+        assert!(!repo
+            .update_exception(Uuid::new_v4(), &[site], &[], Level::Off)
+            .await
+            .expect("update"));
+        assert!(
+            repo.create_exception(&[], &[], Level::Off).await.is_err(),
+            "an exception naming nothing is refused by the table"
+        );
+        assert!(repo.delete_exception(id).await.expect("delete"));
+        assert!(!repo.delete_exception(id).await.expect("delete"));
     }
 }

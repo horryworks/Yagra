@@ -823,6 +823,8 @@ export type ChannelConfigInput = components['schemas']['ChannelConfig'];
 /** A routing rule (`GET /api/v1/routing-rules`): alerts of `severity` (null = any) fan out
  *  to `channel_ids`. */
 export type RoutingRule = components['schemas']['RoutingRule'];
+/** What creating or editing a routing rule sends (ADR-193, ADR-259, ADR-262). */
+export type RoutingRuleBody = components['schemas']['CreateRule'];
 export type NodeTags = components['schemas']['NodeTags'];
 
 /** The env-configured default notification route (`GET /api/v1/notification-default-route`):
@@ -1695,6 +1697,10 @@ export type GroupingLevel = (typeof GROUPING_LEVELS)[number];
 /** The deployment's grouping level, each folder's own, and what each level would do now
  *  (`GET /api/v1/alert-grouping`). */
 export type AlertGroupingConfig = components['schemas']['AlertGroupingConfig'];
+/** One exception to the grouping level, by folder and tag (ADR-262). */
+export type GroupingException = components['schemas']['GroupingException'];
+/** What creating or editing a grouping exception sends. */
+export type GroupingExceptionBody = components['schemas']['ExceptionBody'];
 
 /** The fixed error envelope (ADR-019). */
 export type ApiErrorBody = components['schemas']['ApiErrorBody'];

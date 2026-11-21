@@ -887,8 +887,9 @@ impl YagraMcp {
                        `scope_level` / `direction` / `scope_id`), event_rules (with `node_id`, only the \
                        rules that reach that node: every-node rules, rules on its folders, and \
                        rules on the node itself), event_sources, \
-                       notification_channels, routing_rules (each with the `tags` a node must \
-                       carry one of; empty = every node), node_tags (every tag some node carries \
+                       notification_channels, routing_rules (each with the `group_ids` a node \
+                       must be inside or the `tags` it must carry one of; both empty = every \
+                       node), node_tags (every tag some node carries \
                        among its effective labels, with how many nodes carry it — the names a \
                        routing rule can usefully name), notification_default_route (the \
                        route set by the core's environment, which every alert is sent to whatever \
@@ -898,7 +899,8 @@ impl YagraMcp {
                        in minutes after local midnight, the folders each applies to, \
                        and the default time zone), alert_grouping (how strongly the alerts of \
                        nodes that go down together are rolled up into one: the deployment's level, \
-                       each folder's own, and how many of the nodes down now would page at each \
+                       its exceptions by folder and tag (the weakest reaching a node wins), and \
+                       how many of the nodes down now would page at each \
                        level); **collection** — profiles, \
                        profile_templates (needs `profile_id`), collection_templates, \
                        template_items (needs `template_id`), node_collection (one node's collected \
@@ -1099,10 +1101,12 @@ impl YagraMcp {
             },
             // No `reach` here: the count per tag answers what a model asks, and the de-duplicated
             // union is arithmetic for the rule dialog (ADR-259 Inc.2).
-            ConfigKind::NodeTags => match crate::api::notifications::node_tags_in(a, None).await {
-                Ok(t) => ok_json(TOOL, &t),
-                Err(e) => tool_api_error(TOOL, &e),
-            },
+            ConfigKind::NodeTags => {
+                match crate::api::notifications::node_tags_in(a, None, None).await {
+                    Ok(t) => ok_json(TOOL, &t),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
             ConfigKind::NotificationDefaultRoute => ok_json(
                 TOOL,
                 &crate::api::notifications::NotificationDefaultRoute::of(&a.notify_default_route),

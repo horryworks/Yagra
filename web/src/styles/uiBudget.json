@@ -283,6 +283,10 @@
       "lines": 46,
       "why": "before ADR-246"
     },
+    "pages/DeliveryLog.css": {
+      "lines": 31,
+      "why": "The delivery log's opened row: the verdict line, the attempt list and the response block (ADR-195), moved out of RoutingPage.css when the log became its own page (ADR-262)."
+    },
     "pages/DiscoveryPage.css": {
       "lines": 487,
       "why": "before ADR-246"
@@ -376,8 +380,8 @@
       "why": "before ADR-246"
     },
     "pages/RoutingPage.css": {
-      "lines": 88,
-      "why": "before ADR-246"
+      "lines": 59,
+      "why": "before ADR-246; the alert-grouping exceptions indent under the level they change (ADR-262)"
     },
     "pages/SubnetOverlapsPage.css": {
       "lines": 261,

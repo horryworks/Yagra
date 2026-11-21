@@ -300,14 +300,20 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/alert-grouping/exceptions",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
         "PUT",
-        "/api/v1/alert-grouping/folders/:group_id",
+        "/api/v1/alert-grouping/exceptions/:id",
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
     (
         "DELETE",
-        "/api/v1/alert-grouping/folders/:group_id",
+        "/api/v1/alert-grouping/exceptions/:id",
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),

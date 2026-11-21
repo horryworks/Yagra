@@ -21,7 +21,7 @@
         "operationId": "get_alert_grouping",
         "responses": {
           "200": {
-            "description": "The deployment's grouping level, each folder's own, and what each level would do to the outage open now",
+            "description": "The deployment's grouping level, its exceptions, and what each level would do to the outage open now",
             "content": {
               "application/json": {
                 "schema": {
@@ -63,17 +63,90 @@
         }
       }
     },
-    "/api/v1/alert-grouping/folders/{group_id}": {
+    "/api/v1/alert-grouping/exceptions": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "create_grouping_exception",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExceptionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The exception is added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedException"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Names no folder or tag, or a tag is not a valid label",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a grouping level (the body framework's own rejection, plain text)"
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/alert-grouping/exceptions/{id}": {
       "put": {
         "tags": [
           "notifications"
         ],
-        "operationId": "set_folder_grouping_level",
+        "operationId": "update_grouping_exception",
         "parameters": [
           {
-            "name": "group_id",
+            "name": "id",
             "in": "path",
-            "description": "The folder",
+            "description": "The exception",
             "required": true,
             "schema": {
               "type": "string",
@@ -85,7 +158,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/LevelBody"
+                "$ref": "#/components/schemas/ExceptionBody"
               }
             }
           },
@@ -93,7 +166,17 @@
         },
         "responses": {
           "204": {
-            "description": "The folder's own grouping level is set"
+            "description": "The exception is replaced"
+          },
+          "400": {
+            "description": "Names no folder or tag, or a tag is not a valid label",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           },
           "401": {
             "description": "No valid bearer token",
@@ -116,7 +199,7 @@
             }
           },
           "404": {
-            "description": "No such folder",
+            "description": "No such exception",
             "content": {
               "application/json": {
                 "schema": {
@@ -144,12 +227,12 @@
         "tags": [
           "notifications"
         ],
-        "operationId": "clear_folder_grouping_level",
+        "operationId": "delete_grouping_exception",
         "parameters": [
           {
-            "name": "group_id",
+            "name": "id",
             "in": "path",
-            "description": "The folder",
+            "description": "The exception",
             "required": true,
             "schema": {
               "type": "string",
@@ -159,7 +242,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The folder follows the deployment's level again"
+            "description": "The exception is removed; the nodes it reached follow the deployment's level or another exception"
           },
           "401": {
             "description": "No valid bearer token",
@@ -182,7 +265,7 @@
             }
           },
           "404": {
-            "description": "The folder had no level of its own",
+            "description": "No such exception",
             "content": {
               "application/json": {
                 "schema": {
@@ -12674,6 +12757,18 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "reach_groups",
+            "in": "query",
+            "description": "Folders whose reach to count with `reach`: a node inside one of them, at any depth, counts\ntoo (ADR-262). Comma-separated ids; one that does not parse is ignored.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -23144,7 +23239,7 @@
         "tags": [
           "notifications"
         ],
-        "summary": "Replace a rule's name, severity filter, tags and channels. Whether it is switched on is left as\nit was, and so are its tags when the body omits them.",
+        "summary": "Replace a rule's name, severity filter, tags, folders and channels. Whether it is switched on is\nleft as it was, and so are its tags and folders when the body omits them.",
         "operationId": "update_routing_rule",
         "parameters": [
           {
@@ -23170,7 +23265,7 @@
         },
         "responses": {
           "204": {
-            "description": "Rule replaced; its enabled switch is unchanged, and so are its tags when the body omits them"
+            "description": "Rule replaced; its enabled switch is unchanged, and so are its tags and folders when the body omits them"
           },
           "400": {
             "description": "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character",
@@ -28484,19 +28579,20 @@
       },
       "AlertGroupingConfig": {
         "type": "object",
-        "description": "The deployment's level, every folder's own, and the preview.",
+        "description": "The deployment's level, its exceptions, and the preview.",
         "required": [
           "level",
           "wait",
-          "folders",
+          "exceptions",
           "now"
         ],
         "properties": {
-          "folders": {
+          "exceptions": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/FolderGroupingLevel"
-            }
+              "$ref": "#/components/schemas/GroupingException"
+            },
+            "description": "Oldest first."
           },
           "last_7_days": {
             "oneOf": [
@@ -32456,7 +32552,7 @@
       },
       "CreateRule": {
         "type": "object",
-        "description": "Create-rule body: a name, an optional severity filter (absent = any), the tags a node must\ncarry one of (ADR-259), and target channels. Editing a rule takes the same body (ADR-193).",
+        "description": "Create-rule body: a name, an optional severity filter (absent = any), the folders and tags a\nnode must be inside or carry one of (ADR-259, ADR-262), and target channels. Editing a rule\ntakes the same body (ADR-193).",
         "required": [
           "name",
           "channel_ids"
@@ -32468,6 +32564,17 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "group_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Only alerts on a node inside one of these folders, at any depth, reach the rule's channels\n(or on a node carrying one of `tags`: either is enough, ADR-262). Both empty = every node.\nOmitted on an edit, the rule keeps the folders it has."
           },
           "name": {
             "type": "string"
@@ -32639,6 +32746,19 @@
           "token": {
             "type": "string",
             "description": "The raw bearer token, returned **once**. Never stored, never logged."
+          }
+        }
+      },
+      "CreatedException": {
+        "type": "object",
+        "description": "The id of a created exception.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -34942,6 +35062,31 @@
           }
         }
       },
+      "ExceptionBody": {
+        "type": "object",
+        "description": "What an exception applies to and its level. Names at least one folder or tag.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "level": {
+            "$ref": "#/components/schemas/GroupingLevel"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "Exclusion": {
         "oneOf": [
           {
@@ -35548,23 +35693,6 @@
             "format": "int64",
             "description": "Packets.",
             "minimum": 0
-          }
-        }
-      },
-      "FolderGroupingLevel": {
-        "type": "object",
-        "description": "One folder's own level, which beats the deployment's for everything beneath it.",
-        "required": [
-          "group_id",
-          "level"
-        ],
-        "properties": {
-          "group_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "level": {
-            "$ref": "#/components/schemas/GroupingLevel"
           }
         }
       },
@@ -36384,6 +36512,38 @@
           }
         }
       },
+      "GroupingException": {
+        "type": "object",
+        "description": "One exception to the deployment's level (ADR-262 decision 2): every node inside one of\n`group_ids` (at any depth) or carrying one of `tags` groups at `level`. When several reach one\nnode, the weakest level wins.",
+        "required": [
+          "id",
+          "group_ids",
+          "tags",
+          "level"
+        ],
+        "properties": {
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "level": {
+            "$ref": "#/components/schemas/GroupingLevel"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "GroupingLevel": {
         "type": "string",
         "description": "How strongly alerts are grouped, weakest first (ADR-236 decision 2).",
@@ -36413,7 +36573,7 @@
               "type": "integer",
               "minimum": 0
             },
-            "description": "How many of them would page on their own with the deployment at each level, weakest first\n(`off`, `certain`, `links`, `site`), every folder keeping its own level."
+            "description": "How many of them would page on their own with the deployment at each level, weakest first\n(`off`, `certain`, `links`, `site`), every exception keeping its own level."
           }
         }
       },
@@ -42211,7 +42371,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "How many nodes carry at least one of the `reach` tags, each node counted once. Absent when\nthe request named none.",
+            "description": "How many nodes carry at least one of the `reach` tags or sit inside one of the\n`reach_groups` folders, each node counted once. Absent when the request named neither.",
             "minimum": 0
           },
           "tags": {
@@ -46535,7 +46695,7 @@
       },
       "RoutingRule": {
         "type": "object",
-        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node carries one of `tags`\n(empty = every node) fan out to `channel_ids`.",
+        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of\n`group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.",
         "required": [
           "id",
           "name",
@@ -46553,6 +46713,14 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "group_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Folders the node must be inside, at any depth (ADR-262 decision 1). A node inside one of\nthese **or** carrying one of `tags` matches; with both empty the rule covers every node. A\nfolder that no longer exists reaches nothing. A subject that is not a node matches only a\nrule that names neither."
           },
           "id": {
             "type": "string",

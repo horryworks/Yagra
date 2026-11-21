@@ -21,9 +21,9 @@ test('every row action on Notification delivery can be pressed', async ({ page }
   const report = await inspectRowActions(page);
   expect(report.findings).toEqual([]);
   // Five on a channel (test, delivery log, template, on/off, delete — ADR-195 added the log),
-  // three on a rule (edit, on/off, delete), one on a folder's grouping level (ADR-236) and three
-  // on a delivery-hours schedule (ADR-226).
-  expect(report.buttons).toBe(12);
+  // three on a rule (edit, on/off, delete), two on a grouping exception (edit, remove — ADR-262)
+  // and three on a delivery-hours schedule (ADR-226).
+  expect(report.buttons).toBe(13);
 });
 
 // Refresh used to write the same filters back to the URL. The query string did not change, so
@@ -31,13 +31,25 @@ test('every row action on Notification delivery can be pressed', async ({ page }
 // `waitForRequest` times out instead of passing on nothing.
 test('Refresh on the delivery log asks the server again', async ({ page }) => {
   const first = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
-  await page.goto('/alerts/routing');
+  await page.goto('/alerts/deliveries');
   await first;
-  const log = section(page, 'Delivery log');
-  await expect(log).toBeVisible();
   const again = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
-  await log.getByRole('button', { name: 'Refresh' }).click();
+  await page.getByRole('button', { name: 'Refresh' }).click();
   await again;
+});
+
+// ADR-262 decision 7: the log is its own page, and a channel row opens it narrowed to that channel
+// - the server is asked for that channel's rows, not the whole log.
+test('a channel row opens the delivery log narrowed to that channel', async ({ page }) => {
+  await page.goto('/alerts/routing');
+  const channelRow = section(page, 'Notification channels').locator('.dt-row').first();
+  await channelRow.hover();
+  const narrowed = page.waitForRequest(
+    (r) => r.url().includes('/api/v1/notification-deliveries') && r.url().includes('channel='),
+  );
+  await channelRow.getByRole('button', { name: 'Show delivery log' }).click();
+  await expect(page).toHaveURL(/\/alerts\/deliveries\?channel=/);
+  await narrowed;
 });
 
 test('a routing rule opens for editing with its own values', async ({ page }) => {
@@ -62,13 +74,20 @@ test('a routing rule saves the tags it was given', async ({ page }) => {
   await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
   const dialog = page.getByRole('dialog');
   // Inc.2: the tags are a list of boxes, one per tag nodes carry, so nothing can be typed wrong.
-  // Decision 17: a rule with tags opens on "Only these tags"; the boxes show only there.
-  const tags = dialog.getByRole('group', { name: 'Nodes', exact: true });
-  await expect(tags).toBeVisible();
-  await expect(tags.getByRole('button', { name: 'Only these tags' })).toHaveAttribute(
+  // Decision 17: a rule with tags opens on "Only these"; the boxes show only there. Since ADR-262
+  // the folders are a second list beside them, in the one "Applies to" group.
+  const target = dialog.getByRole('group', { name: 'Applies to', exact: true });
+  await expect(target).toBeVisible();
+  await expect(target.getByRole('button', { name: 'Only these' })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
+  // The generated rule may name a folder too; take it away so the tags alone decide the reach.
+  const folders = target.getByRole('group', { name: 'Folders', exact: true });
+  for (const box of await folders.locator('.checklist-rows input:checked').all()) {
+    await box.uncheck();
+  }
+  const tags = target.getByRole('group', { name: 'Tags', exact: true });
   // The rule's own tag no node carries is listed first, ticked and marked.
   const gone = tags.locator('.checklist-row', { hasText: 'no node' });
   await expect(gone).toHaveCount(1);
@@ -87,9 +106,10 @@ test('a routing rule saves the tags it was given', async ({ page }) => {
     (r) => r.method() === 'PUT' && r.url().includes('/definition'),
   );
   await dialog.getByRole('button', { name: 'Save' }).click();
-  const body = (await saved).postDataJSON() as { tags?: unknown };
+  const body = (await saved).postDataJSON() as { tags?: unknown; group_ids?: unknown };
   expect(Array.isArray(body.tags)).toBe(true);
   expect(body.tags).toEqual(['TeamA']);
+  expect(body.group_ids).toEqual([]);
 });
 
 // Inc.2: a rule naming a tag no node carries matches nothing, so its row says so.

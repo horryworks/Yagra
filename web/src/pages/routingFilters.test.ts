@@ -30,6 +30,7 @@ const rule = (over: Partial<RoutingRule> = {}): RoutingRule => ({
   severity: 'critical',
   enabled: true,
   tags: [],
+  group_ids: [],
   channel_ids: ['c1'],
   ...over,
 });
@@ -65,7 +66,7 @@ describe('the channels filter row', () => {
 });
 
 describe('the routing-rules filter row', () => {
-  const specs = routingRuleFilters(t, sevLabel);
+  const specs = routingRuleFilters(t, sevLabel, (id) => (id === 'g1' ? 'Tokyo / Edge' : id));
 
   it('shows everything when nothing is set', () => {
     expect(keeps(specs, rule(), {})).toBe(true);
@@ -101,8 +102,14 @@ describe('the routing-rules filter row', () => {
     // ADR-259: an untagged rule reaches every node, but the question this filter answers is
     // "which rules were written for TeamA", so it does not list them.
     const team = rule({ tags: ['APAC', 'TeamA'] });
-    expect(keeps(specs, team, { tags: term('teama') })).toBe(true);
-    expect(keeps(specs, team, { tags: term('EMEA') })).toBe(false);
-    expect(keeps(specs, rule(), { tags: term('TeamA') })).toBe(false);
+    expect(keeps(specs, team, { target: term('teama') })).toBe(true);
+    expect(keeps(specs, team, { target: term('EMEA') })).toBe(false);
+    expect(keeps(specs, rule(), { target: term('TeamA') })).toBe(false);
+  });
+
+  it('finds a rule by the path of a folder it names (ADR-262)', () => {
+    const edge = rule({ group_ids: ['g1'] });
+    expect(keeps(specs, edge, { target: term('tokyo') })).toBe(true);
+    expect(keeps(specs, edge, { target: term('Osaka') })).toBe(false);
   });
 });

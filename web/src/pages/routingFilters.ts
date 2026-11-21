@@ -67,6 +67,7 @@ export function channelFilters(
 export function routingRuleFilters(
   t: TFunction,
   severityLabel: (s: Severity) => string,
+  folderPath: (id: string) => string = (id) => id,
 ): Record<string, ColumnFilterSpec<RoutingRule>> {
   return {
     name: {
@@ -88,14 +89,15 @@ export function routingRuleFilters(
       allLabel: t('routing.rules.allSeverities'),
       counts: 'client',
     },
-    // A rule with no tags reaches every node but reads as having none here, so "TeamA" finds
-    // the rules written for that tag rather than every rule that would also page for it (ADR-259).
-    tags: {
+    // A rule naming nothing reaches every node but reads as having nothing here, so "TeamA" finds
+    // the rules written for that tag or folder rather than every rule that would also page for it
+    // (ADR-259, ADR-262). Folders are read by their path, as the column shows them.
+    target: {
       kind: 'text',
       modes: ['contains', 'regex'],
-      readText: (r) => r.tags,
+      readText: (r) => [...(r.group_ids ?? []).map(folderPath), ...r.tags],
       containsSemantics: 'substring',
-      placeholder: t('routing.rules.cols.tags'),
+      placeholder: t('appliesTo.title'),
     },
     status: {
       kind: 'enum',

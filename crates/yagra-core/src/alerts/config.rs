@@ -127,8 +127,10 @@ pub(crate) struct GroupingFacts {
     pub sites: std::collections::HashSet<Uuid>,
     /// The deployment's level.
     pub default_level: Level,
-    /// Each folder's own level.
-    pub folder_levels: HashMap<Uuid, Level>,
+    /// The exceptions to the deployment's level (ADR-262 decision 2).
+    pub exceptions: Vec<super::grouping::GroupingException>,
+    /// Each node's effective tags, read only when an exception names a tag (empty otherwise).
+    pub node_tags: HashMap<NodeId, Vec<String>>,
     /// Whether to wait for a failing neighbour (ADR-236 Inc.2).
     pub wait: bool,
 }
@@ -144,8 +146,9 @@ fn is_physical(source: yagra_common::LinkSource) -> bool {
     }
 }
 
-/// Turn the facts into the graph the engine groups by. Each node's level is the one its nearest
-/// folder sets, else the deployment's; its site is the nearest folder above it that is a Site.
+/// Turn the facts into the graph the engine groups by. Each node's level is the weakest of the
+/// exceptions that reach it (by folder or tag, ADR-262 decision 2), else the deployment's; its site
+/// is the nearest folder above it that is a Site.
 pub(crate) fn build_link_graph(
     facts: &GroupingFacts,
     meta: &HashMap<NodeId, NodeMeta>,
@@ -165,10 +168,9 @@ pub(crate) fn build_link_graph(
         g.set_rank(*n, *r);
     }
     for (node, m) in meta {
-        if let Some(level) = m
-            .folder_chain
-            .iter()
-            .find_map(|f| facts.folder_levels.get(f).copied())
+        let tags = facts.node_tags.get(node).map_or(&[][..], Vec::as_slice);
+        if let Some(level) =
+            super::grouping::weakest_level(&facts.exceptions, &m.folder_chain, tags)
         {
             g.set_level(*node, level);
         }
@@ -237,12 +239,19 @@ impl AlertConfigSources for LiveConfigSources {
             .collect();
         let default_level = grouping.level().await?;
         let wait = grouping.wait().await?;
-        let folder_levels = grouping
-            .folder_levels()
-            .await?
-            .into_iter()
-            .map(|f| (f.group, f.level))
-            .collect();
+        let exceptions = grouping.exceptions().await?;
+        // Effective tags (own + inherited − refused, ADR-135) only when an exception names a tag:
+        // the folder read is the one this costs, and a deployment without one pays nothing.
+        let node_tags = if exceptions.iter().any(|e| !e.tags.is_empty()) {
+            let resolver =
+                crate::inventory::tagres::TagResolver::build(self.groups.tag_rows().await?);
+            nodes
+                .iter()
+                .map(|n| (n.id, resolver.effective(n)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         // An imported access point first, then a Meraki device by its product, then the profile.
         let ranks = ids
             .iter()
@@ -265,7 +274,8 @@ impl AlertConfigSources for LiveConfigSources {
             ranks,
             sites,
             default_level,
-            folder_levels,
+            exceptions,
+            node_tags,
             wait,
         })
     }
@@ -648,7 +658,16 @@ pub(crate) async fn load_webui_url(notifier: &Notifier, repo: &NodeRepo) {
 
 /// Load the DB notification channels + routing rules into the notifier. Failures degrade to
 /// the existing snapshot (warn) rather than dropping routing.
-pub(crate) async fn load_routing(notifier: &Notifier, notifications: &NotificationRepo) {
+///
+/// Also which nodes each rule's folders reach (ADR-262), read only when an enabled rule names a
+/// folder. A failure to read it keeps the previous reach: clearing it would quietly drop every
+/// folder rule's channels.
+pub(crate) async fn load_routing(
+    notifier: &Notifier,
+    notifications: &NotificationRepo,
+    repo: &NodeRepo,
+    groups: &groups::GroupRepo,
+) {
     let channels = notifications
         .list_open_channels()
         .await
@@ -660,6 +679,22 @@ pub(crate) async fn load_routing(notifier: &Notifier, notifications: &Notificati
         tracing::warn!(error = %e, "failed to load routing rules");
         Vec::new()
     });
+    if rules.iter().any(|r| r.enabled && !r.group_ids.is_empty()) {
+        match tokio::try_join!(repo.folder_rows(), groups.edges()) {
+            Ok((nodes, edges)) => {
+                let nodes: Vec<_> = nodes
+                    .into_iter()
+                    .map(|(n, g)| (NodeId::from(n), g))
+                    .collect();
+                notifier.set_rule_reach(crate::alerts::notify::rule_reach(&rules, &nodes, &edges));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to resolve routing-rule folders; keeping the last")
+            }
+        }
+    } else {
+        notifier.set_rule_reach(crate::alerts::notify::RuleReach::new());
+    }
     notifier.set_routing(channels, rules);
 }
 
@@ -1051,9 +1086,20 @@ mod tests {
             ],
             sites: [site].into_iter().collect(),
             default_level: Level::Off,
-            folder_levels: [(site, Level::Site), (floor, Level::Certain)]
-                .into_iter()
-                .collect(),
+            exceptions: vec![
+                super::super::grouping::GroupingException {
+                    id: Uuid::new_v4(),
+                    group_ids: vec![site],
+                    tags: Vec::new(),
+                    level: Level::Site,
+                },
+                super::super::grouping::GroupingException {
+                    id: Uuid::new_v4(),
+                    group_ids: vec![floor],
+                    tags: Vec::new(),
+                    level: Level::Certain,
+                },
+            ],
             ..GroupingFacts::default()
         };
         let g = build_link_graph(&facts, &meta);

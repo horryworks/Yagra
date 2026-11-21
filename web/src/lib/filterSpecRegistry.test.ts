@@ -61,7 +61,7 @@ import { pollerFilters } from '../pages/pollerFilters';
 import { siteRowFilters, SUBNET_FILTER_PREFIX, subnetRowFilters } from '../pages/missingPrefixes';
 import { overlapFilters } from '../pages/subnetOverlaps';
 import { channelFilters, routingRuleFilters } from '../pages/routingFilters';
-import { DELIVERY_FILTER_PREFIX, deliveryFilters } from '../pages/deliveryLogQuery';
+import { deliveryFilters } from '../pages/deliveryLogQuery';
 import { windowFilters } from '../pages/suppressionFilters';
 import { thresholdFilters } from '../pages/thresholdQuery';
 import { userFilters } from '../pages/userFilters';
@@ -439,13 +439,9 @@ const ROUTES: readonly Route[] = [
         prefix: ROUTING_RULE_FILTER_PREFIX,
         wiredIn: { file: 'pages/RoutingPage.tsx', spelling: 'ROUTING_RULE_FILTER_PREFIX' },
       },
-      {
-        entries: ['deliveryFilters'],
-        prefix: DELIVERY_FILTER_PREFIX,
-        wiredIn: { file: 'pages/RoutingPage.tsx', spelling: 'DELIVERY_FILTER_PREFIX' },
-      },
     ],
   },
+  { path: '/alerts/deliveries', own: [], tables: [{ entries: ['deliveryFilters'], prefix: '' }] },
   {
     path: '/alerts/rules/events',
     own: [EVENT_VIEW_KEYS.tab, EVENT_VIEW_KEYS.target],

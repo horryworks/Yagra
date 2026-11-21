@@ -117,8 +117,8 @@ pub struct OpenChannel {
     pub template: ChannelTemplate,
 }
 
-/// A routing rule: enabled alerts of `severity` (None = any) whose node carries one of `tags`
-/// (empty = every node) fan out to `channel_ids`.
+/// A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
+/// `group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RoutingRule {
     pub id: Uuid,
@@ -130,7 +130,21 @@ pub struct RoutingRule {
     /// subject that is not a node (a poller pool, a Meraki organization) matches only an empty
     /// list. Compared exactly, case included, the way a node's own labels are stored.
     pub tags: Vec<String>,
+    /// Folders the node must be inside, at any depth (ADR-262 decision 1). A node inside one of
+    /// these **or** carrying one of `tags` matches; with both empty the rule covers every node. A
+    /// folder that no longer exists reaches nothing. A subject that is not a node matches only a
+    /// rule that names neither.
+    #[serde(default)]
+    pub group_ids: Vec<Uuid>,
     pub channel_ids: Vec<Uuid>,
+}
+
+impl RoutingRule {
+    /// Whether the rule names any folder or tag, i.e. covers only some nodes.
+    #[must_use]
+    pub fn is_narrowed(&self) -> bool {
+        !self.tags.is_empty() || !self.group_ids.is_empty()
+    }
 }
 
 /// Parse a severity DB token (None for NULL/unknown ⇒ matches all severities).
@@ -330,7 +344,7 @@ impl NotificationRepo {
     /// All routing rules.
     pub async fn list_rules(&self) -> anyhow::Result<Vec<RoutingRule>> {
         let rows = sqlx::query(
-            "SELECT id, name, enabled, severity, tags, channel_ids FROM routing_rules \
+            "SELECT id, name, enabled, severity, tags, group_ids, channel_ids FROM routing_rules \
              ORDER BY created_at",
         )
         .fetch_all(&self.pool)
@@ -343,29 +357,33 @@ impl NotificationRepo {
                     enabled: row.try_get("enabled")?,
                     severity: parse_severity(row.try_get("severity")?),
                     tags: row.try_get("tags")?,
+                    group_ids: row.try_get("group_ids")?,
                     channel_ids: row.try_get("channel_ids")?,
                 })
             })
             .collect()
     }
 
-    /// Create a routing rule. `severity` None ⇒ matches all severities; empty `tags` ⇒ every node.
+    /// Create a routing rule. `severity` None ⇒ matches all severities; empty `tags` and
+    /// `group_ids` ⇒ every node.
     pub async fn create_rule(
         &self,
         name: &str,
         severity: Option<Severity>,
         tags: &[String],
+        group_ids: &[Uuid],
         channel_ids: &[Uuid],
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO routing_rules (id, name, enabled, severity, tags, channel_ids) \
-             VALUES ($1, $2, true, $3, $4, $5)",
+            "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, channel_ids) \
+             VALUES ($1, $2, true, $3, $4, $5, $6)",
         )
         .bind(id)
         .bind(name)
         .bind(severity.map(|s| s.as_str()))
         .bind(tags)
+        .bind(group_ids)
         .bind(channel_ids)
         .execute(&self.pool)
         .await?;
@@ -382,7 +400,8 @@ impl NotificationRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Replace a rule's name, severity filter, tags (ADR-259) and channels (ADR-193). `enabled` is left alone: it
+    /// Replace a rule's name, severity filter, tags (ADR-259), folders (ADR-262) and channels
+    /// (ADR-193). `enabled` is left alone: it
     /// has its own switch, and an edit that also re-enabled a rule the operator had parked would
     /// start paging without anyone asking for it. Returns whether a row changed.
     pub async fn update_rule(
@@ -391,18 +410,20 @@ impl NotificationRepo {
         name: &str,
         severity: Option<Severity>,
         tags: Option<&[String]>,
+        group_ids: Option<&[Uuid]>,
         channel_ids: &[Uuid],
     ) -> anyhow::Result<bool> {
-        // `None` keeps the stored tags: a client that predates them must not widen a rule to
-        // every node by saving it (ADR-259).
+        // `None` keeps the stored tags and folders: a client that predates them must not widen a
+        // rule to every node by saving it (ADR-259, ADR-262).
         let res = sqlx::query(
             "UPDATE routing_rules SET name = $2, severity = $3, tags = COALESCE($4, tags), \
-             channel_ids = $5 WHERE id = $1",
+             group_ids = COALESCE($5, group_ids), channel_ids = $6 WHERE id = $1",
         )
         .bind(id)
         .bind(name)
         .bind(severity.map(|s| s.as_str()))
         .bind(tags)
+        .bind(group_ids)
         .bind(channel_ids)
         .execute(&self.pool)
         .await?;
@@ -626,13 +647,14 @@ mod tests {
             .await
             .expect("create");
         let both = repo
-            .create_rule("Everything", None, &[], &[doomed, kept])
+            .create_rule("Everything", None, &[], &[], &[doomed, kept])
             .await
             .expect("rule");
         let only_doomed = repo
             .create_rule(
                 "Just the doomed one",
                 Some(Severity::Critical),
+                &[],
                 &[],
                 &[doomed],
             )
@@ -750,11 +772,11 @@ mod tests {
         // severity". Storing a token for it instead would make the catch-all rule the one rule
         // that matches nothing after a vocabulary change.
         let catch_all = repo
-            .create_rule("Everything", None, &[], &[a, b])
+            .create_rule("Everything", None, &[], &[], &[a, b])
             .await
             .expect("rule");
         let criticals = repo
-            .create_rule("Criticals only", Some(Severity::Critical), &[], &[b])
+            .create_rule("Criticals only", Some(Severity::Critical), &[], &[], &[b])
             .await
             .expect("rule");
 
@@ -782,7 +804,7 @@ mod tests {
         // A rule may name no channel at all: that is how an operator parks one without deleting
         // the severity filter they tuned.
         let parked = repo
-            .create_rule("Parked", Some(Severity::Info), &[], &[])
+            .create_rule("Parked", Some(Severity::Info), &[], &[], &[])
             .await
             .expect("rule");
         let rules = repo.list_rules().await.expect("rules");
@@ -805,11 +827,11 @@ mod tests {
             .await
             .expect("channel");
         let rule = repo
-            .create_rule("Everything", None, &[], &[channel])
+            .create_rule("Everything", None, &[], &[], &[channel])
             .await
             .expect("rule");
         let other = repo
-            .create_rule("Criticals", Some(Severity::Critical), &[], &[channel])
+            .create_rule("Criticals", Some(Severity::Critical), &[], &[], &[channel])
             .await
             .expect("rule");
 
@@ -860,17 +882,17 @@ mod tests {
             .await
             .expect("channel");
         let rule = repo
-            .create_rule("Everything", None, &[], &[a])
+            .create_rule("Everything", None, &[], &[], &[a])
             .await
             .expect("rule");
         let other = repo
-            .create_rule("Criticals", Some(Severity::Critical), &[], &[a])
+            .create_rule("Criticals", Some(Severity::Critical), &[], &[], &[a])
             .await
             .expect("rule");
         assert!(repo.set_rule_enabled(rule, false).await.expect("disable"));
 
         assert!(repo
-            .update_rule(rule, "Warnings", Some(Severity::Warning), None, &[b])
+            .update_rule(rule, "Warnings", Some(Severity::Warning), None, None, &[b])
             .await
             .expect("update"));
         let rules = repo.list_rules().await.expect("rules");
@@ -892,7 +914,7 @@ mod tests {
 
         // Back to "any severity" is a real edit, not a no-op.
         assert!(repo
-            .update_rule(rule, "Warnings", None, None, &[b])
+            .update_rule(rule, "Warnings", None, None, None, &[b])
             .await
             .expect("update"));
         let rules = repo.list_rules().await.expect("rules");
@@ -918,24 +940,57 @@ mod tests {
                 .clone()
         };
         assert!(repo
-            .update_rule(rule, "Warnings", None, Some(&tags), &[b])
+            .update_rule(rule, "Warnings", None, Some(&tags), None, &[b])
             .await
             .expect("update"));
         assert_eq!(tags_of(&repo.list_rules().await.expect("rules")), tags);
         assert!(repo
-            .update_rule(rule, "Renamed", None, None, &[b])
+            .update_rule(rule, "Renamed", None, None, None, &[b])
             .await
             .expect("update"));
         assert_eq!(tags_of(&repo.list_rules().await.expect("rules")), tags);
         assert!(repo
-            .update_rule(rule, "Renamed", None, Some(&[]), &[b])
+            .update_rule(rule, "Renamed", None, Some(&[]), None, &[b])
             .await
             .expect("update"));
         assert!(tags_of(&repo.list_rules().await.expect("rules")).is_empty());
 
+        // Folders behave as tags do (ADR-262): stored as written, kept by an edit that does not
+        // name them, cleared by an empty list.
+        let folders = vec![Uuid::new_v4(), Uuid::new_v4()];
+        let folders_of = |rules: &[RoutingRule]| {
+            rules
+                .iter()
+                .find(|r| r.id == rule)
+                .expect("rule")
+                .group_ids
+                .clone()
+        };
+        assert!(repo
+            .update_rule(rule, "Renamed", None, None, Some(&folders), &[b])
+            .await
+            .expect("update"));
+        assert_eq!(
+            folders_of(&repo.list_rules().await.expect("rules")),
+            folders
+        );
+        assert!(repo
+            .update_rule(rule, "Renamed", None, None, None, &[b])
+            .await
+            .expect("update"));
+        assert_eq!(
+            folders_of(&repo.list_rules().await.expect("rules")),
+            folders
+        );
+        assert!(repo
+            .update_rule(rule, "Renamed", None, None, Some(&[]), &[b])
+            .await
+            .expect("update"));
+        assert!(folders_of(&repo.list_rules().await.expect("rules")).is_empty());
+
         // The API edge turns `false` into a 404.
         assert!(!repo
-            .update_rule(Uuid::new_v4(), "Nobody", None, None, &[a])
+            .update_rule(Uuid::new_v4(), "Nobody", None, None, None, &[a])
             .await
             .expect("update"));
     }

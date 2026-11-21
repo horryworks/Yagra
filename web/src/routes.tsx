@@ -51,6 +51,7 @@ import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { RoutingPage } from './pages/RoutingPage';
+import { DeliveryLogPage } from './pages/DeliveryLog';
 import { EventsPage } from './pages/EventsPage';
 import { EventRulesPage } from './pages/EventRulesPage';
 import { EventSourcesPage } from './pages/EventSourcesPage';
@@ -147,6 +148,7 @@ export function AppRoutes() {
         {/* Alerts */}
         <Route path="alerts" element={<ActiveAlertsPage />} />
         <Route path="alerts/history" element={<HistoryPage />} />
+        <Route path="alerts/deliveries" element={<DeliveryLogPage />} />
         {/* Alert rules: thresholds and event rules as path tabs of one page (ADR-232). */}
         <Route path="alerts/rules" element={<AlertRulesPage />}>
           <Route index element={<ThresholdsPage />} />

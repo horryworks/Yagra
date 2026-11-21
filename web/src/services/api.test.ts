@@ -1133,7 +1133,7 @@ describe('api client', () => {
     });
   });
 
-  it('sets the alert grouping level and a folder level, and takes the folder level away', async () => {
+  it('sets the alert grouping level and adds, edits and removes an exception', async () => {
     const spy = vi
       .fn()
       .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
@@ -1143,13 +1143,20 @@ describe('api client', () => {
     expect(spy.mock.calls[0][1].method).toBe('PUT');
     expect(JSON.parse(spy.mock.calls[0][1].body)).toEqual({ level: 'certain' });
 
-    await api.setFolderGroupingLevel('g1', 'site');
-    expect(spy.mock.calls[1][0]).toBe('/api/v1/alert-grouping/folders/g1');
-    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual({ level: 'site' });
+    // An exception names folders and tags together (ADR-262).
+    const body = { group_ids: ['g1'], tags: ['no-lldp'], level: 'site' as const };
+    await api.createGroupingException(body);
+    expect(spy.mock.calls[1][0]).toBe('/api/v1/alert-grouping/exceptions');
+    expect(spy.mock.calls[1][1].method).toBe('POST');
+    expect(JSON.parse(spy.mock.calls[1][1].body)).toEqual(body);
 
-    await api.clearFolderGroupingLevel('g1');
-    expect(spy.mock.calls[2][0]).toBe('/api/v1/alert-grouping/folders/g1');
-    expect(spy.mock.calls[2][1].method).toBe('DELETE');
+    await api.updateGroupingException('x1', { ...body, level: 'off' });
+    expect(spy.mock.calls[2][0]).toBe('/api/v1/alert-grouping/exceptions/x1');
+    expect(spy.mock.calls[2][1].method).toBe('PUT');
+
+    await api.deleteGroupingException('x1');
+    expect(spy.mock.calls[3][0]).toBe('/api/v1/alert-grouping/exceptions/x1');
+    expect(spy.mock.calls[3][1].method).toBe('DELETE');
   });
 
   it('drag-reorders nodes before a sibling through the bulk move (placement)', async () => {

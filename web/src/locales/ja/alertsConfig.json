@@ -6,8 +6,7 @@
   "noun": {
     "channel_other": "チャネル",
     "source_other": "ソース",
-    "schedule_other": "件",
-    "folder_other": "フォルダ"
+    "schedule_other": "件"
   },
   "routing": {
     "channels": {
@@ -37,7 +36,6 @@
       "cols": {
         "name": "名前",
         "severity": "重大度",
-        "tags": "タグ",
         "channels": "チャネル",
         "status": "状態",
         "actions": "操作"
@@ -45,7 +43,6 @@
       "empty": "ルーティングルールがありません",
       "emptyNoChannels": "先にチャネルを追加してください。",
       "any": "すべて",
-      "anyNode": "すべてのノード",
       "noChannels": "（チャネルなし）",
       "enable": "ルールを有効化",
       "disable": "ルールを無効化",
@@ -80,11 +77,6 @@
       "name": "名前",
       "severity": "重大度",
       "anySeverity": "すべての重大度",
-      "nodes": "対象のノード",
-      "allNodes": "すべてのノード",
-      "onlyTags": "タグで絞る",
-      "tagNodes_other": "{{count}} 台",
-      "reach_other": "{{count}} 台に届く",
       "channels": "チャネル",
       "add": "ルールを追加",
       "editTitle": "ルーティングルールを編集 — {{name}}",
@@ -409,7 +401,6 @@
       }
     },
     "log": {
-      "title": "配信ログ",
       "refresh": "再読み込み",
       "noun_one": "件",
       "noun_other": "件",
@@ -470,6 +461,18 @@
         "load": "配信ログを読み込めませんでした"
       }
     }
+  },
+  "appliesTo": {
+    "title": "対象",
+    "allNodes": "すべてのノード",
+    "onlyThese": "選んだものだけ",
+    "folders": "フォルダ",
+    "tags": "タグ",
+    "nodes_one": "{{count}} 台",
+    "nodes_other": "{{count}} 台",
+    "reach_one": "{{count}} 台に届く",
+    "reach_other": "{{count}} 台に届く",
+    "goneFolder": "削除されたフォルダ"
   },
   "thresholds": {
     "noLiveness": "到達性のルールがないため、ノードが落ちてもアラートも通知も出ません。",
@@ -776,25 +779,20 @@
     "levelWithCount": "{{level}}（通知 {{count}} 件）",
     "now": "いま応答なし {{down}} 台 → 通知 {{count}} 件",
     "nowNone": "いま応答のないノードはありません。",
-    "folders": "フォルダごとの段",
-    "add": "+ フォルダの段を追加",
-    "empty": "すべてのフォルダが上の段に従います。",
-    "remove": "上の段に従う",
     "cols": {
-      "folder": "フォルダ",
       "level": "段",
       "actions": "操作"
     },
     "modal": {
-      "title": "フォルダの段を追加",
-      "pickFolder": "フォルダを選ぶ",
-      "add": "追加"
+      "title": "例外を追加",
+      "editTitle": "例外を編集",
+      "add": "追加",
+      "save": "保存"
     },
     "err": {
       "level": "まとめ方の段を変えられませんでした。",
       "remove": "フォルダの段を外せませんでした。",
       "save": "フォルダの段を追加できませんでした。",
-      "noFolder": "フォルダを選んでください。",
       "wait": "待つかどうかを変えられませんでした。"
     },
     "waitTitle": "隣が落ちかけているとき",
@@ -805,6 +803,14 @@
     "last7": "直近 7 日：発報 {{fired}} 件 → 通知 {{count}} 件、待つと {{waiting}} 件",
     "last7Delay": "直近 7 日：発報 {{fired}} 件 → 通知 {{count}} 件、待つと {{waiting}} 件（遅れは最大 {{delay}}）",
     "last7None": "直近 7 日に落ちたノードはありません。",
-    "last7Partial": "（古い記録だけ）"
+    "last7Partial": "（古い記録だけ）",
+    "exceptions": "例外",
+    "exceptionsInfo": {
+      "info": "1 台に例外が 2 つ以上当たると、弱いレベルが勝ちます。まとめすぎると障害が隠れ、弱すぎても通知が増えるだけです。"
+    },
+    "add": "+ 例外を追加",
+    "edit": "例外を編集",
+    "remove": "例外を削除",
+    "empty": "例外はありません。すべてのノードが上のレベルに従います。"
   }
 }

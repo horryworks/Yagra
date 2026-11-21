@@ -36,6 +36,7 @@
   "alerts": {
     "active": "Active alerts",
     "history": "History",
+    "deliveries": "Delivery log",
     "rules": "Threshold rules",
     "routing": "Notification delivery",
     "maintenance": "Maintenance windows",
@@ -113,6 +114,7 @@
     "topologyGeo": "Node groups placed on a world map by the coordinates you give them",
     "alertsActive": "What is wrong right now — the triage list",
     "alertsHistory": "Every alert that has fired and cleared",
+    "alertsDeliveries": "Each notification sent, and whether it arrived",
     "troubleshootAll": "On-demand deep analyses — pick one, choose a scope, read the report",
     "settingsIntegrations": "Vendor clouds Yagra pulls inventory and metrics from, such as Cisco Meraki",
     "settingsTls": "The certificate the WebUI serves",

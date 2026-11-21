@@ -1,13 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The judgement behind Alerts ▸ Notification delivery's grouping section (ADR-236): what each level
-// would do to the outage open now, and the folder rows in the order they are drawn.
+// would do to the outage open now, and the last seven days replayed at a level.
 
-import {
-  GROUPING_LEVELS,
-  type AlertGroupingConfig,
-  type GroupingLevel,
-  type NodeGroup,
-} from '../types/api';
+import { GROUPING_LEVELS, type AlertGroupingConfig, type GroupingLevel } from '../types/api';
 
 /** How many of the nodes down now would page on their own at `level`. The server lists the counts
  *  weakest level first, in `GROUPING_LEVELS` order; a list that came back short answers "all of
@@ -39,22 +34,6 @@ export function replayAt(cfg: AlertGroupingConfig, level: GroupingLevel): Replay
     maxDelaySecs: l?.delay_max_secs ?? null,
     truncated: r.truncated,
   };
-}
-
-/** One folder with a level of its own, named. */
-export interface FolderLevelRow {
-  groupId: string;
-  name: string;
-  level: GroupingLevel;
-}
-
-/** The folders that set their own level, by name. A folder deleted since keeps no row on the
- *  server (its level goes with it), so an unknown id is shown by its id rather than dropped. */
-export function folderLevelRows(cfg: AlertGroupingConfig, groups: NodeGroup[]): FolderLevelRow[] {
-  const names = new Map(groups.map((g) => [g.id, g.name]));
-  return cfg.folders
-    .map((f) => ({ groupId: f.group_id, name: names.get(f.group_id) ?? f.group_id, level: f.level }))
-    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Whether a string the switch handed back is a level. */

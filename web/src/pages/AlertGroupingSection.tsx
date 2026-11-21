@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Alert grouping (ADR-236), a section of Alerts ▸ Notification delivery: how strongly the alerts of
-// nodes that go down together are rolled up into one, for the deployment and per folder. Each level
-// shows what it would do to the outage open now. The judgement is in `alertGrouping.ts`.
+// nodes that go down together are rolled up into one - the deployment's level and, right under it,
+// its exceptions by folder and tag (ADR-262 decision 2; the weakest exception reaching a node wins).
+// Each level shows what it would do to the outage open now. The judgement is in `alertGrouping.ts`.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { GROUPING_LEVELS, type GroupingLevel, type NodeGroup } from '../types/api';
+import {
+  GROUPING_LEVELS,
+  type GroupingException,
+  type GroupingLevel,
+  type NodeGroup,
+  type NodeTags,
+} from '../types/api';
 import { useLoad } from '../lib/useLoad';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { ListToolbar } from '../components/ui/ListToolbar';
-import { columnLabels } from '../lib/listToolbar';
-import { useClientFilters } from '../lib/useClientFilters';
-import { useClientSort } from '../lib/useClientSort';
-import { ClippedText } from '../components/ui/ClippedText';
 import { Button } from '../components/ui/Button';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Modal } from '../components/ui/Modal';
@@ -23,27 +25,25 @@ import { Segmented } from '../components/ui/Segmented';
 import { InfoTip } from '../components/ui/InfoTip';
 import { Inline, Stack } from '../components/ui/Page';
 import { SectionHead } from '../components/ui/Section';
-import { GroupPicker } from '../components/ui/GroupPicker';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TrashIcon } from '../components/ui/icons';
+import { EditIcon, TrashIcon } from '../components/ui/icons';
 import { rowActionsWidth } from '../lib/rowActions';
-import { groupOptions } from '../lib/nodeTree';
 import { useSubmit } from '../lib/useSubmit';
 import { done } from '../lib/submitState';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { formatDuration } from '../lib/format';
+import { AppliesToCell, AppliesToPicker } from '../components/AppliesTo/AppliesTo';
 import {
-  folderLevelRows,
-  isGroupingLevel,
-  notifiedAt,
-  replayAt,
-  type FolderLevelRow,
-} from './alertGrouping';
+  appliesToFrom,
+  namesNothing,
+  type AppliesTo,
+} from '../components/AppliesTo/appliesToTarget';
+import { isGroupingLevel, notifiedAt, replayAt } from './alertGrouping';
 
 const EMPTY = {
   level: 'off' as GroupingLevel,
   wait: false,
-  folders: [],
+  exceptions: [] as GroupingException[],
   now: { down: 0, notified: [] },
   last_7_days: null,
 };
@@ -59,9 +59,13 @@ export function AlertGroupingSection({
   const { t } = useTranslation('alertsConfig');
   const grouping = useLoad(() => api.getAlertGrouping(), [], { initial: EMPTY });
   const { data: groups } = useLoad<NodeGroup[]>(() => api.listNodeGroups(), [], { initial: [] });
-  const [adding, setAdding] = useState(false);
+  const { data: nodeTags } = useLoad<NodeTags | null>(() => api.listNodeTags(), [], {
+    initial: null,
+  });
+  // `null` = closed; `'new'` = adding; an exception = editing it.
+  const [editing, setEditing] = useState<GroupingException | 'new' | null>(null);
   const cfg = grouping.data;
-  const rows = useMemo(() => folderLevelRows(cfg, groups), [cfg, groups]);
+  const rows = cfg.exceptions;
 
   const levelLabel = (l: GroupingLevel) => t(`grouping.level.${l}`);
   const setLevel = (v: string) => {
@@ -77,39 +81,39 @@ export function AlertGroupingSection({
       .then(grouping.reload)
       .catch((e: unknown) => onError(errMsg(e, t('grouping.err.wait'))));
   const replay = replayAt(cfg, cfg.level);
-  const setFolder = (groupId: string, v: string) => {
+  const setExceptionLevel = (x: GroupingException, v: string) => {
     if (!isGroupingLevel(v)) return;
     api
-      .setFolderGroupingLevel(groupId, v)
+      .updateGroupingException(x.id, { group_ids: x.group_ids, tags: x.tags, level: v })
       .then(grouping.reload)
       .catch((e: unknown) => onError(errMsg(e, t('grouping.err.level'))));
   };
-  const clearFolder = (groupId: string) =>
+  const remove = (x: GroupingException) =>
     api
-      .clearFolderGroupingLevel(groupId)
+      .deleteGroupingException(x.id)
       .then(grouping.reload)
       .catch((e: unknown) => onError(errMsg(e, t('grouping.err.remove'))));
 
-  const columns = useMemo<Column<FolderLevelRow>[]>(
+  const columns = useMemo<Column<GroupingException>[]>(
     () => [
       {
-        key: 'folder',
-        sortValue: (r) => r.name,
-        header: t('grouping.cols.folder'),
-        width: '1.4fr',
-        render: (r) => <ClippedText className="yt-name-txt" text={r.name} />,
+        key: 'target',
+        header: t('appliesTo.title'),
+        width: '1.6fr',
+        render: (x) => (
+          <AppliesToCell groupIds={x.group_ids} tags={x.tags} groups={groups} nodeTags={nodeTags} />
+        ),
       },
       {
         key: 'level',
-        sortValue: (r) => GROUPING_LEVELS.indexOf(r.level),
         header: t('grouping.cols.level'),
         width: '200px',
-        render: (r) => (
+        render: (x) => (
           <Select
-            value={r.level}
+            value={x.level}
             disabled={!canSystem}
             aria-label={t('grouping.cols.level')}
-            onChange={(e) => setFolder(r.groupId, e.target.value)}
+            onChange={(e) => setExceptionLevel(x, e.target.value)}
           >
             {GROUPING_LEVELS.map((l) => (
               <option key={l} value={l}>
@@ -122,18 +126,23 @@ export function AlertGroupingSection({
       {
         key: 'actions',
         header: t('grouping.cols.actions'),
-        width: rowActionsWidth(1),
+        width: rowActionsWidth(2),
         align: 'right',
-        render: (r) =>
+        render: (x) =>
           canSystem ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
                   {
+                    label: t('grouping.edit'),
+                    icon: <EditIcon />,
+                    onClick: () => setEditing(x),
+                  },
+                  {
                     label: t('grouping.remove'),
                     icon: <TrashIcon />,
                     danger: true,
-                    onClick: () => void clearFolder(r.groupId),
+                    onClick: () => void remove(x),
                   },
                 ]}
               />
@@ -143,10 +152,8 @@ export function AlertGroupingSection({
     ],
     // The handlers are rebuilt every render; what they read is listed instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, canSystem],
+    [t, canSystem, groups, nodeTags],
   );
-  const filtering = useClientFilters(columns, rows, { prefix: 'grouping.' });
-  const sorting = useClientSort(columns, filtering.shown, { prefix: 'grouping.' });
 
   return (
     <Stack as="section" gap={12}>
@@ -205,57 +212,55 @@ export function AlertGroupingSection({
           </p>
         )}
       </Stack>
-      <ListToolbar
-        title={t('grouping.folders')}
-        list={filtering}
-        labels={columnLabels(columns)}
-        count={{
-          shown: filtering.shown.length,
-          total: rows.length,
-          noun: (n) => t('noun.folder', { count: n }),
-        }}
-      >
-        {canSystem && (
-          <Button variant="primary" onClick={() => setAdding(true)}>
-            {t('grouping.add')}
-          </Button>
-        )}
-      </ListToolbar>
-      <DataTable
-        tableId="settings.alertGroupingFolders"
-        rows={sorting.rows}
-        columns={sorting.columns}
-        sort={sorting.sort}
-        onSortChange={sorting.setSort}
-        rowKey={(r) => r.groupId}
-        filters={filtering.filters}
-        onFiltersChange={filtering.setFilters}
-        filterCounts={filtering.counts}
-        loading={grouping.loading}
-        empty={
-          filtering.anyFiltered ? (
-            t('common:filter.noMatch')
-          ) : (
+      {/* The exceptions sit inside the grouping, indented under the level they change, so they
+          read as part of it rather than as a setting of their own (ADR-262 decision 2). */}
+      <Stack gap={8} className="routing-grouping-exceptions">
+        <SectionHead
+          title={
+            <Inline as="span" gap={6}>
+              {t('grouping.exceptions')}
+              <InfoTip
+                infoKey="alertsConfig:grouping.exceptionsInfo.info"
+                label={t('grouping.exceptions')}
+              />
+            </Inline>
+          }
+          actions={
+            canSystem && (
+              <Button variant="primary" onClick={() => setEditing('new')}>
+                {t('grouping.add')}
+              </Button>
+            )
+          }
+        />
+        <DataTable
+          tableId="settings.alertGroupingExceptions"
+          rows={rows}
+          columns={columns}
+          rowKey={(x) => x.id}
+          loading={grouping.loading}
+          empty={
             <EmptyState
               text={t('grouping.empty')}
               action={
                 canSystem && (
-                  <Button variant="primary" onClick={() => setAdding(true)}>
+                  <Button variant="primary" onClick={() => setEditing('new')}>
                     {t('grouping.add')}
                   </Button>
                 )
               }
             />
-          )
-        }
-      />
-      {adding && (
-        <FolderLevelModal
+          }
+        />
+      </Stack>
+      {editing !== null && (
+        <ExceptionModal
+          exception={editing === 'new' ? undefined : editing}
           groups={groups}
-          taken={rows.map((r) => r.groupId)}
-          onClose={() => setAdding(false)}
+          nodeTags={nodeTags}
+          onClose={() => setEditing(null)}
           onDone={() => {
-            setAdding(false);
+            setEditing(null);
             grouping.reload();
           }}
         />
@@ -264,56 +269,66 @@ export function AlertGroupingSection({
   );
 }
 
-function FolderLevelModal({
+/** Add an exception, or - given `exception` - replace what it applies to and its level. */
+function ExceptionModal({
+  exception,
   groups,
-  taken,
+  nodeTags,
   onClose,
   onDone,
 }: {
+  exception?: GroupingException;
   groups: NodeGroup[];
-  taken: string[];
+  nodeTags: NodeTags | null;
   onClose: () => void;
   onDone: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
-  const [groupId, setGroupId] = useState('');
-  const [level, setLevel] = useState<GroupingLevel>('certain');
+  // An exception always names something, so the switch to "every node" is not offered.
+  const [initial] = useState<AppliesTo>(() => ({
+    ...appliesToFrom(exception?.group_ids ?? [], exception?.tags ?? []),
+    only: true,
+  }));
+  const [target, setTarget] = useState<AppliesTo>(initial);
+  const [level, setLevel] = useState<GroupingLevel>(exception?.level ?? 'off');
   const form = useSubmit({ errorFallback: t('grouping.err.save'), onDone });
-  const options = useMemo(
-    () => groupOptions(groups).filter((o) => !taken.includes(o.id)),
-    [groups, taken],
-  );
+  const empty = namesNothing(target);
 
   const submit = () => {
-    if (!groupId) {
-      form.refuse(t('grouping.err.noFolder'));
-      return;
-    }
-    form.submit(() => api.setFolderGroupingLevel(groupId, level).then(() => done()));
+    if (empty) return;
+    const body = { group_ids: target.groupIds, tags: target.tags, level };
+    form.submit(() =>
+      (exception
+        ? api.updateGroupingException(exception.id, body)
+        : api.createGroupingException(body)
+      ).then(() => done()),
+    );
   };
 
   return (
     <Modal
-      title={t('grouping.modal.title')}
+      title={exception ? t('grouping.modal.editTitle') : t('grouping.modal.title')}
       onClose={onClose}
       footer={
         <FormFooter
           form={form}
           onClose={onClose}
           onSubmit={submit}
-          submitLabel={t('grouping.modal.add')}
+          submitLabel={exception ? t('grouping.modal.save') : t('grouping.modal.add')}
+          canSubmit={!empty}
         />
       }
     >
       <Fields>
-        <Field label={t('grouping.cols.folder')}>
-          <GroupPicker
-            options={options}
-            value={groupId}
-            placeholder={t('grouping.modal.pickFolder')}
-            onChange={setGroupId}
-          />
-        </Field>
+        <AppliesToPicker
+          label={t('appliesTo.title')}
+          value={target}
+          onChange={setTarget}
+          groups={groups}
+          nodeTags={nodeTags}
+          initial={initial}
+          allowAll={false}
+        />
         <Field label={t('grouping.cols.level')}>
           <Select
             id="grouping-level"

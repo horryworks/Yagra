@@ -2220,6 +2220,17 @@ impl NodeRepo {
             .collect()
     }
 
+    /// Every node's own folder (`None` = ungrouped), unscoped: what a routing rule's folders are
+    /// resolved against (ADR-262). Two columns, so the 30-second routing refresh stays cheap.
+    pub async fn folder_rows(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+        let rows = sqlx::query("SELECT id, group_id FROM nodes")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("id")?, row.try_get("group_id")?)))
+            .collect()
+    }
+
     /// The folder each of these nodes is filed in (`None` = ungrouped), unscoped. A node that does not
     /// exist is absent. Read by the map to tell which site a node and its default gateway are in
     /// (ADR-191 Inc.10).

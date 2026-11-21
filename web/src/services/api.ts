@@ -155,6 +155,8 @@ import type {
   RoleMatrix,
   NotificationDefaultRoute,
   RoutingRule,
+  RoutingRuleBody,
+  GroupingExceptionBody,
   NodeTags,
   DeliveryHoursConfig,
   HeldNotification,
@@ -170,7 +172,6 @@ import type {
   SavedFinding,
   SavedFindingsQuery,
   Scope,
-  Severity,
   StateHistory,
   SuppressionExemption,
   ThroughputRange,
@@ -2458,21 +2459,27 @@ export const api = {
   getNotificationDefaultRoute: (): Promise<NotificationDefaultRoute> =>
     apiGet('/api/v1/notification-default-route'),
 
-  /** Create a routing rule. `severity` null ⇒ matches all severities; empty `tags` ⇒ every node
-   *  (ADR-259). */
-  createRoutingRule: (body: {
-    name: string;
-    severity: Severity | null;
-    tags: string[];
-    channel_ids: string[];
-  }): Promise<{ id: string }> => apiPost('/api/v1/routing-rules', { body }),
+  /** Create a routing rule. `severity` null ⇒ matches all severities; empty `tags` and
+   *  `group_ids` ⇒ every node (ADR-259, ADR-262). */
+  createRoutingRule: (body: RoutingRuleBody): Promise<{ id: string }> =>
+    apiPost('/api/v1/routing-rules', { body }),
 
   /** The tags nodes carry, with how many carry each — what a routing rule's tags are picked from
-   *  (ADR-259 Inc.2). `reach` adds how many nodes carry at least one of those tags. Newline-joined,
-   *  because a tag cannot hold a control character and may hold a comma. */
-  listNodeTags: (reach?: readonly string[]): Promise<NodeTags> =>
+   *  (ADR-259 Inc.2). Given a target, adds how many nodes carry one of its tags or sit inside one
+   *  of its folders (ADR-262). Tags are newline-joined, because a tag cannot hold a control
+   *  character and may hold a comma; folder ids are comma-joined. */
+  listNodeTags: (reach?: {
+    tags: readonly string[];
+    groups: readonly string[];
+  }): Promise<NodeTags> =>
     apiGet('/api/v1/node-tags', {
-      query: reach && reach.length > 0 ? { reach: reach.join('\n') } : undefined,
+      query:
+        reach && (reach.tags.length > 0 || reach.groups.length > 0)
+          ? {
+              ...(reach.tags.length > 0 ? { reach: reach.tags.join('\n') } : {}),
+              ...(reach.groups.length > 0 ? { reach_groups: reach.groups.join(',') } : {}),
+            }
+          : undefined,
     }),
 
   /** Enable/disable a rule. */
@@ -2481,10 +2488,8 @@ export const api = {
 
   /** Replace a rule's name, severity filter, tags and channels; its on/off switch is left alone
    *  (ADR-193, ADR-259). */
-  updateRoutingRule: (
-    id: string,
-    body: { name: string; severity: Severity | null; tags: string[]; channel_ids: string[] },
-  ): Promise<void> => apiPut('/api/v1/routing-rules/{id}/definition', { path: { id }, body }),
+  updateRoutingRule: (id: string, body: RoutingRuleBody): Promise<void> =>
+    apiPut('/api/v1/routing-rules/{id}/definition', { path: { id }, body }),
 
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
@@ -2521,13 +2526,18 @@ export const api = {
   setAlertGroupingWait: (wait: boolean): Promise<void> =>
     apiPut('/api/v1/alert-grouping/wait', { body: { wait } }),
 
-  /** Give a folder its own grouping level, which beats the deployment's beneath it. */
-  setFolderGroupingLevel: (groupId: string, level: GroupingLevel): Promise<void> =>
-    apiPut('/api/v1/alert-grouping/folders/{group_id}', { path: { group_id: groupId }, body: { level } }),
+  /** Add an exception to the grouping level: the nodes inside its folders or carrying its tags
+   *  group at its level; the weakest exception reaching a node wins (ADR-262). */
+  createGroupingException: (body: GroupingExceptionBody): Promise<{ id: string }> =>
+    apiPost('/api/v1/alert-grouping/exceptions', { body }),
 
-  /** Take a folder's own level away, so it follows the deployment's again. */
-  clearFolderGroupingLevel: (groupId: string): Promise<void> =>
-    apiDelete('/api/v1/alert-grouping/folders/{group_id}', { path: { group_id: groupId } }),
+  /** Replace what an exception applies to and its level. */
+  updateGroupingException: (id: string, body: GroupingExceptionBody): Promise<void> =>
+    apiPut('/api/v1/alert-grouping/exceptions/{id}', { path: { id }, body }),
+
+  /** Remove an exception; the nodes it reached follow the deployment's level or another one. */
+  deleteGroupingException: (id: string): Promise<void> =>
+    apiDelete('/api/v1/alert-grouping/exceptions/{id}', { path: { id } }),
 
   /** Notifications held until their node's delivery hours open (ADR-226). */
   listHeldNotifications: (): Promise<HeldNotification[]> =>

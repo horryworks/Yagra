@@ -68,7 +68,7 @@ export const TABLE_IDS = [
   'troubleshoot.runs',
   'troubleshoot.scheduled',
   // Settings
-  'settings.alertGroupingFolders',
+  'settings.alertGroupingExceptions',
   'settings.apiTokens',
   'settings.audit',
   'settings.credentials',

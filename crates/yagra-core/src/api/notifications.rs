@@ -1017,6 +1017,9 @@ pub(super) struct NodeTagsQuery {
     /// newline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma
     /// is legal inside one. Absent = no reach in the reply.
     reach: Option<String>,
+    /// Folders whose reach to count with `reach`: a node inside one of them, at any depth, counts
+    /// too (ADR-262). Comma-separated ids; one that does not parse is ignored.
+    reach_groups: Option<String>,
 }
 
 /// One tag some node carries, and on how many nodes.
@@ -1034,10 +1037,18 @@ pub(crate) struct NodeTag {
 pub(crate) struct NodeTags {
     /// Every tag at least one node carries, most-carried first, then by name.
     tags: Vec<NodeTag>,
-    /// How many nodes carry at least one of the `reach` tags, each node counted once. Absent when
-    /// the request named none.
+    /// How many nodes carry at least one of the `reach` tags or sit inside one of the
+    /// `reach_groups` folders, each node counted once. Absent when the request named neither.
     #[serde(skip_serializing_if = "Option::is_none")]
     reach: Option<u64>,
+}
+
+/// Who a reach question asks about: tags a node may carry, and folders it may sit in (already
+/// expanded to every folder beneath them).
+#[derive(Default)]
+struct Reach {
+    tags: Vec<String>,
+    folders: std::collections::HashSet<Uuid>,
 }
 
 /// Count the effective tags over every node, and the reach of `reach`. Pure, so the counting is
@@ -1045,13 +1056,16 @@ pub(crate) struct NodeTags {
 fn count_node_tags(
     rows: &[yagra_base::repo::NodeLabelRow],
     resolver: &crate::inventory::tagres::TagResolver,
-    reach: Option<&[String]>,
+    reach: Option<&Reach>,
 ) -> NodeTags {
     let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut reached = 0u64;
     for row in rows {
         let tags = resolver.effective_parts(row.group_id, &row.tags, &row.tags_excluded);
-        if reach.is_some_and(|want| want.iter().any(|w| tags.contains(w))) {
+        if reach.is_some_and(|want| {
+            want.tags.iter().any(|w| tags.contains(w))
+                || row.group_id.is_some_and(|g| want.folders.contains(&g))
+        }) {
             reached += 1;
         }
         for t in tags {
@@ -1097,22 +1111,36 @@ async fn list_node_tags(
     admin: Admin,
     Query(q): Query<NodeTagsQuery>,
 ) -> ApiResult<Json<NodeTags>> {
-    Ok(Json(node_tags_in(&admin, q.reach.as_deref()).await?))
+    Ok(Json(
+        node_tags_in(&admin, q.reach.as_deref(), q.reach_groups.as_deref()).await?,
+    ))
 }
 
 /// What `GET /api/v1/node-tags` answers, shared with the MCP `get_config(kind=node_tags)`.
 pub(crate) async fn node_tags_in(
     admin: &super::AdminState,
     reach: Option<&str>,
+    reach_groups: Option<&str>,
 ) -> ApiResult<NodeTags> {
     let fail = |e: anyhow::Error| {
         ApiError::from_internal(e.as_ref(), "list node tags", "failed to list node tags")
     };
     let rows = admin.repo.label_rows().await.map_err(fail)?;
     let folders = admin.groups.tag_rows().await.map_err(fail)?;
+    let edges: Vec<(Uuid, Option<Uuid>)> = folders.iter().map(|f| (f.0, f.1)).collect();
     let resolver = crate::inventory::tagres::TagResolver::build(folders);
-    let reach = reach.map(reach_tags);
-    Ok(count_node_tags(&rows, &resolver, reach.as_deref()))
+    let reach = (reach.is_some() || reach_groups.is_some()).then(|| Reach {
+        tags: reach.map(reach_tags).unwrap_or_default(),
+        folders: reach_groups
+            .map(|raw| {
+                raw.split(',')
+                    .filter_map(|id| id.trim().parse::<Uuid>().ok())
+                    .flat_map(|g| yagra_base::groups::group_subtree(&edges, g))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    });
+    Ok(count_node_tags(&rows, &resolver, reach.as_ref()))
 }
 
 /// The env-configured default notification route (ADR-200 Inc.28): whether it exists, and which
@@ -1160,8 +1188,9 @@ async fn get_notification_default_route(
     Json(NotificationDefaultRoute::of(&admin.notify_default_route))
 }
 
-/// Create-rule body: a name, an optional severity filter (absent = any), the tags a node must
-/// carry one of (ADR-259), and target channels. Editing a rule takes the same body (ADR-193).
+/// Create-rule body: a name, an optional severity filter (absent = any), the folders and tags a
+/// node must be inside or carry one of (ADR-259, ADR-262), and target channels. Editing a rule
+/// takes the same body (ADR-193).
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateRule {
     name: String,
@@ -1172,6 +1201,11 @@ pub(super) struct CreateRule {
     /// a client that predates the field must not widen a rule by saving it.
     #[serde(default)]
     tags: Option<Vec<String>>,
+    /// Only alerts on a node inside one of these folders, at any depth, reach the rule's channels
+    /// (or on a node carrying one of `tags`: either is enough, ADR-262). Both empty = every node.
+    /// Omitted on an edit, the rule keeps the folders it has.
+    #[serde(default)]
+    group_ids: Option<Vec<Uuid>>,
     channel_ids: Vec<Uuid>,
 }
 
@@ -1237,6 +1271,7 @@ async fn create_routing_rule(
             rule.name,
             rule.severity,
             &rule.tags.unwrap_or_default(),
+            body.group_ids.as_deref().unwrap_or_default(),
             &body.channel_ids,
         )
         .await
@@ -1282,14 +1317,14 @@ async fn set_routing_rule_enabled(
     }
 }
 
-/// Replace a rule's name, severity filter, tags and channels. Whether it is switched on is left as
-/// it was, and so are its tags when the body omits them.
+/// Replace a rule's name, severity filter, tags, folders and channels. Whether it is switched on is
+/// left as it was, and so are its tags and folders when the body omits them.
 #[utoipa::path(
     put, path = "/api/v1/routing-rules/{id}/definition", tag = "notifications",
     params(("id" = Uuid, Path, description = "Routing rule id")),
     request_body = CreateRule,
     responses(
-        (status = 204, description = "Rule replaced; its enabled switch is unchanged, and so are its tags when the body omits them"),
+        (status = 204, description = "Rule replaced; its enabled switch is unchanged, and so are its tags and folders when the body omits them"),
         (status = 400, description = "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
@@ -1311,6 +1346,7 @@ async fn update_routing_rule(
             rule.name,
             rule.severity,
             rule.tags.as_deref(),
+            body.group_ids.as_deref(),
             &body.channel_ids,
         )
         .await
@@ -2196,7 +2232,10 @@ at 2026-08-04T09:41:07+00:00"
             row(Some(site), &[], &["TeamA"]),
             row(None, &["core"], &[]),
         ];
-        let reach = ["TeamA".to_owned(), "core".to_owned()];
+        let reach = Reach {
+            tags: vec!["TeamA".to_owned(), "core".to_owned()],
+            ..Reach::default()
+        };
         let got = count_node_tags(&rows, &resolver, Some(&reach));
         assert_eq!(
             got.tags,
@@ -2218,6 +2257,16 @@ at 2026-08-04T09:41:07+00:00"
             "the node carrying both counts once; the one refusing TeamA and carrying nothing else counts none"
         );
         assert_eq!(count_node_tags(&rows, &resolver, None).reach, None);
+        // A folder reaches every node filed in it, and a node a tag also reaches counts once
+        // (ADR-262): the three in `site`, plus the ungrouped node carrying `core`.
+        let mixed = Reach {
+            tags: vec!["core".to_owned()],
+            folders: [site].into_iter().collect(),
+        };
+        assert_eq!(
+            count_node_tags(&rows, &resolver, Some(&mixed)).reach,
+            Some(4)
+        );
         assert_eq!(
             reach_tags(" TeamA \n\ncore\n"),
             vec!["TeamA".to_owned(), "core".to_owned()]

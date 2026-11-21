@@ -726,7 +726,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Notification routing priming: load the DB channels/rules into the notifier now (env
     // channels stay always-on). The periodic refresh loop is leader-only (`leader_work`).
-    alerts::config::load_routing(&notifier, &notifications).await;
+    alerts::config::load_routing(&notifier, &notifications, &repo, &group_repo).await;
     alerts::config::load_webui_url(&notifier, &repo).await;
     notifier.set_held_store(delivery_hours.clone());
     alerts::config::load_hours(
@@ -2372,7 +2372,7 @@ async fn run_routing_refresh(
     let mut hours = alerts::config::HoursCache::default();
     loop {
         tokio::time::sleep(Duration::from_secs(30)).await;
-        alerts::config::load_routing(&notifier, &notifications).await;
+        alerts::config::load_routing(&notifier, &notifications, &repo, &group_repo).await;
         alerts::config::load_webui_url(&notifier, &repo).await;
         alerts::config::load_hours(&notifier, &delivery_hours, &repo, &group_repo, &mut hours)
             .await;

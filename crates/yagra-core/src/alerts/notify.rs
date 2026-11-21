@@ -20,7 +20,9 @@ use yagra_alert::{
     Alert, DedupKey, DeliveryFailure, DispatchOutcome, DispatchReport, Dispatcher, Notification,
     NotifyChannel, NotifyError, ResolveSent, RetryPolicy, Subject,
 };
-use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, Direction, NotifyEvent, Severity};
+use yagra_common::{
+    is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
+};
 
 use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore, HoursPolicy};
 use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
@@ -1009,22 +1011,31 @@ struct Routing {
 
 impl Routing {
     /// Channel ids whose enabled routing rule matches this severity (a rule with no severity
-    /// matches any) and these tags (a rule with no tags matches any node, ADR-259).
+    /// matches any) and this node (a rule naming no folder and no tag matches any node; otherwise
+    /// the node must be inside one of its folders or carry one of its tags - ADR-259, ADR-262).
     ///
     /// `tags` is the subject node's effective labels, from the facts lookup; a subject that is not
-    /// a node, or a lookup that found nothing, passes an empty slice and so matches only the rules
-    /// that name no tags - a failure narrows, never widens.
+    /// a node, or a lookup that found nothing, passes an empty slice. `node` is `None` for a
+    /// subject that is not a node. `reach` is which nodes each rule's folders reach. Either way a
+    /// subject that cannot be placed matches only the rules that name nothing - a failure
+    /// narrows, never widens.
     ///
     /// One function rather than the three verbatim copies the fire / resolve / roll-up paths each
     /// carried — the set has to be identical across them or a resolve would go somewhere its fire
     /// did not (ADR-104 decision 5).
-    fn matched(&self, severity: Severity, tags: &[String]) -> BTreeSet<Uuid> {
+    fn matched(
+        &self,
+        severity: Severity,
+        tags: &[String],
+        node: Option<NodeId>,
+        reach: &RuleReach,
+    ) -> BTreeSet<Uuid> {
         self.rules
             .iter()
             .filter(|r| {
                 r.enabled
                     && rule_matches_severity(r.severity, severity)
-                    && rule_matches_tags(&r.tags, tags)
+                    && rule_matches_target(r, tags, node, reach)
             })
             .flat_map(|r| r.channel_ids.iter().copied())
             .collect()
@@ -1173,6 +1184,9 @@ pub struct Notifier {
     /// Which nodes keep delivery hours, and which (ADR-226). Empty until the first refresh and on
     /// every deployment with no enabled schedule, and an empty policy holds nothing.
     hours: RwLock<Arc<HoursPolicy>>,
+    /// Which nodes each routing rule's folders reach (ADR-262). Empty until the first refresh and
+    /// on every deployment with no rule that names a folder.
+    rule_reach: RwLock<Arc<RuleReach>>,
     /// Where a notification outside its node's hours is kept until they open (ADR-226 decision
     /// 7). `None` in skeleton mode and in tests that do not ask, which holds nothing.
     held: RwLock<Option<Arc<dyn HeldStore>>>,
@@ -1249,6 +1263,7 @@ impl Notifier {
             sides: std::sync::Mutex::new(HashMap::new()),
             default_kinds,
             hours: RwLock::new(Arc::new(HoursPolicy::default())),
+            rule_reach: RwLock::new(Arc::new(RuleReach::new())),
             held: RwLock::new(None),
         }
     }
@@ -1392,6 +1407,25 @@ impl Notifier {
             text,
             kinds,
         });
+    }
+
+    /// Replace which nodes each rule's folders reach (ADR-262), refreshed alongside routing. Not
+    /// `async`, for the reason [`Self::set_routing`] is not.
+    pub fn set_rule_reach(&self, reach: RuleReach) {
+        *self
+            .rule_reach
+            .write()
+            .expect("notifier rule-reach lock poisoned") = Arc::new(reach);
+    }
+
+    /// The current rule-reach snapshot. One `Arc` clone; never held across an await.
+    fn rule_reach(&self) -> Arc<RuleReach> {
+        Arc::clone(
+            &self
+                .rule_reach
+                .read()
+                .expect("notifier rule-reach lock poisoned"),
+        )
     }
 
     /// Attach the store held notifications are kept in (ADR-226). Called once at startup by a core
@@ -1652,7 +1686,12 @@ impl Notifier {
                     tracing::debug!(subject = %alert.subject, %root, "suppressing downstream alert notification (rolled up under root cause)");
                     return;
                 }
-                let matched = routing.matched(alert.severity, tags_of(facts.as_ref()));
+                let matched = routing.matched(
+                    alert.severity,
+                    tags_of(facts.as_ref()),
+                    alert.subject.node(),
+                    &self.rule_reach(),
+                );
                 if self.side_changed(&alert) {
                     // Only the channels this fire goes to forget it, so each is paged again. A
                     // channel the first side reached and no rule matches now - the node lost the
@@ -1782,7 +1821,12 @@ impl Notifier {
         let key = alert.dedup_key();
         let notification = with_subject_facts(json_notification(alert, event, facts), facts);
         let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
-        let matched = routing.matched(alert.severity, tags_of(facts));
+        let matched = routing.matched(
+            alert.severity,
+            tags_of(facts),
+            alert.subject.node(),
+            &self.rule_reach(),
+        );
         let done = Delivered {
             alert,
             event,
@@ -2157,6 +2201,53 @@ fn rule_matches_severity(rule_severity: Option<Severity>, alert_severity: Severi
 #[must_use]
 fn rule_matches_tags(rule_tags: &[String], node_tags: &[String]) -> bool {
     rule_tags.is_empty() || rule_tags.iter().any(|t| node_tags.contains(t))
+}
+
+/// Which nodes each routing rule's folders reach, by rule id (ADR-262): every node filed in one
+/// of the rule's folders or any folder beneath them. A rule naming no folder is absent.
+pub type RuleReach = HashMap<Uuid, HashSet<NodeId>>;
+
+/// Match a routing rule against the subject (ADR-262 decision 1): a rule naming no folder and no
+/// tag matches every subject; otherwise the node must carry one of its tags **or** be inside one
+/// of its folders. A subject that is not a node matches only the rule that names nothing.
+#[must_use]
+fn rule_matches_target(
+    rule: &RoutingRule,
+    node_tags: &[String],
+    node: Option<NodeId>,
+    reach: &RuleReach,
+) -> bool {
+    if !rule.is_narrowed() {
+        return true;
+    }
+    let by_tag = !rule.tags.is_empty() && rule_matches_tags(&rule.tags, node_tags);
+    let by_folder = node.is_some_and(|n| reach.get(&rule.id).is_some_and(|set| set.contains(&n)));
+    by_tag || by_folder
+}
+
+/// Which nodes each rule's folders reach (ADR-262): `nodes` is every node's own folder, `edges`
+/// the folder tree. Pure, so the refresh that calls it and the coverage that will share it agree.
+#[must_use]
+pub fn rule_reach(
+    rules: &[RoutingRule],
+    nodes: &[(NodeId, Option<Uuid>)],
+    edges: &[(Uuid, Option<Uuid>)],
+) -> RuleReach {
+    let mut out = RuleReach::new();
+    for r in rules.iter().filter(|r| !r.group_ids.is_empty()) {
+        let folders: HashSet<Uuid> = r
+            .group_ids
+            .iter()
+            .flat_map(|g| yagra_base::groups::group_subtree(edges, *g))
+            .collect();
+        let reached = nodes
+            .iter()
+            .filter(|(_, g)| g.is_some_and(|g| folders.contains(&g)))
+            .map(|(n, _)| *n)
+            .collect();
+        out.insert(r.id, reached);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -3154,6 +3245,7 @@ mod delivery_tests {
             enabled: true,
             severity,
             tags: Vec::new(),
+            group_ids: Vec::new(),
             channel_ids: vec![channel],
         }
     }
@@ -3191,6 +3283,63 @@ mod delivery_tests {
         assert!(
             !rule_matches_tags(&["JAPAN".to_owned()], &[]),
             "a subject with no tags never matches a rule that names one"
+        );
+    }
+
+    /// ADR-262 decision 1: a rule names folders and tags together, and either reaches a node. A
+    /// folder reaches every node filed beneath it, at any depth; a subject that is not a node, or
+    /// a node nowhere in the reach, matches only a rule that names nothing.
+    #[test]
+    fn a_rule_reaches_a_node_by_folder_or_by_tag() {
+        let channel = Uuid::new_v4();
+        let (site, floor, other) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let edges = [(site, None), (floor, Some(site)), (other, None)];
+        let (deep, beside, elsewhere) = (NodeId::new(), NodeId::new(), NodeId::new());
+        let nodes = [
+            (deep, Some(floor)),
+            (beside, Some(other)),
+            (elsewhere, None),
+        ];
+        let mixed = RoutingRule {
+            group_ids: vec![site],
+            ..tagged_rule(channel, &["core"])
+        };
+        let every = rule(channel, None);
+        let reach = rule_reach(&[mixed.clone(), every.clone()], &nodes, &edges);
+        assert_eq!(
+            reach.get(&mixed.id),
+            Some(&[deep].into_iter().collect()),
+            "the floor beneath the site is reached, the folder beside it is not"
+        );
+        assert!(
+            !reach.contains_key(&every.id),
+            "a rule naming no folder has no reach row"
+        );
+
+        let core = ["core".to_owned()];
+        assert!(
+            rule_matches_target(&mixed, &[], Some(deep), &reach),
+            "by folder"
+        );
+        assert!(
+            rule_matches_target(&mixed, &core, Some(elsewhere), &reach),
+            "by tag"
+        );
+        assert!(
+            !rule_matches_target(&mixed, &[], Some(beside), &reach),
+            "by neither"
+        );
+        assert!(
+            !rule_matches_target(&mixed, &[], None, &reach),
+            "not a node"
+        );
+        assert!(
+            rule_matches_target(&every, &[], None, &reach),
+            "a rule naming nothing"
+        );
+        assert!(
+            !rule_matches_target(&mixed, &[], Some(deep), &RuleReach::new()),
+            "with no reach resolved, a folder rule narrows rather than widens"
         );
     }
 
