@@ -156,6 +156,8 @@ pub(super) enum ConfigKind {
     NotificationChannels,
     RoutingRules,
     NodeTags,
+    RoutingCatchAll,
+    RoutingCoverage,
     NotificationDefaultRoute,
     DeliveryHours,
     AlertGrouping,
@@ -198,6 +200,8 @@ yagra_base::stored_enum::token_enum!(ConfigKind, [
     NotificationChannels => "notification_channels",
     RoutingRules => "routing_rules",
     NodeTags => "node_tags",
+    RoutingCatchAll => "routing_catch_all",
+    RoutingCoverage => "routing_coverage",
     NotificationDefaultRoute => "notification_default_route",
     DeliveryHours => "delivery_hours",
     AlertGrouping => "alert_grouping",
@@ -261,6 +265,8 @@ impl ConfigKind {
             | Self::NotificationChannels
             | Self::RoutingRules
             | Self::NodeTags
+            | Self::RoutingCatchAll
+            | Self::RoutingCoverage
             | Self::NotificationDefaultRoute
             | Self::DeliveryHours
             | Self::AlertGrouping
@@ -298,6 +304,8 @@ impl ConfigKind {
             Self::NotificationChannels => "notification_channels",
             Self::RoutingRules => "routing_rules",
             Self::NodeTags => "node_tags",
+            Self::RoutingCatchAll => "routing_catch_all",
+            Self::RoutingCoverage => "routing_coverage",
             Self::NotificationDefaultRoute => "notification_default_route",
             Self::DeliveryHours => "delivery_hours",
             Self::AlertGrouping => "alert_grouping",
@@ -351,7 +359,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 39 values.
+    /// Which configuration to read. Required; see the tool description for the 41 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -889,15 +897,21 @@ impl YagraMcp {
                        rules on the node itself), event_sources, \
                        notification_channels, routing_rules (each with the `group_ids` a node \
                        must be inside or the `tags` it must carry one of; both empty = every \
-                       node), node_tags (every tag some node carries \
+                       node; and `when`: `always`, or `during` / `outside` a weekly window of ISO \
+                       weekdays and minutes after midnight, read in the node's own zone — a rule \
+                       is only sent to while it is open), node_tags (every tag some node carries \
                        among its effective labels, with how many nodes carry it — the names a \
-                       routing rule can usefully name), notification_default_route (the \
+                       routing rule can usefully name), routing_catch_all (the channels an alert \
+                       goes to when no rule that matches it is open; empty = it is held until one \
+                       opens), routing_coverage (every node grouped by the critical-severity rules \
+                       that match it and the zone it keeps time in, with where its alerts go across \
+                       the week in stretches of minutes from Monday 00:00 local: to the rules' \
+                       channels, the catch-all, held, or nowhere), notification_default_route (the \
                        route set by the core's environment, which every alert is sent to whatever \
                        the routing rules say: whether it is configured and which kinds of channel \
                        — webhook, email — it sends to, never where), delivery_hours (the \
-                       schedules outside which notifications are held: weekdays, start and end \
-                       in minutes after local midnight, the folders each applies to, \
-                       and the default time zone), alert_grouping (how strongly the alerts of \
+                       deployment's default time zone, and the schedules of an earlier version, \
+                       which no longer hold anything — a rule's `when` replaced them), alert_grouping (how strongly the alerts of \
                        nodes that go down together are rolled up into one: the deployment's level, \
                        its exceptions by folder and tag (the weakest reaching a node wins), and \
                        how many of the nodes down now would page at each \
@@ -971,7 +985,7 @@ impl YagraMcp {
                        get_interface_thresholds; for what a metric measures use \
                        kind=metric_meanings. \
                        Kinds require different permissions: oidc and ldap need manage-users; \
-                       notification_channels, routing_rules, node_tags, notification_default_route, \
+                       notification_channels, routing_rules, node_tags, routing_catch_all, routing_coverage, notification_default_route, \
                        delivery_hours, alert_grouping, forward_destinations and llm need manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
                        discovery_candidates, the four meraki kinds, the two report kinds, \
                        retention, adjacency_settings, webui_url and roles need view; the rest need \
@@ -1107,6 +1121,19 @@ impl YagraMcp {
                     Err(e) => tool_api_error(TOOL, &e),
                 }
             }
+            // Critical: the alert a person is woken for. REST takes `severity` for the others.
+            ConfigKind::RoutingCoverage => {
+                match crate::api::notifications::coverage_in(a, yagra_common::Severity::Critical)
+                    .await
+                {
+                    Ok(c) => ok_json(TOOL, &c),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
+            ConfigKind::RoutingCatchAll => match crate::api::notifications::catch_all_in(a).await {
+                Ok(c) => ok_json(TOOL, &c),
+                Err(e) => tool_api_error(TOOL, &e),
+            },
             ConfigKind::NotificationDefaultRoute => ok_json(
                 TOOL,
                 &crate::api::notifications::NotificationDefaultRoute::of(&a.notify_default_route),
@@ -1675,7 +1702,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            39,
+            41,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

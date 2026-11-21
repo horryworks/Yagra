@@ -57,3 +57,52 @@
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* Coverage (ADR-262 decision 8): one row per set of rules, a week of seven day columns, each day
+   a bar of stretches. A stretch to several channels stacks one band per channel. */
+.coverage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: center;
+  font-size: var(--font-sm);
+}
+.coverage-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-0-5);
+}
+.coverage-days {
+  color: var(--text-secondary);
+}
+.coverage-day {
+  display: flex;
+  height: var(--space-4);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+.coverage-seg {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+}
+.coverage-seg > span {
+  flex: 1;
+}
+.coverage-held {
+  background: var(--status-warning);
+}
+.coverage-nowhere {
+  background: var(--status-critical);
+}
+.coverage-legend {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+.coverage-legend i {
+  display: inline-block;
+  width: var(--space-3);
+  height: var(--space-2);
+  margin-right: var(--space-1);
+  border-radius: var(--radius-sm);
+}

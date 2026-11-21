@@ -512,10 +512,9 @@ pub struct NodeStatusDto {
     /// The IANA zone this node's site keeps time in, after inheritance; `null` ⇒ no folder above
     /// it names one (ADR-252). Mirrors `NodeDetail.time_zone`, from the same function.
     pub time_zone: Option<String>,
-    /// Whether notifications about this node are delivered right now, and until when; `null` ⇒ no
-    /// delivery-hours schedule reaches it, so they always are (ADR-226, ADR-252). Mirrors
-    /// `NodeDetail.delivery`, from the same function. A held notification is not lost: it goes
-    /// out when the hours open if its alert is still open.
+    /// Where an alert about this node goes right now, and until when; `null` ⇒ to no channel
+    /// (ADR-252, ADR-262). Mirrors `NodeDetail.delivery`, from the same function. A held
+    /// notification is not lost: it goes out when a rule opens if its alert is still open.
     pub delivery: Option<yagra_base::groups::DeliveryNow>,
     /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
     ///
@@ -735,7 +734,7 @@ impl NodeGroupDto {
             time_zone: g.time_zone.clone(),
             netbox_time_zone: g.netbox_time_zone.clone(),
             effective_time_zone: g.effective_time_zone.clone(),
-            delivery: g.delivery,
+            delivery: g.delivery.clone(),
             state_counts: None,
         }
     }
@@ -1291,6 +1290,8 @@ mod tests {
                 open: false,
                 closes_at: None,
                 opens_at: Some(chrono::Utc::now()),
+                channels: Vec::new(),
+                catch_all: false,
             }),
             notes: Some("reachable only from the jump host".to_owned()),
             os_version: Some("15.0(2a)EX5".to_owned()),
@@ -1614,6 +1615,8 @@ mod tests {
                 open: true,
                 closes_at: Some(chrono::Utc::now()),
                 opens_at: None,
+                channels: vec!["NOC mail".to_owned()],
+                catch_all: false,
             }),
         };
         let group_json = serde_json::to_value(NodeGroupDto::from_summary(&group)).unwrap();

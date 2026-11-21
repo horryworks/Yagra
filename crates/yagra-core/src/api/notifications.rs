@@ -46,6 +46,9 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     set_routing_rule_enabled,
     update_routing_rule,
     delete_routing_rule,
+    get_routing_catch_all,
+    set_routing_catch_all,
+    get_routing_coverage,
     list_notification_deliveries
 ))]
 pub(super) struct Doc;
@@ -108,6 +111,11 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/routing-rules/:id/definition",
             put(update_routing_rule),
         )
+        .route(
+            "/api/v1/routing-catch-all",
+            get(get_routing_catch_all).put(set_routing_catch_all),
+        )
+        .route("/api/v1/routing-coverage", get(get_routing_coverage))
 }
 
 /// Exact-host allowlists for the fixed-vendor channels.
@@ -1167,6 +1175,185 @@ impl NotificationDefaultRoute {
     }
 }
 
+/// What the site and node screens read to say where an alert goes now (ADR-262 decision 9): the
+/// rules, the catch-all, the channel names, the folder tree and its zones, read once per request.
+/// `Ok(None)` when no channel exists, which answers "nowhere" for every place without a judgement.
+pub(crate) async fn place_routes(
+    admin: &super::AdminState,
+) -> anyhow::Result<Option<crate::alerts::rule_time::PlaceRoutes>> {
+    let channels = admin.notifications.list_channels().await?;
+    let catch_all = admin.notifications.catch_all().await?;
+    if channels.iter().all(|c| !c.enabled) {
+        return Ok(None);
+    }
+    let rules = admin.notifications.list_rules().await?;
+    let rows = admin.groups.time_zone_rows().await?;
+    let default =
+        yagra_base::wall_clock::zone_or_utc(admin.delivery_hours.default_zone().await?.as_deref());
+    let edges = rows.iter().map(|(g, p, _)| (*g, *p)).collect();
+    let zones = yagra_base::groups::resolve_nearest_ancestor(rows)
+        .into_iter()
+        .filter_map(|(g, (name, owner))| {
+            Some((g, (yagra_base::wall_clock::parse_zone(&name)?, owner)))
+        })
+        .collect();
+    // A switched-off channel hears nothing, so it is not named as where an alert goes.
+    let names = channels
+        .into_iter()
+        .filter(|c| c.enabled)
+        .map(|c| (c.id, c.name))
+        .collect();
+    Ok(Some(crate::alerts::rule_time::PlaceRoutes {
+        rules,
+        catch_all,
+        names,
+        edges,
+        zones,
+        default,
+    }))
+}
+
+/// Which severity the coverage is drawn for.
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub(super) struct CoverageQuery {
+    /// `critical` (the default), `warning` or `info`: a rule for one severity reaches only that.
+    severity: Option<String>,
+}
+
+/// Where a deployment's alerts go across the week (ADR-262 decision 8).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct RoutingCoverage {
+    /// The severity it was drawn for.
+    pub(crate) severity: Severity,
+    /// The catch-all's channels, so a stretch drawn as `catch_all` can be named.
+    pub(crate) catch_all: Vec<Uuid>,
+    /// One per set of matching rules and zone, the most nodes first.
+    pub(crate) rows: Vec<crate::alerts::rule_time::CoverageRow>,
+}
+
+/// What `GET /api/v1/routing-coverage` answers, shared with MCP `get_config(kind=routing_coverage)`.
+/// Reads every node: an administrator's question, asked from one screen, never on a timer.
+pub(crate) async fn coverage_in(
+    admin: &super::AdminState,
+    severity: Severity,
+) -> ApiResult<RoutingCoverage> {
+    let fail = |e: anyhow::Error| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "routing coverage",
+            "failed to draw the coverage",
+        )
+    };
+    let rules = admin.notifications.list_rules().await.map_err(fail)?;
+    let catch_all = admin.notifications.catch_all().await.map_err(fail)?;
+    let nodes = admin.repo.list_nodes().await.map_err(fail)?;
+    let rows = admin.groups.time_zone_rows().await.map_err(fail)?;
+    let edges: Vec<(Uuid, Option<Uuid>)> = rows.iter().map(|(g, p, _)| (*g, *p)).collect();
+    let zones = yagra_base::groups::resolve_nearest_ancestor(rows);
+    let tags = super::util::tag_resolver(admin).await;
+    let nodes: Vec<crate::alerts::rule_time::CoverageNode> = nodes
+        .iter()
+        .map(|n| {
+            let group = n.group.map(|g| g.as_uuid());
+            crate::alerts::rule_time::CoverageNode {
+                id: n.id.as_uuid(),
+                group,
+                tags: tags.effective(n),
+                zone: group.and_then(|g| zones.get(&g)).map(|(z, _)| z.clone()),
+            }
+        })
+        .collect();
+    Ok(RoutingCoverage {
+        severity,
+        rows: crate::alerts::rule_time::coverage(&rules, &catch_all, severity, &nodes, &edges),
+        catch_all,
+    })
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/routing-coverage", tag = "notifications",
+    params(CoverageQuery),
+    responses(
+        (status = 200, description = "Every node grouped by the rules that match it, and where their alerts go across the week", body = RoutingCoverage),
+        (status = 400, description = "A severity other than critical, warning or info", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_routing_coverage(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Query(q): Query<CoverageQuery>,
+) -> ApiResult<Json<RoutingCoverage>> {
+    let severity = match q.severity.as_deref() {
+        None => Severity::Critical,
+        Some(s) => Severity::from_token(s).ok_or_else(|| {
+            ApiError::bad_request("invalid_severity", "severity must be critical|warning|info")
+        })?,
+    };
+    Ok(Json(coverage_in(&admin, severity).await?))
+}
+
+/// The catch-all (ADR-262 decision 4): the channels an alert goes to when no routing rule that
+/// matches it is open, or no rule matches it at all.
+#[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub(crate) struct RoutingCatchAll {
+    /// Empty = none. Then an alert whose matching rules are all closed is held until one opens,
+    /// and one no rule matches reaches no channel (the environment's default route still gets it).
+    pub(crate) channel_ids: Vec<Uuid>,
+}
+
+/// What `GET /api/v1/routing-catch-all` answers, shared with MCP `get_config(kind=routing_rules)`'s
+/// neighbour kind so the two cannot disagree.
+pub(crate) async fn catch_all_in(admin: &super::AdminState) -> ApiResult<RoutingCatchAll> {
+    let channel_ids = admin.notifications.catch_all().await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "read catch-all", "failed to read the catch-all")
+    })?;
+    Ok(RoutingCatchAll { channel_ids })
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/routing-catch-all", tag = "notifications",
+    responses(
+        (status = 200, description = "The channels an alert goes to when no matching rule is open", body = RoutingCatchAll),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn get_routing_catch_all(
+    _guard: RequireManageSystem,
+    admin: Admin,
+) -> ApiResult<Json<RoutingCatchAll>> {
+    Ok(Json(catch_all_in(&admin).await?))
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/routing-catch-all", tag = "notifications",
+    request_body = RoutingCatchAll,
+    responses(
+        (status = 204, description = "The catch-all's channels are replaced"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_routing_catch_all(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Json(body): Json<RoutingCatchAll>,
+) -> ApiResult<StatusCode> {
+    admin
+        .notifications
+        .set_catch_all(&body.channel_ids)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "set catch-all", "failed to set the catch-all")
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// The default notification route, set by `YAGRA_WEBHOOK_URL` and `YAGRA_SMTP_*` on the core.
 ///
 /// It is sent every alert, whatever the routing rules say, so it is not a fallback for alerts no
@@ -1207,6 +1394,11 @@ pub(super) struct CreateRule {
     #[serde(default)]
     group_ids: Option<Vec<Uuid>>,
     channel_ids: Vec<Uuid>,
+    /// When the rule is open (ADR-262): `always`, or `during` / `outside` a weekly window read in
+    /// the node's own zone. A window needs at least one ISO weekday (1 = Monday .. 7 = Sunday);
+    /// minutes are after local midnight, below 1440. Omitted on an edit, the rule keeps its own.
+    #[serde(default)]
+    when: Option<crate::alerts::notifications::RuleWhen>,
 }
 
 /// A rule's definition after the edge's checks.
@@ -1215,6 +1407,31 @@ struct ParsedRule<'a> {
     severity: Option<Severity>,
     /// `None` only when the body omitted the field.
     tags: Option<Vec<String>>,
+    /// `None` only when the body omitted the field.
+    when: Option<crate::alerts::notifications::RuleWhen>,
+}
+
+/// Check a rule's window (ADR-262): a window names a weekday, and its minutes fall inside a day.
+/// `always` ignores the rest, which is stored as sent.
+fn checked_when(
+    when: &crate::alerts::notifications::RuleWhen,
+) -> ApiResult<crate::alerts::notifications::RuleWhen> {
+    use crate::alerts::notifications::WhenMode;
+    if when.mode != WhenMode::Always {
+        if when.days.is_empty() || when.days.iter().any(|d| !(1..=7).contains(d)) {
+            return Err(ApiError::bad_request(
+                "invalid_rule",
+                "a window needs at least one weekday, each 1 (Monday) to 7 (Sunday)",
+            ));
+        }
+        if when.start_minute > 1439 || when.end_minute > 1439 {
+            return Err(ApiError::bad_request(
+                "invalid_rule",
+                "start_minute and end_minute are minutes after midnight, 0 to 1439",
+            ));
+        }
+    }
+    Ok(when.clone())
 }
 
 impl CreateRule {
@@ -1240,10 +1457,12 @@ impl CreateRule {
             .clone()
             .map(super::nodes::validated_labels)
             .transpose()?;
+        let when = self.when.as_ref().map(checked_when).transpose()?;
         Ok(ParsedRule {
             name,
             severity,
             tags,
+            when,
         })
     }
 }
@@ -1273,6 +1492,7 @@ async fn create_routing_rule(
             &rule.tags.unwrap_or_default(),
             body.group_ids.as_deref().unwrap_or_default(),
             &body.channel_ids,
+            &rule.when.clone().unwrap_or_default(),
         )
         .await
         .map_err(|e| {
@@ -1343,11 +1563,14 @@ async fn update_routing_rule(
         .notifications
         .update_rule(
             id,
-            rule.name,
-            rule.severity,
-            rule.tags.as_deref(),
-            body.group_ids.as_deref(),
-            &body.channel_ids,
+            &crate::alerts::notifications::RuleEdit {
+                name: rule.name,
+                severity: rule.severity,
+                tags: rule.tags.as_deref(),
+                group_ids: body.group_ids.as_deref(),
+                channel_ids: &body.channel_ids,
+                when: rule.when.as_ref(),
+            },
         )
         .await
     {
@@ -2152,6 +2375,82 @@ at 2026-08-04T09:41:07+00:00"
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
         assert_eq!(body["error"]["code"], "rule_not_found", "{body}");
+    }
+
+    /// ADR-262: a rule keeps its window (an edit that omits it keeps it, a window naming no day is
+    /// refused), and the catch-all's channels are written and read back.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_keeps_its_window_and_the_catch_all_is_set(pool: sqlx::PgPool) {
+        let st = super::super::tests_support::live_state(pool).await;
+        let tok = super::super::tests_support::token(&st, yagra_common::Role::Admin);
+        let send = super::super::tests_support::send;
+        let (status, ch) = send(
+            &st,
+            "POST",
+            "/api/v1/notification-channels",
+            &tok,
+            Some(serde_json::json!({
+                "name": "NOC mail",
+                "config": { "kind": "webhook", "url": "http://10.0.0.9/hook" },
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{ch}");
+        let ch = ch["id"].as_str().unwrap().to_owned();
+        let window = serde_json::json!({
+            "mode": "during", "days": [1, 2, 3, 4, 5], "start_minute": 510, "end_minute": 1040
+        });
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(serde_json::json!({ "name": "day", "channel_ids": [ch], "when": window })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{created}");
+        let id = created["id"].as_str().unwrap().to_owned();
+        let (status, _) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/routing-rules/{id}/definition"),
+            &tok,
+            Some(serde_json::json!({ "name": "day desk", "channel_ids": [ch] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+        let (_, rules) = send(&st, "GET", "/api/v1/routing-rules", &tok, None).await;
+        assert_eq!(rules[0]["name"], "day desk");
+        assert_eq!(
+            rules[0]["when"], window,
+            "an edit without a window keeps it"
+        );
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &format!("/api/v1/routing-rules/{id}/definition"),
+            &tok,
+            Some(serde_json::json!({
+                "name": "day", "channel_ids": [ch], "when": { "mode": "outside", "days": [] }
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+
+        let (status, _) = send(
+            &st,
+            "PUT",
+            "/api/v1/routing-catch-all",
+            &tok,
+            Some(serde_json::json!({ "channel_ids": [ch] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+        let (status, read) = send(&st, "GET", "/api/v1/routing-catch-all", &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(read["channel_ids"], serde_json::json!([ch]));
     }
 
     /// ADR-259: a rule is created with tags (trimmed and de-duplicated the way a node's labels

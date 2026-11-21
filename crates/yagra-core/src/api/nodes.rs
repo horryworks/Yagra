@@ -1524,7 +1524,7 @@ async fn get_node(
     // One whole-table read of `node_groups` per detail GET — the same profile the pool fact beside
     // it already accepts, against a table of hundreds of rows.
     let inherited_tags = super::util::tag_resolver(admin).await.inherited(&node);
-    let (time_zone, delivery) = local_time_of(admin, node.group.map(|g| g.as_uuid())).await;
+    let (time_zone, delivery) = local_time_of(admin, &node).await;
     // Taken before the literal below moves the node's fields out.
     let tags = std::mem::take(&mut node.tags);
     let tags_excluded = std::mem::take(&mut node.tags_excluded);
@@ -1566,36 +1566,41 @@ async fn get_node(
     }))
 }
 
-/// A node's site zone and its delivery state now (ADR-252), for the REST detail and
-/// `get_node_status` alike, so the two cannot answer differently.
+/// A node's site zone, and where an alert about it goes now (ADR-252; ADR-262 decision 9), for
+/// the REST detail and `get_node_status` alike, so the two cannot answer differently.
 ///
-/// Best effort like the other detail facts: a failed read answers "no zone, no schedule", which
-/// hides the clock rather than failing the whole detail. Logged, because a hidden clock is
-/// otherwise indistinguishable from a site with no zone.
+/// Best effort like the other detail facts: a failed read answers "no zone, nowhere", which hides
+/// the clock rather than failing the whole detail. Logged, because a hidden clock is otherwise
+/// indistinguishable from a site with no zone.
 pub(crate) async fn local_time_of(
     admin: &super::AdminState,
-    group: Option<Uuid>,
+    node: &yagra_common::Node,
 ) -> (Option<String>, Option<yagra_base::groups::DeliveryNow>) {
     // A node filed nowhere has no site: nothing to read.
-    let Some(group) = group else {
+    let Some(group) = node.group.map(|g| g.as_uuid()) else {
         return (None, None);
     };
-    let (hours, rows) =
-        match crate::alerts::delivery_hours::read_hours(&admin.delivery_hours, &admin.groups, true)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to read a node's local time");
-                return (None, None);
-            }
-        };
+    let rows = match admin.groups.time_zone_rows().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to read a node's local time");
+            return (None, None);
+        }
+    };
     let zone = yagra_base::groups::resolve_nearest_ancestor(rows)
         .remove(&group)
         .map(|(zone, _)| zone);
-    let delivery = hours
-        .get(&group)
-        .map(|h| h.delivery_now(chrono::Utc::now()));
+    let delivery = match crate::api::notifications::place_routes(admin).await {
+        Ok(Some(routes)) => {
+            let tags = super::util::tag_resolver(admin).await.effective(node);
+            routes.at(group, &tags, chrono::Utc::now())
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to read where a node's alerts go");
+            None
+        }
+    };
     (zone, delivery)
 }
 

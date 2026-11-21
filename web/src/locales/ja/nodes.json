@@ -755,11 +755,13 @@
     }
   },
   "localTime": {
-    "delivering": "配信中",
-    "deliveringUntil": "{{time}} まで配信",
     "held": "保留中",
     "heldUntil": "{{time}} まで保留",
-    "clock": "現地時刻 {{time}} {{zone}} (UTC {{offset}})"
+    "clock": "現地時刻 {{time}} {{zone}} (UTC {{offset}})",
+    "goesTo": "{{to}} へ届く",
+    "goesToUntil": "{{to}} へ届く（{{time}} まで）",
+    "catchAll": "Catch-all（{{to}}）へ",
+    "catchAllUntil": "Catch-all（{{to}}）へ（{{time}} まで）"
   },
   "groupDetail": {
     "health": "ヘルス",

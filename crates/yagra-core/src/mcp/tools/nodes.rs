@@ -770,8 +770,7 @@ impl YagraMcp {
             None => None,
         };
         // The site's zone and delivery state, from the function the REST detail calls (ADR-252).
-        let local_time =
-            crate::api::nodes::local_time_of(admin, node.group.map(|g| g.as_uuid())).await;
+        let local_time = crate::api::nodes::local_time_of(admin, &node).await;
         // The node's VLANs, from the function `GET /nodes/{id}/vlans` calls, narrowed to the same
         // scope (ADR-257). Best effort like the interface list: a failed read leaves it empty.
         let node_vlans = crate::api::vlans::node_vlans(admin, p.node_id, |n| {

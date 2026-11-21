@@ -113,7 +113,8 @@ export const LONG_NOTE: Record<string, string> = {};
  * Blind spots: dialogs, tabs other than the default, Japanese, and phone width.
  */
 export const PROSE_CEILING: Record<string, number> = {
-  '/alerts/routing': 67,
+  // + the state line that appears while an earlier version's delivery-hours schedules remain (ADR-262 decision 6); it leaves with the last one.
+  '/alerts/routing': 173,
   '/events': 93,
   '/events/forwarding': 97,
   '/nodes': 41,

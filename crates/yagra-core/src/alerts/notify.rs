@@ -24,11 +24,12 @@ use yagra_common::{
     is_ssrf_blocked, AlertFacts, CheckId, Direction, NodeId, NotifyEvent, Severity,
 };
 
-use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore, HoursPolicy};
+use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore};
 use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
 use crate::alerts::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
 use crate::alerts::notify_facts::{context_for, node_ids_for, with_links, AlertFactsSource};
 use crate::alerts::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
+use crate::alerts::rule_time::{next_change, route_at, RouteNow, RuleClock};
 
 use super::NotifyAction;
 
@@ -1029,7 +1030,7 @@ impl Routing {
         tags: &[String],
         node: Option<NodeId>,
         reach: &RuleReach,
-    ) -> BTreeSet<Uuid> {
+    ) -> Vec<&RoutingRule> {
         self.rules
             .iter()
             .filter(|r| {
@@ -1037,7 +1038,6 @@ impl Routing {
                     && rule_matches_severity(r.severity, severity)
                     && rule_matches_target(r, tags, node, reach)
             })
-            .flat_map(|r| r.channel_ids.iter().copied())
             .collect()
     }
 
@@ -1181,9 +1181,11 @@ pub struct Notifier {
     /// Which kinds of channel make up the env default route, in the order [`Self::from_env`]
     /// adds them (ADR-200 Inc.28). Fixed for the process's life, like the route itself.
     default_kinds: Vec<DefaultRouteKind>,
-    /// Which nodes keep delivery hours, and which (ADR-226). Empty until the first refresh and on
-    /// every deployment with no enabled schedule, and an empty policy holds nothing.
-    hours: RwLock<Arc<HoursPolicy>>,
+    /// Each node's zone, for reading a routing rule's window in local time (ADR-262). Empty until
+    /// the first refresh and on every deployment with no rule that has a window.
+    clock: RwLock<Arc<RuleClock>>,
+    /// The channels an alert goes to when no rule that matches it is open (ADR-262 decision 4).
+    catch_all: RwLock<Arc<Vec<Uuid>>>,
     /// Which nodes each routing rule's folders reach (ADR-262). Empty until the first refresh and
     /// on every deployment with no rule that names a folder.
     rule_reach: RwLock<Arc<RuleReach>>,
@@ -1262,7 +1264,8 @@ impl Notifier {
             delivery_log: RwLock::new(None),
             sides: std::sync::Mutex::new(HashMap::new()),
             default_kinds,
-            hours: RwLock::new(Arc::new(HoursPolicy::default())),
+            clock: RwLock::new(Arc::new(RuleClock::default())),
+            catch_all: RwLock::new(Arc::new(Vec::new())),
             rule_reach: RwLock::new(Arc::new(RuleReach::new())),
             held: RwLock::new(None),
         }
@@ -1434,15 +1437,40 @@ impl Notifier {
         *self.held.write().expect("notifier held lock poisoned") = Some(store);
     }
 
-    /// Replace the delivery-hours snapshot (refreshed alongside routing). Not `async`, for the
-    /// reason [`Self::set_routing`] is not.
-    pub fn set_hours(&self, policy: HoursPolicy) {
-        *self.hours.write().expect("notifier hours lock poisoned") = Arc::new(policy);
+    /// Replace the zones a rule's window is read in (refreshed alongside routing). Not `async`,
+    /// for the reason [`Self::set_routing`] is not.
+    pub fn set_clock(&self, clock: RuleClock) {
+        *self.clock.write().expect("notifier clock lock poisoned") = Arc::new(clock);
     }
 
-    /// The current delivery-hours snapshot. One `Arc` clone; never held across an await.
-    pub fn hours(&self) -> Arc<HoursPolicy> {
-        Arc::clone(&self.hours.read().expect("notifier hours lock poisoned"))
+    /// The current zones. One `Arc` clone; never held across an await.
+    pub fn clock(&self) -> Arc<RuleClock> {
+        Arc::clone(&self.clock.read().expect("notifier clock lock poisoned"))
+    }
+
+    /// Whether an enabled routing rule has a window - the one case the zones are worth reading.
+    pub fn any_timed_rule(&self) -> bool {
+        self.routing()
+            .rules
+            .iter()
+            .any(|r| r.enabled && r.when.mode != crate::alerts::notifications::WhenMode::Always)
+    }
+
+    /// Replace the catch-all's channels (refreshed alongside routing).
+    pub fn set_catch_all(&self, channels: Vec<Uuid>) {
+        *self
+            .catch_all
+            .write()
+            .expect("notifier catch-all lock poisoned") = Arc::new(channels);
+    }
+
+    fn catch_all(&self) -> Arc<Vec<Uuid>> {
+        Arc::clone(
+            &self
+                .catch_all
+                .read()
+                .expect("notifier catch-all lock poisoned"),
+        )
     }
 
     fn held_store(&self) -> Option<Arc<dyn HeldStore>> {
@@ -1530,97 +1558,54 @@ impl Notifier {
         self.handle_at(action, chrono::Utc::now()).await;
     }
 
-    /// [`Self::handle`] at a given instant, so a test can stand inside or outside delivery hours.
+    /// [`Self::handle`] at a given instant, so a test can stand inside or outside a rule's hours.
     async fn handle_at(&self, action: NotifyAction, now: chrono::DateTime<chrono::Utc>) {
-        if self.hold_if_closed(&action, now).await {
+        if self.drop_with_held_fire(&action).await {
             return;
         }
-        self.deliver(action).await;
+        self.deliver_at(action, now, false).await;
     }
 
-    /// Keep `action` back if its node is outside its delivery hours, and say whether it was kept
-    /// (ADR-226). A notification about a node no schedule covers, or any notification on a
-    /// deployment with no schedule, passes straight through without a query.
-    ///
-    /// 🚨 **A failed write delivers.** If the held store cannot take the row, the notification
-    /// goes out now: a page at night is a nuisance, a page lost is an outage nobody hears about.
-    async fn hold_if_closed(
-        &self,
-        action: &NotifyAction,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        let policy = self.hours();
-        if policy.is_empty() {
-            return false;
-        }
+    /// An end (resolve or roll-up) whose fire is still held reaches nobody, because its fire never
+    /// did (ADR-226 decision 8, kept by ADR-262): drop both, clear what the dispatchers remember,
+    /// and say so. Anything else passes through.
+    async fn drop_with_held_fire(&self, action: &NotifyAction) -> bool {
+        let alert = match action {
+            NotifyAction::Fire(_) => return false,
+            NotifyAction::Resolve(a) | NotifyAction::Suppress(a) => a,
+        };
         let Some(store) = self.held_store() else {
             return false;
         };
-        let (event, alert) = match action {
-            NotifyAction::Fire(a) => (HeldEvent::Fire, a),
-            NotifyAction::Resolve(a) => (HeldEvent::Resolve, a),
-            NotifyAction::Suppress(a) => (HeldEvent::Suppress, a),
-        };
-        match event {
-            HeldEvent::Fire => {
-                // A rolled-up fire would not be delivered anyway, so there is nothing to hold.
-                if alert.root_cause.is_some() {
-                    return false;
+        match store.discard_fires(&alert.subject, alert.check).await {
+            Ok(0) => false,
+            Ok(_) => {
+                self.forget_side(alert);
+                let key = alert.dedup_key();
+                let routing = self.routing();
+                if let Some(d) = routing.default.as_ref() {
+                    d.mark_resolved(&key).await;
                 }
-            }
-            HeldEvent::Resolve | HeldEvent::Suppress => {
-                // A fire still held never reached anyone, so its end reaches nobody either
-                // (decision 8): drop both and clear what the dispatchers remember.
-                match store.discard_fires(&alert.subject, alert.check).await {
-                    Ok(0) => {}
-                    Ok(_) => {
-                        self.forget_side(alert);
-                        let key = alert.dedup_key();
-                        let routing = self.routing();
-                        if let Some(d) = routing.default.as_ref() {
-                            d.mark_resolved(&key).await;
-                        }
-                        for d in routing.channels.values() {
-                            d.mark_resolved(&key).await;
-                        }
-                        tracing::debug!(subject = %alert.subject, "held fire dropped with its resolve");
-                        return true;
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "could not read held notifications; delivering");
-                        return false;
-                    }
+                for d in routing.channels.values() {
+                    d.mark_resolved(&key).await;
                 }
-                // A rolled-up alert's fire was never delivered, so its resolve closes nothing.
-                if event == HeldEvent::Resolve && alert.root_cause.is_some() {
-                    return false;
-                }
-            }
-        }
-        if policy.is_open(alert.node(), now) {
-            return false;
-        }
-        let release_at = policy.next_open(alert.node(), now);
-        match store.hold(event, alert, release_at).await {
-            Ok(()) => {
-                metrics::counter!(M_HELD, "event" => event.as_str()).increment(1);
-                tracing::info!(subject = %alert.subject, event = event.as_str(), "notification held until delivery hours open");
+                tracing::debug!(subject = %alert.subject, "held fire dropped with its resolve");
                 true
             }
             Err(e) => {
-                tracing::warn!(error = %e, "could not hold a notification; delivering it now");
+                tracing::warn!(error = %e, "could not read held notifications; delivering");
                 false
             }
         }
     }
 
-    /// Send what was held for every node whose hours are open at `now` (ADR-226 decision 7).
+    /// Send what was held whose rules have opened at `now` (ADR-262 decision 4).
     ///
-    /// A held fire goes out only if its alert is still open and not rolled up (decision 9; Yagra
-    /// keeps no acknowledgement to consult since ADR-233) - and then as the alert is **now**, so a
-    /// severity that rose overnight is the one sent. A held resolve or roll-up goes out as it was
-    /// (decision 10), unless the same alert is open again, in which case it is stale and dropped.
-    /// Each row is removed once handled, whatever happened to it.
+    /// A held fire goes out only if its alert is still open and not rolled up - and then as the
+    /// alert is **now**, so a severity that rose overnight is the one sent, to the rules open now.
+    /// One whose rules are all still closed stays held. A held end (written by an earlier version,
+    /// which held resolves too) goes out as it was, unless the same alert is open again, in which
+    /// case it is stale and dropped. A row is removed once handled.
     pub async fn release(
         &self,
         rows: Vec<HeldRow>,
@@ -1630,33 +1615,41 @@ impl Notifier {
         let Some(store) = self.held_store() else {
             return;
         };
-        let policy = self.hours();
         let mut sent: HashSet<(String, yagra_common::CheckId)> = HashSet::new();
         for row in rows {
-            if !policy.is_open(row.alert.node(), now) {
-                continue;
-            }
             match row.event {
                 HeldEvent::Fire => {
                     let live = active
                         .iter()
                         .find(|a| a.subject == row.alert.subject && a.check == row.alert.check);
                     if let Some(a) = live {
-                        if a.root_cause.is_none() && sent.insert((a.subject.to_string(), a.check)) {
-                            self.deliver(NotifyAction::Fire(a.clone())).await;
+                        if a.root_cause.is_none()
+                            && !sent.contains(&(a.subject.to_string(), a.check))
+                        {
+                            if !self
+                                .deliver_at(NotifyAction::Fire(a.clone()), now, true)
+                                .await
+                            {
+                                continue;
+                            }
+                            sent.insert((a.subject.to_string(), a.check));
                         }
                     }
                 }
-                // A held end whose alert is open again under the same identity is stale: the alert
-                // fired again after it, and that fire may already have gone out once the hours
-                // opened, before this pass ran. Sending the old end now would close the incident
-                // of an alert that is open, so it is dropped instead.
+                // A held end whose alert is open again under the same identity is stale: sending
+                // it would close the incident of an alert that is open.
                 HeldEvent::Resolve | HeldEvent::Suppress
                     if active.iter().any(|a| {
                         a.dedup_key() == row.alert.dedup_key() && a.root_cause.is_none()
                     }) => {}
-                HeldEvent::Resolve => self.deliver(NotifyAction::Resolve(row.alert)).await,
-                HeldEvent::Suppress => self.deliver(NotifyAction::Suppress(row.alert)).await,
+                HeldEvent::Resolve => {
+                    self.deliver_at(NotifyAction::Resolve(row.alert), now, true)
+                        .await;
+                }
+                HeldEvent::Suppress => {
+                    self.deliver_at(NotifyAction::Suppress(row.alert), now, true)
+                        .await;
+                }
             }
             if let Err(e) = store.remove(row.id).await {
                 tracing::warn!(error = %e, id = row.id, "could not forget a released notification");
@@ -1664,9 +1657,20 @@ impl Notifier {
         }
     }
 
-    /// Deliver one notify action now, whatever the hour - what [`Self::handle`] does once
-    /// delivery hours have let it through, and what [`Self::release`] does in the morning.
-    async fn deliver(&self, action: NotifyAction) {
+    /// Deliver one notify action at `now` to where it goes then (ADR-262 decision 4), and say
+    /// whether it was handled. A fire whose matching rules are all closed, with no catch-all, is
+    /// held - or, when `releasing` (the morning's pass over what was held), left where it is and
+    /// answered `false`.
+    ///
+    /// 🚨 **A failed hold delivers.** If the held store cannot take the row, the fire goes to every
+    /// matching rule's channels now: a page at night is a nuisance, a page lost is an outage
+    /// nobody hears about.
+    async fn deliver_at(
+        &self,
+        action: NotifyAction,
+        now: chrono::DateTime<chrono::Utc>,
+        releasing: bool,
+    ) -> bool {
         // Resolving names is I/O, so it happens first. A rolled-up alert pays for a
         // lookup it will not use, which the facts cache makes negligible and which is worth not
         // restructuring the suppression checks around.
@@ -1684,14 +1688,49 @@ impl Notifier {
                 // for the UI/history; only the duplicate notification is suppressed.
                 if let Some(root) = alert.root_cause {
                     tracing::debug!(subject = %alert.subject, %root, "suppressing downstream alert notification (rolled up under root cause)");
-                    return;
+                    return true;
                 }
-                let matched = routing.matched(
+                let reach = self.rule_reach();
+                let rules = routing.matched(
                     alert.severity,
                     tags_of(facts.as_ref()),
                     alert.subject.node(),
-                    &self.rule_reach(),
+                    &reach,
                 );
+                let clock = self.clock();
+                let catch_all = self.catch_all();
+                let node = alert.subject.node();
+                let matched: BTreeSet<Uuid> = match route_at(&rules, &catch_all, &clock, node, now)
+                {
+                    RouteNow::Held if releasing => return false,
+                    RouteNow::Held => {
+                        let until = next_change(&rules, &catch_all, &clock, node, now);
+                        match self.held_store() {
+                            Some(store) => match store.hold(HeldEvent::Fire, &alert, until).await {
+                                Ok(()) => {
+                                    metrics::counter!(M_HELD, "event" => HeldEvent::Fire.as_str())
+                                        .increment(1);
+                                    tracing::info!(subject = %alert.subject, "notification held until a routing rule opens");
+                                    // The environment's default route still hears it now: it
+                                    // is sent every alert, whatever the rules say.
+                                    BTreeSet::new()
+                                }
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "could not hold a notification; delivering it now");
+                                    rules
+                                        .iter()
+                                        .flat_map(|r| r.channel_ids.iter().copied())
+                                        .collect()
+                                }
+                            },
+                            None => rules
+                                .iter()
+                                .flat_map(|r| r.channel_ids.iter().copied())
+                                .collect(),
+                        }
+                    }
+                    other => other.channels(),
+                };
                 if self.side_changed(&alert) {
                     // Only the channels this fire goes to forget it, so each is paged again. A
                     // channel the first side reached and no rule matches now - the node lost the
@@ -1726,7 +1765,7 @@ impl Notifier {
                     let report = d.dispatch(notification.clone()).await;
                     self.after_dispatch(&done, None, None, &report, at, started);
                 }
-                for id in matched {
+                for id in matched.iter().copied() {
                     if let Some(d) = routing.channels.get(&id) {
                         let base = routing.builtin_for(id, &notification, text.as_ref());
                         let n = for_channel(id, &routing.overrides, facts.as_ref(), base);
@@ -1750,7 +1789,7 @@ impl Notifier {
                     for d in routing.channels.values() {
                         d.mark_resolved(&key).await;
                     }
-                    return;
+                    return true;
                 }
                 // Deliver the resolve to the same channels the fire was routed to (same
                 // severity match) so lifecycle-aware channels (PagerDuty/JSM) close their
@@ -1761,6 +1800,7 @@ impl Notifier {
                     NotifyEvent::Resolve,
                     facts.as_ref(),
                     "alert resolve dispatched",
+                    now,
                 )
                 .await;
             }
@@ -1777,10 +1817,12 @@ impl Notifier {
                     NotifyEvent::Suppress,
                     facts.as_ref(),
                     "downstream alert rolled up (incident closed)",
+                    now,
                 )
                 .await;
             }
         }
+        true
     }
 
     /// Record the side `alert` is being delivered with, and say whether that differs from the
@@ -1817,16 +1859,23 @@ impl Notifier {
         event: NotifyEvent,
         facts: Option<&AlertFacts>,
         message: &'static str,
+        now: chrono::DateTime<chrono::Utc>,
     ) {
         let key = alert.dedup_key();
         let notification = with_subject_facts(json_notification(alert, event, facts), facts);
         let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
-        let matched = routing.matched(
-            alert.severity,
-            tags_of(facts),
+        // Where a fire would go now, as the end's reach beside the channels holding the incident:
+        // the end goes out at once, whatever the hour (ADR-262 decision 4).
+        let reach = self.rule_reach();
+        let rules = routing.matched(alert.severity, tags_of(facts), alert.subject.node(), &reach);
+        let matched = route_at(
+            &rules,
+            &self.catch_all(),
+            &self.clock(),
             alert.subject.node(),
-            &self.rule_reach(),
-        );
+            now,
+        )
+        .channels();
         let done = Delivered {
             alert,
             event,
@@ -3247,6 +3296,7 @@ mod delivery_tests {
             tags: Vec::new(),
             group_ids: Vec::new(),
             channel_ids: vec![channel],
+            when: crate::alerts::notifications::RuleWhen::default(),
         }
     }
 
@@ -3441,41 +3491,41 @@ mod delivery_tests {
         }
     }
 
-    // -- Delivery hours (ADR-226) ---------------------------------------------------------------
+    // -- A rule's hours (ADR-262, the hold and release of ADR-226) ------------------------------
 
-    use crate::alerts::delivery_hours::{
-        build_policy, testkit::MemHeld, DeliverySchedule, HeldEvent, NodeTarget,
-    };
+    use crate::alerts::delivery_hours::{testkit::MemHeld, HeldEvent};
+    use crate::alerts::notifications::{RuleWhen, WhenMode};
     use chrono::TimeZone;
 
-    /// A notifier whose default route records, holding into memory, with `node` keeping
-    /// weekdays 08:30-17:20 UTC.
-    fn office_hours(node: NodeId) -> (Notifier, Log, Arc<MemHeld>) {
-        let dflt = log();
-        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+    /// The office's channel id, and a second channel the night rule or the catch-all sends to.
+    const OFFICE: Uuid = Uuid::from_u128(0x0ff1ce);
+    const NIGHT: Uuid = Uuid::from_u128(0x4e1647);
+
+    /// A rule open on weekdays 08:30-17:20 (UTC: no node here has a zoned folder).
+    fn office_rule(channel: Uuid) -> RoutingRule {
+        RoutingRule {
+            when: RuleWhen {
+                mode: WhenMode::During,
+                days: vec![1, 2, 3, 4, 5],
+                start_minute: 8 * 60 + 30,
+                end_minute: 17 * 60 + 20,
+            },
+            ..rule(channel, None)
+        }
+    }
+
+    /// A notifier with one office-hours rule sending to `OFFICE`, holding into memory. Returns the
+    /// office channel's log and the store.
+    fn office_hours() -> (Notifier, Log, Arc<MemHeld>) {
+        let office = log();
+        let n = Notifier::with_default(None);
         let held = Arc::new(MemHeld::default());
         n.set_held_store(held.clone());
-        let office = Uuid::from_u128(0x0ff1ce);
-        let schedule = DeliverySchedule {
-            id: Uuid::nil(),
-            name: "office".to_owned(),
-            enabled: true,
-            days: vec![1, 2, 3, 4, 5],
-            start_minute: 8 * 60 + 30,
-            end_minute: 17 * 60 + 20,
-            group_ids: vec![office],
-        };
-        let target = NodeTarget {
-            id: node,
-            group: Some(office),
-        };
-        n.set_hours(build_policy(
-            &[schedule],
-            &[target],
-            &[(office, None, None)],
-            yagra_base::wall_clock::Tz::UTC,
-        ));
-        (n, dflt, held)
+        n.install_routing(
+            vec![built(OFFICE, Recorder(office.clone()))],
+            vec![office_rule(OFFICE)],
+        );
+        (n, office, held)
     }
 
     /// Monday 2026-11-02 20:00 UTC: after hours.
@@ -3495,13 +3545,13 @@ mod delivery_tests {
     #[tokio::test]
     async fn a_fire_after_hours_is_held_and_sent_in_the_morning_if_still_open() {
         let node = NodeId::new();
-        let (n, dflt, held) = office_hours(node);
+        let (n, office, held) = office_hours();
         let a = alert(node, Severity::Critical, None);
         n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
         assert_eq!(
-            dflt.lock().unwrap().count("fire"),
+            office.lock().unwrap().count("fire"),
             0,
-            "nothing reaches anyone at night"
+            "the closed rule's channel hears nothing at night"
         );
         assert_eq!(held.rows.lock().unwrap().len(), 1);
         assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Fire);
@@ -3509,12 +3559,12 @@ mod delivery_tests {
         // Still closed: a release pass at night sends nothing and keeps the row.
         let rows = held.list().await.unwrap();
         n.release(rows, std::slice::from_ref(&a), evening()).await;
-        assert_eq!(dflt.lock().unwrap().count("fire"), 0);
+        assert_eq!(office.lock().unwrap().count("fire"), 0);
         assert_eq!(held.rows.lock().unwrap().len(), 1);
 
         release_now(&n, &held, std::slice::from_ref(&a)).await;
         assert_eq!(
-            dflt.lock().unwrap().count("fire"),
+            office.lock().unwrap().count("fire"),
             1,
             "the morning delivers it once"
         );
@@ -3524,7 +3574,7 @@ mod delivery_tests {
     #[tokio::test]
     async fn a_problem_that_starts_and_ends_at_night_reaches_nobody() {
         let node = NodeId::new();
-        let (n, dflt, held) = office_hours(node);
+        let (n, office, held) = office_hours();
         let a = alert(node, Severity::Critical, None);
         n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
         n.handle_at(NotifyAction::Resolve(a), evening()).await;
@@ -3534,85 +3584,127 @@ mod delivery_tests {
         );
         release_now(&n, &held, &[]).await;
         assert!(
-            dflt.lock().unwrap().0.is_empty(),
+            office.lock().unwrap().0.is_empty(),
             "neither the fire nor its end was sent"
         );
     }
 
+    /// ADR-262 decision 4 overrules ADR-226 decision 10: the end of an incident a channel holds
+    /// goes out at once, at any hour, so the remote incident does not stay open until morning.
     #[tokio::test]
-    async fn a_resolve_after_hours_waits_for_the_morning() {
+    async fn a_resolve_after_hours_closes_the_incident_at_once() {
         let node = NodeId::new();
-        let (n, dflt, held) = office_hours(node);
+        let (n, office, held) = office_hours();
         let a = alert(node, Severity::Critical, None);
         n.handle_at(NotifyAction::Fire(a.clone()), morning()).await;
         assert_eq!(
-            dflt.lock().unwrap().count("fire"),
+            office.lock().unwrap().count("fire"),
             1,
             "inside hours it goes straight out"
         );
         n.handle_at(NotifyAction::Resolve(a), evening()).await;
-        assert_eq!(dflt.lock().unwrap().count("close"), 0);
-        assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Resolve);
-        release_now(&n, &held, &[]).await;
-        assert_eq!(dflt.lock().unwrap().count("close"), 1);
+        assert_eq!(office.lock().unwrap().count("close"), 1);
+        assert!(held.rows.lock().unwrap().is_empty(), "nothing was held");
     }
 
-    /// A resolve held overnight must not close an incident the alert reopened once the hours
-    /// opened: the new fire goes straight out, and the release pass that follows drops the stale
-    /// end rather than sending it after the fire.
+    /// ADR-262 decision 4: what a night rule already sent is not sent again by the day rule in the
+    /// morning, and a closed rule with a catch-all goes to the catch-all instead of being held.
     #[tokio::test]
-    async fn a_held_resolve_does_not_close_an_alert_that_fired_again() {
+    async fn a_night_rule_or_the_catch_all_takes_the_night_and_nothing_is_held() {
         let node = NodeId::new();
-        let (n, dflt, held) = office_hours(node);
+        let (office, night) = (log(), log());
+        let n = Notifier::with_default(None);
+        let held = Arc::new(MemHeld::default());
+        n.set_held_store(held.clone());
+        let night_rule = RoutingRule {
+            when: RuleWhen {
+                mode: WhenMode::Outside,
+                ..office_rule(NIGHT).when
+            },
+            ..rule(NIGHT, None)
+        };
+        n.install_routing(
+            vec![
+                built(OFFICE, Recorder(office.clone())),
+                built(NIGHT, Recorder(night.clone())),
+            ],
+            vec![office_rule(OFFICE), night_rule],
+        );
         let a = alert(node, Severity::Critical, None);
-        n.handle_at(NotifyAction::Fire(a.clone()), morning()).await;
-        n.handle_at(NotifyAction::Resolve(a.clone()), evening())
-            .await;
-        assert_eq!(held.rows.lock().unwrap()[0].event, HeldEvent::Resolve);
-        // The next morning it fires again before the release pass has run.
-        n.handle_at(NotifyAction::Fire(a.clone()), morning()).await;
+        n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
+        assert_eq!(
+            night.lock().unwrap().count("fire"),
+            1,
+            "the night rule pages"
+        );
+        assert_eq!(office.lock().unwrap().count("fire"), 0);
+        assert!(
+            held.rows.lock().unwrap().is_empty(),
+            "someone heard it, so nothing is held"
+        );
         release_now(&n, &held, std::slice::from_ref(&a)).await;
         assert_eq!(
-            dflt.lock().unwrap().count("close"),
+            office.lock().unwrap().count("fire"),
             0,
-            "the stale end is not sent after the fire"
+            "and the morning does not resend it"
         );
-        assert!(held.rows.lock().unwrap().is_empty(), "the row is forgotten");
 
-        // A held end for another severity still goes out: that incident is a different one.
-        let warning = alert(node, Severity::Warning, None);
-        n.handle_at(NotifyAction::Fire(warning.clone()), morning())
-            .await;
-        n.handle_at(NotifyAction::Resolve(warning), evening()).await;
-        release_now(&n, &held, std::slice::from_ref(&a)).await;
-        assert_eq!(dflt.lock().unwrap().count("close"), 1);
+        // Only the office rule, and a catch-all: the night goes to the catch-all.
+        let (office, catch) = (log(), log());
+        let n = Notifier::with_default(None);
+        let held = Arc::new(MemHeld::default());
+        n.set_held_store(held.clone());
+        n.install_routing(
+            vec![
+                built(OFFICE, Recorder(office.clone())),
+                built(NIGHT, Recorder(catch.clone())),
+            ],
+            vec![office_rule(OFFICE)],
+        );
+        n.set_catch_all(vec![NIGHT]);
+        n.handle_at(
+            NotifyAction::Fire(alert(node, Severity::Critical, None)),
+            evening(),
+        )
+        .await;
+        assert_eq!(catch.lock().unwrap().count("fire"), 1);
+        assert_eq!(office.lock().unwrap().count("fire"), 0);
+        assert!(held.rows.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn a_held_fire_that_closed_is_not_sent() {
         let node = NodeId::new();
-        let (n, dflt, held) = office_hours(node);
+        let (n, office, held) = office_hours();
         let a = alert(node, Severity::Critical, None);
         n.handle_at(NotifyAction::Fire(a), evening()).await;
         release_now(&n, &held, &[]).await;
         assert_eq!(
-            dflt.lock().unwrap().count("fire"),
+            office.lock().unwrap().count("fire"),
             0,
             "no longer open in the morning"
         );
         assert!(held.rows.lock().unwrap().is_empty());
     }
 
+    /// The environment's default route is sent every alert, whatever the rules say - held or not.
     #[tokio::test]
-    async fn a_node_no_schedule_covers_is_delivered_at_any_hour() {
-        let (n, dflt, held) = office_hours(NodeId::new());
+    async fn the_default_route_hears_a_held_fire_at_once() {
+        let dflt = log();
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let held = Arc::new(MemHeld::default());
+        n.set_held_store(held.clone());
+        n.install_routing(
+            vec![built(OFFICE, Recorder(log()))],
+            vec![office_rule(OFFICE)],
+        );
         n.handle_at(
             NotifyAction::Fire(alert(NodeId::new(), Severity::Critical, None)),
             evening(),
         )
         .await;
         assert_eq!(dflt.lock().unwrap().count("fire"), 1);
-        assert!(held.rows.lock().unwrap().is_empty());
+        assert_eq!(held.rows.lock().unwrap().len(), 1);
     }
 
     /// A store that cannot take a row: the notification goes out now rather than being lost.
@@ -3646,14 +3738,14 @@ mod delivery_tests {
     #[tokio::test]
     async fn a_notification_that_cannot_be_held_is_delivered() {
         let node = NodeId::new();
-        let (n, dflt, _) = office_hours(node);
+        let (n, office, _) = office_hours();
         n.set_held_store(Arc::new(BrokenHeld));
         n.handle_at(
             NotifyAction::Fire(alert(node, Severity::Critical, None)),
             evening(),
         )
         .await;
-        assert_eq!(dflt.lock().unwrap().count("fire"), 1);
+        assert_eq!(office.lock().unwrap().count("fire"), 1);
     }
 
     /// A channel that always refuses, the way JSM refuses a wrong key.

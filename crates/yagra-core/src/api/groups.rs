@@ -141,29 +141,42 @@ async fn visible_groups_with(
     let list = admin.groups.list().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
     })?;
-    // Each folder's delivery hours, judged here by the function the notifier's policy is built
-    // from (ADR-252 decision 6). One query when no schedule is enabled, which is most deployments.
-    let delivery = if with_delivery {
-        let (hours, _) =
-            crate::alerts::delivery_hours::read_hours(&admin.delivery_hours, &admin.groups, false)
+    // Where an alert about each folder's nodes goes now, judged by the function the notifier
+    // routes with (ADR-262 decision 9). One query when no channel is switched on.
+    let delivery: std::collections::HashMap<uuid::Uuid, yagra_base::groups::DeliveryNow> =
+        if with_delivery {
+            let routes = crate::api::notifications::place_routes(admin)
                 .await
                 .map_err(|e| {
                     ApiError::from_internal(
                         e.as_ref(),
-                        "read delivery hours",
+                        "read where alerts go",
                         "failed to list node groups",
                     )
                 })?;
-        crate::alerts::delivery_hours::delivery_by_folder(&hours, chrono::Utc::now())
-    } else {
-        std::collections::HashMap::new()
-    };
+            match routes {
+                Some(routes) => {
+                    let tags = super::util::tag_resolver(admin).await;
+                    let now = chrono::Utc::now();
+                    list.iter()
+                        .filter_map(|g| {
+                            let own: Vec<String> =
+                                tags.for_group(Some(g.id)).iter().cloned().collect();
+                            Some((g.id, routes.at(g.id, &own, now)?))
+                        })
+                        .collect()
+                }
+                None => std::collections::HashMap::new(),
+            }
+        } else {
+            std::collections::HashMap::new()
+        };
     Ok(list
         .into_iter()
         .filter(|g| scope.allows_group_row(g.id))
         .map(|mut g| {
             if scope.allows_group(Some(g.id)) {
-                g.delivery = delivery.get(&g.id).copied();
+                g.delivery = delivery.get(&g.id).cloned();
             } else {
                 g.prefixes.clear();
                 // A note is what a person wrote about the site — door codes, who holds the key —

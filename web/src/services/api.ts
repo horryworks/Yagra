@@ -156,6 +156,9 @@ import type {
   NotificationDefaultRoute,
   RoutingRule,
   RoutingRuleBody,
+  RoutingCatchAll,
+  RoutingCoverage,
+  Severity,
   GroupingExceptionBody,
   NodeTags,
   DeliveryHoursConfig,
@@ -634,16 +637,6 @@ export interface ClientConfig {
    *  for the same reason as `rca_enabled`: an older core omits it and that must read as off. */
   flow_enabled?: boolean;
 }
-
-/** A delivery-hours schedule as the create and replace routes take it (ADR-226). */
-type DeliveryHoursBody = {
-  name: string;
-  enabled: boolean;
-  days: number[];
-  start_minute: number;
-  end_minute: number;
-  group_ids: string[];
-};
 
 export const api = {
   /** Public bootstrap config: whether reads are open, login availability, default poll interval. */
@@ -2498,15 +2491,19 @@ export const api = {
   /** Delivery-hours schedules and the default time zone (ADR-226). */
   getDeliveryHours: (): Promise<DeliveryHoursConfig> => apiGet('/api/v1/delivery-hours'),
 
-  /** Create a delivery-hours schedule. Times are minutes after local midnight. */
-  createDeliveryHours: (body: DeliveryHoursBody): Promise<{ id: string }> =>
-    apiPost('/api/v1/delivery-hours', { body }),
+  /** The channels an alert goes to when no routing rule that matches it is open (ADR-262). */
+  getRoutingCatchAll: (): Promise<RoutingCatchAll> => apiGet('/api/v1/routing-catch-all'),
 
-  /** Replace a delivery-hours schedule, its on/off switch included. */
-  updateDeliveryHours: (id: string, body: DeliveryHoursBody): Promise<void> =>
-    apiPut('/api/v1/delivery-hours/{id}', { path: { id }, body }),
+  /** Every node grouped by the rules that reach it at `severity`, and where their alerts go across
+   *  the week (ADR-262). Reads every node, so it is asked for when the section is open. */
+  getRoutingCoverage: (severity: Severity): Promise<RoutingCoverage> =>
+    apiGet('/api/v1/routing-coverage', { query: { severity } }),
 
-  /** Delete a delivery-hours schedule; what it held goes out on the next pass. */
+  /** Replace the catch-all's channels. */
+  setRoutingCatchAll: (channel_ids: string[]): Promise<void> =>
+    apiPut('/api/v1/routing-catch-all', { body: { channel_ids } }),
+
+  /** Delete a schedule of an earlier version; it holds nothing since ADR-262. */
   deleteDeliveryHours: (id: string): Promise<void> =>
     apiDelete('/api/v1/delivery-hours/{id}', { path: { id } }),
 

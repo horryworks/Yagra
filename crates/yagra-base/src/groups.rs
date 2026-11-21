@@ -206,25 +206,31 @@ pub struct GroupSummary {
     /// then a person's), else the nearest ancestor's, else null for the deployment's default.
     /// Resolved on every read, never stored - the same call the effective position makes.
     pub effective_time_zone: Option<String>,
-    /// Whether notifications about this folder's nodes are delivered right now, under the
-    /// delivery-hours schedules that reach it (ADR-226), or null when none does (ADR-252). Judged
-    /// by core on every read; this crate only carries it. Null on an ancestor a scoped caller
-    /// receives only by name.
+    /// Where an alert about this folder's nodes goes right now, under the routing rules that reach
+    /// it (ADR-262 decision 9), or null when it goes to no channel (ADR-252). Judged by core on
+    /// every read; this crate only carries it. Null on an ancestor a scoped caller receives only
+    /// by name.
     pub delivery: Option<DeliveryNow>,
 }
 
-/// Whether notifications about a node are delivered right now, and until when (ADR-252).
+/// Where an alert goes right now, and until when (ADR-252; since ADR-262 decision 9 judged from
+/// the routing rules' own hours).
 ///
 /// Only the server judges it: the WebUI lays the instants out in the site's zone and never reads a
-/// schedule itself, so the screen and the notifier cannot disagree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+/// rule itself, so the screen and the notifier cannot disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct DeliveryNow {
-    /// True inside the hours: a notification goes out now. False: it is held.
+    /// True: an alert goes out now, to `channels`. False: it is held until `opens_at`.
     pub open: bool,
-    /// While open, the instant the hours close; null when they do not close within a week.
+    /// While open, the instant where it goes changes; null when that is not within a week.
     pub closes_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// While held, the instant the hours open again; null while open.
+    /// While held, the instant a rule opens again; null while open.
     pub opens_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// While open, the names of the channels it goes to, by name; empty while held.
+    pub channels: Vec<String>,
+    /// While open, whether those are the catch-all's channels, because no rule that matches is
+    /// open.
+    pub catch_all: bool,
 }
 
 /// A folder's own zone: NetBox's when it names one, else the one a person set (ADR-226 decision 6).

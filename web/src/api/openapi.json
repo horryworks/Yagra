@@ -4756,74 +4756,6 @@
             }
           }
         }
-      },
-      "post": {
-        "tags": [
-          "notifications"
-        ],
-        "operationId": "create_delivery_hours",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScheduleBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Schedule created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreatedId"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Empty name, no weekday, a time outside the day, or no folder",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks ManageSystem",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/api/v1/delivery-hours/default-time-zone": {
@@ -4890,89 +4822,6 @@
       }
     },
     "/api/v1/delivery-hours/{id}": {
-      "put": {
-        "tags": [
-          "notifications"
-        ],
-        "operationId": "update_delivery_hours",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Schedule id",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ScheduleBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Schedule replaced"
-          },
-          "400": {
-            "description": "Empty name, no weekday, a time outside the day, or no folder",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid bearer token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Role lacks ManageSystem",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "No such schedule",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "This core has no write side (skeleton mode)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      },
       "delete": {
         "tags": [
           "notifications"
@@ -22975,6 +22824,181 @@
         }
       }
     },
+    "/api/v1/routing-catch-all": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "get_routing_catch_all",
+        "responses": {
+          "200": {
+            "description": "The channels an alert goes to when no matching rule is open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingCatchAll"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "set_routing_catch_all",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoutingCatchAll"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The catch-all's channels are replaced"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/routing-coverage": {
+      "get": {
+        "tags": [
+          "notifications"
+        ],
+        "operationId": "get_routing_coverage",
+        "parameters": [
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "`critical` (the default), `warning` or `info`: a rule for one severity reaches only that.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every node grouped by the rules that match it, and where their alerts go across the week",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingCoverage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A severity other than critical, warning or info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/routing-rules": {
       "get": {
         "tags": [
@@ -32113,6 +32137,94 @@
           }
         }
       },
+      "CoverageKind": {
+        "type": "string",
+        "description": "Where an alert goes during a [`CoverageSegment`].",
+        "enum": [
+          "rules",
+          "catch_all",
+          "held",
+          "nowhere"
+        ]
+      },
+      "CoverageRow": {
+        "type": "object",
+        "description": "The nodes one set of matching rules reaches, and where their alerts go across the week.",
+        "required": [
+          "rule_ids",
+          "node_count",
+          "node_ids",
+          "segments"
+        ],
+        "properties": {
+          "node_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Up to fifty of them, for naming."
+          },
+          "rule_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The enabled rules that match these nodes at the asked severity, in rule order; empty when\nnone does."
+          },
+          "segments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoverageSegment"
+            }
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The zone these nodes keep time in; `null` for the deployment's default."
+          }
+        }
+      },
+      "CoverageSegment": {
+        "type": "object",
+        "description": "One stretch of the week in which an alert goes to the same place (ADR-262 decision 8). Minutes\nare counted from Monday 00:00 local time.",
+        "required": [
+          "start",
+          "end",
+          "kind",
+          "channel_ids"
+        ],
+        "properties": {
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The channels it goes to; empty when held or going nowhere."
+          },
+          "end": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CoverageKind"
+          },
+          "start": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "CreateAnalysisJob": {
         "type": "object",
         "description": "Request body to launch an analysis (launch drawer / report config bar).",
@@ -32594,6 +32706,17 @@
               "type": "string"
             },
             "description": "Only alerts on a node carrying at least one of these among its effective labels (its own\nplus its folders', minus the ones it refuses) reach the rule's channels. Empty = every\nnode. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —\na client that predates the field must not widen a rule by saving it."
+          },
+          "when": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RuleWhen",
+                "description": "When the rule is open (ADR-262): `always`, or `during` / `outside` a weekly window read in\nthe node's own zone. A window needs at least one ISO weekday (1 = Monday .. 7 = Sunday);\nminutes are after local midnight, below 1440. Omitted on an edit, the rule keeps its own."
+              }
+            ]
           }
         }
       },
@@ -33052,22 +33175,35 @@
       },
       "DeliveryNow": {
         "type": "object",
-        "description": "Whether notifications about a node are delivered right now, and until when (ADR-252).\n\nOnly the server judges it: the WebUI lays the instants out in the site's zone and never reads a\nschedule itself, so the screen and the notifier cannot disagree.",
+        "description": "Where an alert goes right now, and until when (ADR-252; since ADR-262 decision 9 judged from\nthe routing rules' own hours).\n\nOnly the server judges it: the WebUI lays the instants out in the site's zone and never reads a\nrule itself, so the screen and the notifier cannot disagree.",
         "required": [
-          "open"
+          "open",
+          "channels",
+          "catch_all"
         ],
         "properties": {
+          "catch_all": {
+            "type": "boolean",
+            "description": "While open, whether those are the catch-all's channels, because no rule that matches is\nopen."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "While open, the names of the channels it goes to, by name; empty while held."
+          },
           "closes_at": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time",
-            "description": "While open, the instant the hours close; null when they do not close within a week."
+            "description": "While open, the instant where it goes changes; null when that is not within a week."
           },
           "open": {
             "type": "boolean",
-            "description": "True inside the hours: a notification goes out now. False: it is held."
+            "description": "True: an alert goes out now, to `channels`. False: it is held until `opens_at`."
           },
           "opens_at": {
             "type": [
@@ -33075,7 +33211,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "While held, the instant the hours open again; null while open."
+            "description": "While held, the instant a rule opens again; null while open."
           }
         }
       },
@@ -36336,7 +36472,7 @@
               },
               {
                 "$ref": "#/components/schemas/DeliveryNow",
-                "description": "Whether notifications about this folder's nodes are delivered right now, under the\ndelivery-hours schedules that reach it (ADR-226), or null when none does (ADR-252). Judged\nby core on every read; this crate only carries it. Null on an ancestor a scoped caller\nreceives only by name."
+                "description": "Where an alert about this folder's nodes goes right now, under the routing rules that reach\nit (ADR-262 decision 9), or null when it goes to no channel (ADR-252). Judged by core on\nevery read; this crate only carries it. Null on an ancestor a scoped caller receives only\nby name."
               }
             ]
           },
@@ -46693,6 +46829,53 @@
           }
         }
       },
+      "RoutingCatchAll": {
+        "type": "object",
+        "description": "The catch-all (ADR-262 decision 4): the channels an alert goes to when no routing rule that\nmatches it is open, or no rule matches it at all.",
+        "required": [
+          "channel_ids"
+        ],
+        "properties": {
+          "channel_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Empty = none. Then an alert whose matching rules are all closed is held until one opens,\nand one no rule matches reaches no channel (the environment's default route still gets it)."
+          }
+        }
+      },
+      "RoutingCoverage": {
+        "type": "object",
+        "description": "Where a deployment's alerts go across the week (ADR-262 decision 8).",
+        "required": [
+          "severity",
+          "catch_all",
+          "rows"
+        ],
+        "properties": {
+          "catch_all": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The catch-all's channels, so a stretch drawn as `catch_all` can be named."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoverageRow"
+            },
+            "description": "One per set of matching rules and zone, the most nodes first."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity",
+            "description": "The severity it was drawn for."
+          }
+        }
+      },
       "RoutingRule": {
         "type": "object",
         "description": "A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of\n`group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.",
@@ -46745,6 +46928,10 @@
               "type": "string"
             },
             "description": "The node must carry at least one of these among its effective labels - its own plus the\nones its folders supply, minus the ones it refuses (ADR-259). Empty means every node, and a\nsubject that is not a node (a poller pool, a Meraki organization) matches only an empty\nlist. Compared exactly, case included, the way a node's own labels are stored."
+          },
+          "when": {
+            "$ref": "#/components/schemas/RuleWhen",
+            "description": "When the rule is open (ADR-262 decision 3). Absent = always."
           }
         }
       },
@@ -46769,6 +46956,33 @@
           },
           "matched": {
             "type": "boolean"
+          }
+        }
+      },
+      "RuleWhen": {
+        "type": "object",
+        "description": "When a routing rule is open: always, or inside / outside a weekly window read in the node's own\nzone (ADR-262 decision 3). The window is ISO weekdays (1 = Monday .. 7 = Sunday) and minutes\nafter local midnight; a start later than the end spans midnight and belongs to the day it opens\non, and equal start and end means the whole of each listed day - the rules ADR-226's schedules\nkept.",
+        "properties": {
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          "end_minute": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "mode": {
+            "$ref": "#/components/schemas/WhenMode"
+          },
+          "start_minute": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -47390,51 +47604,6 @@
           }
         ],
         "description": "A scan's status, and which of its candidates a device node already stands at.\n\nA view over the scan rather than a field on each candidate: the candidate type is also what the\ndiscovery-queue widget serves, where there is no scan read to hang the lookup on and the field\nwould always be empty — which would be untrue."
-      },
-      "ScheduleBody": {
-        "type": "object",
-        "description": "Create or replace body. Times are minutes after local midnight; a start later than the end\nspans midnight, and an equal pair means the whole of each listed day.",
-        "required": [
-          "name",
-          "days",
-          "start_minute",
-          "end_minute"
-        ],
-        "properties": {
-          "days": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "int32",
-              "minimum": 0
-            },
-            "description": "ISO weekdays, 1 = Monday .. 7 = Sunday. At least one."
-          },
-          "enabled": {
-            "type": "boolean"
-          },
-          "end_minute": {
-            "type": "integer",
-            "format": "int32",
-            "minimum": 0
-          },
-          "group_ids": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "format": "uuid"
-            },
-            "description": "The folders it applies to, each with everything beneath it. At least one. A label is\nnever a target (ADR-229 decision 9)."
-          },
-          "name": {
-            "type": "string"
-          },
-          "start_minute": {
-            "type": "integer",
-            "format": "int32",
-            "minimum": 0
-          }
-        }
       },
       "SchedulerStatsSnapshot": {
         "type": "object",
@@ -50445,6 +50614,15 @@
             "description": "An absolute `http`/`https` URL with no query and no fragment, without a trailing `/`\n(for example `https://yagra.example.com`). `null` when not set; notifications then carry no\nlink to Yagra."
           }
         }
+      },
+      "WhenMode": {
+        "type": "string",
+        "description": "Whether a routing rule is open always, only inside its window, or only outside it\n(ADR-262 decision 3).",
+        "enum": [
+          "always",
+          "during",
+          "outside"
+        ]
       },
       "WindowScope": {
         "type": "string",

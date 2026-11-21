@@ -20,6 +20,10 @@ export interface DeliveryNow {
   open: boolean;
   closes_at?: string | null;
   opens_at?: string | null;
+  /** While open, where it goes, by channel name (ADR-262 decision 9). */
+  channels?: string[];
+  /** While open, whether those are the catch-all's channels. */
+  catch_all?: boolean;
 }
 
 export interface LocalTimeLine {
@@ -38,7 +42,7 @@ export interface LocalTimeLine {
  *  as this browser's clock runs ahead of the server's. */
 export function deliveryKey(delivery: DeliveryNow | null | undefined): string {
   if (!delivery) return '';
-  return `${delivery.open}|${delivery.closes_at ?? ''}|${delivery.opens_at ?? ''}`;
+  return `${delivery.open}|${delivery.closes_at ?? ''}|${delivery.opens_at ?? ''}|${delivery.catch_all}|${(delivery.channels ?? []).join(',')}`;
 }
 
 /** `HH:MM` at `at` in `tz`, with the weekday in front when it is not the same day as `now` there. */
@@ -72,10 +76,16 @@ export function localTimeLine(
   const tz = known ?? displayTimeZone();
   const at =
     boundary === null || Number.isNaN(boundary) ? null : boundaryText(boundary, now, tz, locale);
+  // Where an alert goes now (ADR-262 decision 9): the channels by name, or the catch-all's.
+  const to = (delivery.channels ?? []).join(', ');
   const text = delivery.open
-    ? at
-      ? t('localTime.deliveringUntil', { time: at })
-      : t('localTime.delivering')
+    ? delivery.catch_all
+      ? at
+        ? t('localTime.catchAllUntil', { to, time: at })
+        : t('localTime.catchAll', { to })
+      : at
+        ? t('localTime.goesToUntil', { to, time: at })
+        : t('localTime.goesTo', { to })
     : at
       ? t('localTime.heldUntil', { time: at })
       : t('localTime.held');

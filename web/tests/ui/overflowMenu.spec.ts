@@ -49,8 +49,6 @@ const SCREENS: Record<string, string> = {
 const EXEMPT: Record<string, string> = {
   'pages/AlertGroupingSection.tsx':
     'A section of /alerts/routing, which RoutingPage.tsx already walks: one route is opened once, and its rows use the same menu (ADR-236).',
-  'pages/DeliveryHoursSection.tsx':
-    'A section of /alerts/routing, which RoutingPage.tsx already walks: one route is opened once, and its rows use the same menu (ADR-226).',
   'components/NodeDetail/CheckConfigActions.tsx':
     'A node-detail tab, not a route. Reaching it needs a node of the right kind and a tab click; the geometry it would exercise is the same menu these twelve already do.',
   'components/shell/UserMenu.tsx':

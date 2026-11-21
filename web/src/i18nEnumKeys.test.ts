@@ -54,6 +54,7 @@ import {
   MAP_ROLES,
   MAP_ROLE_REASONS,
   GROUPING_LEVELS,
+  COVERAGE_KINDS,
   TLS_CERT_SOURCES,
   INVESTIGATE_HYPOTHESES,
   INVESTIGATE_VERDICTS,
@@ -110,6 +111,7 @@ import {
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
+import { WHEN_MODES } from './pages/ruleWhen';
 import { CREATABLE_USER_KINDS } from './pages/userKinds';
 import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
 import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
@@ -1227,6 +1229,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   it('every sky has strings (topology:geo.dayNight.sky.*)', () => {
     // The Geo map's legend and each site's tooltip build `geo.dayNight.sky.${sky}` (ADR-189).
     expectKeys('geo sky', { en: enTopology, ja: jaTopology }, 'geo.dayNight.sky.', SKIES);
+  });
+
+  it('every coverage stretch and rule window has a label (alertsConfig:routing.*)', () => {
+    // The coverage strip and its legend build `routing.coverage.kind.${kind}` from the server's
+    // answer, and the rule dialog `routing.when.mode.${mode}` for each stop of its switch (ADR-262).
+    const both = { en: enAlertsConfig, ja: jaAlertsConfig };
+    expectKeys('coverage kind', both, 'routing.coverage.kind.', COVERAGE_KINDS);
+    expectKeys('rule window', both, 'routing.when.mode.', WHEN_MODES);
   });
 
   it('every grouping level has a label (alertsConfig:grouping.level.*)', () => {

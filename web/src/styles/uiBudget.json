@@ -380,8 +380,8 @@
       "why": "before ADR-246"
     },
     "pages/RoutingPage.css": {
-      "lines": 59,
-      "why": "before ADR-246; the alert-grouping exceptions indent under the level they change (ADR-262)"
+      "lines": 108,
+      "why": "before ADR-246; the alert-grouping exceptions indent under the level they change, and the coverage week is a chart of its own: seven day bars of stretches, a band per channel (ADR-262)"
     },
     "pages/SubnetOverlapsPage.css": {
       "lines": 261,

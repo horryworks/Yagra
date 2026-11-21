@@ -21,9 +21,9 @@ test('every row action on Notification delivery can be pressed', async ({ page }
   const report = await inspectRowActions(page);
   expect(report.findings).toEqual([]);
   // Five on a channel (test, delivery log, template, on/off, delete — ADR-195 added the log),
-  // three on a rule (edit, on/off, delete), two on a grouping exception (edit, remove — ADR-262)
-  // and three on a delivery-hours schedule (ADR-226).
-  expect(report.buttons).toBe(13);
+  // three on a rule (edit, on/off, delete) and two on a grouping exception (edit, remove). The
+  // delivery-hours table is gone: a rule keeps its own hours (ADR-262).
+  expect(report.buttons).toBe(10);
 });
 
 // Refresh used to write the same filters back to the URL. The query string did not change, so
@@ -117,4 +117,52 @@ test('a rule tag no node carries is marked on the rule list', async ({ page }) =
   await page.goto('/alerts/routing');
   const ruleRow = section(page, 'Routing rules').locator('.dt-row').first();
   await expect(ruleRow.locator('.badge', { hasText: 'no node' })).toBeVisible();
+});
+
+// ADR-262 decision 3: a rule keeps its own hours. "During" shows the weekdays and the two times,
+// and the window is sent with the rest of the rule.
+test("a routing rule's hours are chosen in its dialog and sent with it", async ({ page }) => {
+  await page.goto('/alerts/routing');
+  const ruleRow = section(page, 'Routing rules').locator('.dt-row').first();
+  await ruleRow.hover();
+  await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
+  const dialog = page.getByRole('dialog');
+  const when = dialog.getByRole('group', { name: 'When', exact: true });
+  await when.getByRole('button', { name: 'During', exact: true }).click();
+  await expect(when.getByRole('checkbox')).toHaveCount(7);
+  const saved = page.waitForRequest((r) => r.method() === 'PUT' && r.url().includes('/definition'));
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  const body = (await saved).postDataJSON() as { when?: { mode: string; days: number[] } };
+  expect(body.when?.mode).toBe('during');
+  expect(body.when?.days.length).toBeGreaterThan(0);
+});
+
+// ADR-262 decision 4: the catch-all is the line under the rules, and its channels are set there.
+test('the catch-all line sets the channels an alert goes to when no rule is open', async ({ page }) => {
+  await page.goto('/alerts/routing');
+  await page.getByRole('button', { name: 'Set channels' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('.checklist-rows input').first().check();
+  const saved = page.waitForRequest(
+    (r) => r.method() === 'PUT' && r.url().endsWith('/api/v1/routing-catch-all'),
+  );
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  const body = (await saved).postDataJSON() as { channel_ids: string[] };
+  expect(body.channel_ids.length).toBeGreaterThan(0);
+});
+
+// ADR-262 decision 8: the coverage week draws a row per set of rules, seven day bars each, and
+// asks again for another severity.
+test('the coverage week draws its rows and redraws for another severity', async ({ page }) => {
+  const first = page.waitForRequest((r) => r.url().includes('/api/v1/routing-coverage'));
+  await page.goto('/alerts/routing');
+  expect(new URL((await first).url()).searchParams.get('severity')).toBe('critical');
+  const coverage = page.locator('.routing-coverage');
+  await expect(coverage.locator('.coverage-day').first()).toBeVisible();
+  expect(await coverage.locator('.coverage-row').count()).toBeGreaterThan(1);
+  const again = page.waitForRequest(
+    (r) => r.url().includes('/api/v1/routing-coverage') && r.url().includes('severity=warning'),
+  );
+  await coverage.getByRole('button', { name: 'Warning', exact: true }).click();
+  await again;
 });

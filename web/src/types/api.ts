@@ -825,6 +825,17 @@ export type ChannelConfigInput = components['schemas']['ChannelConfig'];
 export type RoutingRule = components['schemas']['RoutingRule'];
 /** What creating or editing a routing rule sends (ADR-193, ADR-259, ADR-262). */
 export type RoutingRuleBody = components['schemas']['CreateRule'];
+/** When a routing rule is open (ADR-262). */
+export type RuleWhen = components['schemas']['RuleWhen'];
+export type WhenMode = components['schemas']['WhenMode'];
+/** The channels an alert goes to when no matching rule is open (ADR-262). */
+export type RoutingCatchAll = components['schemas']['RoutingCatchAll'];
+/** Where alerts go across the week, by the set of rules that reach each node (ADR-262). */
+export type RoutingCoverage = components['schemas']['RoutingCoverage'];
+export type CoverageRow = components['schemas']['CoverageRow'];
+export type CoverageSegment = components['schemas']['CoverageSegment'];
+/** Where an alert goes in one stretch of the coverage week, as the strip and its legend name it. */
+export const COVERAGE_KINDS = ['rules', 'catch_all', 'held', 'nowhere'] as const satisfies readonly CoverageSegment['kind'][];
 export type NodeTags = components['schemas']['NodeTags'];
 
 /** The env-configured default notification route (`GET /api/v1/notification-default-route`):

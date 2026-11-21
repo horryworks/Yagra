@@ -635,14 +635,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         Tool("get_config"),
     ),
-    ("POST", "/api/v1/delivery-hours", ADMIN_CFG, NO_MCP_WRITE),
     (
         "PUT",
         "/api/v1/delivery-hours/default-time-zone",
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
-    ("PUT", "/api/v1/delivery-hours/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
         "DELETE",
         "/api/v1/delivery-hours/:id",
@@ -2066,6 +2064,24 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/roles",
         DEPLOY_WIDE,
+        Tool("get_config"),
+    ),
+    (
+        "GET",
+        "/api/v1/routing-catch-all",
+        ADMIN_CFG,
+        Tool("get_config"),
+    ),
+    (
+        "PUT",
+        "/api/v1/routing-catch-all",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/routing-coverage",
+        ADMIN_CFG,
         Tool("get_config"),
     ),
     (

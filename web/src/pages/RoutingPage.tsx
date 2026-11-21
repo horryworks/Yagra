@@ -5,7 +5,8 @@
 // which channels). The notifier snapshots these (refreshed ~30s) so edits take effect live;
 // any env-configured channel stays an always-on default route, shown as one line above the rules
 // (ADR-200 Inc.28). After the rules sit the alert grouping (ADR-236, `AlertGroupingSection.tsx`)
-// and the delivery hours (ADR-226, `DeliveryHoursSection.tsx`). The delivery log is its own page
+// (ADR-236). A rule keeps its own hours since ADR-262; what is left of delivery hours is the
+// default zone and the schedules an earlier version kept (`RoutingRulesFooter.tsx`). The delivery log is its own page
 // under Alerts ▸ Monitor since ADR-262 (`DeliveryLog.tsx`); a channel row links to it.
 //
 // A `sections` page (ADR-246): each list is its toolbar, which carries the section's title, the
@@ -73,7 +74,12 @@ import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTes
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { AlertGroupingSection } from './AlertGroupingSection';
-import { DeliveryHoursSection } from './DeliveryHoursSection';
+import { CatchAllLine, DefaultZoneSelect, OldSchedules } from './RoutingRulesFooter';
+import { RoutingCoverage } from './RoutingCoverage';
+import { WEEKDAYS, weekdayName } from './deliveryHours';
+import { WHEN_MODES, whenBodyFrom, whenDraftFrom, whenText, type WhenDraft } from './ruleWhen';
+import { TimeOfDayInput } from '../components/ui/WallTimeInput';
+import { Segmented } from '../components/ui/Segmented';
 import { defaultRouteChannels } from './defaultRoute';
 import { deliveryLogFor } from './deliveryLogQuery';
 
@@ -150,6 +156,7 @@ export function RoutingPage() {
           onError={setError}
           onShowLog={showLog}
         />
+        <OldSchedules groups={groups} canSystem={canSystem} />
         <RulesSection
           rules={rules}
           nodeTags={nodeTags}
@@ -161,8 +168,8 @@ export function RoutingPage() {
           onChange={load}
           onError={setError}
         />
+        <RoutingCoverage rules={rules} channels={channels} />
         <AlertGroupingSection canSystem={canSystem} onError={setError} />
-        <DeliveryHoursSection canSystem={canSystem} onError={setError} />
       </LoadGate>
     </Page>
   );
@@ -676,6 +683,13 @@ function RulesSection({
         ),
       },
       {
+        key: 'when',
+        header: t('routing.rules.cols.when'),
+        width: '1fr',
+        sortValue: (r) => whenText(t, r.when),
+        render: (r) => <ClippedText text={whenText(t, r.when)} />,
+      },
+      {
         key: 'channels',
         sortValue: (r) => r.channel_ids.map(channelName).join(', ') || null,
         header: t('routing.rules.cols.channels'),
@@ -750,25 +764,13 @@ function RulesSection({
       >
         {/* Not drawn rather than disabled while there is no channel (ADR-056): a rule names the
             channels it sends to, and the empty list below says what comes first (ADR-209). */}
+        <DefaultZoneSelect canSystem={canSystem} onError={onError} />
         {canSystem && channels.length > 0 && (
           <Button variant="primary" onClick={() => setAdding(true)}>
             {t('routing.rules.add')}
           </Button>
         )}
       </ListToolbar>
-
-      {/* The env default route, read-only: it is sent every alert whatever the rules say. A line
-          rather than a pinned row, because the rules table is filtered and counted in the browser
-          and a row that is not a rule would be filtered and counted with them. */}
-      {defaultRoute && (
-        <Inline as="p" gap={8} className="routing-default-route">
-          <span className="yt-name-txt">{t('routing.log.defaultRoute')}</span>
-          <Badge tone="neutral">{t('routing.rules.defaultRoute.allAlerts')}</Badge>
-          <span className="muted">
-            {defaultRouteChannels(defaultRoute) ?? t('routing.rules.defaultRoute.notSet')}
-          </span>
-        </Inline>
-      )}
 
       <DataTable
         tableId="settings.routingRules"
@@ -798,9 +800,25 @@ function RulesSection({
                 )
               }
             />
+
           )
         }
       />
+
+      {/* The two lines after the last rule (ADR-262 decision 5): where an alert goes when no rule
+          that matches it is open, and the environment's route, sent every alert whatever the rules
+          say. Lines rather than pinned rows, because the rules table is filtered and counted in the
+          browser and a row that is not a rule would be filtered and counted with them. */}
+      <CatchAllLine channels={channels} canSystem={canSystem} />
+      {defaultRoute && (
+        <Inline as="p" gap={8} className="routing-default-route">
+          <span className="yt-name-txt">{t('routing.rules.alwaysAlso')}</span>
+          <Badge tone="neutral">{t('routing.rules.defaultRoute.allAlerts')}</Badge>
+          <span className="muted">
+            {defaultRouteChannels(defaultRoute) ?? t('routing.rules.defaultRoute.notSet')}
+          </span>
+        </Inline>
+      )}
 
       {adding && (
         <RuleModal
@@ -876,6 +894,13 @@ function RuleModal({
     appliesToFrom(rule?.group_ids ?? [], rule?.tags ?? []),
   );
   const [target, setTarget] = useState<AppliesTo>(initial);
+  const [when, setWhen] = useState<WhenDraft>(() => whenDraftFrom(rule?.when));
+  const whenBody = whenBodyFrom(when);
+  const toggleDay = (d: number) =>
+    setWhen((w) => ({
+      ...w,
+      days: w.days.includes(d) ? w.days.filter((x) => x !== d) : [...w.days, d],
+    }));
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
   const form = useSubmit({
@@ -891,7 +916,8 @@ function RuleModal({
       return next;
     });
 
-  const canAdd = name.trim() !== '' && selected.size > 0 && !namesNothing(target);
+  const canAdd =
+    name.trim() !== '' && selected.size > 0 && !namesNothing(target) && 'when' in whenBody;
 
   const submit = () => {
     if (!canAdd) return;
@@ -900,6 +926,7 @@ function RuleModal({
       severity: severity === '' ? null : severity,
       ...appliesToBody(target),
       channel_ids: [...selected],
+      when: 'when' in whenBody ? whenBody.when : undefined,
     };
     form.submit(() =>
       (rule ? api.updateRoutingRule(rule.id, body) : api.createRoutingRule(body)).then(() =>
@@ -947,6 +974,48 @@ function RuleModal({
           initial={initial}
           allowAll
         />
+        <FieldGroup
+          label={t('routing.ruleModal.when')}
+          error={'error' in whenBody ? t(`routing.when.err.${whenBody.error}`) : undefined}
+        >
+          <Segmented
+            options={WHEN_MODES.map((m) => ({ value: m, label: t(`routing.when.mode.${m}`) }))}
+            value={when.mode}
+            onChange={(v) => {
+              const mode = WHEN_MODES.find((m) => m === v);
+              if (mode) setWhen((w) => ({ ...w, mode }));
+            }}
+          />
+          {when.mode !== 'always' && (
+            <>
+              <Inline gap={12}>
+                {WEEKDAYS.map((d) => (
+                  <CheckField
+                    key={d}
+                    checked={when.days.includes(d)}
+                    onChange={() => toggleDay(d)}
+                    label={weekdayName(t, d)}
+                  />
+                ))}
+              </Inline>
+              <Inline gap={8}>
+                <TimeOfDayInput
+                  id="rule-when-start"
+                  aria-label={t('routing.when.from')}
+                  value={when.start}
+                  onChange={(start) => setWhen((w) => ({ ...w, start }))}
+                />
+                <span>–</span>
+                <TimeOfDayInput
+                  id="rule-when-end"
+                  aria-label={t('routing.when.until')}
+                  value={when.end}
+                  onChange={(end) => setWhen((w) => ({ ...w, end }))}
+                />
+              </Inline>
+            </>
+          )}
+        </FieldGroup>
         <FieldGroup label={t('routing.ruleModal.channels')}>
           <Inline gap={12}>
             {channels.map((c) => (

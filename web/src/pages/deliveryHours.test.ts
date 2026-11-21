@@ -5,8 +5,6 @@ import {
   heldFireFor,
   hoursText,
   minutesToTime,
-  scheduleBodyFrom,
-  scheduleDraftFrom,
   timeToMinutes,
 } from './deliveryHours';
 import type { HeldNotification } from '../types/api';
@@ -34,24 +32,6 @@ describe('delivery hours', () => {
   it('says an equal start and end as the whole day', () => {
     expect(hoursText({ start_minute: 0, end_minute: 0 })).toBe('00:00–24:00');
     expect(hoursText({ start_minute: 1320, end_minute: 360 })).toBe('22:00–06:00');
-  });
-
-  it('starts a new schedule at office hours on weekdays', () => {
-    const d = scheduleDraftFrom();
-    expect(d.days).toEqual([1, 2, 3, 4, 5]);
-    expect([d.start, d.end]).toEqual(['08:30', '17:20']);
-  });
-
-  it('refuses what the server refuses, before sending', () => {
-    const ok = { ...scheduleDraftFrom(), name: 'office', groupIds: ['g1'] };
-    expect('body' in scheduleBodyFrom(ok, true)).toBe(true);
-    expect(scheduleBodyFrom({ ...ok, name: ' ' }, true)).toEqual({ error: 'name' });
-    expect(scheduleBodyFrom({ ...ok, days: [] }, true)).toEqual({ error: 'days' });
-    expect(scheduleBodyFrom({ ...ok, end: '25:00' }, true)).toEqual({ error: 'time' });
-    expect(scheduleBodyFrom({ ...ok, groupIds: [] }, true)).toEqual({ error: 'target' });
-    const r = scheduleBodyFrom({ ...ok, days: [5, 1] }, false);
-    expect('body' in r && r.body.days).toEqual([1, 5]);
-    expect('body' in r && r.body.enabled).toBe(false);
   });
 
   it('marks an open alert only for its own held fire', () => {

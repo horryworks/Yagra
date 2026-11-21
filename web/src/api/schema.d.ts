@@ -993,7 +993,7 @@ export interface paths {
         };
         get: operations["list_delivery_hours"];
         put?: never;
-        post: operations["create_delivery_hours"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1024,7 +1024,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put: operations["update_delivery_hours"];
+        put?: never;
         post?: never;
         delete: operations["delete_delivery_hours"];
         options?: never;
@@ -4739,6 +4739,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/routing-catch-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_routing_catch_all"];
+        put: operations["set_routing_catch_all"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routing-coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["get_routing_coverage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/routing-rules": {
         parameters: {
             query?: never;
@@ -7741,6 +7773,38 @@ export interface components {
             /** @description What it is doing about this run. */
             state: components["schemas"]["ConvergeState"];
         };
+        /**
+         * @description Where an alert goes during a [`CoverageSegment`].
+         * @enum {string}
+         */
+        CoverageKind: "rules" | "catch_all" | "held" | "nowhere";
+        /** @description The nodes one set of matching rules reaches, and where their alerts go across the week. */
+        CoverageRow: {
+            node_count: number;
+            /** @description Up to fifty of them, for naming. */
+            node_ids: string[];
+            /**
+             * @description The enabled rules that match these nodes at the asked severity, in rule order; empty when
+             *     none does.
+             */
+            rule_ids: string[];
+            segments: components["schemas"]["CoverageSegment"][];
+            /** @description The zone these nodes keep time in; `null` for the deployment's default. */
+            zone?: string | null;
+        };
+        /**
+         * @description One stretch of the week in which an alert goes to the same place (ADR-262 decision 8). Minutes
+         *     are counted from Monday 00:00 local time.
+         */
+        CoverageSegment: {
+            /** @description The channels it goes to; empty when held or going nowhere. */
+            channel_ids: string[];
+            /** Format: int32 */
+            end: number;
+            kind: components["schemas"]["CoverageKind"];
+            /** Format: int32 */
+            start: number;
+        };
         /** @description Request body to launch an analysis (launch drawer / report config bar). */
         CreateAnalysisJob: {
             /** Format: int64 */
@@ -7910,6 +7974,7 @@ export interface components {
              *     a client that predates the field must not widen a rule by saving it.
              */
             tags?: string[] | null;
+            when?: null | components["schemas"]["RuleWhen"];
         };
         /** @description Create-template body. */
         CreateTemplate: {
@@ -8150,22 +8215,30 @@ export interface components {
             schedules: components["schemas"]["DeliverySchedule"][];
         };
         /**
-         * @description Whether notifications about a node are delivered right now, and until when (ADR-252).
+         * @description Where an alert goes right now, and until when (ADR-252; since ADR-262 decision 9 judged from
+         *     the routing rules' own hours).
          *
          *     Only the server judges it: the WebUI lays the instants out in the site's zone and never reads a
-         *     schedule itself, so the screen and the notifier cannot disagree.
+         *     rule itself, so the screen and the notifier cannot disagree.
          */
         DeliveryNow: {
             /**
+             * @description While open, whether those are the catch-all's channels, because no rule that matches is
+             *     open.
+             */
+            catch_all: boolean;
+            /** @description While open, the names of the channels it goes to, by name; empty while held. */
+            channels: string[];
+            /**
              * Format: date-time
-             * @description While open, the instant the hours close; null when they do not close within a week.
+             * @description While open, the instant where it goes changes; null when that is not within a week.
              */
             closes_at?: string | null;
-            /** @description True inside the hours: a notification goes out now. False: it is held. */
+            /** @description True: an alert goes out now, to `channels`. False: it is held until `opens_at`. */
             open: boolean;
             /**
              * Format: date-time
-             * @description While held, the instant the hours open again; null while open.
+             * @description While held, the instant a rule opens again; null while open.
              */
             opens_at?: string | null;
         };
@@ -14795,6 +14868,26 @@ export interface components {
             token: string;
         };
         /**
+         * @description The catch-all (ADR-262 decision 4): the channels an alert goes to when no routing rule that
+         *     matches it is open, or no rule matches it at all.
+         */
+        RoutingCatchAll: {
+            /**
+             * @description Empty = none. Then an alert whose matching rules are all closed is held until one opens,
+             *     and one no rule matches reaches no channel (the environment's default route still gets it).
+             */
+            channel_ids: string[];
+        };
+        /** @description Where a deployment's alerts go across the week (ADR-262 decision 8). */
+        RoutingCoverage: {
+            /** @description The catch-all's channels, so a stretch drawn as `catch_all` can be named. */
+            catch_all: string[];
+            /** @description One per set of matching rules and zone, the most nodes first. */
+            rows: components["schemas"]["CoverageRow"][];
+            /** @description The severity it was drawn for. */
+            severity: components["schemas"]["Severity"];
+        };
+        /**
          * @description A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
          *     `group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.
          */
@@ -14819,6 +14912,8 @@ export interface components {
              *     list. Compared exactly, case included, the way a node's own labels are stored.
              */
             tags: string[];
+            /** @description When the rule is open (ADR-262 decision 3). Absent = always. */
+            when?: components["schemas"]["RuleWhen"];
         };
         /**
          * @description The tester's answer. A compile failure is reported **in-band** rather than as a 400: the whole
@@ -14829,6 +14924,21 @@ export interface components {
             clear_matched?: boolean | null;
             error?: string | null;
             matched: boolean;
+        };
+        /**
+         * @description When a routing rule is open: always, or inside / outside a weekly window read in the node's own
+         *     zone (ADR-262 decision 3). The window is ISO weekdays (1 = Monday .. 7 = Sunday) and minutes
+         *     after local midnight; a start later than the end spans midnight and belongs to the day it opens
+         *     on, and equal start and end means the whole of each listed day - the rules ADR-226's schedules
+         *     kept.
+         */
+        RuleWhen: {
+            days?: number[];
+            /** Format: int32 */
+            end_minute?: number;
+            mode?: components["schemas"]["WhenMode"];
+            /** Format: int32 */
+            start_minute?: number;
         };
         /** @description The accepted run. */
         RunAccepted: {
@@ -15122,25 +15232,6 @@ export interface components {
              *     can see are named. A candidate in `existing` is never here.
              */
             same_device: components["schemas"]["SameDeviceMatch"][];
-        };
-        /**
-         * @description Create or replace body. Times are minutes after local midnight; a start later than the end
-         *     spans midnight, and an equal pair means the whole of each listed day.
-         */
-        ScheduleBody: {
-            /** @description ISO weekdays, 1 = Monday .. 7 = Sunday. At least one. */
-            days: number[];
-            enabled?: boolean;
-            /** Format: int32 */
-            end_minute: number;
-            /**
-             * @description The folders it applies to, each with everything beneath it. At least one. A label is
-             *     never a target (ADR-229 decision 9).
-             */
-            group_ids?: string[];
-            name: string;
-            /** Format: int32 */
-            start_minute: number;
         };
         /** @description A point-in-time view of [`SchedulerStats`] for the API. */
         SchedulerStatsSnapshot: {
@@ -16730,6 +16821,12 @@ export interface components {
              */
             url?: string | null;
         };
+        /**
+         * @description Whether a routing rule is open always, only inside its window, or only outside it
+         *     (ADR-262 decision 3).
+         * @enum {string}
+         */
+        WhenMode: "always" | "during" | "outside";
         /**
          * @description How a maintenance window is scoped: `Node` = node id, `Profile` = device-class id,
          *     `FolderGroup` = the hierarchical inventory group (resolved recursively, incl. subgroups,
@@ -20851,66 +20948,6 @@ export interface operations {
             };
         };
     };
-    create_delivery_hours: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleBody"];
-            };
-        };
-        responses: {
-            /** @description Schedule created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreatedId"];
-                };
-            };
-            /** @description Empty name, no weekday, a time outside the day, or no folder */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks ManageSystem */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     set_default_time_zone: {
         parameters: {
             query?: never;
@@ -20951,76 +20988,6 @@ export interface operations {
             };
             /** @description Role lacks ManageSystem */
             403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This core has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
-    update_delivery_hours: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Schedule id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScheduleBody"];
-            };
-        };
-        responses: {
-            /** @description Schedule replaced */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Empty name, no weekday, a time outside the day, or no folder */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks ManageSystem */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such schedule */
-            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -35151,6 +35118,161 @@ export interface operations {
             };
             /** @description Role lacks read access */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_routing_catch_all: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The channels an alert goes to when no matching rule is open */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingCatchAll"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_routing_catch_all: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutingCatchAll"];
+            };
+        };
+        responses: {
+            /** @description The catch-all's channels are replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_routing_coverage: {
+        parameters: {
+            query?: {
+                /** @description `critical` (the default), `warning` or `info`: a rule for one severity reaches only that. */
+                severity?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every node grouped by the rules that match it, and where their alerts go across the week */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutingCoverage"];
+                };
+            };
+            /** @description A severity other than critical, warning or info */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

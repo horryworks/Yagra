@@ -65,7 +65,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   access: [1422, 777],
   alertNames: [248, 140], // + the "config backup not fetched for 2 days" alert's name (ADR-240, 2026-11-06)
   alerts: [902, 518], // - the per-alert Mute button and the "muted until" mark (ADR-234, 2026-11-03)
-  alertsConfig: [9507, 5038], // + the exceptions' ⓘ (the weakest reaching a node wins) and their empty state (ADR-262 Inc.2, 2026-11-21); + the two link variables' names and meanings in the template editor (ADR-260, 2026-11-20); + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03); + the wait switch, the last-7-days line in three states and one refusal (ADR-236 Inc.2, 2026-11-05)
+  alertsConfig: [9754, 5177], // + the coverage week's gap line, legend and row words (ADR-262 Inc.4, 2026-11-21); + the line saying an earlier version's delivery-hours schedules no longer apply, the catch-all line and the rule's window errors (ADR-262 Inc.3, 2026-11-21); + the exceptions' ⓘ (the weakest reaching a node wins) and their empty state (ADR-262 Inc.2, 2026-11-21); + the two link variables' names and meanings in the template editor (ADR-260, 2026-11-20); + the grouping section: its ⓘ, the line saying what the chosen level does now, its empty state and its four refusals (ADR-236, 2026-11-03); + the wait switch, the last-7-days line in three states and one refusal (ADR-236 Inc.2, 2026-11-05)
   auth: [79, 43],
   common: [1040, 596], // + sortable.*, what a screen reader is told while a list is dragged; never drawn (ADR-255, 2026-11-12)
   dashboard: [6280, 3469],

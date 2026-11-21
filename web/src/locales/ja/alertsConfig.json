@@ -38,7 +38,8 @@
         "severity": "重大度",
         "channels": "チャネル",
         "status": "状態",
-        "actions": "操作"
+        "actions": "操作",
+        "when": "時間"
       },
       "empty": "ルーティングルールがありません",
       "emptyNoChannels": "先にチャネルを追加してください。",
@@ -54,7 +55,8 @@
         "notSet": "未設定"
       },
       "allSeverities": "すべての重大度",
-      "edit": "ルールを編集"
+      "edit": "ルールを編集",
+      "alwaysAlso": "常にこちらにも送る"
     },
     "channelModal": {
       "title": "通知チャネルを追加",
@@ -80,7 +82,8 @@
       "channels": "チャネル",
       "add": "ルールを追加",
       "editTitle": "ルーティングルールを編集 — {{name}}",
-      "save": "保存"
+      "save": "保存",
+      "when": "時間"
     },
     "err": {
       "update": "更新に失敗しました",
@@ -460,6 +463,47 @@
       "err": {
         "load": "配信ログを読み込めませんでした"
       }
+    },
+    "when": {
+      "always": "常に",
+      "outsideSpan": "{{span}} 以外",
+      "mode": {
+        "always": "常に",
+        "during": "この時間だけ",
+        "outside": "この時間以外"
+      },
+      "from": "開始",
+      "until": "終了",
+      "err": {
+        "days": "曜日を 1 つ以上選んでください。",
+        "time": "時刻を HH:MM で 2 つとも入れてください。"
+      }
+    },
+    "catchAll": {
+      "title": "Catch-all",
+      "when": "どのルールも開いていないとき",
+      "held": "なし: ルールが開くまで保留",
+      "edit": "チャネルを選ぶ",
+      "err": "Catch-all を保存できませんでした。"
+    },
+    "oldSchedules": {
+      "title_one": "前の版の配信時間 {{count}} 件は効いていません。ルールに作り直してから削除してください。",
+      "title_other": "前の版の配信時間 {{count}} 件は効いていません。ルールに作り直してから削除してください。",
+      "delete": "配信時間を削除"
+    },
+    "coverage": {
+      "title": "届き先の週",
+      "severity": "重大度",
+      "gaps": "保留になる時間がある {{held}} 台 · 誰にも届かない時間がある {{nowhere}} 台",
+      "noRule": "ルールなし",
+      "nodes_one": "{{count}} 台",
+      "nodes_other": "{{count}} 台",
+      "kind": {
+        "rules": "ルールの送り先へ",
+        "catch_all": "Catch-all へ",
+        "held": "保留",
+        "nowhere": "誰にも届かない"
+      }
     }
   },
   "appliesTo": {
@@ -714,47 +758,12 @@
     }
   },
   "deliveryHours": {
-    "title": "配信時間",
-    "add": "+ 配信時間を追加",
-    "empty": "配信時間はありません。通知はすべてすぐに送られます。",
     "defaultZone": "既定のタイムゾーン",
     "utc": "UTC",
-    "cols": {
-      "name": "名前",
-      "days": "曜日",
-      "hours": "時間",
-      "appliesTo": "対象",
-      "status": "状態",
-      "actions": "操作"
-    },
-    "edit": "配信時間を編集",
-    "enable": "配信時間を有効化",
-    "disable": "配信時間を無効化",
-    "delete": "配信時間を削除",
-    "deleteTitle": "配信時間を削除",
     "deleteBody": "<strong>{{name}}</strong> を削除しますか？保留中の通知は 1 分以内に送られます。",
-    "modal": {
-      "title": "配信時間を追加",
-      "editTitle": "{{name}} を編集",
-      "name": "名前",
-      "days": "曜日",
-      "start": "開始",
-      "end": "終了",
-      "folders": "フォルダ",
-      "addFolder": "フォルダを追加",
-      "removeFolder": "{{name}} を外す",
-      "add": "追加",
-      "save": "保存"
-    },
     "err": {
-      "name": "名前を入力してください。",
-      "days": "曜日を 1 つ以上選んでください。",
-      "time": "時刻を HH:MM で 2 つとも入力してください。",
-      "target": "フォルダを選んでください。",
-      "save": "配信時間を保存できませんでした。",
-      "update": "配信時間を更新できませんでした。",
-      "delete": "配信時間を削除できませんでした。",
-      "zone": "既定のタイムゾーンを設定できませんでした。"
+      "zone": "既定のタイムゾーンを設定できませんでした。",
+      "delete": "配信時間を削除できませんでした。"
     }
   },
   "alertRules": {

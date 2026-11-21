@@ -757,11 +757,13 @@
     }
   },
   "localTime": {
-    "delivering": "Delivering",
-    "deliveringUntil": "Delivering until {{time}}",
     "held": "Held",
     "heldUntil": "Held until {{time}}",
-    "clock": "Local time {{time}} {{zone}} (UTC {{offset}})"
+    "clock": "Local time {{time}} {{zone}} (UTC {{offset}})",
+    "goesTo": "Goes to {{to}}",
+    "goesToUntil": "Goes to {{to}} until {{time}}",
+    "catchAll": "Catch-all ({{to}})",
+    "catchAllUntil": "Catch-all ({{to}}) until {{time}}"
   },
   "groupDetail": {
     "health": "Health",

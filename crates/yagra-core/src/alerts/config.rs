@@ -583,22 +583,19 @@ pub(crate) async fn load_alert_config(
 }
 
 /// What [`load_hours`] last built from, so an unchanged deployment does not re-read every node
-/// every 30 seconds: the config generation (bumped by any folder, label, node or schedule write),
-/// the schedules and the default zone.
+/// every 30 seconds: the config generation (bumped by any folder, node or rule write) and the
+/// default zone.
 #[derive(Default)]
 pub(crate) struct HoursCache {
-    key: Option<(
-        u64,
-        Vec<super::delivery_hours::DeliverySchedule>,
-        Option<String>,
-    )>,
+    key: Option<(u64, Option<String>)>,
 }
 
-/// Load the delivery-hours policy into the notifier (ADR-226).
+/// Load the zones a routing rule's window is read in (ADR-262 decision 3).
 ///
-/// A deployment with no enabled schedule installs the empty policy and reads nothing else. With
-/// one, every node is read - but only when something it depends on changed. A failed read keeps
-/// the previous policy, the direction every other read in this refresh takes.
+/// Only while some enabled rule has a window: otherwise the empty clock is installed and nothing
+/// else is read. With one, every node's folder and every folder's zone are read - but only when
+/// something they depend on changed. A failed read keeps the previous clock, the direction every
+/// other read in this refresh takes. Call after [`load_routing`], whose rules it asks about.
 pub(crate) async fn load_hours(
     notifier: &Notifier,
     store: &super::delivery_hours::DeliveryHoursRepo,
@@ -606,16 +603,8 @@ pub(crate) async fn load_hours(
     groups: &groups::GroupRepo,
     cache: &mut HoursCache,
 ) {
-    use super::delivery_hours::{build_policy, HoursPolicy, NodeTarget};
-    let schedules = match store.list().await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to load delivery hours");
-            return;
-        }
-    };
-    if !schedules.iter().any(|s| s.enabled) {
-        notifier.set_hours(HoursPolicy::default());
+    if !notifier.any_timed_rule() {
+        notifier.set_clock(super::rule_time::RuleClock::default());
         cache.key = None;
         return;
     }
@@ -626,27 +615,24 @@ pub(crate) async fn load_hours(
             return;
         }
     };
-    let key = (config_gen::current(), schedules, default_zone);
+    let key = (config_gen::current(), default_zone);
     if cache.key.as_ref() == Some(&key) {
         return;
     }
-    let (nodes, folders) = match (repo.list_nodes().await, groups.time_zone_rows().await) {
+    let (nodes, folders) = match (repo.folder_rows().await, groups.time_zone_rows().await) {
         (Ok(n), Ok(f)) => (n, f),
         (n, f) => {
             let e = [n.err(), f.err()].into_iter().flatten().next();
-            tracing::warn!(error = ?e, "failed to resolve delivery hours");
+            tracing::warn!(error = ?e, "failed to resolve the zones routing rules are read in");
             return;
         }
     };
-    let targets: Vec<NodeTarget> = nodes
-        .iter()
-        .map(|n| NodeTarget {
-            id: n.id,
-            group: n.group.map(|g| g.as_uuid()),
-        })
+    let nodes: Vec<(NodeId, Option<Uuid>)> = nodes
+        .into_iter()
+        .map(|(n, g)| (NodeId::from(n), g))
         .collect();
-    let zone = yagra_base::wall_clock::zone_or_utc(key.2.as_deref());
-    notifier.set_hours(build_policy(&key.1, &targets, &folders, zone));
+    let zone = yagra_base::wall_clock::zone_or_utc(key.1.as_deref());
+    notifier.set_clock(super::rule_time::build_clock(&nodes, &folders, zone));
     cache.key = Some(key);
 }
 
@@ -694,6 +680,10 @@ pub(crate) async fn load_routing(
         }
     } else {
         notifier.set_rule_reach(crate::alerts::notify::RuleReach::new());
+    }
+    match notifications.catch_all().await {
+        Ok(c) => notifier.set_catch_all(c),
+        Err(e) => tracing::warn!(error = %e, "failed to load the catch-all; keeping the last"),
     }
     notifier.set_routing(channels, rules);
 }

@@ -71,6 +71,7 @@ pub(crate) mod notify_facts;
 pub(crate) mod notify_render;
 pub(crate) mod notify_text;
 pub(crate) mod restore;
+pub(crate) mod rule_time;
 pub(crate) mod sink;
 pub(crate) mod stale;
 pub(crate) mod thresholds;

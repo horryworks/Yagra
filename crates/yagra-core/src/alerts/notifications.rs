@@ -137,6 +137,95 @@ pub struct RoutingRule {
     #[serde(default)]
     pub group_ids: Vec<Uuid>,
     pub channel_ids: Vec<Uuid>,
+    /// When the rule is open (ADR-262 decision 3). Absent = always.
+    #[serde(default)]
+    pub when: RuleWhen,
+}
+
+/// What an edit of a routing rule writes (ADR-193). `None` keeps what the rule has: a client that
+/// predates a field must not change it by saving (ADR-259 decision 9, ADR-262).
+#[derive(Debug, Clone, Copy)]
+pub struct RuleEdit<'a> {
+    pub name: &'a str,
+    pub severity: Option<Severity>,
+    pub tags: Option<&'a [String]>,
+    pub group_ids: Option<&'a [Uuid]>,
+    pub channel_ids: &'a [Uuid],
+    pub when: Option<&'a RuleWhen>,
+}
+
+/// Whether a routing rule is open always, only inside its window, or only outside it
+/// (ADR-262 decision 3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WhenMode {
+    #[default]
+    Always,
+    During,
+    Outside,
+}
+
+impl WhenMode {
+    /// The stored number (`routing_rules.when_mode`).
+    #[must_use]
+    pub const fn as_i16(self) -> i16 {
+        match self {
+            Self::Always => 0,
+            Self::During => 1,
+            Self::Outside => 2,
+        }
+    }
+
+    /// Read a stored number. Anything the CHECK would refuse (a hand edit, a newer core) reads as
+    /// `Always`: a rule that sends too often is a nuisance, one that never sends is an outage
+    /// nobody hears about.
+    #[must_use]
+    pub const fn from_i16(n: i16) -> Self {
+        match n {
+            1 => Self::During,
+            2 => Self::Outside,
+            _ => Self::Always,
+        }
+    }
+}
+
+/// When a routing rule is open: always, or inside / outside a weekly window read in the node's own
+/// zone (ADR-262 decision 3). The window is ISO weekdays (1 = Monday .. 7 = Sunday) and minutes
+/// after local midnight; a start later than the end spans midnight and belongs to the day it opens
+/// on, and equal start and end means the whole of each listed day - the rules ADR-226's schedules
+/// kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RuleWhen {
+    #[serde(default)]
+    pub mode: WhenMode,
+    #[serde(default)]
+    pub days: Vec<u8>,
+    #[serde(default)]
+    pub start_minute: u16,
+    #[serde(default)]
+    pub end_minute: u16,
+}
+
+impl RuleWhen {
+    /// The window, ready to be asked about one local time.
+    #[must_use]
+    pub fn window(&self) -> crate::alerts::delivery_hours::Window {
+        crate::alerts::delivery_hours::Window::from_parts(
+            &self.days,
+            self.start_minute,
+            self.end_minute,
+        )
+    }
+
+    /// Whether the rule is open at minute `minute` of ISO weekday `day`, local time.
+    #[must_use]
+    pub fn open_at(&self, day: u8, minute: u16) -> bool {
+        match self.mode {
+            WhenMode::Always => true,
+            WhenMode::During => self.window().open_at(day, minute),
+            WhenMode::Outside => !self.window().open_at(day, minute),
+        }
+    }
 }
 
 impl RoutingRule {
@@ -148,6 +237,23 @@ impl RoutingRule {
 }
 
 /// Parse a severity DB token (None for NULL/unknown ⇒ matches all severities).
+/// A rule's days as the column stores them: the ISO weekdays it names, in order, once each.
+fn days_column(days: &[u8]) -> Vec<i16> {
+    let mut out: Vec<i16> = days
+        .iter()
+        .filter(|d| (1..=7).contains(*d))
+        .map(|d| i16::from(*d))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A minute of the day as the column stores it, clamped to the day.
+fn minute_column(minute: u16) -> i16 {
+    i16::try_from(minute.min(1439)).unwrap_or(0)
+}
+
 fn parse_severity(s: Option<String>) -> Option<Severity> {
     s.as_deref().and_then(Severity::from_token)
 }
@@ -344,8 +450,8 @@ impl NotificationRepo {
     /// All routing rules.
     pub async fn list_rules(&self) -> anyhow::Result<Vec<RoutingRule>> {
         let rows = sqlx::query(
-            "SELECT id, name, enabled, severity, tags, group_ids, channel_ids FROM routing_rules \
-             ORDER BY created_at",
+            "SELECT id, name, enabled, severity, tags, group_ids, channel_ids, when_mode, days, \
+             start_minute, end_minute FROM routing_rules ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -359,6 +465,18 @@ impl NotificationRepo {
                     tags: row.try_get("tags")?,
                     group_ids: row.try_get("group_ids")?,
                     channel_ids: row.try_get("channel_ids")?,
+                    when: RuleWhen {
+                        mode: WhenMode::from_i16(row.try_get("when_mode")?),
+                        days: row
+                            .try_get::<Vec<i16>, _>("days")?
+                            .into_iter()
+                            .filter_map(|d| u8::try_from(d).ok())
+                            .collect(),
+                        start_minute: u16::try_from(row.try_get::<i16, _>("start_minute")?)
+                            .unwrap_or(0),
+                        end_minute: u16::try_from(row.try_get::<i16, _>("end_minute")?)
+                            .unwrap_or(0),
+                    },
                 })
             })
             .collect()
@@ -373,11 +491,13 @@ impl NotificationRepo {
         tags: &[String],
         group_ids: &[Uuid],
         channel_ids: &[Uuid],
+        when: &RuleWhen,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, channel_ids) \
-             VALUES ($1, $2, true, $3, $4, $5, $6)",
+            "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, channel_ids, \
+             when_mode, days, start_minute, end_minute) \
+             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(id)
         .bind(name)
@@ -385,6 +505,10 @@ impl NotificationRepo {
         .bind(tags)
         .bind(group_ids)
         .bind(channel_ids)
+        .bind(when.mode.as_i16())
+        .bind(days_column(&when.days))
+        .bind(minute_column(when.start_minute))
+        .bind(minute_column(when.end_minute))
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -404,20 +528,23 @@ impl NotificationRepo {
     /// (ADR-193). `enabled` is left alone: it
     /// has its own switch, and an edit that also re-enabled a rule the operator had parked would
     /// start paging without anyone asking for it. Returns whether a row changed.
-    pub async fn update_rule(
-        &self,
-        id: Uuid,
-        name: &str,
-        severity: Option<Severity>,
-        tags: Option<&[String]>,
-        group_ids: Option<&[Uuid]>,
-        channel_ids: &[Uuid],
-    ) -> anyhow::Result<bool> {
+    pub async fn update_rule(&self, id: Uuid, edit: &RuleEdit<'_>) -> anyhow::Result<bool> {
+        let RuleEdit {
+            name,
+            severity,
+            tags,
+            group_ids,
+            channel_ids,
+            when,
+        } = *edit;
         // `None` keeps the stored tags and folders: a client that predates them must not widen a
         // rule to every node by saving it (ADR-259, ADR-262).
         let res = sqlx::query(
             "UPDATE routing_rules SET name = $2, severity = $3, tags = COALESCE($4, tags), \
-             group_ids = COALESCE($5, group_ids), channel_ids = $6 WHERE id = $1",
+             group_ids = COALESCE($5, group_ids), channel_ids = $6, \
+             when_mode = COALESCE($7, when_mode), days = COALESCE($8, days), \
+             start_minute = COALESCE($9, start_minute), end_minute = COALESCE($10, end_minute) \
+             WHERE id = $1",
         )
         .bind(id)
         .bind(name)
@@ -425,9 +552,37 @@ impl NotificationRepo {
         .bind(tags)
         .bind(group_ids)
         .bind(channel_ids)
+        .bind(when.map(|w| w.mode.as_i16()))
+        .bind(when.map(|w| days_column(&w.days)))
+        .bind(when.map(|w| minute_column(w.start_minute)))
+        .bind(when.map(|w| minute_column(w.end_minute)))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// The channels an alert goes to when no rule that matches it is open (ADR-262 decision 4).
+    /// Empty before the settings row exists and when none is set.
+    pub async fn catch_all(&self) -> anyhow::Result<Vec<Uuid>> {
+        let row = sqlx::query("SELECT catch_all_channel_ids FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(r) => r.try_get("catch_all_channel_ids")?,
+            None => Vec::new(),
+        })
+    }
+
+    /// Replace the catch-all's channels.
+    pub async fn set_catch_all(&self, channel_ids: &[Uuid]) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, catch_all_channel_ids) VALUES (TRUE, $1) \
+             ON CONFLICT (id) DO UPDATE SET catch_all_channel_ids = $1",
+        )
+        .bind(channel_ids)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Delete a rule. Returns whether a row was removed.
@@ -647,7 +802,14 @@ mod tests {
             .await
             .expect("create");
         let both = repo
-            .create_rule("Everything", None, &[], &[], &[doomed, kept])
+            .create_rule(
+                "Everything",
+                None,
+                &[],
+                &[],
+                &[doomed, kept],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
         let only_doomed = repo
@@ -657,6 +819,7 @@ mod tests {
                 &[],
                 &[],
                 &[doomed],
+                &RuleWhen::default(),
             )
             .await
             .expect("rule");
@@ -772,11 +935,18 @@ mod tests {
         // severity". Storing a token for it instead would make the catch-all rule the one rule
         // that matches nothing after a vocabulary change.
         let catch_all = repo
-            .create_rule("Everything", None, &[], &[], &[a, b])
+            .create_rule("Everything", None, &[], &[], &[a, b], &RuleWhen::default())
             .await
             .expect("rule");
         let criticals = repo
-            .create_rule("Criticals only", Some(Severity::Critical), &[], &[], &[b])
+            .create_rule(
+                "Criticals only",
+                Some(Severity::Critical),
+                &[],
+                &[],
+                &[b],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
 
@@ -804,7 +974,14 @@ mod tests {
         // A rule may name no channel at all: that is how an operator parks one without deleting
         // the severity filter they tuned.
         let parked = repo
-            .create_rule("Parked", Some(Severity::Info), &[], &[], &[])
+            .create_rule(
+                "Parked",
+                Some(Severity::Info),
+                &[],
+                &[],
+                &[],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
         let rules = repo.list_rules().await.expect("rules");
@@ -827,11 +1004,25 @@ mod tests {
             .await
             .expect("channel");
         let rule = repo
-            .create_rule("Everything", None, &[], &[], &[channel])
+            .create_rule(
+                "Everything",
+                None,
+                &[],
+                &[],
+                &[channel],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
         let other = repo
-            .create_rule("Criticals", Some(Severity::Critical), &[], &[], &[channel])
+            .create_rule(
+                "Criticals",
+                Some(Severity::Critical),
+                &[],
+                &[],
+                &[channel],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
 
@@ -882,17 +1073,34 @@ mod tests {
             .await
             .expect("channel");
         let rule = repo
-            .create_rule("Everything", None, &[], &[], &[a])
+            .create_rule("Everything", None, &[], &[], &[a], &RuleWhen::default())
             .await
             .expect("rule");
         let other = repo
-            .create_rule("Criticals", Some(Severity::Critical), &[], &[], &[a])
+            .create_rule(
+                "Criticals",
+                Some(Severity::Critical),
+                &[],
+                &[],
+                &[a],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
         assert!(repo.set_rule_enabled(rule, false).await.expect("disable"));
 
         assert!(repo
-            .update_rule(rule, "Warnings", Some(Severity::Warning), None, None, &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Warnings",
+                    severity: Some(Severity::Warning),
+                    tags: None,
+                    group_ids: None,
+                    channel_ids: &[b],
+                    when: None,
+                }
+            )
             .await
             .expect("update"));
         let rules = repo.list_rules().await.expect("rules");
@@ -914,7 +1122,17 @@ mod tests {
 
         // Back to "any severity" is a real edit, not a no-op.
         assert!(repo
-            .update_rule(rule, "Warnings", None, None, None, &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Warnings",
+                    severity: None,
+                    tags: None,
+                    group_ids: None,
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         let rules = repo.list_rules().await.expect("rules");
@@ -940,17 +1158,47 @@ mod tests {
                 .clone()
         };
         assert!(repo
-            .update_rule(rule, "Warnings", None, Some(&tags), None, &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Warnings",
+                    severity: None,
+                    tags: Some(&tags),
+                    group_ids: None,
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         assert_eq!(tags_of(&repo.list_rules().await.expect("rules")), tags);
         assert!(repo
-            .update_rule(rule, "Renamed", None, None, None, &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Renamed",
+                    severity: None,
+                    tags: None,
+                    group_ids: None,
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         assert_eq!(tags_of(&repo.list_rules().await.expect("rules")), tags);
         assert!(repo
-            .update_rule(rule, "Renamed", None, Some(&[]), None, &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Renamed",
+                    severity: None,
+                    tags: Some(&[]),
+                    group_ids: None,
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         assert!(tags_of(&repo.list_rules().await.expect("rules")).is_empty());
@@ -967,7 +1215,17 @@ mod tests {
                 .clone()
         };
         assert!(repo
-            .update_rule(rule, "Renamed", None, None, Some(&folders), &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Renamed",
+                    severity: None,
+                    tags: None,
+                    group_ids: Some(&folders),
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         assert_eq!(
@@ -975,7 +1233,17 @@ mod tests {
             folders
         );
         assert!(repo
-            .update_rule(rule, "Renamed", None, None, None, &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Renamed",
+                    severity: None,
+                    tags: None,
+                    group_ids: None,
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         assert_eq!(
@@ -983,14 +1251,34 @@ mod tests {
             folders
         );
         assert!(repo
-            .update_rule(rule, "Renamed", None, None, Some(&[]), &[b])
+            .update_rule(
+                rule,
+                &RuleEdit {
+                    name: "Renamed",
+                    severity: None,
+                    tags: None,
+                    group_ids: Some(&[]),
+                    channel_ids: &[b],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
         assert!(folders_of(&repo.list_rules().await.expect("rules")).is_empty());
 
         // The API edge turns `false` into a 404.
         assert!(!repo
-            .update_rule(Uuid::new_v4(), "Nobody", None, None, None, &[a])
+            .update_rule(
+                Uuid::new_v4(),
+                &RuleEdit {
+                    name: "Nobody",
+                    severity: None,
+                    tags: None,
+                    group_ids: None,
+                    channel_ids: &[a],
+                    when: None
+                }
+            )
             .await
             .expect("update"));
     }
