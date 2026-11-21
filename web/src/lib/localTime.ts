@@ -78,7 +78,12 @@ export function localTimeLine(
     boundary === null || Number.isNaN(boundary) ? null : boundaryText(boundary, now, tz, locale);
   // Where an alert goes now (ADR-262 decision 9): the channels by name, or the catch-all's.
   const to = (delivery.channels ?? []).join(', ');
-  const text = delivery.open
+  // A caller who may not read routing gets no names (ADR-057): then only whether and until when.
+  const text = delivery.open && to === ''
+    ? at
+      ? t('localTime.deliveringUntil', { time: at })
+      : t('localTime.delivering')
+    : delivery.open
     ? delivery.catch_all
       ? at
         ? t('localTime.catchAllUntil', { to, time: at })

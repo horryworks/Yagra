@@ -763,7 +763,9 @@
     "goesTo": "Goes to {{to}}",
     "goesToUntil": "Goes to {{to}} until {{time}}",
     "catchAll": "Catch-all ({{to}})",
-    "catchAllUntil": "Catch-all ({{to}}) until {{time}}"
+    "catchAllUntil": "Catch-all ({{to}}) until {{time}}",
+    "delivering": "Delivering",
+    "deliveringUntil": "Delivering until {{time}}"
   },
   "groupDetail": {
     "health": "Health",

@@ -29,7 +29,7 @@ function zonedGroups(): Json {
           time_zone: null,
           netbox_time_zone: 'Asia/Tokyo',
           effective_time_zone: 'Asia/Tokyo',
-          delivery: { open: true, closes_at: LATER, opens_at: null },
+          delivery: { open: true, closes_at: LATER, opens_at: null, channels: ['NOC mail'], catch_all: false },
         }
       : { ...g, time_zone: null, netbox_time_zone: null, effective_time_zone: null, delivery: null },
   ) as unknown as Json;
@@ -48,7 +48,7 @@ test.use({
           name: NODE_NAME,
           group_id: CHILD_ID,
           time_zone: 'Asia/Tokyo',
-          delivery: { open: false, closes_at: null, opens_at: LATER },
+          delivery: { open: false, closes_at: null, opens_at: LATER, channels: [], catch_all: false },
         }) as Json,
     },
   },
@@ -58,7 +58,7 @@ test("a site's pane shows its clock and that notifications are delivered", async
   await page.goto(`/nodes?sel=group:${CHILD_ID}`);
   const sub = page.locator('.nd-sub');
   await expect(sub).toContainText(/Local time \d\d:\d\d Asia\/Tokyo \(UTC \+0900\)/);
-  await expect(sub).toContainText(/Delivering until (\S+ )?\d\d:\d\d/);
+  await expect(sub).toContainText(/Goes to NOC mail until (\S+ )?\d\d:\d\d/);
 });
 
 test('a folder no zone reaches shows no clock and no delivery state', async ({ page }) => {
@@ -67,7 +67,7 @@ test('a folder no zone reaches shows no clock and no delivery state', async ({ p
   // The sub line has drawn (its node count), so an absent clock is an answer, not a slow one.
   await expect(sub).toContainText(/\d+ node/);
   await expect(sub).not.toContainText('Asia/Tokyo');
-  await expect(sub).not.toContainText(/Delivering|Held/);
+  await expect(sub).not.toContainText(/Goes to|Delivering|Held/);
 });
 
 test("a node's pane shows its site's clock and that notifications are held", async ({ page }) => {

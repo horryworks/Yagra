@@ -45,6 +45,11 @@ describe("a site's local time on the sub line (ADR-252)", () => {
     expect(line.delivery).toEqual({ open: true, text: 'Goes to NOC mail until 17:20' });
   });
 
+  it('says only that it is delivering when the caller may not see the channels', () => {
+    const line = localTimeLine('Asia/Tokyo', MAIL({ channels: [] }), MON_9_TOKYO, t, 'en');
+    expect(line.delivery?.text).toBe('Delivering');
+  });
+
   it('says when it goes to the catch-all (ADR-262 decision 9)', () => {
     const line = localTimeLine(
       'Asia/Tokyo',
