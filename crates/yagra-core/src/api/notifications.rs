@@ -2746,9 +2746,15 @@ at 2026-08-04T09:41:07+00:00"
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+        // The reached node's folder sets no zone, so it keeps the deployment's default (ADR-262
+        // decision 11) - UTC, since none is set either.
         assert_eq!(
             body,
-            serde_json::json!({ "tags": [{ "tag": "TeamA", "nodes": 1 }], "reach": 1 })
+            serde_json::json!({
+                "tags": [{ "tag": "TeamA", "nodes": 1 }],
+                "reach": 1,
+                "reach_zones": [{ "zone": "UTC", "nodes": 1, "default": true }],
+            })
         );
         let operator = token(&st, yagra_common::Role::Operator);
         let (status, _) = send(&st, "GET", "/api/v1/node-tags", &operator, None).await;
