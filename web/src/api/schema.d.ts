@@ -7961,10 +7961,11 @@ export interface components {
             channel_ids: string[];
             /**
              * @description Only alerts on a node inside one of these folders, at any depth, reach the rule's channels
-             *     (or on a node carrying one of `tags`: either is enough, ADR-262). Both empty = every node.
-             *     Omitted on an edit, the rule keeps the folders it has.
+             *     (ADR-262). Both this and `tags` empty = every node. Omitted on an edit, the rule keeps the
+             *     folders it has.
              */
             group_ids?: string[] | null;
+            join?: null | components["schemas"]["Join"];
             name: string;
             severity?: string | null;
             /**
@@ -9087,6 +9088,8 @@ export interface components {
         /** @description What an exception applies to and its level. Names at least one folder or tag. */
         ExceptionBody: {
             group_ids?: string[];
+            /** @description `or` (the default: inside one of the folders or carrying one of the tags) or `and` (both). */
+            join?: components["schemas"]["Join"];
             level: components["schemas"]["GroupingLevel"];
             tags?: string[];
         };
@@ -9876,13 +9879,15 @@ export interface components {
         };
         /**
          * @description One exception to the deployment's level (ADR-262 decision 2): every node inside one of
-         *     `group_ids` (at any depth) or carrying one of `tags` groups at `level`. When several reach one
-         *     node, the weakest level wins.
+         *     `group_ids` (at any depth) and/or carrying one of `tags` (`join`) groups at `level`. When several
+         *     reach one node, the weakest level wins.
          */
         GroupingException: {
             group_ids: string[];
             /** Format: uuid */
             id: string;
+            /** @description How `group_ids` and `tags` combine when both are named. */
+            join: components["schemas"]["Join"];
             level: components["schemas"]["GroupingLevel"];
             tags: string[];
         };
@@ -10569,6 +10574,12 @@ export interface components {
              */
             to: number;
         };
+        /**
+         * @description How a setting's folders and its tags combine when it names both (ADR-262 decision 10). Inside
+         *     each list one entry is always enough; this joins the two lists.
+         * @enum {string}
+         */
+        Join: "or" | "and";
         /** @description One number to lift out of a JSON response body and record as a metric. */
         JsonExtract: {
             /**
@@ -12906,10 +12917,11 @@ export interface components {
         NodeTags: {
             /**
              * Format: int64
-             * @description How many nodes carry at least one of the `reach` tags or sit inside one of the
-             *     `reach_groups` folders, each node counted once. Absent when the request named neither.
+             * @description How many nodes a setting naming the `reach` tags and the `reach_groups` folders, joined by
+             *     `reach_join`, reaches, each node counted once. Absent when the request named neither.
              */
             reach?: number | null;
+            reach_parts?: null | components["schemas"]["ReachParts"];
             /** @description Every tag at least one node carries, most-carried first, then by name. */
             tags: components["schemas"]["NodeTag"][];
         };
@@ -14178,6 +14190,24 @@ export interface components {
             provider: string;
             summary: string;
         };
+        /** @description How a pick of folders and a pick of tags overlap (ADR-262 decision 10). */
+        ReachParts: {
+            /**
+             * Format: int64
+             * @description Nodes that are both.
+             */
+            both: number;
+            /**
+             * Format: int64
+             * @description Nodes inside one of the folders.
+             */
+            by_folder: number;
+            /**
+             * Format: int64
+             * @description Nodes carrying one of the tags.
+             */
+            by_tag: number;
+        };
         /**
          * @description Whether a node is fetched, and if not, the one thing to fix.
          * @enum {string}
@@ -14889,20 +14919,25 @@ export interface components {
         };
         /**
          * @description A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
-         *     `group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.
+         *     `group_ids` and/or carries one of `tags` (`join`; both empty = every node) fan out to
+         *     `channel_ids`.
          */
         RoutingRule: {
             channel_ids: string[];
             enabled: boolean;
             /**
-             * @description Folders the node must be inside, at any depth (ADR-262 decision 1). A node inside one of
-             *     these **or** carrying one of `tags` matches; with both empty the rule covers every node. A
-             *     folder that no longer exists reaches nothing. A subject that is not a node matches only a
-             *     rule that names neither.
+             * @description Folders the node must be inside, at any depth (ADR-262 decision 1). With both this and
+             *     `tags` empty the rule covers every node. A folder that no longer exists reaches nothing. A
+             *     subject that is not a node matches only a rule that names neither.
              */
             group_ids?: string[];
             /** Format: uuid */
             id: string;
+            /**
+             * @description How `group_ids` and `tags` combine when the rule names both (ADR-262 decision 10): `or` (a
+             *     node inside one of the folders or carrying one of the tags) or `and` (both). Absent = `or`.
+             */
+            join?: components["schemas"]["Join"];
             name: string;
             severity?: null | components["schemas"]["Severity"];
             /**
@@ -27059,6 +27094,11 @@ export interface operations {
                  *     too (ADR-262). Comma-separated ids; one that does not parse is ignored.
                  */
                 reach_groups?: string | null;
+                /**
+                 * @description How `reach` and `reach_groups` combine when both are given: `or` (the default) or `and`
+                 *     (ADR-262 decision 10), the way a rule or an exception naming them would.
+                 */
+                reach_join?: null | components["schemas"]["Join"];
             };
             header?: never;
             path?: never;

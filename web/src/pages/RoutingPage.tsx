@@ -677,6 +677,7 @@ function RulesSection({
           <AppliesToCell
             groupIds={r.group_ids ?? []}
             tags={r.tags}
+            join={r.join ?? 'or'}
             groups={groups}
             nodeTags={nodeTags}
           />
@@ -891,7 +892,7 @@ function RuleModal({
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
   // Built once from the rule as it was opened, so a row unticked under the pointer stays put.
   const [initial] = useState<AppliesTo>(() =>
-    appliesToFrom(rule?.group_ids ?? [], rule?.tags ?? []),
+    appliesToFrom(rule?.group_ids ?? [], rule?.tags ?? [], rule?.join),
   );
   const [target, setTarget] = useState<AppliesTo>(initial);
   const [when, setWhen] = useState<WhenDraft>(() => whenDraftFrom(rule?.when));

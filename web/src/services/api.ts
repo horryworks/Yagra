@@ -2464,6 +2464,7 @@ export const api = {
   listNodeTags: (reach?: {
     tags: readonly string[];
     groups: readonly string[];
+    join?: 'or' | 'and';
   }): Promise<NodeTags> =>
     apiGet('/api/v1/node-tags', {
       query:
@@ -2471,6 +2472,7 @@ export const api = {
           ? {
               ...(reach.tags.length > 0 ? { reach: reach.tags.join('\n') } : {}),
               ...(reach.groups.length > 0 ? { reach_groups: reach.groups.join(',') } : {}),
+              ...(reach.join === 'and' ? { reach_join: 'and' as const } : {}),
             }
           : undefined,
     }),

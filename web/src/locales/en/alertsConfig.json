@@ -519,6 +519,15 @@
     "nodes_other": "{{count}} nodes",
     "reach_one": "Reaches {{count}} node",
     "reach_other": "Reaches {{count}} nodes",
+    "join": "How folders and tags combine",
+    "or": "or",
+    "and": "and",
+    "moreFolders_one": "+{{count}} folder",
+    "moreFolders_other": "+{{count}} folders",
+    "moreTags_one": "+{{count}} tag",
+    "moreTags_other": "+{{count}} tags",
+    "partsOr": "{{folders}} + {{tags}}, {{both}} in both",
+    "partsAnd": "of {{folders}} in the folders",
     "goneFolder": "Deleted folder"
   },
   "thresholds": {

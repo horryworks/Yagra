@@ -1028,6 +1028,9 @@ pub(super) struct NodeTagsQuery {
     /// Folders whose reach to count with `reach`: a node inside one of them, at any depth, counts
     /// too (ADR-262). Comma-separated ids; one that does not parse is ignored.
     reach_groups: Option<String>,
+    /// How `reach` and `reach_groups` combine when both are given: `or` (the default) or `and`
+    /// (ADR-262 decision 10), the way a rule or an exception naming them would.
+    reach_join: Option<crate::alerts::applies_to::Join>,
 }
 
 /// One tag some node carries, and on how many nodes.
@@ -1045,10 +1048,25 @@ pub(crate) struct NodeTag {
 pub(crate) struct NodeTags {
     /// Every tag at least one node carries, most-carried first, then by name.
     tags: Vec<NodeTag>,
-    /// How many nodes carry at least one of the `reach` tags or sit inside one of the
-    /// `reach_groups` folders, each node counted once. Absent when the request named neither.
+    /// How many nodes a setting naming the `reach` tags and the `reach_groups` folders, joined by
+    /// `reach_join`, reaches, each node counted once. Absent when the request named neither.
     #[serde(skip_serializing_if = "Option::is_none")]
     reach: Option<u64>,
+    /// How the two lists overlap, whatever the join. Present only when the request named both
+    /// folders and tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reach_parts: Option<ReachParts>,
+}
+
+/// How a pick of folders and a pick of tags overlap (ADR-262 decision 10).
+#[derive(Debug, Default, Clone, Copy, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct ReachParts {
+    /// Nodes inside one of the folders.
+    by_folder: u64,
+    /// Nodes carrying one of the tags.
+    by_tag: u64,
+    /// Nodes that are both.
+    both: u64,
 }
 
 /// Who a reach question asks about: tags a node may carry, and folders it may sit in (already
@@ -1056,7 +1074,9 @@ pub(crate) struct NodeTags {
 #[derive(Default)]
 struct Reach {
     tags: Vec<String>,
-    folders: std::collections::HashSet<Uuid>,
+    /// `None` when the question named no folder.
+    folders: Option<std::collections::HashSet<Uuid>>,
+    join: crate::alerts::applies_to::Join,
 }
 
 /// Count the effective tags over every node, and the reach of `reach`. Pure, so the counting is
@@ -1068,13 +1088,23 @@ fn count_node_tags(
 ) -> NodeTags {
     let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut reached = 0u64;
+    let mut parts = ReachParts::default();
     for row in rows {
         let tags = resolver.effective_parts(row.group_id, &row.tags, &row.tags_excluded);
-        if reach.is_some_and(|want| {
-            want.tags.iter().any(|w| tags.contains(w))
-                || row.group_id.is_some_and(|g| want.folders.contains(&g))
-        }) {
-            reached += 1;
+        if let Some(want) = reach {
+            let by_folder = want
+                .folders
+                .as_ref()
+                .map(|set| row.group_id.is_some_and(|g| set.contains(&g)));
+            let by_tag =
+                (!want.tags.is_empty()).then(|| want.tags.iter().any(|w| tags.contains(w)));
+            if crate::alerts::applies_to::joined(by_folder, by_tag, want.join) {
+                reached += 1;
+            }
+            let (f, t) = (by_folder == Some(true), by_tag == Some(true));
+            parts.by_folder += u64::from(f);
+            parts.by_tag += u64::from(t);
+            parts.both += u64::from(f && t);
         }
         for t in tags {
             *counts.entry(t).or_default() += 1;
@@ -1088,6 +1118,9 @@ fn count_node_tags(
     NodeTags {
         tags,
         reach: reach.map(|_| reached),
+        reach_parts: reach
+            .filter(|r| r.folders.is_some() && !r.tags.is_empty())
+            .map(|_| parts),
     }
 }
 
@@ -1120,7 +1153,13 @@ async fn list_node_tags(
     Query(q): Query<NodeTagsQuery>,
 ) -> ApiResult<Json<NodeTags>> {
     Ok(Json(
-        node_tags_in(&admin, q.reach.as_deref(), q.reach_groups.as_deref()).await?,
+        node_tags_in(
+            &admin,
+            q.reach.as_deref(),
+            q.reach_groups.as_deref(),
+            q.reach_join.unwrap_or_default(),
+        )
+        .await?,
     ))
 }
 
@@ -1129,6 +1168,7 @@ pub(crate) async fn node_tags_in(
     admin: &super::AdminState,
     reach: Option<&str>,
     reach_groups: Option<&str>,
+    join: crate::alerts::applies_to::Join,
 ) -> ApiResult<NodeTags> {
     let fail = |e: anyhow::Error| {
         ApiError::from_internal(e.as_ref(), "list node tags", "failed to list node tags")
@@ -1144,9 +1184,10 @@ pub(crate) async fn node_tags_in(
                 raw.split(',')
                     .filter_map(|id| id.trim().parse::<Uuid>().ok())
                     .flat_map(|g| yagra_base::groups::group_subtree(&edges, g))
-                    .collect()
+                    .collect::<std::collections::HashSet<Uuid>>()
             })
-            .unwrap_or_default(),
+            .filter(|set| !set.is_empty()),
+        join,
     });
     Ok(count_node_tags(&rows, &resolver, reach.as_ref()))
 }
@@ -1389,10 +1430,15 @@ pub(super) struct CreateRule {
     #[serde(default)]
     tags: Option<Vec<String>>,
     /// Only alerts on a node inside one of these folders, at any depth, reach the rule's channels
-    /// (or on a node carrying one of `tags`: either is enough, ADR-262). Both empty = every node.
-    /// Omitted on an edit, the rule keeps the folders it has.
+    /// (ADR-262). Both this and `tags` empty = every node. Omitted on an edit, the rule keeps the
+    /// folders it has.
     #[serde(default)]
     group_ids: Option<Vec<Uuid>>,
+    /// How `group_ids` and `tags` combine when both are given: `or` (either is enough) or `and`
+    /// (the node must be inside one of the folders and carry one of the tags). Omitted on a
+    /// create = `or`; omitted on an edit, the rule keeps its own.
+    #[serde(default)]
+    join: Option<crate::alerts::applies_to::Join>,
     channel_ids: Vec<Uuid>,
     /// When the rule is open (ADR-262): `always`, or `during` / `outside` a weekly window read in
     /// the node's own zone. A window needs at least one ISO weekday (1 = Monday .. 7 = Sunday);
@@ -1489,8 +1535,11 @@ async fn create_routing_rule(
         .create_rule(
             rule.name,
             rule.severity,
-            &rule.tags.unwrap_or_default(),
-            body.group_ids.as_deref().unwrap_or_default(),
+            &crate::alerts::notifications::RuleTarget {
+                tags: &rule.tags.unwrap_or_default(),
+                group_ids: body.group_ids.as_deref().unwrap_or_default(),
+                join: body.join.unwrap_or_default(),
+            },
             &body.channel_ids,
             &rule.when.clone().unwrap_or_default(),
         )
@@ -1568,6 +1617,7 @@ async fn update_routing_rule(
                 severity: rule.severity,
                 tags: rule.tags.as_deref(),
                 group_ids: body.group_ids.as_deref(),
+                join: body.join,
                 channel_ids: &body.channel_ids,
                 when: rule.when.as_ref(),
             },
@@ -2560,11 +2610,30 @@ at 2026-08-04T09:41:07+00:00"
         // (ADR-262): the three in `site`, plus the ungrouped node carrying `core`.
         let mixed = Reach {
             tags: vec!["core".to_owned()],
-            folders: [site].into_iter().collect(),
+            folders: Some([site].into_iter().collect()),
+            join: crate::alerts::applies_to::Join::Or,
         };
+        let got = count_node_tags(&rows, &resolver, Some(&mixed));
+        assert_eq!(got.reach, Some(4));
+        let parts = ReachParts {
+            by_folder: 3,
+            by_tag: 2,
+            both: 1,
+        };
+        assert_eq!(got.reach_parts, Some(parts), "how the two lists overlap");
+        // ADR-262 decision 10: joined by `and`, only the node in `site` carrying `core` is reached,
+        // and the overlap is the same whatever the join.
+        let both = Reach {
+            join: crate::alerts::applies_to::Join::And,
+            ..mixed
+        };
+        let got = count_node_tags(&rows, &resolver, Some(&both));
+        assert_eq!(got.reach, Some(1));
+        assert_eq!(got.reach_parts, Some(parts));
         assert_eq!(
-            count_node_tags(&rows, &resolver, Some(&mixed)).reach,
-            Some(4)
+            count_node_tags(&rows, &resolver, Some(&reach)).reach_parts,
+            None,
+            "tags alone have nothing to overlap with"
         );
         assert_eq!(
             reach_tags(" TeamA \n\ncore\n"),

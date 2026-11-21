@@ -118,7 +118,8 @@ pub struct OpenChannel {
 }
 
 /// A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
-/// `group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.
+/// `group_ids` and/or carries one of `tags` (`join`; both empty = every node) fan out to
+/// `channel_ids`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RoutingRule {
     pub id: Uuid,
@@ -130,12 +131,15 @@ pub struct RoutingRule {
     /// subject that is not a node (a poller pool, a Meraki organization) matches only an empty
     /// list. Compared exactly, case included, the way a node's own labels are stored.
     pub tags: Vec<String>,
-    /// Folders the node must be inside, at any depth (ADR-262 decision 1). A node inside one of
-    /// these **or** carrying one of `tags` matches; with both empty the rule covers every node. A
-    /// folder that no longer exists reaches nothing. A subject that is not a node matches only a
-    /// rule that names neither.
+    /// Folders the node must be inside, at any depth (ADR-262 decision 1). With both this and
+    /// `tags` empty the rule covers every node. A folder that no longer exists reaches nothing. A
+    /// subject that is not a node matches only a rule that names neither.
     #[serde(default)]
     pub group_ids: Vec<Uuid>,
+    /// How `group_ids` and `tags` combine when the rule names both (ADR-262 decision 10): `or` (a
+    /// node inside one of the folders or carrying one of the tags) or `and` (both). Absent = `or`.
+    #[serde(default)]
+    pub join: crate::alerts::applies_to::Join,
     pub channel_ids: Vec<Uuid>,
     /// When the rule is open (ADR-262 decision 3). Absent = always.
     #[serde(default)]
@@ -150,8 +154,30 @@ pub struct RuleEdit<'a> {
     pub severity: Option<Severity>,
     pub tags: Option<&'a [String]>,
     pub group_ids: Option<&'a [Uuid]>,
+    pub join: Option<crate::alerts::applies_to::Join>,
     pub channel_ids: &'a [Uuid],
     pub when: Option<&'a RuleWhen>,
+}
+
+/// Which nodes a new routing rule names (ADR-262 decisions 1 and 10).
+#[derive(Debug, Clone, Copy)]
+pub struct RuleTarget<'a> {
+    pub tags: &'a [String],
+    pub group_ids: &'a [Uuid],
+    pub join: crate::alerts::applies_to::Join,
+}
+
+#[cfg(test)]
+impl<'a> RuleTarget<'a> {
+    /// Folders or tags, the way every rule before ADR-262 decision 10 joined them.
+    #[must_use]
+    pub const fn or(tags: &'a [String], group_ids: &'a [Uuid]) -> Self {
+        Self {
+            tags,
+            group_ids,
+            join: crate::alerts::applies_to::Join::Or,
+        }
+    }
 }
 
 /// Whether a routing rule is open always, only inside its window, or only outside it
@@ -225,14 +251,6 @@ impl RuleWhen {
             WhenMode::During => self.window().open_at(day, minute),
             WhenMode::Outside => !self.window().open_at(day, minute),
         }
-    }
-}
-
-impl RoutingRule {
-    /// Whether the rule names any folder or tag, i.e. covers only some nodes.
-    #[must_use]
-    pub fn is_narrowed(&self) -> bool {
-        !self.tags.is_empty() || !self.group_ids.is_empty()
     }
 }
 
@@ -450,8 +468,8 @@ impl NotificationRepo {
     /// All routing rules.
     pub async fn list_rules(&self) -> anyhow::Result<Vec<RoutingRule>> {
         let rows = sqlx::query(
-            "SELECT id, name, enabled, severity, tags, group_ids, channel_ids, when_mode, days, \
-             start_minute, end_minute FROM routing_rules ORDER BY created_at",
+            "SELECT id, name, enabled, severity, tags, group_ids, join_and, channel_ids, when_mode, \
+             days, start_minute, end_minute FROM routing_rules ORDER BY created_at",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -464,6 +482,7 @@ impl NotificationRepo {
                     severity: parse_severity(row.try_get("severity")?),
                     tags: row.try_get("tags")?,
                     group_ids: row.try_get("group_ids")?,
+                    join: crate::alerts::applies_to::Join::from_and(row.try_get("join_and")?),
                     channel_ids: row.try_get("channel_ids")?,
                     when: RuleWhen {
                         mode: WhenMode::from_i16(row.try_get("when_mode")?),
@@ -482,28 +501,28 @@ impl NotificationRepo {
             .collect()
     }
 
-    /// Create a routing rule. `severity` None ⇒ matches all severities; empty `tags` and
-    /// `group_ids` ⇒ every node.
+    /// Create a routing rule. `severity` None ⇒ matches all severities; a target naming no tag
+    /// and no folder ⇒ every node.
     pub async fn create_rule(
         &self,
         name: &str,
         severity: Option<Severity>,
-        tags: &[String],
-        group_ids: &[Uuid],
+        target: &RuleTarget<'_>,
         channel_ids: &[Uuid],
         when: &RuleWhen,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, channel_ids, \
-             when_mode, days, start_minute, end_minute) \
-             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10)",
+            "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, join_and, \
+             channel_ids, when_mode, days, start_minute, end_minute) \
+             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(id)
         .bind(name)
         .bind(severity.map(|s| s.as_str()))
-        .bind(tags)
-        .bind(group_ids)
+        .bind(target.tags)
+        .bind(target.group_ids)
+        .bind(target.join.is_and())
         .bind(channel_ids)
         .bind(when.mode.as_i16())
         .bind(days_column(&when.days))
@@ -534,6 +553,7 @@ impl NotificationRepo {
             severity,
             tags,
             group_ids,
+            join,
             channel_ids,
             when,
         } = *edit;
@@ -543,7 +563,8 @@ impl NotificationRepo {
             "UPDATE routing_rules SET name = $2, severity = $3, tags = COALESCE($4, tags), \
              group_ids = COALESCE($5, group_ids), channel_ids = $6, \
              when_mode = COALESCE($7, when_mode), days = COALESCE($8, days), \
-             start_minute = COALESCE($9, start_minute), end_minute = COALESCE($10, end_minute) \
+             start_minute = COALESCE($9, start_minute), end_minute = COALESCE($10, end_minute), \
+             join_and = COALESCE($11, join_and) \
              WHERE id = $1",
         )
         .bind(id)
@@ -556,6 +577,7 @@ impl NotificationRepo {
         .bind(when.map(|w| days_column(&w.days)))
         .bind(when.map(|w| minute_column(w.start_minute)))
         .bind(when.map(|w| minute_column(w.end_minute)))
+        .bind(join.map(crate::alerts::applies_to::Join::is_and))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -805,8 +827,7 @@ mod tests {
             .create_rule(
                 "Everything",
                 None,
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[doomed, kept],
                 &RuleWhen::default(),
             )
@@ -816,8 +837,7 @@ mod tests {
             .create_rule(
                 "Just the doomed one",
                 Some(Severity::Critical),
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[doomed],
                 &RuleWhen::default(),
             )
@@ -935,15 +955,20 @@ mod tests {
         // severity". Storing a token for it instead would make the catch-all rule the one rule
         // that matches nothing after a vocabulary change.
         let catch_all = repo
-            .create_rule("Everything", None, &[], &[], &[a, b], &RuleWhen::default())
+            .create_rule(
+                "Everything",
+                None,
+                &crate::alerts::notifications::RuleTarget::or(&[], &[]),
+                &[a, b],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
         let criticals = repo
             .create_rule(
                 "Criticals only",
                 Some(Severity::Critical),
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[b],
                 &RuleWhen::default(),
             )
@@ -977,8 +1002,7 @@ mod tests {
             .create_rule(
                 "Parked",
                 Some(Severity::Info),
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[],
                 &RuleWhen::default(),
             )
@@ -1007,8 +1031,7 @@ mod tests {
             .create_rule(
                 "Everything",
                 None,
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[channel],
                 &RuleWhen::default(),
             )
@@ -1018,8 +1041,7 @@ mod tests {
             .create_rule(
                 "Criticals",
                 Some(Severity::Critical),
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[channel],
                 &RuleWhen::default(),
             )
@@ -1073,15 +1095,20 @@ mod tests {
             .await
             .expect("channel");
         let rule = repo
-            .create_rule("Everything", None, &[], &[], &[a], &RuleWhen::default())
+            .create_rule(
+                "Everything",
+                None,
+                &crate::alerts::notifications::RuleTarget::or(&[], &[]),
+                &[a],
+                &RuleWhen::default(),
+            )
             .await
             .expect("rule");
         let other = repo
             .create_rule(
                 "Criticals",
                 Some(Severity::Critical),
-                &[],
-                &[],
+                &RuleTarget::or(&[], &[]),
                 &[a],
                 &RuleWhen::default(),
             )
@@ -1097,6 +1124,7 @@ mod tests {
                     severity: Some(Severity::Warning),
                     tags: None,
                     group_ids: None,
+                    join: None,
                     channel_ids: &[b],
                     when: None,
                 }
@@ -1129,6 +1157,7 @@ mod tests {
                     severity: None,
                     tags: None,
                     group_ids: None,
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1165,6 +1194,7 @@ mod tests {
                     severity: None,
                     tags: Some(&tags),
                     group_ids: None,
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1180,6 +1210,7 @@ mod tests {
                     severity: None,
                     tags: None,
                     group_ids: None,
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1195,6 +1226,7 @@ mod tests {
                     severity: None,
                     tags: Some(&[]),
                     group_ids: None,
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1222,6 +1254,7 @@ mod tests {
                     severity: None,
                     tags: None,
                     group_ids: Some(&folders),
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1240,6 +1273,7 @@ mod tests {
                     severity: None,
                     tags: None,
                     group_ids: None,
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1258,6 +1292,7 @@ mod tests {
                     severity: None,
                     tags: None,
                     group_ids: Some(&[]),
+                    join: None,
                     channel_ids: &[b],
                     when: None
                 }
@@ -1275,6 +1310,7 @@ mod tests {
                     severity: None,
                     tags: None,
                     group_ids: None,
+                    join: None,
                     channel_ids: &[a],
                     when: None
                 }

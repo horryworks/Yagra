@@ -88,13 +88,15 @@ impl From<Level> for GroupingLevel {
 }
 
 /// One exception to the deployment's level (ADR-262 decision 2): every node inside one of
-/// `group_ids` (at any depth) or carrying one of `tags` groups at `level`. When several reach one
-/// node, the weakest level wins.
+/// `group_ids` (at any depth) and/or carrying one of `tags` (`join`) groups at `level`. When several
+/// reach one node, the weakest level wins.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct GroupingException {
     pub(crate) id: Uuid,
     pub(crate) group_ids: Vec<Uuid>,
     pub(crate) tags: Vec<String>,
+    /// How `group_ids` and `tags` combine when both are named.
+    pub(crate) join: crate::alerts::applies_to::Join,
     pub(crate) level: GroupingLevel,
 }
 
@@ -105,6 +107,9 @@ pub(crate) struct ExceptionBody {
     pub(crate) group_ids: Vec<Uuid>,
     #[serde(default)]
     pub(crate) tags: Vec<String>,
+    /// `or` (the default: inside one of the folders or carrying one of the tags) or `and` (both).
+    #[serde(default)]
+    pub(crate) join: crate::alerts::applies_to::Join,
     pub(crate) level: GroupingLevel,
 }
 
@@ -212,6 +217,7 @@ pub(crate) async fn config(
             id: e.id,
             group_ids: e.group_ids,
             tags: e.tags,
+            join: e.join,
             level: e.level.into(),
         })
         .collect();
@@ -313,7 +319,14 @@ async fn set_alert_grouping_wait(
 
 /// Check an exception's body: at least one folder or tag, each tag a valid label (the rule a
 /// routing rule's tags pass, ADR-259 decision 3).
-fn checked(body: ExceptionBody) -> ApiResult<(Vec<Uuid>, Vec<String>, Level)> {
+fn checked(
+    body: ExceptionBody,
+) -> ApiResult<(
+    Vec<Uuid>,
+    Vec<String>,
+    crate::alerts::applies_to::Join,
+    Level,
+)> {
     let tags = super::nodes::validated_labels(body.tags)?;
     if body.group_ids.is_empty() && tags.is_empty() {
         return Err(ApiError::bad_request(
@@ -321,7 +334,7 @@ fn checked(body: ExceptionBody) -> ApiResult<(Vec<Uuid>, Vec<String>, Level)> {
             "an exception names at least one folder or tag",
         ));
     }
-    Ok((body.group_ids, tags, body.level.into()))
+    Ok((body.group_ids, tags, body.join, body.level.into()))
 }
 
 #[utoipa::path(
@@ -341,9 +354,9 @@ async fn create_grouping_exception(
     admin: Admin,
     Json(body): Json<ExceptionBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedException>)> {
-    let (group_ids, tags, level) = checked(body)?;
+    let (group_ids, tags, join, level) = checked(body)?;
     let id = repo(&admin)
-        .create_exception(&group_ids, &tags, level)
+        .create_exception(&group_ids, &tags, join, level)
         .await
         .map_err(internal("create grouping exception"))?;
     Ok((StatusCode::CREATED, Json(CreatedException { id })))
@@ -369,9 +382,9 @@ async fn update_grouping_exception(
     Path(id): Path<Uuid>,
     Json(body): Json<ExceptionBody>,
 ) -> ApiResult<StatusCode> {
-    let (group_ids, tags, level) = checked(body)?;
+    let (group_ids, tags, join, level) = checked(body)?;
     let found = repo(&admin)
-        .update_exception(id, &group_ids, &tags, level)
+        .update_exception(id, &group_ids, &tags, join, level)
         .await
         .map_err(internal("update grouping exception"))?;
     if !found {

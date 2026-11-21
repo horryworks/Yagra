@@ -12618,6 +12618,22 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "reach_join",
+            "in": "query",
+            "description": "How `reach` and `reach_groups` combine when both are given: `or` (the default) or `and`\n(ADR-262 decision 10), the way a rule or an exception naming them would.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/Join"
+                }
+              ]
+            }
           }
         ],
         "responses": {
@@ -32686,7 +32702,18 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Only alerts on a node inside one of these folders, at any depth, reach the rule's channels\n(or on a node carrying one of `tags`: either is enough, ADR-262). Both empty = every node.\nOmitted on an edit, the rule keeps the folders it has."
+            "description": "Only alerts on a node inside one of these folders, at any depth, reach the rule's channels\n(ADR-262). Both this and `tags` empty = every node. Omitted on an edit, the rule keeps the\nfolders it has."
+          },
+          "join": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Join",
+                "description": "How `group_ids` and `tags` combine when both are given: `or` (either is enough) or `and`\n(the node must be inside one of the folders and carry one of the tags). Omitted on a\ncreate = `or`; omitted on an edit, the rule keeps its own."
+              }
+            ]
           },
           "name": {
             "type": "string"
@@ -35212,6 +35239,10 @@
               "format": "uuid"
             }
           },
+          "join": {
+            "$ref": "#/components/schemas/Join",
+            "description": "`or` (the default: inside one of the folders or carrying one of the tags) or `and` (both)."
+          },
           "level": {
             "$ref": "#/components/schemas/GroupingLevel"
           },
@@ -36650,11 +36681,12 @@
       },
       "GroupingException": {
         "type": "object",
-        "description": "One exception to the deployment's level (ADR-262 decision 2): every node inside one of\n`group_ids` (at any depth) or carrying one of `tags` groups at `level`. When several reach one\nnode, the weakest level wins.",
+        "description": "One exception to the deployment's level (ADR-262 decision 2): every node inside one of\n`group_ids` (at any depth) and/or carrying one of `tags` (`join`) groups at `level`. When several\nreach one node, the weakest level wins.",
         "required": [
           "id",
           "group_ids",
           "tags",
+          "join",
           "level"
         ],
         "properties": {
@@ -36668,6 +36700,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "join": {
+            "$ref": "#/components/schemas/Join",
+            "description": "How `group_ids` and `tags` combine when both are named."
           },
           "level": {
             "$ref": "#/components/schemas/GroupingLevel"
@@ -38056,6 +38092,14 @@
             "description": "Unix seconds."
           }
         }
+      },
+      "Join": {
+        "type": "string",
+        "description": "How a setting's folders and its tags combine when it names both (ADR-262 decision 10). Inside\neach list one entry is always enough; this joins the two lists.",
+        "enum": [
+          "or",
+          "and"
+        ]
       },
       "JsonExtract": {
         "type": "object",
@@ -42507,8 +42551,19 @@
               "null"
             ],
             "format": "int64",
-            "description": "How many nodes carry at least one of the `reach` tags or sit inside one of the\n`reach_groups` folders, each node counted once. Absent when the request named neither.",
+            "description": "How many nodes a setting naming the `reach` tags and the `reach_groups` folders, joined by\n`reach_join`, reaches, each node counted once. Absent when the request named neither.",
             "minimum": 0
+          },
+          "reach_parts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReachParts",
+                "description": "How the two lists overlap, whatever the join. Present only when the request named both\nfolders and tags."
+              }
+            ]
           },
           "tags": {
             "type": "array",
@@ -45127,6 +45182,35 @@
           }
         }
       },
+      "ReachParts": {
+        "type": "object",
+        "description": "How a pick of folders and a pick of tags overlap (ADR-262 decision 10).",
+        "required": [
+          "by_folder",
+          "by_tag",
+          "both"
+        ],
+        "properties": {
+          "both": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes that are both.",
+            "minimum": 0
+          },
+          "by_folder": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes inside one of the folders.",
+            "minimum": 0
+          },
+          "by_tag": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes carrying one of the tags.",
+            "minimum": 0
+          }
+        }
+      },
       "Readiness": {
         "type": "string",
         "description": "Whether a node is fetched, and if not, the one thing to fix.",
@@ -46878,7 +46962,7 @@
       },
       "RoutingRule": {
         "type": "object",
-        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of\n`group_ids` or carries one of `tags` (both empty = every node) fan out to `channel_ids`.",
+        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of\n`group_ids` and/or carries one of `tags` (`join`; both empty = every node) fan out to\n`channel_ids`.",
         "required": [
           "id",
           "name",
@@ -46903,11 +46987,15 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "Folders the node must be inside, at any depth (ADR-262 decision 1). A node inside one of\nthese **or** carrying one of `tags` matches; with both empty the rule covers every node. A\nfolder that no longer exists reaches nothing. A subject that is not a node matches only a\nrule that names neither."
+            "description": "Folders the node must be inside, at any depth (ADR-262 decision 1). With both this and\n`tags` empty the rule covers every node. A folder that no longer exists reaches nothing. A\nsubject that is not a node matches only a rule that names neither."
           },
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "join": {
+            "$ref": "#/components/schemas/Join",
+            "description": "How `group_ids` and `tags` combine when the rule names both (ADR-262 decision 10): `or` (a\nnode inside one of the folders or carrying one of the tags) or `and` (both). Absent = `or`."
           },
           "name": {
             "type": "string"

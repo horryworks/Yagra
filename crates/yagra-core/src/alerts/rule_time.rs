@@ -295,9 +295,13 @@ pub fn coverage(
         let ids: Vec<Uuid> = live
             .iter()
             .filter(|r| {
-                !r.is_narrowed()
-                    || r.tags.iter().any(|t| n.tags.contains(t))
-                    || r.group_ids.iter().any(|g| chain.contains(g))
+                crate::alerts::applies_to::reaches_chain(
+                    &r.group_ids,
+                    &r.tags,
+                    r.join,
+                    &chain,
+                    &n.tags,
+                )
             })
             .map(|r| r.id)
             .collect();
@@ -366,9 +370,13 @@ impl PlaceRoutes {
                 r.enabled
                     && r.severity
                         .is_none_or(|s| s == yagra_common::Severity::Critical)
-                    && (!r.is_narrowed()
-                        || r.tags.iter().any(|t| tags.contains(t))
-                        || r.group_ids.iter().any(|g| chain.contains(g)))
+                    && crate::alerts::applies_to::reaches_chain(
+                        &r.group_ids,
+                        &r.tags,
+                        r.join,
+                        &chain,
+                        tags,
+                    )
             })
             .collect();
         let key = (
@@ -442,6 +450,7 @@ mod tests {
             severity: None,
             tags: Vec::new(),
             group_ids: Vec::new(),
+            join: crate::alerts::applies_to::Join::Or,
             channel_ids: vec![channel],
             when: RuleWhen {
                 mode,
@@ -545,6 +554,7 @@ mod tests {
         let (site, other) = (Uuid::new_v4(), Uuid::new_v4());
         let day = RoutingRule {
             group_ids: vec![site],
+            join: crate::alerts::applies_to::Join::Or,
             ..rule(mail, WhenMode::During)
         };
         let core = RoutingRule {

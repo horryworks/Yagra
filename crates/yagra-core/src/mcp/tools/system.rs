@@ -896,8 +896,8 @@ impl YagraMcp {
                        rules that reach that node: every-node rules, rules on its folders, and \
                        rules on the node itself), event_sources, \
                        notification_channels, routing_rules (each with the `group_ids` a node \
-                       must be inside or the `tags` it must carry one of; both empty = every \
-                       node; and `when`: `always`, or `during` / `outside` a weekly window of ISO \
+                       must be inside and the `tags` it must carry one of, joined by `join` \
+                       (`or`: either is enough, `and`: both); both empty = every node; and `when`: `always`, or `during` / `outside` a weekly window of ISO \
                        weekdays and minutes after midnight, read in the node's own zone — a rule \
                        is only sent to while it is open), node_tags (every tag some node carries \
                        among its effective labels, with how many nodes carry it — the names a \
@@ -1116,7 +1116,14 @@ impl YagraMcp {
             // No `reach` here: the count per tag answers what a model asks, and the de-duplicated
             // union is arithmetic for the rule dialog (ADR-259 Inc.2).
             ConfigKind::NodeTags => {
-                match crate::api::notifications::node_tags_in(a, None, None).await {
+                match crate::api::notifications::node_tags_in(
+                    a,
+                    None,
+                    None,
+                    crate::alerts::applies_to::Join::Or,
+                )
+                .await
+                {
                     Ok(t) => ok_json(TOOL, &t),
                     Err(e) => tool_api_error(TOOL, &e),
                 }

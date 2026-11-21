@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The one way Notification delivery picks the nodes a setting applies to (ADR-262 decision 1):
-// every node, or only the nodes inside one of some folders (at any depth) or carrying one of some
-// tags - either is enough. A routing rule and an alert-grouping exception both use it, so the two
-// cannot drift into picking nodes differently again.
+// The one way Notification delivery picks the nodes a setting applies to (ADR-262 decisions 1
+// and 10): every node, or only the nodes inside one of some folders (at any depth) and/or carrying
+// one of some tags, joined by or / and. A routing rule and an alert-grouping exception both use
+// it, so the two cannot drift into picking nodes differently again.
 //
-// `AppliesToPicker` is the dialog half (a switch, the folder list, the tag list, how many nodes it
-// reaches); `AppliesToCell` is the list half (one chip per folder and tag).
+// `AppliesToPicker` is the dialog half (a switch, the folder list, or / and, the tag list, and the
+// pick written out with how many nodes it reaches); `AppliesToCell` is the list half (one chip per
+// folder and tag, joined the same way).
 
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,7 +20,16 @@ import { FieldGroup } from '../ui/FormLayout';
 import { Inline } from '../ui/Page';
 import { Segmented } from '../ui/Segmented';
 import { tagChoices, tagsNoNodeCarries } from '../../pages/routingTags';
-import { folderChoices, type AppliesTo } from './appliesToTarget';
+import {
+  JOINS,
+  folderChoices,
+  joinMatters,
+  reachDetail,
+  shownNames,
+  type AppliesTo,
+  type Join,
+  type ReachParts,
+} from './appliesToTarget';
 
 interface PickerProps {
   value: AppliesTo;
@@ -81,17 +91,23 @@ export function AppliesToPicker({
   // How many nodes the pick reaches, asked again whenever it changes. `null` while asking or after
   // a failed read, when the line is left out rather than showing a stale number.
   const empty = value.groupIds.length === 0 && value.tags.length === 0;
-  const key = `${value.groupIds.join(',')}|${value.tags.join('\n')}|${only}`;
-  const { data: reach } = useLoad<number | null>(
+  const both = joinMatters({ ...value, only });
+  const key = `${value.groupIds.join(',')}|${value.tags.join('\n')}|${only}|${value.join}`;
+  const { data: reach } = useLoad<{ count: number; parts: ReachParts | null } | null>(
     () =>
       only && !empty
         ? api
-            .listNodeTags({ tags: value.tags, groups: value.groupIds })
-            .then((r) => r.reach ?? null)
+            .listNodeTags({ tags: value.tags, groups: value.groupIds, join: value.join })
+            .then((r) =>
+              r.reach === undefined || r.reach === null
+                ? null
+                : { count: r.reach, parts: r.reach_parts ?? null },
+            )
         : Promise.resolve(null),
     [key],
     { initial: null },
   );
+  const folderPath = (id: string) => folders.find((f) => f.id === id)?.label ?? id;
 
   return (
     <FieldGroup label={label}>
@@ -116,6 +132,20 @@ export function AppliesToPicker({
               />
             </FieldGroup>
           )}
+          {both && (
+            <Inline justify="center">
+              <Segmented
+                size="sm"
+                ariaLabel={t('appliesTo.join')}
+                options={JOINS.map((j) => ({ value: j, label: t(JOIN_LABEL[j]) }))}
+                value={value.join}
+                onChange={(v) => {
+                  const j = JOINS.find((x) => x === v);
+                  if (j) onChange({ ...value, join: j });
+                }}
+              />
+            </Inline>
+          )}
           {tagItems.length > 0 && (
             <FieldGroup label={t('appliesTo.tags')}>
               <CheckList items={tagItems} selected={new Set(value.tags)} onChange={pickTags} />
@@ -124,11 +154,70 @@ export function AppliesToPicker({
           {empty ? (
             <p className="form-status">{t('appliesTo.reach', { count: 0 })}</p>
           ) : (
-            reach !== null && <p className="form-status">{t('appliesTo.reach', { count: reach })}</p>
+            reach !== null && (
+              <p className="form-status">
+                <PickLine
+                  groupNames={value.groupIds.map(folderPath)}
+                  tags={value.tags}
+                  join={value.join}
+                />
+                {' · '}
+                {t('appliesTo.reach', { count: reach.count })}
+                {both && reach.parts && (
+                  <span className="muted">
+                    {' · '}
+                    {(() => {
+                      const d = reachDetail(reach.parts, value.join);
+                      return t(d.key, d.values);
+                    })()}
+                  </span>
+                )}
+              </p>
+            )
           )}
         </>
       )}
     </FieldGroup>
+  );
+}
+
+/** The word for each join, spelled out so no key is built at runtime. */
+const JOIN_LABEL: Record<Join, 'appliesTo.or' | 'appliesTo.and'> = {
+  or: 'appliesTo.or',
+  and: 'appliesTo.and',
+};
+
+/** The pick written out: the first two folders, then the first two tags, the lists joined by the
+ *  setting's or / and ("Japan or WORLD"), the rest counted. */
+function PickLine({
+  groupNames,
+  tags,
+  join,
+}: {
+  groupNames: readonly string[];
+  tags: readonly string[];
+  join: Join;
+}) {
+  const { t } = useTranslation('alertsConfig');
+  const side = (names: readonly string[], moreKey: 'appliesTo.moreFolders' | 'appliesTo.moreTags') => {
+    const { shown, more } = shownNames(names);
+    return [shown.join(', '), more > 0 ? t(moreKey, { count: more }) : '']
+      .filter((s) => s !== '')
+      .join(' ');
+  };
+  const parts = [
+    groupNames.length > 0 ? side(groupNames, 'appliesTo.moreFolders') : '',
+    tags.length > 0 ? side(tags, 'appliesTo.moreTags') : '',
+  ].filter((s) => s !== '');
+  return (
+    <span>
+      {parts.map((p, i) => (
+        <span key={p}>
+          {i > 0 && <span className="muted"> {t(JOIN_LABEL[join])} </span>}
+          {p}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -137,11 +226,14 @@ export function AppliesToPicker({
 export function AppliesToCell({
   groupIds,
   tags,
+  join,
   groups,
   nodeTags,
 }: {
   groupIds: readonly string[];
   tags: readonly string[];
+  /** How the folders and the tags combine; said between them only when both are named. */
+  join: Join;
   groups: readonly NodeGroup[];
   nodeTags: NodeTags | null;
 }) {
@@ -165,6 +257,9 @@ export function AppliesToCell({
           </Badge>
         );
       })}
+      {groupIds.length > 0 && tags.length > 0 && (
+        <span className="muted">{t(JOIN_LABEL[join])}</span>
+      )}
       {tags.map((tag) =>
         goneTags?.has(tag) ? (
           <Badge key={tag} tone="warning">

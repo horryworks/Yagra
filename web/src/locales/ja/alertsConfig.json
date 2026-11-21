@@ -516,6 +516,15 @@
     "nodes_other": "{{count}} 台",
     "reach_one": "{{count}} 台に届く",
     "reach_other": "{{count}} 台に届く",
+    "join": "フォルダとタグの組み合わせ方",
+    "or": "または",
+    "and": "かつ",
+    "moreFolders_one": "ほか {{count}} フォルダ",
+    "moreFolders_other": "ほか {{count}} フォルダ",
+    "moreTags_one": "ほか {{count}} タグ",
+    "moreTags_other": "ほか {{count}} タグ",
+    "partsOr": "{{folders}} + {{tags}}、両方 {{both}}",
+    "partsAnd": "フォルダ内の {{folders}} 台のうち",
     "goneFolder": "削除されたフォルダ"
   },
   "thresholds": {
