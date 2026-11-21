@@ -1056,6 +1056,24 @@ pub(crate) struct NodeTags {
     /// folders and tags.
     #[serde(skip_serializing_if = "Option::is_none")]
     reach_parts: Option<ReachParts>,
+    /// The zones the reached nodes keep time in, so a rule's hours can be read as they will be
+    /// applied (ADR-262 decision 11): each node's nearest folder that sets a zone, else the
+    /// deployment's default zone. Most nodes first, then by name. Absent when the request named
+    /// neither tags nor folders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reach_zones: Option<Vec<ReachZone>>,
+}
+
+/// One zone some reached nodes keep time in (ADR-262 decision 11).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct ReachZone {
+    /// The IANA zone name.
+    zone: String,
+    /// How many of the reached nodes keep time in it.
+    nodes: u64,
+    /// `true` when these nodes have no folder that sets a zone and fall back to the deployment's
+    /// default.
+    default: bool,
 }
 
 /// How a pick of folders and a pick of tags overlap (ADR-262 decision 10).
@@ -1077,6 +1095,18 @@ struct Reach {
     /// `None` when the question named no folder.
     folders: Option<std::collections::HashSet<Uuid>>,
     join: crate::alerts::applies_to::Join,
+    /// Each folder's zone: its own or its nearest ancestor's.
+    zones: std::collections::HashMap<Uuid, String>,
+    /// The zone a node with no zoned folder keeps time in.
+    default_zone: String,
+}
+
+/// The zone a node in `group` keeps time in, and whether it is the default (ADR-262 decision 11).
+fn zone_of(reach: &Reach, group: Option<Uuid>) -> (String, bool) {
+    group.and_then(|g| reach.zones.get(&g)).map_or_else(
+        || (reach.default_zone.clone(), true),
+        |z| (z.clone(), false),
+    )
 }
 
 /// Count the effective tags over every node, and the reach of `reach`. Pure, so the counting is
@@ -1089,6 +1119,8 @@ fn count_node_tags(
     let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut reached = 0u64;
     let mut parts = ReachParts::default();
+    let mut zones: std::collections::HashMap<(String, bool), u64> =
+        std::collections::HashMap::new();
     for row in rows {
         let tags = resolver.effective_parts(row.group_id, &row.tags, &row.tags_excluded);
         if let Some(want) = reach {
@@ -1100,6 +1132,7 @@ fn count_node_tags(
                 (!want.tags.is_empty()).then(|| want.tags.iter().any(|w| tags.contains(w)));
             if crate::alerts::applies_to::joined(by_folder, by_tag, want.join) {
                 reached += 1;
+                *zones.entry(zone_of(want, row.group_id)).or_default() += 1;
             }
             let (f, t) = (by_folder == Some(true), by_tag == Some(true));
             parts.by_folder += u64::from(f);
@@ -1121,6 +1154,18 @@ fn count_node_tags(
         reach_parts: reach
             .filter(|r| r.folders.is_some() && !r.tags.is_empty())
             .map(|_| parts),
+        reach_zones: reach.map(|_| {
+            let mut list: Vec<ReachZone> = zones
+                .into_iter()
+                .map(|((zone, default), nodes)| ReachZone {
+                    zone,
+                    nodes,
+                    default,
+                })
+                .collect();
+            list.sort_by(|a, b| b.nodes.cmp(&a.nodes).then_with(|| a.zone.cmp(&b.zone)));
+            list
+        }),
     }
 }
 
@@ -1177,7 +1222,25 @@ pub(crate) async fn node_tags_in(
     let folders = admin.groups.tag_rows().await.map_err(fail)?;
     let edges: Vec<(Uuid, Option<Uuid>)> = folders.iter().map(|f| (f.0, f.1)).collect();
     let resolver = crate::inventory::tagres::TagResolver::build(folders);
-    let reach = (reach.is_some() || reach_groups.is_some()).then(|| Reach {
+    let asked = reach.is_some() || reach_groups.is_some();
+    // The zones are read only for a reach question: the tag list alone needs none.
+    let (zones, default_zone) = if asked {
+        let rows = admin.groups.time_zone_rows().await.map_err(fail)?;
+        let default = admin.delivery_hours.default_zone().await.map_err(fail)?;
+        (
+            yagra_base::groups::resolve_nearest_ancestor(rows)
+                .into_iter()
+                .map(|(g, (zone, _))| (g, zone))
+                .collect(),
+            yagra_base::wall_clock::zone_name(&yagra_base::wall_clock::zone_or_utc(
+                default.as_deref(),
+            ))
+            .to_owned(),
+        )
+    } else {
+        (std::collections::HashMap::new(), String::new())
+    };
+    let reach = asked.then(|| Reach {
         tags: reach.map(reach_tags).unwrap_or_default(),
         folders: reach_groups
             .map(|raw| {
@@ -1188,6 +1251,8 @@ pub(crate) async fn node_tags_in(
             })
             .filter(|set| !set.is_empty()),
         join,
+        zones,
+        default_zone,
     });
     Ok(count_node_tags(&rows, &resolver, reach.as_ref()))
 }
@@ -2583,6 +2648,8 @@ at 2026-08-04T09:41:07+00:00"
         ];
         let reach = Reach {
             tags: vec!["TeamA".to_owned(), "core".to_owned()],
+            zones: [(site, "Asia/Tokyo".to_owned())].into_iter().collect(),
+            default_zone: "UTC".to_owned(),
             ..Reach::default()
         };
         let got = count_node_tags(&rows, &resolver, Some(&reach));
@@ -2605,13 +2672,27 @@ at 2026-08-04T09:41:07+00:00"
             Some(3),
             "the node carrying both counts once; the one refusing TeamA and carrying nothing else counts none"
         );
+        // ADR-262 decision 11: the two reached nodes in `site` keep Tokyo time, the ungrouped one
+        // falls back to the default.
+        let zone = |z: &str, nodes, default| ReachZone {
+            zone: z.to_owned(),
+            nodes,
+            default,
+        };
+        assert_eq!(
+            count_node_tags(&rows, &resolver, Some(&reach)).reach_zones,
+            Some(vec![zone("Asia/Tokyo", 2, false), zone("UTC", 1, true)]),
+            "most nodes first, the default marked"
+        );
         assert_eq!(count_node_tags(&rows, &resolver, None).reach, None);
+        assert_eq!(count_node_tags(&rows, &resolver, None).reach_zones, None);
         // A folder reaches every node filed in it, and a node a tag also reaches counts once
         // (ADR-262): the three in `site`, plus the ungrouped node carrying `core`.
         let mixed = Reach {
             tags: vec!["core".to_owned()],
             folders: Some([site].into_iter().collect()),
             join: crate::alerts::applies_to::Join::Or,
+            ..Reach::default()
         };
         let got = count_node_tags(&rows, &resolver, Some(&mixed));
         assert_eq!(got.reach, Some(4));

@@ -477,6 +477,11 @@
       },
       "from": "From",
       "until": "Until",
+      "zoneNodes_one": "{{count}} node",
+      "zoneNodes_other": "{{count}} nodes",
+      "zoneDefault": "default",
+      "moreZones_one": "+{{count}} zone",
+      "moreZones_other": "+{{count}} zones",
       "err": {
         "days": "Pick at least one day.",
         "time": "Enter both times as HH:MM."

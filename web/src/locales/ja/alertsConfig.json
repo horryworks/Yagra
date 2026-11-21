@@ -474,6 +474,11 @@
       },
       "from": "開始",
       "until": "終了",
+      "zoneNodes_one": "{{count}} 台",
+      "zoneNodes_other": "{{count}} 台",
+      "zoneDefault": "既定",
+      "moreZones_one": "ほか {{count}} ゾーン",
+      "moreZones_other": "ほか {{count}} ゾーン",
       "err": {
         "days": "曜日を 1 つ以上選んでください。",
         "time": "時刻を HH:MM で 2 つとも入れてください。"

@@ -20,9 +20,12 @@
   font-family: var(--font-family);
 }
 
-/* Two classes deep so a dialog's `.modal-field .field { width: 100% }` does not stretch it and
-   push the zone onto a line of its own. */
-.field.wt-time {
+/* Deeper than a dialog's `.modal-field .field { width: 100% }`, so it is not stretched and
+   pushed onto a line of its own. Two classes were not enough: equal weight left the winner to
+   whichever stylesheet loaded last, and in the routing rule dialog that was the dialog's (ADR-262
+   decision 11). */
+.field.wt-time,
+.modal-field .field.wt-time {
   flex: none;
   width: 6em; /* fits HH:MM in the monospace face */
   font-family: var(--font-family);

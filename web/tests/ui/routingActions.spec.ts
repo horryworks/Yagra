@@ -137,6 +137,29 @@ test("a routing rule's hours are chosen in its dialog and sent with it", async (
   expect(body.when?.days.length).toBeGreaterThan(0);
 });
 
+// ADR-262 decision 11: the rule's times are read in its nodes' zones, and the line under them names
+// those zones. The two times sit side by side: a dialog's full-width field rule once stretched each
+// onto a line of its own, because it weighed the same as the time box's own width.
+test("a rule's hours name the zones they are read in, on one line of times", async ({ page }) => {
+  await page.goto('/alerts/routing');
+  const ruleRow = section(page, 'Routing rules').locator('.dt-row').first();
+  await ruleRow.hover();
+  await ruleRow.getByRole('button', { name: 'Edit rule' }).click();
+  const dialog = page.getByRole('dialog');
+  const when = dialog.getByRole('group', { name: 'When', exact: true });
+  await when.getByRole('button', { name: 'During', exact: true }).click();
+  await expect(when.locator('.form-status')).toContainText(/node/);
+  const from = await when.getByRole('textbox', { name: 'From' }).boundingBox();
+  const until = await when.getByRole('textbox', { name: 'Until' }).boundingBox();
+  expect(from && until && Math.abs(from.y - until.y)).toBeLessThan(2);
+  if (process.env.SHOT_ZONES) {
+    await when.scrollIntoViewIfNeeded();
+    await when.screenshot({ path: process.env.SHOT_ZONES });
+  }
+  await when.getByRole('button', { name: 'Always', exact: true }).click();
+  await expect(when.locator('.form-status')).toHaveCount(0);
+});
+
 // ADR-262 decision 4: the catch-all is the line under the rules, and its channels are set there.
 test('the catch-all line sets the channels an alert goes to when no rule is open', async ({ page }) => {
   await page.goto('/alerts/routing');

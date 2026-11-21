@@ -107,7 +107,11 @@ export function AppliesToPicker({
     [key],
     { initial: null },
   );
-  const folderPath = (id: string) => folders.find((f) => f.id === id)?.label ?? id;
+  // A folder that no longer exists is named as such, never by its raw id.
+  const folderPath = (id: string) => {
+    const f = folders.find((x) => x.id === id);
+    return f && !f.gone ? f.label : t('appliesTo.goneFolder');
+  };
 
   return (
     <FieldGroup label={label}>

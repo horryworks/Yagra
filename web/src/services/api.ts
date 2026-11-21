@@ -2465,10 +2465,13 @@ export const api = {
     tags: readonly string[];
     groups: readonly string[];
     join?: 'or' | 'and';
+    /** Ask about every node (an empty `reach`), for the zones a rule naming none reads time in. */
+    everyNode?: boolean;
   }): Promise<NodeTags> =>
     apiGet('/api/v1/node-tags', {
-      query:
-        reach && (reach.tags.length > 0 || reach.groups.length > 0)
+      query: reach?.everyNode
+        ? { reach: '' }
+        : reach && (reach.tags.length > 0 || reach.groups.length > 0)
           ? {
               ...(reach.tags.length > 0 ? { reach: reach.tags.join('\n') } : {}),
               ...(reach.groups.length > 0 ? { reach_groups: reach.groups.join(',') } : {}),

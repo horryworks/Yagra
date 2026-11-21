@@ -12942,6 +12942,13 @@ export interface components {
              */
             reach?: number | null;
             reach_parts?: null | components["schemas"]["ReachParts"];
+            /**
+             * @description The zones the reached nodes keep time in, so a rule's hours can be read as they will be
+             *     applied (ADR-262 decision 11): each node's nearest folder that sets a zone, else the
+             *     deployment's default zone. Most nodes first, then by name. Absent when the request named
+             *     neither tags nor folders.
+             */
+            reach_zones?: components["schemas"]["ReachZone"][] | null;
             /** @description Every tag at least one node carries, most-carried first, then by name. */
             tags: components["schemas"]["NodeTag"][];
         };
@@ -14227,6 +14234,21 @@ export interface components {
              * @description Nodes carrying one of the tags.
              */
             by_tag: number;
+        };
+        /** @description One zone some reached nodes keep time in (ADR-262 decision 11). */
+        ReachZone: {
+            /**
+             * @description `true` when these nodes have no folder that sets a zone and fall back to the deployment's
+             *     default.
+             */
+            default: boolean;
+            /**
+             * Format: int64
+             * @description How many of the reached nodes keep time in it.
+             */
+            nodes: number;
+            /** @description The IANA zone name. */
+            zone: string;
         };
         /**
          * @description Whether a node is fetched, and if not, the one thing to fix.

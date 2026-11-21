@@ -79,6 +79,7 @@ import { RoutingCoverage } from './RoutingCoverage';
 import { WEEKDAYS, weekdayName } from './deliveryHours';
 import { WHEN_MODES, whenBodyFrom, whenDraftFrom, whenText, type WhenDraft } from './ruleWhen';
 import { TimeOfDayInput } from '../components/ui/WallTimeInput';
+import { zoneLine, zoneQuery, type ReachZone } from './ruleZones';
 import { Segmented } from '../components/ui/Segmented';
 import { defaultRouteChannels } from './defaultRoute';
 import { deliveryLogFor } from './deliveryLogQuery';
@@ -897,6 +898,18 @@ function RuleModal({
   const [target, setTarget] = useState<AppliesTo>(initial);
   const [when, setWhen] = useState<WhenDraft>(() => whenDraftFrom(rule?.when));
   const whenBody = whenBodyFrom(when);
+  // The zones the rule's hours are read in, asked only while the rule has hours (ADR-262
+  // decision 11). `null` while asking or after a failed read: the line is left out.
+  const zq = zoneQuery(target);
+  const zoneKey = `${zq.groups.join(',')}|${zq.tags.join('\n')}|${zq.join}|${zq.everyNode}`;
+  const { data: zones } = useLoad<ReachZone[] | null>(
+    () =>
+      when.mode === 'always'
+        ? Promise.resolve(null)
+        : api.listNodeTags(zq).then((r) => r.reach_zones ?? null),
+    [zoneKey, when.mode === 'always'],
+    { initial: null },
+  );
   const toggleDay = (d: number) =>
     setWhen((w) => ({
       ...w,
@@ -1014,6 +1027,7 @@ function RuleModal({
                   onChange={(end) => setWhen((w) => ({ ...w, end }))}
                 />
               </Inline>
+              {zones && zones.length > 0 && <ZoneLine zones={zones} />}
             </>
           )}
         </FieldGroup>
@@ -1032,5 +1046,25 @@ function RuleModal({
         <FormError form={form} />
       </Fields>
     </Modal>
+  );
+}
+
+/** The zones the rule's hours are read in, with how many nodes each (ADR-262 decision 11): the
+ *  most nodes first, three at most, a zone the nodes fall back to marked as the default. */
+function ZoneLine({ zones }: { zones: readonly ReachZone[] }) {
+  const { t } = useTranslation('alertsConfig');
+  const { shown, more } = zoneLine(zones);
+  return (
+    <Inline gap={12} className="form-status">
+      {shown.map((z) => (
+        <span key={`${z.zone}|${z.default}`}>
+          {z.zone}
+          {' · '}
+          {t('routing.when.zoneNodes', { count: z.nodes })}
+          {z.default && <span className="muted">{` · ${t('routing.when.zoneDefault')}`}</span>}
+        </span>
+      ))}
+      {more > 0 && <span className="muted">{t('routing.when.moreZones', { count: more })}</span>}
+    </Inline>
   );
 }

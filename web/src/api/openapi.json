@@ -42661,6 +42661,16 @@
               }
             ]
           },
+          "reach_zones": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ReachZone"
+            },
+            "description": "The zones the reached nodes keep time in, so a rule's hours can be read as they will be\napplied (ADR-262 decision 11): each node's nearest folder that sets a zone, else the\ndeployment's default zone. Most nodes first, then by name. Absent when the request named\nneither tags nor folders."
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -45304,6 +45314,31 @@
             "format": "int64",
             "description": "Nodes carrying one of the tags.",
             "minimum": 0
+          }
+        }
+      },
+      "ReachZone": {
+        "type": "object",
+        "description": "One zone some reached nodes keep time in (ADR-262 decision 11).",
+        "required": [
+          "zone",
+          "nodes",
+          "default"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean",
+            "description": "`true` when these nodes have no folder that sets a zone and fall back to the deployment's\ndefault."
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of the reached nodes keep time in it.",
+            "minimum": 0
+          },
+          "zone": {
+            "type": "string",
+            "description": "The IANA zone name."
           }
         }
       },

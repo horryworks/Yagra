@@ -82,6 +82,12 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
       { tag: 'TeamA', nodes: 3 },
     ],
     reach: 3,
+    // The zones the reached nodes keep time in (ADR-262 decision 11): one site zone and the
+    // default, so the line under a rule's times has both shapes to draw.
+    reach_zones: [
+      { zone: 'Asia/Tokyo', nodes: 2, default: false },
+      { zone: 'UTC', nodes: 1, default: true },
+    ],
   } satisfies Schemas['NodeTags'] as unknown as Json,
 
   // What is not being watched (ADR-227). The generator answers every integer with `1`, which reads
