@@ -105,7 +105,7 @@ FROM nginxinc/nginx-unprivileged:1.30.6-alpine AS runtime
 # ADR-211 decision 5 gives a fix that does not.
 #
 # nginx itself (CVE-2026-123007/123633/123634/121810/113425, Critical, and CVE-2026-118899): the
-# base image ships Alpine's nginx 1.30.6-r1, and nginx-unprivileged has published no 1.30.7 tag.
+# base image ships nginx.org's nginx 1.30.6-r1, and nginx-unprivileged has published no 1.30.7 tag.
 # Two are in HTTP/2, which the TLS listener turns on, so they reach Yagra: Alpine's 1.30.7-r0 (built
 # 2026-11-18) is installed over it. The base image's nginx is nginx.org's build, whose four dynamic
 # modules (geoip, image-filter, njs, xslt) are pinned to its exact version and refuse Alpine's; this
