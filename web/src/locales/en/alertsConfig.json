@@ -484,8 +484,8 @@
     },
     "catchAll": {
       "title": "Catch-all",
-      "when": "When no rule is open",
-      "held": "None: held until a rule opens",
+      "when": "No other rule sends it",
+      "held": "None: waits for a rule's hours",
       "edit": "Set channels",
       "err": "Could not save the catch-all."
     },

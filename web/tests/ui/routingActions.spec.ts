@@ -162,11 +162,11 @@ test("a rule's hours name the zones they are read in, on one line of times", asy
 
 // ADR-262 decisions 4 and 12: the catch-all is the rule table's last row, outside its count, and
 // its channels are set from that row.
-test('the catch-all row sets the channels an alert goes to when no rule is open', async ({ page }) => {
+test('the catch-all row sets the channels an alert goes to when no other rule sends it', async ({ page }) => {
   await page.goto('/alerts/routing');
   const row = page.locator('.dt-row.dt-pinned[data-pinned="catch-all"]');
   await expect(row).toContainText('Catch-all');
-  await expect(row).toContainText('When no rule is open');
+  await expect(row).toContainText('No other rule sends it');
   // The row sits inside the rules table, after its last rule.
   const table = row.locator('xpath=..');
   await expect(table.locator('.dt-head')).toHaveCount(1);
