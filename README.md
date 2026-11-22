@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.85 — Put routing rules in order so the first open one decides, and let a rule hold an alert instead of sending it**
+> Status: **v0.3.86 — Move the bundled images past the weekly image scan: nginx 1.30.7 in the WebUI, oxidized 0.38.0, a Docker 29 upgrade helper, and newer VictoriaMetrics and VictoriaLogs**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

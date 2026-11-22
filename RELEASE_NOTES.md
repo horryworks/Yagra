@@ -10,10 +10,15 @@
 
 ## Unreleased
 
+## v0.3.86 — Move the bundled images past the weekly image scan: nginx 1.30.7 in the WebUI, oxidized 0.38.0, a Docker 29 upgrade helper, and newer VictoriaMetrics and VictoriaLogs
+
+### Breaking changes
+
+- **oxidized 0.38.0 refuses SSH Diffie-Hellman groups smaller than 2048 bits.** A device that offers only 1024-bit groups can no longer be backed up and shows a failed login on its Config tab.
+
 ### Improvements
 
 - **Bundled images moved:** oxidized 0.37.0 → 0.38.0, VictoriaMetrics v1.155.0 → v1.156.0, VictoriaLogs v1.53.0 → v1.54.0, alpine 3.24.3 → 3.24.4, and the upgrade helper `docker:28-cli` → `docker:29.10.0-cli` (the 28 line is no longer rebuilt). The upgrade helper's Compose moves from v2 to v5. Docker Engine 24 or later is now stated as the minimum; the new helper was measured working against Engine 24 and 25.
-- **oxidized 0.38.0 refuses SSH Diffie-Hellman groups smaller than 2048 bits.** A device that offers only 1024-bit groups can no longer be backed up and shows a failed login on its Config tab.
 
 ### Bug Fixes
 

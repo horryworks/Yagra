@@ -26,7 +26,7 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > アラートも上がりません。規模が小さいほど症状は重く、初めて導入した環境ほど強く踏みます。v0.2.6 で
 > 修正済みです。詳細は [RELEASE_NOTES.ja.md](RELEASE_NOTES.ja.md) を参照してください。
 
-> ステータス: **v0.3.85 — 振り分けルールに順番を付け、開いている最初の 1 本だけが送る。ルールで送らずに保留できる**
+> ステータス: **v0.3.86 — 同梱のイメージを週ごとの検査に合わせて上げる。WebUI の nginx 1.30.7、oxidized 0.38.0、Docker 29 のアップグレード補助、新しい VictoriaMetrics と VictoriaLogs**
 > ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、NetBox からのフォルダーツリー同期（読み取り専用）、受動イベント監視、探索・分類、
 > アラート、ダッシュボード、レポートを備えたスタックが、

@@ -10,10 +10,15 @@
 
 ## Unreleased
 
+## v0.3.86 — 同梱のイメージを週ごとの検査に合わせて上げる。WebUI の nginx 1.30.7、oxidized 0.38.0、Docker 29 のアップグレード補助、新しい VictoriaMetrics と VictoriaLogs
+
+### 破壊的変更
+
+- **oxidized 0.38.0 は、2048 ビット未満の SSH の Diffie-Hellman 群を受け付けない。** 1024 ビットの群しか出さない機器は設定を取れなくなり、Config タブにログインの失敗が出る。
+
 ### 改善
 
 - **同梱のイメージを上げた。** oxidized 0.37.0 → 0.38.0、VictoriaMetrics v1.155.0 → v1.156.0、VictoriaLogs v1.53.0 → v1.54.0、alpine 3.24.3 → 3.24.4。アップグレードを行う補助コンテナは `docker:28-cli` → `docker:29.10.0-cli`（28 の系列はもう作り直されない）。補助コンテナの Compose は v2 から v5 に上がる。Docker Engine の下限を 24 以降と書いた。新しい補助コンテナは Engine 24 と 25 で動くことを測った。
-- **oxidized 0.38.0 は、2048 ビット未満の SSH の Diffie-Hellman 群を受け付けない。** 1024 ビットの群しか出さない機器は設定を取れなくなり、Config タブにログインの失敗が出る。
 
 ### バグ修正
 
