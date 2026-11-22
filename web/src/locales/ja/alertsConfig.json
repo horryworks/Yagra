@@ -34,6 +34,7 @@
       "title": "ルーティングルール",
       "add": "+ ルールを追加",
       "cols": {
+        "order": "順番",
         "name": "名前",
         "severity": "重大度",
         "channels": "チャネル",
@@ -45,6 +46,7 @@
       "emptyNoChannels": "先にチャネルを追加してください。",
       "any": "すべて",
       "noChannels": "（チャネルなし）",
+      "hold": "保留",
       "enable": "ルールを有効化",
       "disable": "ルールを無効化",
       "delete": "ルールを削除",
@@ -75,6 +77,7 @@
       "severity": "重大度",
       "anySeverity": "すべての重大度",
       "channels": "チャネル",
+      "send": "送る",
       "add": "ルールを追加",
       "editTitle": "ルーティングルールを編集 — {{name}}",
       "save": "保存",

@@ -1658,12 +1658,13 @@ impl Notifier {
     }
 
     /// Deliver one notify action at `now` to where it goes then (ADR-262 decision 4), and say
-    /// whether it was handled. A fire whose matching rules are all closed, with no catch-all, is
-    /// held - or, when `releasing` (the morning's pass over what was held), left where it is and
-    /// answered `false`.
+    /// whether it was handled. A fire the first open matching rule holds, or whose matching rules
+    /// are all closed with no catch-all, is held (ADR-262 decision 14) - or, when `releasing` (the
+    /// morning's pass over what was held), left where it is and answered `false`.
     ///
     /// 🚨 **A failed hold delivers.** If the held store cannot take the row, the fire goes to every
-    /// matching rule's channels now: a page at night is a nuisance, a page lost is an outage
+    /// matching sending rule's channels now (a holding rule names none): a page at night is a
+    /// nuisance, a page lost is an outage
     /// nobody hears about.
     async fn deliver_at(
         &self,
@@ -1724,12 +1725,14 @@ impl Notifier {
                                     tracing::warn!(error = %e, "could not hold a notification; delivering it now");
                                     rules
                                         .iter()
+                                        .filter(|r| !r.hold)
                                         .flat_map(|r| r.channel_ids.iter().copied())
                                         .collect()
                                 }
                             },
                             None => rules
                                 .iter()
+                                .filter(|r| !r.hold)
                                 .flat_map(|r| r.channel_ids.iter().copied())
                                 .collect(),
                         }
@@ -1878,6 +1881,7 @@ impl Notifier {
         let rules = routing.matched(alert.severity, tags_of(facts), alert.subject.node(), &reach);
         let matched: BTreeSet<Uuid> = rules
             .iter()
+            .filter(|r| !r.hold)
             .flat_map(|r| r.channel_ids.iter().copied())
             .collect();
         let done = Delivered {
@@ -3295,10 +3299,20 @@ mod delivery_tests {
             join: crate::alerts::applies_to::Join::Or,
             channel_ids: vec![channel],
             when: crate::alerts::notifications::RuleWhen::default(),
+            hold: false,
         }
     }
 
     /// An enabled rule sending any severity of a node carrying one of `tags` to one channel.
+    /// One enabled rule sending any severity to several channels. Since ADR-262 decision 14 only
+    /// the first open matching rule sends, so fanning out to several channels is one rule's job.
+    fn rule_to(channels: &[Uuid]) -> RoutingRule {
+        RoutingRule {
+            channel_ids: channels.to_vec(),
+            ..rule(channels[0], None)
+        }
+    }
+
     fn tagged_rule(channel: Uuid, tags: &[&str]) -> RoutingRule {
         RoutingRule {
             tags: tags.iter().map(|t| (*t).to_owned()).collect(),
@@ -3404,9 +3418,10 @@ mod delivery_tests {
         );
     }
 
-    /// The case ADR-259 exists for: a tagged rule pages only for nodes carrying the tag, while an
-    /// untagged rule beside it still pages for both — and it works with no template and no
-    /// JSM/email channel, where the facts would not otherwise be looked up at all.
+    /// The case ADR-259 exists for: a tagged rule pages only for nodes carrying the tag - and it
+    /// works with no template and no JSM/email channel, where the facts would not otherwise be
+    /// looked up at all. The untagged rule below it takes the rest: since ADR-262 decision 14 the
+    /// first open matching rule decides alone, so it does not also page for the tagged node.
     #[tokio::test]
     async fn a_tagged_rule_pages_only_for_nodes_carrying_the_tag() {
         let (tagged, every) = (log(), log());
@@ -3438,8 +3453,8 @@ mod delivery_tests {
         );
         assert_eq!(
             every.lock().unwrap().count("fire"),
-            2,
-            "the untagged rule still pages for both"
+            1,
+            "the untagged rule below pages only for the node the tagged rule did not take"
         );
     }
 
@@ -3836,7 +3851,7 @@ mod delivery_tests {
         refusing.kind = Some(ChannelKind::Jsm);
         n.install_routing(
             vec![built(good, Recorder(ok_log.clone())), refusing],
-            vec![rule(good, None), rule(bad, None)],
+            vec![rule_to(&[good, bad])],
         );
         let node = NodeId::new();
         let fire = alert(node, Severity::Critical, None);
@@ -4078,11 +4093,7 @@ mod delivery_tests {
                 text(text_id, &text_log),
                 broken,
             ],
-            vec![
-                rule(json_id, None),
-                rule(text_id, None),
-                rule(broken_id, None),
-            ],
+            vec![rule_to(&[json_id, text_id, broken_id])],
         );
         let node = NodeId::new();
         n.handle(NotifyAction::Fire(alert(node, Severity::Critical, None)))
@@ -4149,7 +4160,7 @@ mod delivery_tests {
                 built(id_b, Recorder(b.clone())),
             ]
         };
-        n.install_routing(both(), vec![rule(id_a, None), rule(id_b, None)]);
+        n.install_routing(both(), vec![rule_to(&[id_a, id_b])]);
         let node = NodeId::new();
         let fire = || NotifyAction::Fire(alert(node, Severity::Critical, None));
 
@@ -4172,7 +4183,7 @@ mod delivery_tests {
             "B opened an incident for this alert, so it is closed there too"
         );
 
-        n.install_routing(both(), vec![rule(id_a, None), rule(id_b, None)]);
+        n.install_routing(both(), vec![rule_to(&[id_a, id_b])]);
         n.handle(fire()).await;
         assert_eq!(
             a.lock().unwrap().count("fire"),

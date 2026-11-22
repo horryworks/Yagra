@@ -8,7 +8,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { SEVERITIES, type NotificationChannel, type RoutingRule, type Severity } from '../types/api';
-import { channelFilters, routingRuleFilters } from './routingFilters';
+import {
+  canReorderRules,
+  channelFilters,
+  inDroppedOrder,
+  routingRuleFilters,
+} from './routingFilters';
 import { specColumns, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
 import { encodeCondition } from '../lib/filterCondition';
@@ -111,5 +116,22 @@ describe('the routing-rules filter row', () => {
     const edge = rule({ group_ids: ['g1'] });
     expect(keeps(specs, edge, { target: term('tokyo') })).toBe(true);
     expect(keeps(specs, edge, { target: term('Osaka') })).toBe(false);
+  });
+});
+
+// ADR-262 decision 14: the order decides where an alert goes, so it may only be changed while the
+// whole list is on screen in that order (ADR-255).
+describe('reordering the rules', () => {
+  it('offers the grip only unfiltered, unsorted, and to someone who may change it', () => {
+    expect(canReorderRules(true, '', false)).toBe(true);
+    expect(canReorderRules(false, '', false)).toBe(false);
+    expect(canReorderRules(true, 'name', false)).toBe(false);
+    expect(canReorderRules(true, '', true)).toBe(false);
+  });
+
+  it('shows the dropped order until the re-read, and a rule it does not name goes last', () => {
+    const rows = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'new' }];
+    expect(inDroppedOrder(rows, ['c', 'a', 'b']).map((r) => r.id)).toEqual(['c', 'a', 'b', 'new']);
+    expect(inDroppedOrder(rows, null).map((r) => r.id)).toEqual(['a', 'b', 'c', 'new']);
   });
 });

@@ -14,7 +14,7 @@
 // menu; delete confirms in a modal. Channel kind and rule severity are neutral/status chips
 // (categorical vs status).
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
@@ -56,11 +56,14 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { useClientFilters } from '../lib/useClientFilters';
 import { useClientSort } from '../lib/useClientSort';
 import {
+  canReorderRules,
   CHANNEL_FILTER_PREFIX,
   channelFilters,
+  inDroppedOrder,
   ROUTING_RULE_FILTER_PREFIX,
   routingRuleFilters,
 } from './routingFilters';
+import { DragGrip } from '../components/ui/Sortable';
 import { TrashIcon, PowerIcon, EditIcon, BellIcon, SearchIcon } from '../components/ui/icons';
 import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
@@ -672,6 +675,29 @@ function RulesSection({
 
   const channelName = (id: string) => channels.find((c) => c.id === id)?.name ?? id;
 
+  // The order just dropped, shown until the re-read that carries it arrives, so a row does not
+  // spring back to where it was for a moment (ADR-255).
+  const [dropped, setDropped] = useState<string[] | null>(null);
+  const [moving, setMoving] = useState(false);
+  useEffect(() => setDropped(null), [rules]);
+  const reorder = (ids: string[]) => {
+    setMoving(true);
+    setDropped(ids);
+    api
+      .setRoutingRuleOrder(ids)
+      .catch((e: unknown) => {
+        setDropped(null);
+        onError(errMsg(e, t('routing.err.updateRule')));
+      })
+      // Re-read either way: on a 409 the list the grips were drawn from is the stale one.
+      .finally(() => {
+        setMoving(false);
+        onChange();
+      });
+  };
+  const place = new Map(inDroppedOrder(rules, dropped).map((r, i) => [r.id, i + 1]));
+  const [reorderable, setReorderable] = useState(false);
+
   const toggle = (r: RoutingRule) =>
     api
       .setRoutingRuleEnabled(r.id, !r.enabled)
@@ -684,6 +710,19 @@ function RulesSection({
     const folderPath = (id: string) => paths.get(id) ?? id;
     const specs = routingRuleFilters(t, severityLabel, folderPath);
     const cols: Column<RoutingRule>[] = [
+      {
+        // The first open rule that matches an alert decides where it goes (ADR-262 decision 14),
+        // so the order is part of the rule; the grip only while it can be changed (ADR-255).
+        key: 'order',
+        header: t('routing.rules.cols.order'),
+        width: '88px',
+        render: (r) => (
+          <Inline gap={6}>
+            {reorderable && <DragGrip name={r.name} />}
+            <span className="mono">{place.get(r.id) ?? ''}</span>
+          </Inline>
+        ),
+      },
       {
         key: 'name',
         header: t('routing.rules.cols.name'),
@@ -725,10 +764,12 @@ function RulesSection({
       },
       {
         key: 'channels',
-        sortValue: (r) => r.channel_ids.map(channelName).join(', ') || null,
+        sortValue: (r) =>
+          r.hold ? t('routing.rules.hold') : r.channel_ids.map(channelName).join(', ') || null,
         header: t('routing.rules.cols.channels'),
         width: '1fr',
         render: (r) => {
+          if (r.hold) return <Badge tone="warning">{t('routing.rules.hold')}</Badge>;
           const names = r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels');
           // The whole list on hover: a rule may name more channels than the column can show.
           return <ClippedText className="muted" text={names} />;
@@ -777,7 +818,7 @@ function RulesSection({
     return cols;
     // `channelName` and `toggle` are rebuilt every render; what they read is listed instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, canSystem, channels, nodeTags, groups]);
+  }, [t, canSystem, channels, nodeTags, groups, reorderable, dropped, rules]);
 
   // In the URL, under `rules.` — see the channels table above.
   const filtering = useClientFilters(columns, rules, { prefix: ROUTING_RULE_FILTER_PREFIX });
@@ -812,6 +853,10 @@ function RulesSection({
   };
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
   const sorting = useClientSort(columns, filtering.shown, { prefix: ROUTING_RULE_FILTER_PREFIX });
+  // Mirrored into state because the columns, which draw the grip, are what the filter and the sort
+  // are built from; the grip follows them one render late, which no drag can fall into.
+  const canReorder = canReorderRules(canSystem, sorting.sort.by, anyFiltered);
+  useEffect(() => setReorderable(canReorder), [canReorder]);
 
   return (
     <Stack as="section" gap={12}>
@@ -837,12 +882,17 @@ function RulesSection({
 
       <DataTable
         tableId="settings.routingRules"
-        rows={sorting.rows}
+        rows={inDroppedOrder(sorting.rows, reorderable ? dropped : null)}
         columns={sorting.columns}
         sort={sorting.sort}
         onSortChange={sorting.setSort}
         rowKey={(r) => r.id}
         rowClass={(r) => (r.enabled ? undefined : 'is-muted')}
+        sortable={
+          reorderable
+            ? { onReorder: reorder, nameOf: (r: RoutingRule) => r.name, disabled: moving }
+            : undefined
+        }
         filters={filters}
         onFiltersChange={setFilters}
         filterCounts={counts}
@@ -965,6 +1015,8 @@ function RuleModal({
       days: w.days.includes(d) ? w.days.filter((x) => x !== d) : [...w.days, d],
     }));
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
+  // Send to the ticked channels, or hold the alert until another rule decides (ADR-262 decision 14).
+  const [hold, setHold] = useState(rule?.hold ?? false);
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
   const form = useSubmit({
     errorFallback: rule ? t('routing.err.updateRule') : t('routing.err.addRule'),
@@ -980,7 +1032,10 @@ function RuleModal({
     });
 
   const canAdd =
-    name.trim() !== '' && selected.size > 0 && !namesNothing(target) && 'when' in whenBody;
+    name.trim() !== '' &&
+    (hold || selected.size > 0) &&
+    !namesNothing(target) &&
+    'when' in whenBody;
 
   const submit = () => {
     if (!canAdd) return;
@@ -988,8 +1043,9 @@ function RuleModal({
       name: name.trim(),
       severity: severity === '' ? null : severity,
       ...appliesToBody(target),
-      channel_ids: [...selected],
+      channel_ids: hold ? [] : [...selected],
       when: 'when' in whenBody ? whenBody.when : undefined,
+      hold,
     };
     form.submit(() =>
       (rule ? api.updateRoutingRule(rule.id, body) : api.createRoutingRule(body)).then(() =>
@@ -1081,16 +1137,26 @@ function RuleModal({
           )}
         </FieldGroup>
         <FieldGroup label={t('routing.ruleModal.channels')}>
-          <Inline gap={12}>
-            {channels.map((c) => (
-              <CheckField
-                key={c.id}
-                checked={selected.has(c.id)}
-                onChange={() => toggle(c.id)}
-                label={c.name}
-              />
-            ))}
-          </Inline>
+          <Segmented
+            options={[
+              { value: 'send', label: t('routing.ruleModal.send') },
+              { value: 'hold', label: t('routing.rules.hold') },
+            ]}
+            value={hold ? 'hold' : 'send'}
+            onChange={(v) => setHold(v === 'hold')}
+          />
+          {!hold && (
+            <Inline gap={12}>
+              {channels.map((c) => (
+                <CheckField
+                  key={c.id}
+                  checked={selected.has(c.id)}
+                  onChange={() => toggle(c.id)}
+                  label={c.name}
+                />
+              ))}
+            </Inline>
+          )}
         </FieldGroup>
         <FormError form={form} />
       </Fields>

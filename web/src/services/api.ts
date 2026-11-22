@@ -2490,6 +2490,12 @@ export const api = {
   updateRoutingRule: (id: string, body: RoutingRuleBody): Promise<void> =>
     apiPut('/api/v1/routing-rules/{id}/definition', { path: { id }, body }),
 
+  /** Replace the order of the routing rules; every rule's id once, first to last. The first open
+   *  rule that matches an alert decides where it goes (ADR-262). A list that names a different
+   *  set answers `409 rule_order_stale`. */
+  setRoutingRuleOrder: (ids: string[]): Promise<void> =>
+    apiPut('/api/v1/routing-rules/order', { body: { ids } }),
+
   /** Delete a routing rule. */
   deleteRoutingRule: (id: string): Promise<void> =>
     apiDelete('/api/v1/routing-rules/{id}', { path: { id } }),

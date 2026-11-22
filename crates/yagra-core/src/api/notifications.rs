@@ -44,6 +44,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     get_notification_default_route,
     create_routing_rule,
     set_routing_rule_enabled,
+    set_routing_rule_order,
     update_routing_rule,
     delete_routing_rule,
     get_routing_catch_all,
@@ -101,6 +102,8 @@ pub(super) fn routes() -> Router<ApiState> {
             get(list_routing_rules).post(create_routing_rule),
         )
         .route("/api/v1/node-tags", get(list_node_tags))
+        // Registered beside `/:id`, which matchit lets a fixed segment win over.
+        .route("/api/v1/routing-rules/order", put(set_routing_rule_order))
         .route(
             "/api/v1/routing-rules/:id",
             put(set_routing_rule_enabled).delete(delete_routing_rule),
@@ -1528,6 +1531,11 @@ pub(super) struct CreateRule {
     /// minutes are after local midnight, below 1440. Omitted on an edit, the rule keeps its own.
     #[serde(default)]
     when: Option<crate::alerts::notifications::RuleWhen>,
+    /// The rule sends nowhere: while it is the first open rule that matches an alert, the alert is
+    /// held until another rule decides (ADR-262). `channel_ids` is then not read. Omitted on a
+    /// create = false; omitted on an edit, the rule keeps its own.
+    #[serde(default)]
+    hold: Option<bool>,
 }
 
 /// A rule's definition after the edge's checks.
@@ -1625,6 +1633,7 @@ async fn create_routing_rule(
             },
             &body.channel_ids,
             &rule.when.clone().unwrap_or_default(),
+            body.hold.unwrap_or(false),
         )
         .await
         .map_err(|e| {
@@ -1703,6 +1712,7 @@ async fn update_routing_rule(
                 join: body.join,
                 channel_ids: &body.channel_ids,
                 when: rule.when.as_ref(),
+                hold: body.hold,
             },
         )
         .await
@@ -1716,6 +1726,68 @@ async fn update_routing_rule(
             e.as_ref(),
             "update routing rule",
             "failed to update routing rule",
+        )),
+    }
+}
+
+/// The most ids one order may name. Rules are written by an operator, so a real list is a
+/// handful; the cap only bounds what one request can make the server sort and compare.
+const RULE_ORDER_IDS_MAX: usize = 10_000;
+
+/// The rules' order, first to last (ADR-262 decision 14).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct RuleOrder {
+    /// Every stored rule's id, each exactly once. The first one that matches an alert decides
+    /// where it goes.
+    ids: Vec<Uuid>,
+}
+
+/// Replace the order of the routing rules (ADR-262 decision 14).
+///
+/// Rules are read top to bottom, and the first enabled one whose severity and target match an
+/// alert alone decides where it goes: to its channels while its hours are open, otherwise held
+/// until they open. The body names **every** rule: one naming a different set - because a rule
+/// was added or deleted after the caller read the list - is refused with 409 and changes nothing.
+#[utoipa::path(
+    put, path = "/api/v1/routing-rules/order", tag = "notifications",
+    request_body = RuleOrder,
+    responses(
+        (status = 204, description = "Order replaced"),
+        (status = 400, description = "An id appears twice, or more than 10,000 are named (`invalid_order`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 409, description = "The ids are not exactly the stored rules - one was added or deleted since the list was read (`rule_order_stale`); nothing was changed", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_routing_rule_order(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Json(body): Json<RuleOrder>,
+) -> ApiResult<StatusCode> {
+    if body.ids.len() > RULE_ORDER_IDS_MAX {
+        return Err(ApiError::bad_request(
+            "invalid_order",
+            format!("an order names at most {RULE_ORDER_IDS_MAX} rules"),
+        ));
+    }
+    let mut seen = std::collections::HashSet::with_capacity(body.ids.len());
+    if !body.ids.iter().all(|id| seen.insert(*id)) {
+        return Err(ApiError::bad_request(
+            "invalid_order",
+            "each rule may appear in the order once",
+        ));
+    }
+    match admin.notifications.set_rule_order(&body.ids).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(ApiError::conflict(
+            "rule_order_stale",
+            "the order does not name exactly the stored rules; reload the list and try again",
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "set routing rule order",
+            "failed to save the routing rule order",
         )),
     }
 }
@@ -2413,6 +2485,101 @@ at 2026-08-04T09:41:07+00:00"
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    /// ADR-262 decision 14: the order is saved and listed, a rule created afterwards goes last, and
+    /// an order naming a different set (stale, or with a duplicate) changes nothing.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_rule_order_is_saved_and_a_stale_one_changes_nothing(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let mut ids = Vec::new();
+        for name in ["a", "b", "c"] {
+            let (status, created) = send(
+                &st,
+                "POST",
+                "/api/v1/routing-rules",
+                &tok,
+                Some(serde_json::json!({ "name": name, "severity": null, "channel_ids": [] })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CREATED, "{created}");
+            ids.push(created["id"].as_str().unwrap().to_owned());
+        }
+        let names = || async {
+            let (_, list) = send(&st, "GET", "/api/v1/routing-rules", &tok, None).await;
+            list.as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["name"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names().await, ["a", "b", "c"], "created last, listed last");
+
+        let (status, body) = send(
+            &st,
+            "PUT",
+            "/api/v1/routing-rules/order",
+            &tok,
+            Some(serde_json::json!({ "ids": [ids[2], ids[0], ids[1]] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(names().await, ["c", "a", "b"]);
+
+        let (status, _) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(serde_json::json!({ "name": "d", "severity": null, "channel_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(names().await, ["c", "a", "b", "d"]);
+
+        for (body, want, code) in [
+            (
+                serde_json::json!({ "ids": [ids[0]] }),
+                StatusCode::CONFLICT,
+                "rule_order_stale",
+            ),
+            (
+                serde_json::json!({ "ids": [ids[0], ids[0], ids[1]] }),
+                StatusCode::BAD_REQUEST,
+                "invalid_order",
+            ),
+        ] {
+            let (status, answer) = send(
+                &st,
+                "PUT",
+                "/api/v1/routing-rules/order",
+                &tok,
+                Some(body.clone()),
+            )
+            .await;
+            assert_eq!(status, want, "{body}: {answer}");
+            assert_eq!(answer["error"]["code"].as_str(), Some(code), "{body}");
+            assert_eq!(
+                names().await,
+                ["c", "a", "b", "d"],
+                "{body} moved something"
+            );
+        }
+
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let (status, _) = send(
+            &st,
+            "PUT",
+            "/api/v1/routing-rules/order",
+            &viewer,
+            Some(serde_json::json!({ "ids": [ids[0], ids[1], ids[2]] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     /// ADR-193: a rule's definition is replaced in place — name, severity and channels — while

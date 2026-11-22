@@ -23232,6 +23232,81 @@
         }
       }
     },
+    "/api/v1/routing-rules/order": {
+      "put": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Replace the order of the routing rules (ADR-262 decision 14).",
+        "description": "Rules are read top to bottom, and the first enabled one whose severity and target match an\nalert alone decides where it goes: to its channels while its hours are open, otherwise held\nuntil they open. The body names **every** rule: one naming a different set - because a rule\nwas added or deleted after the caller read the list - is refused with 409 and changes nothing.",
+        "operationId": "set_routing_rule_order",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleOrder"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Order replaced"
+          },
+          "400": {
+            "description": "An id appears twice, or more than 10,000 are named (`invalid_order`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The ids are not exactly the stored rules - one was added or deleted since the list was read (`rule_order_stale`); nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/routing-rules/{id}": {
       "put": {
         "tags": [
@@ -32287,7 +32362,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "The enabled rules that match these nodes at the asked severity, in rule order; empty when\nnone does."
+            "description": "The enabled rules that match these nodes at the asked severity and can ever decide where\ntheir alerts go, in rule order (ADR-262 decision 14); empty when none does."
           },
           "segments": {
             "type": "array",
@@ -32799,6 +32874,13 @@
               "format": "uuid"
             },
             "description": "Only alerts on a node inside one of these folders, at any depth, reach the rule's channels\n(ADR-262). Both this and `tags` empty = every node. Omitted on an edit, the rule keeps the\nfolders it has."
+          },
+          "hold": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The rule sends nowhere: while it is the first open rule that matches an alert, the alert is\nheld until another rule decides (ADR-262). `channel_ids` is then not read. Omitted on a\ncreate = false; omitted on an edit, the rule keeps its own."
           },
           "join": {
             "oneOf": [
@@ -47120,6 +47202,10 @@
             },
             "description": "Folders the node must be inside, at any depth (ADR-262 decision 1). With both this and\n`tags` empty the rule covers every node. A folder that no longer exists reaches nothing. A\nsubject that is not a node matches only a rule that names neither."
           },
+          "hold": {
+            "type": "boolean",
+            "description": "The rule sends nowhere: while it is the first open rule that matches, an alert is held until\nanother rule decides (ADR-262 decision 14). Its `channel_ids` are then not read. Absent =\nfalse."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
@@ -47151,6 +47237,23 @@
           "when": {
             "$ref": "#/components/schemas/RuleWhen",
             "description": "When the rule is open (ADR-262 decision 3). Absent = always."
+          }
+        }
+      },
+      "RuleOrder": {
+        "type": "object",
+        "description": "The rules' order, first to last (ADR-262 decision 14).",
+        "required": [
+          "ids"
+        ],
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Every stored rule's id, each exactly once. The first one that matches an alert decides\nwhere it goes."
           }
         }
       },

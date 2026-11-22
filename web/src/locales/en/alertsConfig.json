@@ -37,6 +37,7 @@
       "title": "Routing rules",
       "add": "+ Add rule",
       "cols": {
+        "order": "Order",
         "name": "Name",
         "severity": "Severity",
         "channels": "Channels",
@@ -48,6 +49,7 @@
       "emptyNoChannels": "Add a channel first.",
       "any": "any",
       "noChannels": "(no channels)",
+      "hold": "Hold",
       "enable": "Enable rule",
       "disable": "Disable rule",
       "delete": "Delete rule",
@@ -78,6 +80,7 @@
       "severity": "Severity",
       "anySeverity": "any severity",
       "channels": "Channels",
+      "send": "Send",
       "add": "Add rule",
       "editTitle": "Edit routing rule — {{name}}",
       "save": "Save",

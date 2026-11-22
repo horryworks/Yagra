@@ -4808,6 +4808,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/routing-rules/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace the order of the routing rules (ADR-262 decision 14).
+         * @description Rules are read top to bottom, and the first enabled one whose severity and target match an
+         *     alert alone decides where it goes: to its channels while its hours are open, otherwise held
+         *     until they open. The body names **every** rule: one naming a different set - because a rule
+         *     was added or deleted after the caller read the list - is refused with 409 and changes nothing.
+         */
+        put: operations["set_routing_rule_order"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/routing-rules/{id}": {
         parameters: {
             query?: never;
@@ -7805,8 +7828,8 @@ export interface components {
             /** @description Up to fifty of them, for naming. */
             node_ids: string[];
             /**
-             * @description The enabled rules that match these nodes at the asked severity, in rule order; empty when
-             *     none does.
+             * @description The enabled rules that match these nodes at the asked severity and can ever decide where
+             *     their alerts go, in rule order (ADR-262 decision 14); empty when none does.
              */
             rule_ids: string[];
             segments: components["schemas"]["CoverageSegment"][];
@@ -7986,6 +8009,12 @@ export interface components {
              *     folders it has.
              */
             group_ids?: string[] | null;
+            /**
+             * @description The rule sends nowhere: while it is the first open rule that matches an alert, the alert is
+             *     held until another rule decides (ADR-262). `channel_ids` is then not read. Omitted on a
+             *     create = false; omitted on an edit, the rule keeps its own.
+             */
+            hold?: boolean | null;
             join?: null | components["schemas"]["Join"];
             name: string;
             severity?: string | null;
@@ -14977,6 +15006,12 @@ export interface components {
              *     subject that is not a node matches only a rule that names neither.
              */
             group_ids?: string[];
+            /**
+             * @description The rule sends nowhere: while it is the first open rule that matches, an alert is held until
+             *     another rule decides (ADR-262 decision 14). Its `channel_ids` are then not read. Absent =
+             *     false.
+             */
+            hold?: boolean;
             /** Format: uuid */
             id: string;
             /**
@@ -14995,6 +15030,14 @@ export interface components {
             tags: string[];
             /** @description When the rule is open (ADR-262 decision 3). Absent = always. */
             when?: components["schemas"]["RuleWhen"];
+        };
+        /** @description The rules' order, first to last (ADR-262 decision 14). */
+        RuleOrder: {
+            /**
+             * @description Every stored rule's id, each exactly once. The first one that matches an alert decides
+             *     where it goes.
+             */
+            ids: string[];
         };
         /**
          * @description The tester's answer. A compile failure is reported **in-band** rather than as a 400: the whole
@@ -35536,6 +35579,73 @@ export interface operations {
             };
             /** @description Role lacks ManageSystem */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_routing_rule_order: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleOrder"];
+            };
+        };
+        responses: {
+            /** @description Order replaced */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An id appears twice, or more than 10,000 are named (`invalid_order`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The ids are not exactly the stored rules - one was added or deleted since the list was read (`rule_order_stale`); nothing was changed */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

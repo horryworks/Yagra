@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **Routing rules now have an order, and only the first open rule that matches an alert sends it.** Rules are read top to bottom; the first enabled rule whose severity and target match and whose hours are open decides alone, and rules below it no longer hear that alert. If you have rules that overlap (an "every node" rule and a narrower one, say), check their order after upgrading: until now both sent. The order starts as the order the rules were created in. Resolves are unchanged: they still go to every matching rule's channels and wherever the fire reached.
+- **Migration 0188 raises the oldest core this deployment can go back to** (to 0.3.85): an older core would ignore the order and the holding rules and send to every matching rule.
+
+### New Features
+
+- **Drag routing rules into order** on Alerts ▸ Notification delivery, by the grip at the left of each row. The catch-all stays the last row. `PUT /api/v1/routing-rules/order` takes every rule's id once, first to last, and answers `409 rule_order_stale` when the list has changed since it was read. `GET /api/v1/routing-rules` and MCP `get_config(kind=routing_rules)` list the rules in that order.
+- **A rule can hold instead of send.** Choose **Hold** in place of channels: while it is the first open rule that matches, the alert is kept back and goes out when another rule takes over, if it is still open; one that resolves first is never sent. Put a holding rule for one site's nights above the rule for everything to keep that site quiet at night. Rules carry `hold` in the API.
+
 ## v0.3.84 — Give routing rules their own hours, a catch-all and a week of coverage, pick notification targets by folders and tags, and edit a maintenance window after it is made
 
 ### Breaking changes

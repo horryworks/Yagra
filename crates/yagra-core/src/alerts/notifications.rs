@@ -144,6 +144,11 @@ pub struct RoutingRule {
     /// When the rule is open (ADR-262 decision 3). Absent = always.
     #[serde(default)]
     pub when: RuleWhen,
+    /// The rule sends nowhere: while it is the first open rule that matches, an alert is held until
+    /// another rule decides (ADR-262 decision 14). Its `channel_ids` are then not read. Absent =
+    /// false.
+    #[serde(default)]
+    pub hold: bool,
 }
 
 /// What an edit of a routing rule writes (ADR-193). `None` keeps what the rule has: a client that
@@ -157,6 +162,7 @@ pub struct RuleEdit<'a> {
     pub join: Option<crate::alerts::applies_to::Join>,
     pub channel_ids: &'a [Uuid],
     pub when: Option<&'a RuleWhen>,
+    pub hold: Option<bool>,
 }
 
 /// Which nodes a new routing rule names (ADR-262 decisions 1 and 10).
@@ -474,11 +480,13 @@ impl NotificationRepo {
 
     // ── Routing rules ─────────────────────────────────────────────────────────────────
 
-    /// All routing rules.
+    /// All routing rules, in their order (ADR-262 decision 14): the first one that matches an
+    /// alert decides where it goes, so this is the order the notifier walks.
     pub async fn list_rules(&self) -> anyhow::Result<Vec<RoutingRule>> {
         let rows = sqlx::query(
             "SELECT id, name, enabled, severity, tags, group_ids, join_and, channel_ids, when_mode, \
-             days, start_minute, end_minute FROM routing_rules ORDER BY created_at",
+             days, start_minute, end_minute, hold FROM routing_rules \
+             ORDER BY position, created_at, id",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -505,13 +513,15 @@ impl NotificationRepo {
                         end_minute: u16::try_from(row.try_get::<i16, _>("end_minute")?)
                             .unwrap_or(0),
                     },
+                    hold: row.try_get("hold")?,
                 })
             })
             .collect()
     }
 
     /// Create a routing rule. `severity` None ⇒ matches all severities; a target naming no tag
-    /// and no folder ⇒ every node.
+    /// and no folder ⇒ every node. `hold` makes it a rule that keeps alerts back rather than
+    /// sending them (ADR-262 decision 14). It lists last: its position comes from a sequence.
     pub async fn create_rule(
         &self,
         name: &str,
@@ -519,12 +529,13 @@ impl NotificationRepo {
         target: &RuleTarget<'_>,
         channel_ids: &[Uuid],
         when: &RuleWhen,
+        hold: bool,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, join_and, \
-             channel_ids, when_mode, days, start_minute, end_minute) \
-             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+             channel_ids, when_mode, days, start_minute, end_minute, hold) \
+             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind(id)
         .bind(name)
@@ -537,6 +548,7 @@ impl NotificationRepo {
         .bind(days_column(&when.days))
         .bind(minute_column(when.start_minute))
         .bind(minute_column(when.end_minute))
+        .bind(hold)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -565,6 +577,7 @@ impl NotificationRepo {
             join,
             channel_ids,
             when,
+            hold,
         } = *edit;
         // `None` keeps the stored tags and folders: a client that predates them must not widen a
         // rule to every node by saving it (ADR-259, ADR-262).
@@ -573,7 +586,7 @@ impl NotificationRepo {
              group_ids = COALESCE($5, group_ids), channel_ids = $6, \
              when_mode = COALESCE($7, when_mode), days = COALESCE($8, days), \
              start_minute = COALESCE($9, start_minute), end_minute = COALESCE($10, end_minute), \
-             join_and = COALESCE($11, join_and) \
+             join_and = COALESCE($11, join_and), hold = COALESCE($12, hold) \
              WHERE id = $1",
         )
         .bind(id)
@@ -587,6 +600,7 @@ impl NotificationRepo {
         .bind(when.map(|w| minute_column(w.start_minute)))
         .bind(when.map(|w| minute_column(w.end_minute)))
         .bind(join.map(crate::alerts::applies_to::Join::is_and))
+        .bind(hold)
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -614,6 +628,34 @@ impl NotificationRepo {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Replace the order of the rules (ADR-262 decision 14). `ids` must name every stored rule
+    /// exactly once; `Ok(false)` when it names a different set - a rule was added or deleted since
+    /// the caller read the list - and nothing changed. The comparison and the write are one
+    /// transaction under a lock on every row, so a delete cannot land between them. A create can,
+    /// and is harmless: its sequence default is above the 1..n written here, so it lists last.
+    pub async fn set_rule_order(&self, ids: &[Uuid]) -> anyhow::Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let mut stored: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM routing_rules FOR UPDATE")
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut asked = ids.to_vec();
+        stored.sort_unstable();
+        asked.sort_unstable();
+        if stored != asked {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE routing_rules SET position = t.ord \
+             FROM unnest($1::uuid[]) WITH ORDINALITY AS t(id, ord) \
+             WHERE routing_rules.id = t.id",
+        )
+        .bind(ids)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Delete a rule. Returns whether a row was removed.
@@ -839,6 +881,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[doomed, kept],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -849,6 +892,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[doomed],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -978,6 +1022,7 @@ mod tests {
                 &crate::alerts::notifications::RuleTarget::or(&[], &[]),
                 &[a, b],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -988,6 +1033,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[b],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -1022,6 +1068,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -1051,6 +1098,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[channel],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -1061,6 +1109,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[channel],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -1118,6 +1167,7 @@ mod tests {
                 &crate::alerts::notifications::RuleTarget::or(&[], &[]),
                 &[a],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -1128,6 +1178,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[a],
                 &RuleWhen::default(),
+                false,
             )
             .await
             .expect("rule");
@@ -1144,6 +1195,7 @@ mod tests {
                     join: None,
                     channel_ids: &[b],
                     when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1176,7 +1228,8 @@ mod tests {
                     group_ids: None,
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1213,7 +1266,8 @@ mod tests {
                     group_ids: None,
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1229,7 +1283,8 @@ mod tests {
                     group_ids: None,
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1245,7 +1300,8 @@ mod tests {
                     group_ids: None,
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1273,7 +1329,8 @@ mod tests {
                     group_ids: Some(&folders),
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1292,7 +1349,8 @@ mod tests {
                     group_ids: None,
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1311,7 +1369,8 @@ mod tests {
                     group_ids: Some(&[]),
                     join: None,
                     channel_ids: &[b],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await
@@ -1329,7 +1388,8 @@ mod tests {
                     group_ids: None,
                     join: None,
                     channel_ids: &[a],
-                    when: None
+                    when: None,
+                    hold: None,
                 }
             )
             .await

@@ -122,6 +122,13 @@ pub type Hears<'a> = &'a dyn Fn(&Uuid) -> bool;
 
 /// [`route_at`] at minute `minute` of ISO weekday `day`, local time: the one judgement, which the
 /// weekly coverage (ADR-262 decision 8) asks a slot at a time.
+///
+/// `matched` is in rule order, and the first rule in it that is open decides alone (ADR-262
+/// decision 14): a holding rule holds, a sending rule sends to its channels, and no rule below it
+/// hears the alert. A sending rule no channel of which can hear is passed over, as if it were not
+/// there - otherwise switching a channel off would make a rule swallow alerts. Only when no rule
+/// decides does the catch-all take the alert; without one it is held if a rule could send it
+/// later, and goes nowhere if none could.
 #[must_use]
 pub fn route_local(
     matched: &[&RoutingRule],
@@ -130,24 +137,50 @@ pub fn route_local(
     day: u8,
     minute: u16,
 ) -> RouteNow {
-    let open: BTreeSet<Uuid> = matched
-        .iter()
-        .filter(|r| r.when.open_at(day, minute))
-        .flat_map(|r| r.channel_ids.iter().copied())
-        .filter(|c| hears(c))
-        .collect();
-    if !open.is_empty() {
-        return RouteNow::Rules(open);
+    for rule in matched.iter().filter(|r| r.when.open_at(day, minute)) {
+        if rule.hold {
+            return RouteNow::Held;
+        }
+        let heard: BTreeSet<Uuid> = rule
+            .channel_ids
+            .iter()
+            .copied()
+            .filter(|c| hears(c))
+            .collect();
+        if !heard.is_empty() {
+            return RouteNow::Rules(heard);
+        }
     }
     let catch_all: BTreeSet<Uuid> = catch_all.iter().copied().filter(|c| hears(c)).collect();
     if !catch_all.is_empty() {
         return RouteNow::CatchAll(catch_all);
     }
-    if matched.iter().any(|r| r.channel_ids.iter().any(hears)) {
+    if matched.iter().any(|r| sends_to_someone(r, hears)) {
         RouteNow::Held
     } else {
         RouteNow::Nowhere
     }
+}
+
+/// Whether `rule` sends, and some channel of it can hear.
+fn sends_to_someone(rule: &RoutingRule, hears: Hears<'_>) -> bool {
+    !rule.hold && rule.channel_ids.iter().any(hears)
+}
+
+/// The matching rules that can ever decide, in order: everything down to and including the first
+/// rule that is always open and decides (it holds, or a channel of it hears). A rule below that one
+/// never decides, so two places whose rules differ only there go to the same places all week, and
+/// the coverage and the clock line share one judgement for them.
+#[must_use]
+pub fn deciding<'a>(matched: &[&'a RoutingRule], hears: Hears<'_>) -> Vec<&'a RoutingRule> {
+    let mut out = Vec::with_capacity(matched.len());
+    for rule in matched {
+        out.push(*rule);
+        if rule.when.mode == WhenMode::Always && (rule.hold || sends_to_someone(rule, hears)) {
+            break;
+        }
+    }
+    out
 }
 
 /// The first minute after `now` at which [`route_at`] answers differently, or `None` if it does
@@ -228,8 +261,8 @@ pub enum CoverageKind {
 /// The nodes one set of matching rules reaches, and where their alerts go across the week.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct CoverageRow {
-    /// The enabled rules that match these nodes at the asked severity, in rule order; empty when
-    /// none does.
+    /// The enabled rules that match these nodes at the asked severity and can ever decide where
+    /// their alerts go, in rule order (ADR-262 decision 14); empty when none does.
     pub rule_ids: Vec<Uuid>,
     /// The zone these nodes keep time in; `null` for the deployment's default.
     pub zone: Option<String>,
@@ -283,7 +316,8 @@ pub fn week_of(
     out
 }
 
-/// Group every node by the rules that match it at `severity` and the zone it keeps time in, and
+/// Group every node by the rules that match it at `severity` and can decide (see [`deciding`]) and
+/// the zone it keeps time in, and
 /// draw each group's week (ADR-262 decision 8). Neither a folder nor a rule can draw a gap, since a
 /// gap is where no rule reaches; a group of nodes that share their rules can. Largest group first.
 #[must_use]
@@ -313,8 +347,9 @@ pub fn coverage(
                 .clone(),
             None => Vec::new(),
         };
-        let ids: Vec<Uuid> = live
+        let reaching: Vec<&RoutingRule> = live
             .iter()
+            .copied()
             .filter(|r| {
                 crate::alerts::applies_to::reaches_chain(
                     &r.group_ids,
@@ -324,8 +359,8 @@ pub fn coverage(
                     &n.tags,
                 )
             })
-            .map(|r| r.id)
             .collect();
+        let ids: Vec<Uuid> = deciding(&reaching, hears).iter().map(|r| r.id).collect();
         groups.entry((ids, n.zone.clone())).or_default().push(n.id);
     }
     let mut rows: Vec<CoverageRow> = groups
@@ -400,6 +435,9 @@ impl PlaceRoutes {
                     )
             })
             .collect();
+        // A switched-off channel hears nothing (`names` holds the enabled ones only).
+        let hears = |id: &Uuid| self.names.contains_key(id);
+        let matched = deciding(&matched, &hears);
         let key = (
             matched.iter().map(|r| r.id).collect::<Vec<Uuid>>(),
             self.zones.get(&group).map(|(_, owner)| *owner),
@@ -412,8 +450,6 @@ impl PlaceRoutes {
             .get(&group)
             .map_or_else(|| self.default.clone(), |(z, _)| z.clone());
         let clock = RuleClock::new(HashMap::new(), zone);
-        // A switched-off channel hears nothing (`names` holds the enabled ones only).
-        let hears = |id: &Uuid| self.names.contains_key(id);
         let route = route_at(&matched, &self.catch_all, &hears, &clock, None, now);
         let until = next_change(&matched, &self.catch_all, &hears, &clock, None, now);
         let name_of = |id: &Uuid| self.names.get(id).cloned();
@@ -484,7 +520,117 @@ mod tests {
                 start_minute: 8 * 60 + 30,
                 end_minute: 17 * 60 + 20,
             },
+            hold: false,
         }
+    }
+
+    /// A rule that holds rather than sends, open `mode` the weekday 08:30-17:20 window.
+    fn holding(mode: WhenMode) -> RoutingRule {
+        RoutingRule {
+            channel_ids: Vec::new(),
+            hold: true,
+            ..rule(Uuid::new_v4(), mode)
+        }
+    }
+
+    /// ADR-262 decision 14, the case the user asked for: a holding rule for one site's nights sits
+    /// above the rule for everything. At night the site's alert is held and the rule below never
+    /// hears it; in the morning the holding rule closes and the same alert goes to mail, which is
+    /// what the release of a held fire asks. Another site is not held at all.
+    #[test]
+    fn a_holding_rule_above_keeps_one_sites_nights_quiet() {
+        let mail = Uuid::new_v4();
+        let nights = holding(WhenMode::Outside);
+        let everything = rule(mail, WhenMode::Always);
+        let clock = RuleClock::default();
+        let site_x = [&nights, &everything];
+        let site_y = [&everything];
+        assert_eq!(
+            route_at(&site_x, &[], &ALL, &clock, None, at(23, 23, 0)),
+            RouteNow::Held
+        );
+        assert_eq!(
+            route_at(&site_x, &[mail], &ALL, &clock, None, at(23, 23, 0)),
+            RouteNow::Held,
+            "a holding rule keeps the alert from the catch-all too"
+        );
+        assert_eq!(
+            next_change(&site_x, &[], &ALL, &clock, None, at(23, 23, 0)),
+            Some(at(24, 8, 30)),
+            "held until the holding rule closes, Tuesday 08:30"
+        );
+        assert_eq!(
+            route_at(&site_x, &[], &ALL, &clock, None, at(24, 8, 30)),
+            RouteNow::Rules([mail].into_iter().collect())
+        );
+        assert_eq!(
+            route_at(&site_y, &[], &ALL, &clock, None, at(23, 23, 0)),
+            RouteNow::Rules([mail].into_iter().collect())
+        );
+    }
+
+    /// The first open rule decides alone: two rules open at once do not both send, and moving the
+    /// other one up moves the alert.
+    #[test]
+    fn the_first_open_rule_decides_and_the_order_moves_the_alert() {
+        let (mail, pager) = (Uuid::new_v4(), Uuid::new_v4());
+        let a = rule(mail, WhenMode::Always);
+        let b = rule(pager, WhenMode::Always);
+        let clock = RuleClock::default();
+        assert_eq!(
+            route_at(&[&a, &b], &[], &ALL, &clock, None, at(23, 10, 0)),
+            RouteNow::Rules([mail].into_iter().collect())
+        );
+        assert_eq!(
+            route_at(&[&b, &a], &[], &ALL, &clock, None, at(23, 10, 0)),
+            RouteNow::Rules([pager].into_iter().collect())
+        );
+        // A closed rule above does not decide: it is skipped, not held for.
+        let day = rule(mail, WhenMode::During);
+        assert_eq!(
+            route_at(&[&day, &b], &[], &ALL, &clock, None, at(23, 23, 0)),
+            RouteNow::Rules([pager].into_iter().collect())
+        );
+    }
+
+    /// A sending rule whose channels are all off is passed over, so switching a channel off cannot
+    /// make a rule swallow the alerts below it.
+    #[test]
+    fn a_sending_rule_nobody_hears_is_passed_over() {
+        let (off, pager) = (Uuid::new_v4(), Uuid::new_v4());
+        let hears = |id: &Uuid| *id != off;
+        let dead = rule(off, WhenMode::Always);
+        let live = rule(pager, WhenMode::Always);
+        let clock = RuleClock::default();
+        assert_eq!(
+            route_at(&[&dead, &live], &[], &hears, &clock, None, at(23, 10, 0)),
+            RouteNow::Rules([pager].into_iter().collect())
+        );
+        // Only holding rules match, and none is open: nothing could ever send it.
+        let nights = holding(WhenMode::Outside);
+        assert_eq!(
+            route_at(&[&nights], &[], &ALL, &clock, None, at(23, 10, 0)),
+            RouteNow::Nowhere
+        );
+    }
+
+    /// Rules below the first always-open rule that decides never decide, so they do not split a
+    /// coverage row or a clock line.
+    #[test]
+    fn deciding_stops_at_the_first_always_open_rule_that_decides() {
+        let (mail, off) = (Uuid::new_v4(), Uuid::new_v4());
+        let hears = |id: &Uuid| *id != off;
+        let day = rule(mail, WhenMode::During);
+        let dead = rule(off, WhenMode::Always);
+        let all = rule(mail, WhenMode::Always);
+        let below = rule(mail, WhenMode::Outside);
+        let ids = |v: Vec<&RoutingRule>| v.iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(deciding(&[&day, &dead, &all, &below], &hears)),
+            vec![day.id, dead.id, all.id]
+        );
+        let hold = holding(WhenMode::Always);
+        assert_eq!(ids(deciding(&[&hold, &all], &hears)), vec![hold.id]);
     }
 
     /// 2026-11-23 is a Monday. UTC, so the times read as written.

@@ -27,6 +27,26 @@ import {
 export const CHANNEL_FILTER_PREFIX = 'channels.';
 export const ROUTING_RULE_FILTER_PREFIX = 'rules.';
 
+/** Whether the rules can be put in order by dragging (ADR-262 decision 14, ADR-255): only while
+ *  every rule is on screen in its stored order - not narrowed by a filter, not sorted by a column.
+ *  `sortBy` is `''` when no column is sorted. */
+export function canReorderRules(canSystem: boolean, sortBy: string, filtered: boolean): boolean {
+  return canSystem && sortBy === '' && !filtered;
+}
+
+/** The rules in the order just dropped, until the re-read that shows it arrives. A rule the drop
+ *  does not name (created meanwhile) keeps its place after them. */
+export function inDroppedOrder<T extends { id: string }>(
+  rows: readonly T[],
+  dropped: readonly string[] | null,
+): T[] {
+  if (!dropped) return [...rows];
+  const at = new Map(dropped.map((id, i) => [id, i]));
+  return [...rows].sort(
+    (a, b) => (at.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (at.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
 /** Alerts ▸ Routing, the channels table. Keyed by `Column.key`. */
 export function channelFilters(
   t: TFunction,
