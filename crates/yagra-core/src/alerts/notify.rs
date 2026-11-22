@@ -3303,7 +3303,6 @@ mod delivery_tests {
         }
     }
 
-    /// An enabled rule sending any severity of a node carrying one of `tags` to one channel.
     /// One enabled rule sending any severity to several channels. Since ADR-262 decision 14 only
     /// the first open matching rule sends, so fanning out to several channels is one rule's job.
     fn rule_to(channels: &[Uuid]) -> RoutingRule {
@@ -3313,6 +3312,7 @@ mod delivery_tests {
         }
     }
 
+    /// An enabled rule sending any severity of a node carrying one of `tags` to one channel.
     fn tagged_rule(channel: Uuid, tags: &[&str]) -> RoutingRule {
         RoutingRule {
             tags: tags.iter().map(|t| (*t).to_owned()).collect(),
