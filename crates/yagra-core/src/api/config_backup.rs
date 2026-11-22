@@ -752,7 +752,7 @@ pub(crate) async fn versions_of(
     Ok(versions
         .into_iter()
         .map(|v| ConfigVersion {
-            stored_at: v.date.as_deref().and_then(oxidized::client::parse_time),
+            stored_at: v.committed(),
             oid: v.oid,
         })
         .collect())

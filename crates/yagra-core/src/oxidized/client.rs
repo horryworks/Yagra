@@ -34,9 +34,24 @@ pub(crate) struct OxNode {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct OxVersion {
     pub oid: String,
-    /// The commit time as oxidized prints a Ruby `Time`; see [`parse_time`].
+    /// The commit time as oxidized 0.37 and earlier print a Ruby `Time`; see [`parse_time`].
     #[serde(default)]
-    pub date: Option<String>,
+    date: Option<String>,
+    /// The same commit time from oxidized 0.38 on, which dropped `date` for `time`. Read
+    /// through [`OxVersion::committed`], never directly.
+    #[serde(default)]
+    time: Option<String>,
+}
+
+impl OxVersion {
+    /// When this version was committed, whichever field the running oxidized spells it in.
+    #[must_use]
+    pub(crate) fn committed(&self) -> Option<DateTime<Utc>> {
+        self.date
+            .as_deref()
+            .or(self.time.as_deref())
+            .and_then(parse_time)
+    }
 }
 
 /// A Ruby `Time` as oxidized's JSON carries it: `2026-10-22 10:00:00 +0000` or
@@ -185,6 +200,28 @@ mod tests {
         );
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].oid, "abc");
+    }
+
+    /// oxidized 0.38 dropped a version's `date` for `time` (its CHANGELOG, "output/git"); 0.37 sends
+    /// `date`. Either one dates the version, so moving the pinned image does not blank every stored
+    /// version's time on the Config tab.
+    #[test]
+    fn a_version_is_dated_by_date_or_by_time() {
+        let at = "2026-11-19T10:00:00+00:00";
+        let old = versions_of(r#"[{"oid":"a","date":"2026-11-19 10:00:00 UTC"}]"#);
+        let new = versions_of(r#"[{"oid":"b","time":"2026-11-19 10:00:00 +0000","message":"m"}]"#);
+        let both = versions_of(
+            r#"[{"oid":"c","date":"2026-11-19 10:00:00 UTC","time":"2026-11-19 10:00:00 UTC"}]"#,
+        );
+        for v in [&old[0], &new[0], &both[0]] {
+            assert_eq!(
+                v.committed().map(|t| t.to_rfc3339()).as_deref(),
+                Some(at),
+                "{}",
+                v.oid
+            );
+        }
+        assert!(versions_of(r#"[{"oid":"d"}]"#)[0].committed().is_none());
     }
 
     #[test]

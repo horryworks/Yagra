@@ -880,7 +880,7 @@ cd .. && rm -rf yagra          # compose ファイルと、POSTGRES_PASSWORD が
 ```
 
 `--rmi all` は全サービスのイメージを消します。バックエンドのストア（`postgres` / `redis` / `nats` /
-`victoria-metrics` / `victoria-logs` / `clickhouse` / `busybox` / `alpine` / `docker:28-cli`）も
+`victoria-metrics` / `victoria-logs` / `clickhouse` / `busybox` / `alpine` / `docker:29.10.0-cli`）も
 対象です。他のプロジェクトがまだ使っているものは Docker が自動的に飛ばします。
 
 ### リモートポーラは別のスタックです

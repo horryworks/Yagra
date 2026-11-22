@@ -1810,7 +1810,7 @@ mod tests {
                     continue;
                 }
                 if !trimmed.contains("yagra-") {
-                    continue; // docker:28-cli and the like are not ours to redirect.
+                    continue; // docker:29.10.0-cli and the like are not ours to redirect.
                 }
                 assert!(
                     trimmed.contains(WANT),

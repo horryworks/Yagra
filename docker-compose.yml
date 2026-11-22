@@ -341,7 +341,7 @@ services:
     # never lose or corrupt data" a top-tier policy. A floating tag lets an unrelated `docker
     # compose pull` swap the storage engine underneath it, which is the same class of trap as the
     # `rust:<x>-slim` GLIBC pin documented in CLAUDE.md. Bump this deliberately, with a backup.
-    image: victoriametrics/victoria-metrics:v1.155.0
+    image: victoriametrics/victoria-metrics:v1.156.0
     command: ["--retentionPeriod=12"]
     volumes:
       - vmdata:/victoria-metrics-data
@@ -355,7 +355,7 @@ services:
   # back from /flags but cannot set it (ADR-040). Internal only (port 9428, no host mapping).
   victorialogs:
     # Pinned for the same reason as victoriametrics above.
-    image: victoriametrics/victoria-logs:v1.53.0
+    image: victoriametrics/victoria-logs:v1.54.0
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
     volumes:
       - vldata:/victoria-logs-data
@@ -396,7 +396,7 @@ services:
   # YAGRA_IPASN_* env lines plus the `ipasndata:/data/ipasn:ro` mount on core. $$ escapes keep the
   # shell vars for the container, not compose.
   # ipasn-updater:
-  #   image: alpine:3.24.3
+  #   image: alpine:3.24.4
   #   restart: unless-stopped
   #   environment:
   #     YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}

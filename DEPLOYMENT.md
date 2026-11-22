@@ -1074,7 +1074,7 @@ cd .. && rm -rf yagra          # the compose file and .env, which holds POSTGRES
 
 `--rmi all` removes the images used by every service, including the backing stores (`postgres`,
 `redis`, `nats`, `victoria-metrics`, `victoria-logs`, `clickhouse`, `busybox`, `alpine`,
-`docker:28-cli`). Docker skips any that another project is still using.
+`docker:29.10.0-cli`). Docker skips any that another project is still using.
 
 ### Remote pollers are separate stacks
 

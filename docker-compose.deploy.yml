@@ -453,7 +453,7 @@ services:
   # 8090, behind the source token — ADR-217), so it starts
   # after core is healthy; it restarts until core answers.
   oxidized:
-    image: oxidized/oxidized:0.37.0
+    image: oxidized/oxidized:0.38.0
     depends_on:
       oxidized-config: { condition: service_completed_successfully }
       core: { condition: service_healthy }
@@ -761,7 +761,7 @@ services:
     # deliberately, with a backup. Settings > Upgrade takes that backup by itself: a release whose
     # line here differs from the running image is the one upgrade that snapshots the metrics
     # (ADR-050 decision 22). Keep it a plain unquoted `image:` line — that is what it reads.
-    image: victoriametrics/victoria-metrics:v1.155.0
+    image: victoriametrics/victoria-metrics:v1.156.0
     # Retention (months). This flag is the ONLY way to change it: VictoriaMetrics has no runtime
     # retention API, so Yagra reports this value (read back from /flags) but cannot set it —
     # ADR-040. Edit here, then `up -d victoriametrics` to recreate just this container.
@@ -774,7 +774,7 @@ services:
   # 30-day retention. The 90-day must-preserve subset is the alert-linked rows in PostgreSQL.
   victorialogs:
     # Pinned for the same reason as victoriametrics above.
-    image: victoriametrics/victoria-logs:v1.53.0
+    image: victoriametrics/victoria-logs:v1.54.0
     # As with victoriametrics: this flag is the only way to change retention (no runtime API), so
     # Yagra reports it from /flags but cannot set it (ADR-040).
     command: ["-retentionPeriod=30d", "-storageDataPath=/victoria-logs-data"]
@@ -827,7 +827,7 @@ services:
   # fetches once on start. $$ escapes keep the shell vars for the container, not compose.
   ipasn-updater:
     # A patch release, a week old or more (ADR-211 decision 5). 3.20 is past its support window.
-    image: alpine:3.24.3
+    image: alpine:3.24.4
     restart: unless-stopped
     environment:
       YAGRA_IPASN_REFRESH_SECS: ${YAGRA_IPASN_REFRESH_SECS:-604800}
@@ -884,7 +884,7 @@ services:
   #     local deletion is undone by the very mechanism it was meant to remove. A deployment that
   #     wants it gone for good belongs on the command-line upgrade path.
   yagra-updater:
-    image: docker:28-cli
+    image: docker:29.10.0-cli
     restart: unless-stopped
     # Root, because it must use the socket and chown the hand-off directory. The group only matters
     # if you move the uid off 0 (measured: the socket is root:docker and root reaches it whatever
@@ -1470,7 +1470,7 @@ services:
 
         # ── 1. Reach the new host, and find out what is on it ──────────────────────────────────
         # `ssh` comes from the RUNNING core image, which is the one image this host is guaranteed
-        # to have (ADR-121 decision 13): this container is stock docker:28-cli and `apk add` fails
+        # to have (ADR-121 decision 13): this container is stock docker:29.10.0-cli and `apk add` fails
         # on an air-gapped site. It runs as 10001 so it can read the key files core wrote, and with
         # HOME=/tmp so it never looks for a ~/.ssh it does not have.
         if [ "$$MODE" != archive ]; then
@@ -1551,7 +1551,7 @@ services:
         # Same order and same reasoning as APPLY's check (decision 15): a host that is already
         # short of space must not have several GB written onto it and then be told it failed. The
         # estimate is the volumes this run will copy, doubled — the copy and the tar of the copy.
-        vol_kb() { docker run --rm -v "$${PROJ}_$$1:/v:ro" -v "$$WORKDIR:$$WORKDIR" docker:28-cli du -sk /v 2>/dev/null | awk '{print $$1}'; }
+        vol_kb() { docker run --rm -v "$${PROJ}_$$1:/v:ro" -v "$$WORKDIR:$$WORKDIR" docker:29.10.0-cli du -sk /v 2>/dev/null | awk '{print $$1}'; }
         NEED_KB=$$(num "$$(vol_kb pgdata)")
         if [ "$$METRICS" = 1 ]; then NEED_KB=$$((NEED_KB + $$(num "$$(vol_kb vmdata)"))); fi
         if [ "$$TIER2" = 1 ]; then NEED_KB=$$((NEED_KB + $$(num "$$(vol_kb vldata)") + $$(num "$$(vol_kb chdata)"))); fi
@@ -1638,7 +1638,7 @@ services:
           dc stop victorialogs clickhouse > /tmp/err 2>&1 \
             || rfail tier2 "could not stop the event and flow stores — $$(sanitize < /tmp/err)"
           for v in vldata chdata; do
-            docker run --rm -v "$${PROJ}_$$v:/v:ro" -v "$$WORKDIR:$$WORKDIR" docker:28-cli tar -C /v -czf - . > "$$WORK/tier2/$$v.tar.gz" 2>/tmp/err \
+            docker run --rm -v "$${PROJ}_$$v:/v:ro" -v "$$WORKDIR:$$WORKDIR" docker:29.10.0-cli tar -C /v -czf - . > "$$WORK/tier2/$$v.tar.gz" 2>/tmp/err \
               || { dc start victorialogs clickhouse > /dev/null 2>&1; rfail tier2 "copying $$v failed — $$(sanitize < /tmp/err)"; }
           done
           dc start victorialogs clickhouse > /tmp/err 2>&1 \
@@ -1864,7 +1864,7 @@ services:
                 -v "$${PROJ}_upgradedata:/data/upgrade" \
                 -v "$$WORKDIR:$$WORKDIR" \
                 -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" \
-                docker:28-cli sh -c "$$BUS" yagra-bus "$$BUSMODE" "$$ID" "$$BY" "$$BUSCPW" "$$BUSPPW" >/dev/null \
+                docker:29.10.0-cli sh -c "$$BUS" yagra-bus "$$BUSMODE" "$$ID" "$$BY" "$$BUSCPW" "$$BUSPPW" >/dev/null \
                 || reject "$$ID" "could not start the bus-change container"
               return
               ;;
@@ -1911,7 +1911,7 @@ services:
                 -v "$${PROJ}_upgradedata:/data/upgrade" \
                 -v "$$WORKDIR:$$WORKDIR" \
                 -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" -e "YAGRA_UPGRADE_MIN_FREE_BYTES=$$MINFREE_CFG" \
-                docker:28-cli sh -c "$$RELOCATE" yagra-relocate "$$ID" "$$BY" "$$RMODE" "$$RM" "$$RT" "$$RI" "$$RD" "$$RHOST" "$$RPORT" "$$RUSER" "$$RDIR" "$$RAUTH" >/dev/null \
+                docker:29.10.0-cli sh -c "$$RELOCATE" yagra-relocate "$$ID" "$$BY" "$$RMODE" "$$RM" "$$RT" "$$RI" "$$RD" "$$RHOST" "$$RPORT" "$$RUSER" "$$RDIR" "$$RAUTH" >/dev/null \
                 || reject_relocation "$$ID" "could not start the relocation container"
               return
               ;;
@@ -1947,7 +1947,7 @@ services:
             -v "$$WORKDIR:$$WORKDIR" \
             -e "REPO=$$REPO" -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" \
             -e "YAGRA_UPGRADE_MIN_FREE_BYTES=$$MINFREE_CFG" -e "YAGRA_UPGRADE_KEEP_RELEASES=$$KEEP_CFG" \
-            docker:28-cli sh -c "$$APPLY" yagra-upgrade "$$TAG" "$$ID" "$$BY" "$$BUNDLE" >/dev/null \
+            docker:29.10.0-cli sh -c "$$APPLY" yagra-upgrade "$$TAG" "$$ID" "$$BY" "$$BUNDLE" >/dev/null \
             || reject "$$ID" "could not start the upgrade container"
         }
 

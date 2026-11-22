@@ -195,7 +195,7 @@ services:
   # (`yagra-authz` and `docker/nats/nats-server.conf`), so one site can never order an
   # upgrade at another. What is NOT bounded: whoever controls core can move every site.
   yagra-poller-updater:
-    image: docker:28-cli
+    image: docker:29.10.0-cli
     profiles: ["self-upgrade"]
     restart: unless-stopped
     # uid 0 so it can drive the socket; `YAGRA_DOCKER_GID` matches the host's docker group.

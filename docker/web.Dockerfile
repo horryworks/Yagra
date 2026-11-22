@@ -73,25 +73,6 @@ FROM ${WEB_SRC} AS bundle
 # Pinned to a patch release, not `1.30-alpine`: a dependency is taken only after it has been out a
 # week (ADR-211 decision 5), which a moving tag cannot promise.
 FROM nginxinc/nginx-unprivileged:1.30.6-alpine AS runtime
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-# The security headers (ADR-211), included from three places in nginx.conf.
-COPY nginx-security-headers.conf /etc/nginx/yagra-security-headers.conf
-# The proxy directives the three core-facing locations share (ADR-133). An absolute path, matching
-# the listener fragment the entrypoint renders — nginx resolves a relative `include` against its
-# prefix, and two spellings of "where the fragments live" is the kind of thing that only shows up
-# when one of them moves.
-COPY nginx-proxy-core.conf /etc/nginx/yagra-proxy-core.conf
-
-# --chmod is load-bearing, not tidiness. The stock nginx entrypoint runs /docker-entrypoint.d/*.sh
-# only if the file is executable and otherwise **logs "Ignoring … not executable" and continues** —
-# so on a checkout with no exec bit (any Windows clone) TLS would simply not happen, with no error
-# anywhere and a plaintext listener on the port the compose file publishes as HTTPS. Setting the
-# mode here means the source tree's permissions cannot decide it. This is also what the
-# `# syntax=docker/dockerfile:1` line at the top is for — COPY --chmod needs it.
-COPY --chmod=0755 docker-entrypoint.d/40-yagra-tls.sh /docker-entrypoint.d/40-yagra-tls.sh
-
-COPY --from=bundle /etc/yagra-source-ref /etc/yagra-source-ref
-COPY --from=bundle /app/dist /usr/share/nginx/html
 
 # Prepare the two paths the entrypoint owns: the mount point for the certificate volume, and the
 # listener fragment nginx.conf includes. The fragment is written in its plaintext shape so the image
@@ -122,14 +103,54 @@ COPY --from=bundle /app/dist /usr/share/nginx/html
 # libexpat likewise (four High CVEs fixed in 2.10.0-r0, built 2026-11-02). Only fontconfig links
 # it and nothing here hands it outside XML, so it does not reach Yagra: it waited the seven days
 # ADR-211 decision 5 gives a fix that does not.
+#
+# nginx itself (CVE-2026-123007/123633/123634/121810/113425, Critical, and CVE-2026-118899): the
+# base image ships Alpine's nginx 1.30.6-r1, and nginx-unprivileged has published no 1.30.7 tag.
+# Two are in HTTP/2, which the TLS listener turns on, so they reach Yagra: Alpine's 1.30.7-r0 (built
+# 2026-11-18) is installed over it. The base image's nginx is nginx.org's build, whose four dynamic
+# modules (geoip, image-filter, njs, xslt) are pinned to its exact version and refuse Alpine's; this
+# configuration loads none of them, so they are removed with curl. The unprivileged image's
+# nginx.conf (pid and temp paths under /tmp) is a file apk keeps. Drop all of this, and put the
+# modules back if one is ever loaded, once the base image is 1.30.7 or later.
+#
+# libxslt (CVE-2026-125350, on the KEV list), musl, OpenSSL, zlib and libxml2 likewise: High or
+# Critical with a fixed build in Alpine 3.24 (2026-10-21 .. 2026-11-20), found by the weekly image
+# scan (ADR-215). zlib moves to 1.4-r0 for CVE-2026-4738.
 USER root
 RUN apk del --no-cache curl \
- && apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' 'zlib>=1.3.2-r1' 'libexpat>=2.10.0-r0' \
+      nginx-module-geoip nginx-module-image-filter nginx-module-njs nginx-module-xslt \
+ && apk add --no-cache --upgrade 'brotli-libs>=1.2.1-r0' 'zlib>=1.4-r0' 'libexpat>=2.10.0-r0' \
+      'nginx>=1.30.7-r0' 'libxslt>=1.1.43-r4' 'musl>=1.2.6-r3' 'musl-utils>=1.2.6-r3' \
+      'libcrypto3>=3.5.9-r1' 'libssl3>=3.5.9-r1' 'libxml2>=2.13.9-r3' \
  && install -d -o 101 -g 0 -m 0755 /etc/nginx/certs \
  && printf 'listen 8080;\n' > /etc/nginx/yagra-listen.conf \
  && chown 101:0 /etc/nginx/yagra-listen.conf \
  && chmod 0664 /etc/nginx/yagra-listen.conf
 USER 101
+
+# Our files go in AFTER the package changes above, and that order is load-bearing: replacing
+# nginx.org's nginx package with Alpine's deletes every file the old package owned, and a file we
+# had copied over one of them (index.html, conf.d/default.conf) counted as its. Copied first, the
+# WebUI shipped without index.html and answered 403.
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+# The security headers (ADR-211), included from three places in nginx.conf.
+COPY nginx-security-headers.conf /etc/nginx/yagra-security-headers.conf
+# The proxy directives the three core-facing locations share (ADR-133). An absolute path, matching
+# the listener fragment the entrypoint renders — nginx resolves a relative `include` against its
+# prefix, and two spellings of "where the fragments live" is the kind of thing that only shows up
+# when one of them moves.
+COPY nginx-proxy-core.conf /etc/nginx/yagra-proxy-core.conf
+
+# --chmod is load-bearing, not tidiness. The stock nginx entrypoint runs /docker-entrypoint.d/*.sh
+# only if the file is executable and otherwise **logs "Ignoring … not executable" and continues** —
+# so on a checkout with no exec bit (any Windows clone) TLS would simply not happen, with no error
+# anywhere and a plaintext listener on the port the compose file publishes as HTTPS. Setting the
+# mode here means the source tree's permissions cannot decide it. This is also what the
+# `# syntax=docker/dockerfile:1` line at the top is for — COPY --chmod needs it.
+COPY --chmod=0755 docker-entrypoint.d/40-yagra-tls.sh /docker-entrypoint.d/40-yagra-tls.sh
+
+COPY --from=bundle /etc/yagra-source-ref /etc/yagra-source-ref
+COPY --from=bundle /app/dist /usr/share/nginx/html
 
 # TLS on by default (ADR-044). Set YAGRA_WEB_TLS=off when something in front already terminates it.
 ENV YAGRA_WEB_TLS=on \

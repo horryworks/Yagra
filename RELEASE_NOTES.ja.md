@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### 改善
+
+- **同梱のイメージを上げた。** oxidized 0.37.0 → 0.38.0、VictoriaMetrics v1.155.0 → v1.156.0、VictoriaLogs v1.53.0 → v1.54.0、alpine 3.24.3 → 3.24.4。アップグレードを行う補助コンテナは `docker:28-cli` → `docker:29.10.0-cli`（28 の系列はもう作り直されない）。補助コンテナの Compose は v2 から v5 に上がる。Docker Engine の下限を 24 以降と書いた。新しい補助コンテナは Engine 24 と 25 で動くことを測った。
+- **oxidized 0.38.0 は、2048 ビット未満の SSH の Diffie-Hellman 群を受け付けない。** 1024 ビットの群しか出さない機器は設定を取れなくなり、Config タブにログインの失敗が出る。
+
+### バグ修正
+
+- **oxidized 0.38 でも、保存した設定の各版に時刻が付く。** 0.38 は Yagra が時刻を読んでいた欄の名前を変えていた。
+
+### セキュリティ
+
+- **WebUI のイメージに nginx 1.30.7 を入れた。** Critical の CVE 5 件（うち 2 件は WebUI の TLS が使う HTTP/2）。あわせて libxslt（CVE-2026-125350、実際に悪用されている）・musl・OpenSSL・zlib・libxml2 の直った版を Alpine から入れた。直った nginx-unprivileged の元イメージを待たずに入れている。
+- **oxidized 0.38.0** は Ruby 3.3.13（CVE-2026-97229、実際に悪用されている）と直った Brotli を含む。**VictoriaLogs v1.54.0** は Go 1.27.4 で、**VictoriaMetrics v1.156.0** は直った圧縮ライブラリで作られている。
+
 ## v0.3.85 — 振り分けルールに順番を付け、開いている最初の 1 本だけが送る。ルールで送らずに保留できる
 
 ### 破壊的変更

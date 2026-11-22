@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Bundled images moved:** oxidized 0.37.0 → 0.38.0, VictoriaMetrics v1.155.0 → v1.156.0, VictoriaLogs v1.53.0 → v1.54.0, alpine 3.24.3 → 3.24.4, and the upgrade helper `docker:28-cli` → `docker:29.10.0-cli` (the 28 line is no longer rebuilt). The upgrade helper's Compose moves from v2 to v5. Docker Engine 24 or later is now stated as the minimum; the new helper was measured working against Engine 24 and 25.
+- **oxidized 0.38.0 refuses SSH Diffie-Hellman groups smaller than 2048 bits.** A device that offers only 1024-bit groups can no longer be backed up and shows a failed login on its Config tab.
+
+### Bug Fixes
+
+- **A backed-up configuration's versions keep their time under oxidized 0.38**, which renamed the field Yagra read it from.
+
+### Security
+
+- **The WebUI image installs nginx 1.30.7** (five Critical CVEs, two of them in HTTP/2, which the WebUI's TLS listener uses) and fixed libxslt (CVE-2026-125350, actively exploited), musl, OpenSSL, zlib and libxml2 from Alpine, ahead of a fixed nginx-unprivileged base image.
+- **oxidized 0.38.0** carries Ruby 3.3.13 (CVE-2026-97229, actively exploited) and a fixed Brotli. **VictoriaLogs v1.54.0** is built with Go 1.27.4, and **VictoriaMetrics v1.156.0** with the fixed compression library.
+
 ## v0.3.85 — Put routing rules in order so the first open one decides, and let a rule hold an alert instead of sending it
 
 ### Breaking changes

@@ -185,7 +185,7 @@ ARG TARGETARCH=amd64
 # fetch+install is wrapped so only ca-certificates is a hard requirement; the rest logs and continues.
 #
 # ⚠️ `openssh-client` is here for a reason that has nothing to do with core (ADR-121 decision 13):
-# the relocation container runs `ssh` from THIS image. The updater sidecar is stock `docker:28-cli`
+# the relocation container runs `ssh` from THIS image. The updater sidecar is stock `docker:29.10.0-cli`
 # and `apk add` fails on an air-gapped host, so the one image a deployment is guaranteed to already
 # have is the one that must carry the client. It is deliberately NOT purged with wget below — and
 # core itself never executes it. The poller stage does not install it and must not.

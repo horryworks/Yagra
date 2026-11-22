@@ -299,7 +299,7 @@ curl -sN http://<yagra-host>:8080/mcp \
 
 ## Deployment
 
-**Requirements.** Any x86-64 or ARM64 host with **Docker** and the **Docker Compose** plugin.
+**Requirements.** Any x86-64 or ARM64 host with **Docker** (Engine 24 or later) and the **Docker Compose** plugin.
 **2 vCPU / 4 GB RAM / 20 GB disk** is enough to evaluate Yagra; **4 vCPU / 8 GB RAM / 100 GB disk**
 is comfortable for a working fleet. The composition starts every service, the optional stores
 included, and that whole stack measures 1.0–1.4 GB of RAM. Disk is driven by metric series count ×
