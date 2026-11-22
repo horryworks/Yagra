@@ -2121,6 +2121,21 @@ impl AlertManager {
         config.maintenance.contains(&node) || config.is_paused(node, at_unix_ms)
     }
 
+    /// The nodes inside an active **operator** maintenance window, per the config snapshot.
+    ///
+    /// Unlike [`Self::in_maintenance`] this leaves out the fleet-wide pause an upgrade opens
+    /// (ADR-160): that window says the deployment is out of service, not that anyone is working on
+    /// these devices. The "not watched" count asks this (ADR-227 decision 8) — a device an operator
+    /// put in a window is known to be out, so its silence is not a blind spot.
+    #[must_use]
+    pub fn operator_window_nodes(&self) -> BTreeSet<NodeId> {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .maintenance
+            .clone()
+    }
+
     /// The node's **folder group** (`nodes.group_id`) per the config snapshot, for RBAC visibility
     /// (`api/scope.rs`) — see the [`NodeMeta`] docs.
     ///

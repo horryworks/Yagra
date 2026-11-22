@@ -35694,7 +35694,7 @@
           },
           "no_recent_data": {
             "type": "integer",
-            "description": "Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`.",
+            "description": "Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`. A\nnode inside a maintenance window is not counted: someone said it is being worked on.",
             "minimum": 0
           },
           "pollers_known": {

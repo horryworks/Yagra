@@ -344,7 +344,8 @@ impl YagraMcp {
                        Pass kind=\"coverage\" instead for the blind-spot view — which nodes have \
                        actually reported recently, and a watchlist of the ones that have not. \
                        Pass kind=\"watch\" for counts of nodes not being watched right now: \
-                       no_live_poller (their poller pool has no live poller), no_recent_data, \
+                       no_live_poller (their poller pool has no live poller), no_recent_data \
+                       (silent nodes outside a maintenance window), \
                        pool_polled, and pollers_known (false on an HA standby)."
     )]
     async fn get_fleet_summary(

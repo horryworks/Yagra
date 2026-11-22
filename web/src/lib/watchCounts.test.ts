@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { FleetWatch } from '../types/api';
-import { isSilenced, nothingPolled, watchChips } from './watchCounts';
+import { isSilenced, notWatchedLine, nothingPolled, watchChips } from './watchCounts';
 
 const watch = (over: Partial<FleetWatch> = {}): FleetWatch => ({
   no_live_poller: 0,
@@ -20,27 +20,33 @@ describe('isSilenced', () => {
 });
 
 describe('watchChips', () => {
-  it('draws nothing when everything is zero', () => {
-    expect(watchChips({ silenced: 0, maintenance: 0, watch: watch() })).toEqual([]);
-    expect(watchChips({ silenced: 0, maintenance: 0, watch: null })).toEqual([]);
+  it('draws nothing when nothing is grouped into an outage', () => {
+    expect(watchChips({ silenced: 0 })).toEqual([]);
   });
 
-  it('keeps the fixed order and leaves out the zeros', () => {
-    const got = watchChips({ silenced: 5, maintenance: 0, watch: watch({ no_recent_data: 3 }) });
-    expect(got.map((c) => c.key)).toEqual(['silenced', 'notWatched']);
-    expect(got[1]).toEqual({ key: 'notWatched', count: 3, to: '/nodes?state=unknown' });
+  it('draws the one chip that narrows this list', () => {
+    expect(watchChips({ silenced: 5 })).toEqual([{ key: 'silenced', count: 5 }]);
+  });
+});
+
+describe('notWatchedLine', () => {
+  it('says nothing when every node is sending data, or before the count arrives', () => {
+    expect(notWatchedLine(watch())).toBeNull();
+    expect(notWatchedLine(null)).toBeNull();
+  });
+
+  it('points at the silent nodes when no pool is the cause', () => {
+    expect(notWatchedLine(watch({ no_recent_data: 3 }))).toEqual({
+      count: 3,
+      to: '/nodes?state=unknown',
+    });
   });
 
   it('adds both reasons into one number and points at the pollers when a pool is the cause', () => {
-    const got = watchChips({
-      silenced: 0,
-      maintenance: 2,
-      watch: watch({ no_live_poller: 40, no_recent_data: 1 }),
+    expect(notWatchedLine(watch({ no_live_poller: 40, no_recent_data: 1 }))).toEqual({
+      count: 41,
+      to: '/settings/pollers',
     });
-    expect(got).toEqual([
-      { key: 'maintenance', count: 2, to: '/alerts/maintenance' },
-      { key: 'notWatched', count: 41, to: '/settings/pollers' },
-    ]);
   });
 });
 

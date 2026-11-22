@@ -18,7 +18,7 @@
 //! `PoolSummary.warning` is derived from the same function — so the pill an operator sees and the
 //! page they receive cannot disagree.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use std::sync::Arc;
@@ -230,7 +230,8 @@ pub fn uncovered_pools(
 pub struct NotWatched {
     /// Pool-polled nodes whose pool has no live poller.
     pub no_live_poller: usize,
-    /// Nodes with no recent liveness sample, not already counted in `no_live_poller`.
+    /// Nodes with no recent liveness sample, not already counted in `no_live_poller` and not
+    /// inside an operator's maintenance window.
     pub no_recent_data: usize,
     /// Of the nodes counted, how many depend on a pool poller at all.
     pub pool_polled: usize,
@@ -243,6 +244,12 @@ pub struct NotWatched {
 /// there are. `uncovered` is `None` when this core cannot see poller liveness (an HA standby runs
 /// no coordinator); the pool reason is then never given, rather than given for every node.
 ///
+/// A node inside an operator's maintenance window (`in_window`) is not counted for missing data
+/// (ADR-227 decision 8): someone said it is being worked on, so its silence is expected rather than
+/// a blind spot. It still counts for the pool reason and in `pool_polled` — a pool with no poller
+/// is Yagra's fault, which no device window explains, and the "nothing is polled" sentence compares
+/// those two numbers, so dropping a node from one alone would break it.
+///
 /// ⚠️ This is a display count and nothing acts on it. It must never close or raise an alert —
 /// absence is not evidence (ADR-156 decision 3).
 #[must_use]
@@ -252,6 +259,7 @@ pub fn not_watched(
     resolver: &PoolResolver,
     uncovered: Option<&HashSet<String>>,
     fresh: &HashSet<uuid::Uuid>,
+    in_window: &BTreeSet<yagra_common::NodeId>,
 ) -> NotWatched {
     let mut out = NotWatched::default();
     for n in nodes {
@@ -263,7 +271,7 @@ pub fn not_watched(
                 continue;
             }
         }
-        if !fresh.contains(&n.id.as_uuid()) {
+        if !fresh.contains(&n.id.as_uuid()) && !in_window.contains(&n.id) {
             out.no_recent_data += 1;
         }
     }
@@ -1104,6 +1112,7 @@ mod tests {
             &PoolResolver::empty(),
             Some(&uncovered),
             &fresh,
+            &BTreeSet::new(),
         );
         // `dark` has no fresh data either; counting it twice would add up to four of three nodes.
         assert_eq!(
@@ -1127,6 +1136,7 @@ mod tests {
             &PoolResolver::empty(),
             Some(&uncovered),
             &HashSet::new(),
+            &BTreeSet::new(),
         );
         assert_eq!(
             got,
@@ -1147,9 +1157,37 @@ mod tests {
             &PoolResolver::empty(),
             None,
             &HashSet::new(),
+            &BTreeSet::new(),
         );
         assert_eq!(got.no_live_poller, 0);
         assert_eq!(got.no_recent_data, 1);
+    }
+
+    /// ADR-227 decision 8: a node someone put in a maintenance window is not a blind spot when it
+    /// goes quiet — but its pool still is, and `pool_polled` still counts it, or the "nothing is
+    /// polled" sentence (`no_live_poller == pool_polled`) would stop holding.
+    #[test]
+    fn a_node_in_a_maintenance_window_is_not_counted_for_missing_data() {
+        let (quiet, worked_on, worked_on_dark) =
+            (pooled("osaka"), pooled("osaka"), pooled("tokyo"));
+        let in_window: BTreeSet<yagra_common::NodeId> = [worked_on.id, worked_on_dark.id].into();
+        let uncovered: HashSet<String> = ["tokyo".to_owned()].into();
+        let got = not_watched(
+            &[quiet, worked_on, worked_on_dark],
+            &HashSet::new(),
+            &PoolResolver::empty(),
+            Some(&uncovered),
+            &HashSet::new(),
+            &in_window,
+        );
+        assert_eq!(
+            got,
+            NotWatched {
+                no_live_poller: 1,
+                no_recent_data: 1,
+                pool_polled: 3,
+            }
+        );
     }
 
     use yagra_base::pgtest;

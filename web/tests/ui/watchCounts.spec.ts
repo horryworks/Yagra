@@ -3,9 +3,10 @@
 //
 // Why Tier1: which chips are drawn and when the fleet counts as unpolled is decided in
 // `lib/watchCounts.ts`, which Vitest runs. What only a browser proves is the wiring: the shell
-// reading `/fleet/watch` on a screen that is not Active alerts, the chip on Active alerts leading
-// where the cause is, a fully watched fleet drawing neither, and "Clear all filters" counting the
-// silenced chip as a filter it clears.
+// reading `/fleet/watch` on a screen that is not Active alerts, the sentence on Active alerts leading
+// where the cause is (a sentence, not a chip, since ADR-227 Inc.2 — it counts nodes, not the rows it
+// sits above), a fully watched fleet drawing neither, and "Clear all filters" counting the silenced
+// chip as a filter it clears.
 
 import { expect, test } from '../support/app';
 import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
@@ -38,18 +39,20 @@ test.describe('a fleet whose only pool has no live poller', () => {
 
   test('Active alerts counts both reasons together and leads to the pollers', async ({ page }) => {
     await page.goto('/alerts');
-    const chip = page.locator('.watch-chip', { hasText: 'Not watched 5' });
-    await expect(chip).toBeVisible();
-    await expect(chip).toHaveAttribute('href', '/settings/pollers');
+    const line = page.locator('.not-watched');
+    await expect(line).toContainText('5 nodes are sending no data.');
+    await expect(line.getByRole('link')).toHaveAttribute('href', '/settings/pollers');
+    // It is not a filter on the list, so it is not drawn as one.
+    await expect(page.locator('.watch-chip', { hasText: 'no data' })).toHaveCount(0);
   });
 });
 
 test.describe('a fleet that is fully watched', () => {
-  test('draws neither the line nor the chip', async ({ page }) => {
+  test('draws neither sentence', async ({ page }) => {
     await page.goto('/alerts');
     await expect(page.locator('.dt-row, .dt-empty').first()).toBeVisible();
     await expect(page.locator('.nothing-polled')).toHaveCount(0);
-    await expect(page.locator('.watch-chip', { hasText: 'Not watched' })).toHaveCount(0);
+    await expect(page.locator('.not-watched')).toHaveCount(0);
   });
 });
 

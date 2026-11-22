@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The numbers above the active-alert list that say what it is not seeing (ADR-227): silenced rows,
-// nodes in maintenance, nodes not watched. Only the non-zero ones are drawn, so an all-clear
-// fleet looks exactly as it did before. The judgement is `lib/watchCounts.ts`.
+// The chips above the active-alert list that narrow it (ADR-227): today one, the rows grouped into
+// an outage. Only a non-zero chip is drawn, so an all-clear fleet looks exactly as it did before.
+// The judgement is `lib/watchCounts.ts`. What is not a filter on this list — nodes sending no data —
+// is the sentence `NotWatchedLine` draws instead (ADR-227 Inc.2).
 
 import { Link } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
-import type { WatchChip } from '../lib/watchCounts';
+import { Trans, useTranslation } from 'react-i18next';
+import type { NotWatchedLine as Line, WatchChip } from '../lib/watchCounts';
+import { Callout } from '../components/ui/Section';
 import './WatchChips.css';
 
 export function WatchChips({
@@ -25,24 +27,31 @@ export function WatchChips({
   if (shown.length === 0) return null;
   return (
     <div className="watch-chips">
-      {shown.map((c) => {
-        const label = t(`watch.${c.key}`, { count: c.count });
-        return c.to ? (
-          <Link key={c.key} to={c.to} className="watch-chip">
-            {label}
-          </Link>
-        ) : (
-          <button
-            key={c.key}
-            type="button"
-            className="watch-chip"
-            aria-pressed={onlySilenced}
-            onClick={onToggleSilenced}
-          >
-            {label}
-          </button>
-        );
-      })}
+      {shown.map((c) => (
+        <button
+          key={c.key}
+          type="button"
+          className="watch-chip"
+          aria-pressed={onlySilenced}
+          onClick={onToggleSilenced}
+        >
+          {t('watch.silenced', { count: c.count })}
+        </button>
+      ))}
     </div>
+  );
+}
+
+/** "N nodes are sending no data" with a link to where to start. */
+export function NotWatchedLine({ line }: { line: Line | null }) {
+  if (!line) return null;
+  return (
+    <Callout tone="warning" status className="not-watched">
+      <Trans
+        i18nKey="alerts:watch.notWatched"
+        count={line.count}
+        components={{ lnk: <Link to={line.to} /> }}
+      />
+    </Callout>
   );
 }

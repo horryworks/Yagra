@@ -47,8 +47,8 @@ import { useHeldNotifications } from '../widgets/useHeldNotifications';
 import { heldFireFor } from './deliveryHours';
 import { useFleetSummary } from '../dashboard/useFleetSummary';
 import { useFleetWatch } from '../hooks/useFleetWatch';
-import { isSilenced, watchChips } from '../lib/watchCounts';
-import { WatchChips } from '../widgets/WatchChips';
+import { isSilenced, notWatchedLine, watchChips } from '../lib/watchCounts';
+import { NotWatchedLine, WatchChips } from '../widgets/WatchChips';
 import { addNodeHref } from '../lib/treeSelection';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import {
@@ -308,8 +308,9 @@ export function ActiveAlertsPage() {
       />
       {/* The chips narrow the table under them, so they sit with it rather than a page step away. */}
       <Stack fill gap={8}>
+        <NotWatchedLine line={notWatchedLine(watch)} />
         <WatchChips
-          chips={watchChips({ silenced, maintenance: summary?.states.maintenance ?? 0, watch })}
+          chips={watchChips({ silenced })}
           onlySilenced={onlySilenced}
           onToggleSilenced={toggleSilenced}
         />

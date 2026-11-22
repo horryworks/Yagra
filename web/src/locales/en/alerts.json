@@ -95,8 +95,9 @@
     "emptyNodeWindow": "No events from this node in the last 24 hours."
   },
   "watch": {
-    "silenced": "Silenced {{count}}",
-    "maintenance": "In maintenance {{count}}",
-    "notWatched": "Not watched {{count}}"
+    "silenced_one": "{{count}} alert grouped into an outage",
+    "silenced_other": "{{count}} alerts grouped into outages",
+    "notWatched_one": "{{count}} node is sending no data. <lnk>Show</lnk>",
+    "notWatched_other": "{{count}} nodes are sending no data. <lnk>Show</lnk>"
   }
 }

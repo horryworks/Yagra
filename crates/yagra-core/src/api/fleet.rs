@@ -419,7 +419,8 @@ pub(crate) async fn coverage(
 pub(crate) struct FleetWatch {
     /// Nodes polled through a pool that has no live poller. Their jobs are published to nobody.
     pub no_live_poller: usize,
-    /// Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`.
+    /// Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`. A
+    /// node inside a maintenance window is not counted: someone said it is being worked on.
     pub no_recent_data: usize,
     /// Of the caller's nodes, how many are polled through a pool at all (Meraki devices are not).
     /// `no_live_poller == pool_polled` and above zero means nothing the caller can see is polled.
@@ -533,12 +534,15 @@ pub(crate) async fn watch(
         .filter(|n| scope.allows_group(n.group.map(|g| g.as_uuid())))
         .cloned()
         .collect();
+    // The engine's own set, so "in a window" is decided once (ADR-227 decision 8).
+    let in_window = st.alerts.operator_window_nodes();
     let n = pc::not_watched(
         &visible,
         meraki,
         &resolver,
         uncovered.as_ref(),
         &inputs.fresh,
+        &in_window,
     );
     Ok(FleetWatch {
         no_live_poller: n.no_live_poller,

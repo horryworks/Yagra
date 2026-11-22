@@ -95,8 +95,9 @@
     "emptyNodeWindow": "このノードから過去 24 時間に受信したイベントはありません。"
   },
   "watch": {
-    "silenced": "黙らせ中 {{count}} 件",
-    "maintenance": "メンテナンス中 {{count}} 台",
-    "notWatched": "見ていない {{count}} 台"
+    "silenced_one": "障害にまとめたアラート {{count}} 件",
+    "silenced_other": "障害にまとめたアラート {{count}} 件",
+    "notWatched_one": "データが届いていないノードが {{count}} 台あります。<lnk>表示</lnk>",
+    "notWatched_other": "データが届いていないノードが {{count}} 台あります。<lnk>表示</lnk>"
   }
 }

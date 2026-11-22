@@ -9251,7 +9251,10 @@ export interface components {
         FleetWatch: {
             /** @description Nodes polled through a pool that has no live poller. Their jobs are published to nobody. */
             no_live_poller: number;
-            /** @description Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`. */
+            /**
+             * @description Nodes with no liveness sample in the freshness window, not counted in `no_live_poller`. A
+             *     node inside a maintenance window is not counted: someone said it is being worked on.
+             */
             no_recent_data: number;
             /**
              * @description Whether this core can see poller liveness. `false` on an HA standby, which runs no
