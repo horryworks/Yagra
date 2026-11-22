@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-20
-# counts: MA-L=40426 MA-L-repeats-dropped=3 MA-M=6613 MA-S=7264 withheld=3
+# fetched: 2026-11-22
+# counts: MA-L=40427 MA-L-repeats-dropped=3 MA-M=6613 MA-S=7264 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -34049,6 +34049,7 @@
 7C7D3D	HUAWEI TECHNOLOGIES CO.,LTD
 7C7D41	Jinmuyu Electronics Co., Ltd.
 7C7EF9	eero inc.
+7C81AA	Shenzhen Enrigin Technology Co. ,Ltd.
 7C822D	Nortec
 7C8274	Shenzhen Hikeen Technology CO.,LTD
 7C8306	Glen Dimplex Nordic as
@@ -36277,7 +36278,7 @@
 8C1F6413F	Elsist Srl
 8C1F64140	RF-Tuote Oy
 8C1F64141	Code Blue Corporation
-8C1F64143	ChamSys
+8C1F64143	Chamsys Ltd
 8C1F64144	Langfang ENN lntelligent Technology Co.,Ltd.
 8C1F64145	Spectrum FiftyNine BV
 8C1F64146	Zhongrun Xinchan (Beijing) Technology Co., Ltd

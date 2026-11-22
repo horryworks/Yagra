@@ -1805,7 +1805,6 @@ impl Notifier {
                     NotifyEvent::Resolve,
                     facts.as_ref(),
                     "alert resolve dispatched",
-                    now,
                 )
                 .await;
             }
@@ -1822,7 +1821,6 @@ impl Notifier {
                     NotifyEvent::Suppress,
                     facts.as_ref(),
                     "downstream alert rolled up (incident closed)",
-                    now,
                 )
                 .await;
             }
@@ -1864,25 +1862,24 @@ impl Notifier {
         event: NotifyEvent,
         facts: Option<&AlertFacts>,
         message: &'static str,
-        now: chrono::DateTime<chrono::Utc>,
     ) {
         let key = alert.dedup_key();
         let notification = with_subject_facts(json_notification(alert, event, facts), facts);
         let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
-        // Where a fire would go now, as the end's reach beside the channels holding the incident:
-        // the end goes out at once, whatever the hour (ADR-262 decision 4).
+        // The end goes out at once, whatever the hour (ADR-262 decision 4), to every channel of
+        // every rule that matches - not to where a fire would go now. Asking the clock sent the
+        // end to a night rule that never heard the day's fire, and, once a restart had forgotten
+        // which channels hold the incident, kept it from the day rule's channel that does. A
+        // channel that never heard the fire may get a close for nothing; that is the cheaper
+        // mistake, because the other one leaves an incident open with nothing left to close it.
+        // The catch-all is reached through `is_active` below: it only ever hears a fire no rule
+        // could take.
         let reach = self.rule_reach();
         let rules = routing.matched(alert.severity, tags_of(facts), alert.subject.node(), &reach);
-        let hears = |id: &Uuid| routing.channels.contains_key(id);
-        let matched = route_at(
-            &rules,
-            &self.catch_all(),
-            &hears,
-            &self.clock(),
-            alert.subject.node(),
-            now,
-        )
-        .channels();
+        let matched: BTreeSet<Uuid> = rules
+            .iter()
+            .flat_map(|r| r.channel_ids.iter().copied())
+            .collect();
         let done = Delivered {
             alert,
             event,
@@ -3619,6 +3616,36 @@ mod delivery_tests {
         n.handle_at(NotifyAction::Resolve(a), evening()).await;
         assert_eq!(office.lock().unwrap().count("close"), 1);
         assert!(held.rows.lock().unwrap().is_empty(), "nothing was held");
+    }
+
+    /// A restart forgets which channels hold an incident, so the end goes to every channel of a
+    /// rule that matches, whatever the hour - here the day rule's channel, at night, from a
+    /// notifier that never saw the fire. A channel whose rule does not match hears nothing.
+    #[tokio::test]
+    async fn a_resolve_after_a_restart_still_reaches_the_rule_that_matched_at_any_hour() {
+        let node = NodeId::new();
+        let (office, other) = (log(), log());
+        let n = Notifier::with_default(None);
+        n.set_held_store(Arc::new(MemHeld::default()));
+        n.install_routing(
+            vec![
+                built(OFFICE, Recorder(office.clone())),
+                built(NIGHT, Recorder(other.clone())),
+            ],
+            vec![office_rule(OFFICE), rule(NIGHT, Some(Severity::Info))],
+        );
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Resolve(a), evening()).await;
+        assert_eq!(
+            office.lock().unwrap().count("close"),
+            1,
+            "the day rule matches, so its channel is closed even at night"
+        );
+        assert_eq!(
+            other.lock().unwrap().count("close"),
+            0,
+            "an info-only rule does not match a critical alert"
+        );
     }
 
     /// ADR-262 decision 4: what a night rule already sent is not sent again by the day rule in the

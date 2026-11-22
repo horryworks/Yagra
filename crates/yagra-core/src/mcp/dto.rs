@@ -513,10 +513,10 @@ pub struct NodeStatusDto {
     /// it names one (ADR-252). Mirrors `NodeDetail.time_zone`, from the same function.
     pub time_zone: Option<String>,
     /// Whether an alert about this node goes out right now, and until when; `null` ⇒ to no
-    /// channel (ADR-252, ADR-262). Mirrors `NodeDetail.delivery`, from the same function, except
-    /// that `channels` is always empty here: which channels is routing, read with
-    /// `get_config(kind=routing_coverage)`. A held notification is not lost: it goes out when a
-    /// rule opens if its alert is still open.
+    /// channel (ADR-252, ADR-262). Mirrors `NodeDetail.delivery`, from the same function: the
+    /// channel names are filled in only for a token holding `ManageSystem`, the permission that
+    /// reads the routing rules, and are empty for any other. A held notification is not lost: it
+    /// goes out when a rule opens if its alert is still open.
     pub delivery: Option<yagra_base::groups::DeliveryNow>,
     /// The operator's free-text note about this node; `null` ⇒ none (ADR-135).
     ///

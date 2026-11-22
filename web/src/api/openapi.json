@@ -12688,7 +12688,7 @@
         "tags": [
           "notifications"
         ],
-        "summary": "The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that\nexists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective\nlabels, the same set a rule is matched against. `reach` adds how many nodes carry at least one\nof the named tags.",
+        "summary": "The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that\nexists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective\nlabels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),\njoined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones\nthose nodes keep time in.",
         "operationId": "list_node_tags",
         "parameters": [
           {
@@ -23190,7 +23190,7 @@
             }
           },
           "400": {
-            "description": "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character",
+            "description": "Empty name, a severity outside critical|warning|info|null, a tag that is empty, too long or holds a control character, or a `when` window with no weekday in 1..7 or a minute outside 0..1439",
             "content": {
               "application/json": {
                 "schema": {
@@ -23404,7 +23404,7 @@
             "description": "Rule replaced; its enabled switch is unchanged, and so are its tags and folders when the body omits them"
           },
           "400": {
-            "description": "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character",
+            "description": "Empty name, a severity outside critical|warning|info|null, a tag that is empty, too long or holds a control character, or a `when` window with no weekday in 1..7 or a minute outside 0..1439",
             "content": {
               "application/json": {
                 "schema": {

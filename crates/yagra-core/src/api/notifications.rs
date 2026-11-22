@@ -1180,8 +1180,9 @@ fn reach_tags(raw: &str) -> Vec<String> {
 
 /// The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that
 /// exists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective
-/// labels, the same set a rule is matched against. `reach` adds how many nodes carry at least one
-/// of the named tags.
+/// labels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),
+/// joined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones
+/// those nodes keep time in.
 #[utoipa::path(
     get, path = "/api/v1/node-tags", tag = "notifications",
     params(NodeTagsQuery),
@@ -1427,8 +1428,8 @@ pub(crate) struct RoutingCatchAll {
     pub(crate) channel_ids: Vec<Uuid>,
 }
 
-/// What `GET /api/v1/routing-catch-all` answers, shared with MCP `get_config(kind=routing_rules)`'s
-/// neighbour kind so the two cannot disagree.
+/// What `GET /api/v1/routing-catch-all` answers, shared with MCP
+/// `get_config(kind=routing_catch_all)` so the two cannot disagree.
 pub(crate) async fn catch_all_in(admin: &super::AdminState) -> ApiResult<RoutingCatchAll> {
     let channel_ids = admin.notifications.catch_all().await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "read catch-all", "failed to read the catch-all")
@@ -1600,7 +1601,7 @@ impl CreateRule {
     request_body = CreateRule,
     responses(
         (status = 201, description = "Rule created", body = CreatedId),
-        (status = 400, description = "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name, a severity outside critical|warning|info|null, a tag that is empty, too long or holds a control character, or a `when` window with no weekday in 1..7 or a minute outside 0..1439", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -1676,7 +1677,7 @@ async fn set_routing_rule_enabled(
     request_body = CreateRule,
     responses(
         (status = 204, description = "Rule replaced; its enabled switch is unchanged, and so are its tags and folders when the body omits them"),
-        (status = 400, description = "Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character", body = super::error::ErrorBody),
+        (status = 400, description = "Empty name, a severity outside critical|warning|info|null, a tag that is empty, too long or holds a control character, or a `when` window with no weekday in 1..7 or a minute outside 0..1439", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),

@@ -3,6 +3,7 @@
 // server decides where an alert goes in every stretch of the week; this only cuts the stretches
 // into days, names a row and counts the nodes that have a stretch where nobody hears an alert.
 
+import { PALETTE } from '../components/MetricChart/palette';
 import type { CoverageRow, CoverageSegment } from '../types/api';
 
 /** Minutes in a day; a stretch is counted in minutes from Monday 00:00 local time. */
@@ -45,9 +46,10 @@ export function coverageNodes(rows: readonly CoverageRow[]): number {
   return rows.reduce((n, r) => n + r.node_count, 0);
 }
 
-/** A channel's colour on the strip: the categorical series, by the order channels are first met. */
+/** A channel's colour on the strip: the categorical series, by the order channels are first met.
+ *  It cycles over the shared palette, so it never names a series token that does not exist. */
 export function channelColour(index: number): string {
-  return `var(--series-${(index % 8) + 1})`;
+  return PALETTE[index % PALETTE.length];
 }
 
 /** Every channel a strip paints, in first-seen order, so each keeps one colour across rows. */

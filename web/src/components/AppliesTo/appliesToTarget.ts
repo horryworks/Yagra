@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The judgement behind `AppliesTo.tsx` (ADR-262 decision 1), kept in a `.ts` so Vitest reaches it.
 
-import type { components } from '../../api/schema';
 import type { GroupOption } from '../../lib/nodeTree';
+import type { Join } from '../../types/api';
 
 /** How the folders and the tags combine when a setting names both (ADR-262 decision 10). */
-export type Join = components['schemas']['Join'];
+export type { Join };
 export const JOINS: readonly Join[] = ['or', 'and'];
 
 /** What a setting applies to: every node, or the nodes inside one of `groupIds` (at any depth)

@@ -229,7 +229,7 @@
 }
 
 /* The row after the last that is not one of the rows (`pinnedRow`, ADR-262 decision 12): in the
-   flow rather than positioned, set apart by a heavier line and the muted surface. */
+   flow rather than positioned, set apart by the line above it and the muted surface. */
 .dt-row.dt-pinned,
 .dt-card.dt-pinned {
   position: static;

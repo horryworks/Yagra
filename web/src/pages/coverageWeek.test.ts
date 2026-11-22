@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
+import { PALETTE } from '../components/MetricChart/palette';
 import type { CoverageRow } from '../types/api';
 import {
   channelColour,
@@ -51,6 +52,7 @@ describe('coverage strip', () => {
     expect(coverageGaps(rows)).toEqual({ held: 3, nowhere: 2 });
     expect(coverageNodes(rows)).toBe(rows.reduce((n, r) => n + r.node_count, 0));
     expect(paintedChannels(rows)).toEqual(['m']);
-    expect(channelColour(8)).toBe(channelColour(0));
+    expect(channelColour(PALETTE.length)).toBe(channelColour(0));
+    for (let i = 0; i < PALETTE.length * 2; i++) expect(PALETTE).toContain(channelColour(i));
   });
 });

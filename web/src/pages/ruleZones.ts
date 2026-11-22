@@ -4,6 +4,7 @@
 // as it will be applied. The server counts; this decides what the line shows.
 
 import type { components } from '../api/schema';
+import type { Join } from '../types/api';
 
 export type ReachZone = components['schemas']['ReachZone'];
 
@@ -22,8 +23,8 @@ export function zoneQuery(v: {
   only: boolean;
   groupIds: readonly string[];
   tags: readonly string[];
-  join: 'or' | 'and';
-}): { tags: readonly string[]; groups: readonly string[]; join: 'or' | 'and'; everyNode: boolean } {
+  join: Join;
+}): { tags: readonly string[]; groups: readonly string[]; join: Join; everyNode: boolean } {
   const names = v.only && (v.groupIds.length > 0 || v.tags.length > 0);
   return names
     ? { tags: v.tags, groups: v.groupIds, join: v.join, everyNode: false }

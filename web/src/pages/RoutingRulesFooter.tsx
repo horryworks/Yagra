@@ -18,7 +18,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Select } from '../components/ui/Field';
-import { Fields } from '../components/ui/FormLayout';
+import { FieldGroup, Fields } from '../components/ui/FormLayout';
 import { CheckList } from '../components/ui/CheckList';
 import { Callout } from '../components/ui/Section';
 import { Inline, Stack } from '../components/ui/Page';
@@ -81,7 +81,9 @@ export function CatchAllModal({
       }
     >
       <Fields>
-        <CheckList items={items} selected={picked} onChange={setPicked} />
+        <FieldGroup label={t('routing.ruleModal.channels')}>
+          <CheckList items={items} selected={picked} onChange={setPicked} />
+        </FieldGroup>
         <FormError form={form} />
       </Fields>
     </Modal>

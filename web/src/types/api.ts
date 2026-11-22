@@ -827,6 +827,8 @@ export type RoutingRule = components['schemas']['RoutingRule'];
 export type RoutingRuleBody = components['schemas']['CreateRule'];
 /** When a routing rule is open (ADR-262). */
 export type RuleWhen = components['schemas']['RuleWhen'];
+/** How a setting's folders and tags combine: `or` (either is enough) or `and` (both) (ADR-262). */
+export type Join = components['schemas']['Join'];
 export type WhenMode = components['schemas']['WhenMode'];
 /** The channels an alert goes to when no matching rule is open (ADR-262). */
 export type RoutingCatchAll = components['schemas']['RoutingCatchAll'];

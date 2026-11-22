@@ -30,7 +30,8 @@ export function whenDraftFrom(when?: RuleWhen | null): WhenDraft {
 }
 
 /** Why a draft cannot be saved; each is a key under `routing.when.err.`. */
-export type WhenError = 'days' | 'time';
+export const WHEN_ERRORS = ['days', 'time'] as const;
+export type WhenError = (typeof WHEN_ERRORS)[number];
 
 /** The body the API takes, or the first thing wrong with the draft - the checks the server makes,
  *  so the dialog can say what is wrong before sending. "Always" sends no window. */

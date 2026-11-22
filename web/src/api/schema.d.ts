@@ -2659,8 +2659,9 @@ export interface paths {
         /**
          * The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that
          *     exists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective
-         *     labels, the same set a rule is matched against. `reach` adds how many nodes carry at least one
-         *     of the named tags.
+         *     labels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),
+         *     joined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones
+         *     those nodes keep time in.
          */
         get: operations["list_node_tags"];
         put?: never;
@@ -35515,7 +35516,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character */
+            /** @description Empty name, a severity outside critical|warning|info|null, a tag that is empty, too long or holds a control character, or a `when` window with no weekday in 1..7 or a minute outside 0..1439 */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -35694,7 +35695,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Empty name, a severity outside critical|warning|info|null, or a tag that is empty, too long or holds a control character */
+            /** @description Empty name, a severity outside critical|warning|info|null, a tag that is empty, too long or holds a control character, or a `when` window with no weekday in 1..7 or a minute outside 0..1439 */
             400: {
                 headers: {
                     [name: string]: unknown;

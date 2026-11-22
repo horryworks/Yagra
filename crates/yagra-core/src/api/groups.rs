@@ -147,7 +147,7 @@ async fn visible_groups_with(
         ApiError::from_internal(e.as_ref(), "list node groups", "failed to list node groups")
     })?;
     // Where an alert about each folder's nodes goes now, judged by the function the notifier
-    // routes with (ADR-262 decision 9). One query when no channel is switched on.
+    // routes with (ADR-262 decision 9). Two reads when no channel is switched on.
     let delivery: std::collections::HashMap<uuid::Uuid, yagra_base::groups::DeliveryNow> =
         if let Some(names) = with_delivery {
             let routes = crate::api::notifications::place_routes(admin)

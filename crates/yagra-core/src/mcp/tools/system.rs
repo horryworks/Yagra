@@ -392,6 +392,9 @@ pub(super) struct ConfigParams {
     /// Row cap (kind=thresholds 1–500 default 500; mib_catalog 1–2000 default 100;
     /// discovery_candidates 1–50 default 10).
     limit: Option<i64>,
+    /// The severity the week is drawn for (kind=routing_coverage): `critical` (the default),
+    /// `warning` or `info`. A rule for one severity reaches only that one.
+    severity: Option<String>,
 }
 
 /// The owned halves of a [`crate::alerts::thresholds::ThresholdFilter`], parsed from one `get_config` call.
@@ -903,7 +906,7 @@ impl YagraMcp {
                        among its effective labels, with how many nodes carry it — the names a \
                        routing rule can usefully name), routing_catch_all (the channels an alert \
                        goes to when no rule that matches it is open; empty = it is held until one \
-                       opens), routing_coverage (every node grouped by the critical-severity rules \
+                       opens if a rule matches, and reaches no channel if none does), routing_coverage (every node grouped by the rules of one `severity`, critical unless asked, \
                        that match it and the zone it keeps time in, with where its alerts go across \
                        the week in stretches of minutes from Monday 00:00 local: to the rules' \
                        channels, the catch-all, held, or nowhere), notification_default_route (the \
@@ -1128,11 +1131,19 @@ impl YagraMcp {
                     Err(e) => tool_api_error(TOOL, &e),
                 }
             }
-            // Critical: the alert a person is woken for. REST takes `severity` for the others.
+            // Critical unless asked: the alert a person is woken for. The same three the REST
+            // edge and the WebUI's switch offer.
             ConfigKind::RoutingCoverage => {
-                match crate::api::notifications::coverage_in(a, yagra_common::Severity::Critical)
-                    .await
-                {
+                let severity = match p.severity.as_deref() {
+                    None => yagra_common::Severity::Critical,
+                    Some(s) => match yagra_common::Severity::from_token(s) {
+                        Some(v) => v,
+                        None => {
+                            return tool_bad_params(TOOL, "severity must be critical|warning|info");
+                        }
+                    },
+                };
+                match crate::api::notifications::coverage_in(a, severity).await {
                     Ok(c) => ok_json(TOOL, &c),
                     Err(e) => tool_api_error(TOOL, &e),
                 }

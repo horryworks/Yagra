@@ -111,7 +111,7 @@ import {
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
-import { WHEN_MODES } from './pages/ruleWhen';
+import { WHEN_ERRORS, WHEN_MODES } from './pages/ruleWhen';
 import { CREATABLE_USER_KINDS } from './pages/userKinds';
 import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
 import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
@@ -1237,6 +1237,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const both = { en: enAlertsConfig, ja: jaAlertsConfig };
     expectKeys('coverage kind', both, 'routing.coverage.kind.', COVERAGE_KINDS);
     expectKeys('rule window', both, 'routing.when.mode.', WHEN_MODES);
+    expectKeys('rule window error', both, 'routing.when.err.', WHEN_ERRORS);
   });
 
   it('every grouping level has a label (alertsConfig:grouping.level.*)', () => {

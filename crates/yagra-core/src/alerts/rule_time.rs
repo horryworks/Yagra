@@ -350,7 +350,7 @@ pub fn coverage(
 }
 
 /// What the screens need to say where an alert about one place goes now (ADR-262 decision 9),
-/// read once per request: the enabled rules, the catch-all, the channels' names, the folder tree
+/// read once per request: every rule (`at_memo` keeps the enabled ones), the catch-all, the channels' names, the folder tree
 /// and the zones.
 pub struct PlaceRoutes {
     pub rules: Vec<RoutingRule>,

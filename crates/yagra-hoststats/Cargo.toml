@@ -11,7 +11,9 @@ repository.workspace = true
 [dependencies]
 yagra-common = { path = "../yagra-common" }
 sysinfo = { workspace = true }
-tracing = { workspace = true }
 
+# Both are used only by the unix filesystem read (`statvfs_usage`); listed here so a build for
+# another target does not report `tracing` as an unused dependency.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+tracing = { workspace = true }

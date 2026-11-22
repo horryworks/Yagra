@@ -13,7 +13,7 @@
 ### Breaking changes
 
 - **Delivery hours are a routing rule's own now, and the schedules you made no longer hold anything.** After upgrading, notifications that a schedule kept back overnight go out at once. Each old schedule is listed above the routing rules so you can rebuild it as a rule's **When** and delete it. `POST /api/v1/delivery-hours` and `PUT /api/v1/delivery-hours/{id}` are gone; listing and deleting stay, and so does the default time zone.
-- **The end of an incident goes out at once, at any hour.** An alert that resolves outside a rule's hours used to wait for the morning; it now closes the incident on the channels its fire reached straight away. A fire that was still held when it resolved is still dropped with its end.
+- **The end of an incident goes out at once, at any hour.** An alert that resolves outside a rule's hours used to wait for the morning; it now goes straight away to the channels of every rule that matches the alert, whatever their hours, and to any other channel its fire reached (the catch-all, say). A channel whose rule was closed when the fire came may get a close for an incident it never opened; the other way round, a core restart would have left an incident open. A fire that was still held when it resolved is still dropped with its end.
 - **Migration 0186 raises the oldest core this deployment can go back to** (to 0.3.84): an older core would ignore a rule's hours and send it at any time.
 
 - **A deployment upgraded to this version cannot go back to an earlier core without restoring a backup.** Migration 0185 lets a routing rule name folders; an older core would ignore them and send such a rule's alerts for every node, so it is kept from starting.
@@ -44,6 +44,10 @@
 - **A routing rule or catch-all whose channels are switched off no longer swallows the alert.** A switched-off channel hears nothing, so a rule naming only such channels now lets the alert fall to the catch-all, or be held until a rule opens, instead of sending it nowhere. The catch-all naming only switched-off channels counts as none. Coverage and the "Goes to …" line beside a site's clock read the same way.
 - **Deleting a channel takes it out of the catch-all too.** Left there, it kept the catch-all "set" with nothing to send to, so an alert whose rules were all closed reached nobody instead of being held, while the rule table said it would wait.
 - **A failed read of the routing rules keeps the previous routing** instead of dropping every rule until the next refresh, which would have sent every alert to the catch-all for up to 30 seconds.
+- **A resolve no longer goes to a channel chosen by the hour it arrives.** It used to go where a fire would go at that moment, so a night rule's channel received the close of an incident the day rule had opened, and after a core restart the day rule's channel received nothing and its PagerDuty or JSM incident stayed open.
+- **Coverage draws a 7th and 8th channel.** Their bands and legend swatches asked for colours that do not exist and came out transparent, which read as a gap.
+- **MCP `get_config(kind=routing_coverage)` takes `severity`** (`critical`, the default, `warning` or `info`), as the screen's switch and the REST endpoint do; it could only draw the critical week.
+- **MCP `get_node_status` names the channels in `delivery` for a token holding `ManageSystem`**, as the node page does for the same person; it used to leave them empty for everyone.
 
 ## v0.3.83 — Send a routing rule's alerts only for nodes carrying its tags, link every notification to the node's page in Yagra, and save Cisco Nexus configs
 

@@ -664,16 +664,35 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_node_status";
-        match self.scope_for(identity_of(&ctx)).await {
-            Ok(scope) => self.node_status_in(p, &scope).await,
+        let identity = identity_of(&ctx);
+        // The REST detail's `ReadsRouting`, asked of the token: a caller who may read the routing
+        // rules is told the channels they send to (ADR-262 decision 9).
+        let names = identity
+            .as_ref()
+            .is_some_and(|id| id.principal.can(Permission::ManageSystem));
+        match self.scope_for(identity).await {
+            Ok(scope) => self.node_status_with(p, &scope, names).await,
             Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
+    /// [`Self::node_status_with`] without channel names: what an in-process caller (the RCA agent)
+    /// and the tests read.
     pub(super) async fn node_status_in(
         &self,
         p: NodeIdParams,
         scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        self.node_status_with(p, scope, false).await
+    }
+
+    /// `names` says whether the delivery block may carry channel names - true only for a caller
+    /// holding `ManageSystem`, as on the REST detail.
+    pub(super) async fn node_status_with(
+        &self,
+        p: NodeIdParams,
+        scope: &NodeScope,
+        names: bool,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_node_status";
         // Out of scope answers exactly what a nonexistent id answers, deliberately: a distinct
@@ -771,9 +790,8 @@ impl YagraMcp {
             None => None,
         };
         // The site's zone and delivery state, from the function the REST detail calls (ADR-252).
-        // Channel names are withheld here whatever the caller holds: a client that may read
-        // routing reads them from `get_config(kind=routing_rules / routing_coverage)` (ADR-262).
-        let local_time = crate::api::nodes::local_time_of(admin, &node, false).await;
+        // Channel names only for a caller who may read the routing rules, as on the REST side.
+        let local_time = crate::api::nodes::local_time_of(admin, &node, names).await;
         // The node's VLANs, from the function `GET /nodes/{id}/vlans` calls, narrowed to the same
         // scope (ADR-257). Best effort like the interface list: a failed read leaves it empty.
         let node_vlans = crate::api::vlans::node_vlans(admin, p.node_id, |n| {

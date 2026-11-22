@@ -136,7 +136,7 @@ pub struct HeldRow {
 /// tested without a database; [`DeliveryHoursRepo`] is the real one.
 #[async_trait::async_trait]
 pub trait HeldStore: Send + Sync {
-    /// Keep one notification until its node's hours open.
+    /// Keep one notification until a routing rule that matches it opens (ADR-262 decision 4).
     async fn hold(
         &self,
         event: HeldEvent,
@@ -341,8 +341,9 @@ impl DeliveryHoursRepo {
     }
 }
 
-/// Leader-only loop: every 30 seconds, send what was held for every node whose hours have opened
-/// (ADR-226 decision 7). Spawned by `LeaderTasks::spawn_refresh_loops`; runs until shutdown.
+/// Leader-only loop: every 30 seconds, offer each held notification to the notifier again, which
+/// judges it against the routing rules and sends it once one that matches is open (ADR-262).
+/// Spawned by `LeaderTasks::spawn_refresh_loops`; runs until shutdown.
 ///
 pub(crate) async fn run_release_loop(
     notifier: std::sync::Arc<super::Notifier>,
