@@ -53,13 +53,8 @@
       "delete": "Delete rule",
       "deleteTitle": "Delete routing rule",
       "deleteBody": "Delete rule <strong>{{name}}</strong>? Its channels stop receiving matching alerts.",
-      "defaultRoute": {
-        "allAlerts": "All alerts",
-        "notSet": "Not set"
-      },
       "allSeverities": "All severities",
-      "edit": "Edit rule",
-      "alwaysAlso": "Always also sends to"
+      "edit": "Edit rule"
     },
     "channelModal": {
       "title": "Add notification channel",
@@ -494,15 +489,21 @@
       "edit": "Set channels",
       "err": "Could not save the catch-all."
     },
+    "envCopy": "Every alert is also copied to {{to}}",
     "oldSchedules": {
       "title_one": "{{count}} delivery-hours schedule from an earlier version no longer applies. Rebuild it as a rule, then delete it.",
       "title_other": "{{count}} delivery-hours schedules from an earlier version no longer apply. Rebuild them as rules, then delete them.",
       "delete": "Delete schedule"
     },
     "coverage": {
-      "title": "Coverage",
+      "titleFor": "Who gets a {{severity}} alert, by day",
+      "rowsHead": "Nodes · rules",
+      "nowhere_one": "{{count}} of {{total}} nodes reach nobody at times",
+      "nowhere_other": "{{count}} of {{total}} nodes reach nobody at times",
+      "held_one": "{{count}} of {{total}} nodes are held at times",
+      "held_other": "{{count}} of {{total}} nodes are held at times",
+      "setCatchAll": "Set catch-all channels",
       "severity": "Severity",
-      "gaps": "{{held}} nodes held at times · {{nowhere}} reach nobody at times",
       "noRule": "No rule",
       "nodes_one": "{{count}} node",
       "nodes_other": "{{count}} nodes",

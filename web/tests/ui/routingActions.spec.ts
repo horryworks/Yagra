@@ -160,10 +160,17 @@ test("a rule's hours name the zones they are read in, on one line of times", asy
   await expect(when.locator('.form-status')).toHaveCount(0);
 });
 
-// ADR-262 decision 4: the catch-all is the line under the rules, and its channels are set there.
-test('the catch-all line sets the channels an alert goes to when no rule is open', async ({ page }) => {
+// ADR-262 decisions 4 and 12: the catch-all is the rule table's last row, outside its count, and
+// its channels are set from that row.
+test('the catch-all row sets the channels an alert goes to when no rule is open', async ({ page }) => {
   await page.goto('/alerts/routing');
-  await page.getByRole('button', { name: 'Set channels' }).click();
+  const row = page.locator('.dt-row.dt-pinned[data-pinned="catch-all"]');
+  await expect(row).toContainText('Catch-all');
+  await expect(row).toContainText('When no rule is open');
+  // The row sits inside the rules table, after its last rule.
+  const table = row.locator('xpath=..');
+  await expect(table.locator('.dt-head')).toHaveCount(1);
+  await row.getByRole('button', { name: 'Set channels' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.locator('.checklist-rows input').first().check();
   const saved = page.waitForRequest(
@@ -181,6 +188,8 @@ test('the coverage week draws its rows and redraws for another severity', async 
   await page.goto('/alerts/routing');
   expect(new URL((await first).url()).searchParams.get('severity')).toBe('critical');
   const coverage = page.locator('.routing-coverage');
+  // Its title says what it draws, for the severity picked (ADR-262 decision 12).
+  await expect(coverage.locator('.ui-section-title')).toHaveText('Who gets a Critical alert, by day');
   await expect(coverage.locator('.coverage-day').first()).toBeVisible();
   expect(await coverage.locator('.coverage-row').count()).toBeGreaterThan(1);
   const again = page.waitForRequest(
@@ -188,4 +197,5 @@ test('the coverage week draws its rows and redraws for another severity', async 
   );
   await coverage.getByRole('button', { name: 'Warning', exact: true }).click();
   await again;
+  await expect(coverage.locator('.ui-section-title')).toHaveText('Who gets a Warning alert, by day');
 });

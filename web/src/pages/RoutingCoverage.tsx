@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Coverage (ADR-262 decision 8), under the routing rules: every node grouped by the rules that
-// reach it, and where its alerts go across a week, so a stretch where nobody hears an alert can be
-// seen before it happens. The server draws the week; this paints it. The judgement is in
-// `coverageWeek.ts`.
+// Coverage (ADR-262 decisions 8 and 12): a card of its own under the routing rules. Its title says
+// what it draws — who gets an alert of one severity, across a week — and every node is grouped by
+// the rules that reach it, so a stretch where nobody hears an alert can be seen before it happens.
+// When some nodes reach nobody (or are held), one line above the week says how many and offers the
+// catch-all. The server draws the week; this paints it. The judgement is in `coverageWeek.ts`.
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -16,36 +17,59 @@ import {
 } from '../types/api';
 import { useLoad } from '../lib/useLoad';
 import { severityLabel } from '../lib/format';
-import { SectionHead } from '../components/ui/Section';
+import { Card } from '../components/ui/Card';
+import { Callout, SectionHead } from '../components/ui/Section';
+import { Button } from '../components/ui/Button';
 import { Segmented } from '../components/ui/Segmented';
 import { Inline, Stack } from '../components/ui/Page';
-import { channelColour, coverageGaps, daySlices, paintedChannels, rowRuleNames } from './coverageWeek';
+import {
+  channelColour,
+  coverageGaps,
+  coverageNodes,
+  daySlices,
+  paintedChannels,
+  rowRuleNames,
+} from './coverageWeek';
 import { WEEKDAYS, weekdayName } from './deliveryHours';
 
 export function RoutingCoverage({
   rules,
   channels,
+  catchAll,
+  onEditCatchAll,
 }: {
   rules: RoutingRule[];
   channels: NotificationChannel[];
+  catchAll: string[];
+  /** Opens the catch-all's channels; absent for a caller who may not change them. */
+  onEditCatchAll?: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const [severity, setSeverity] = useState<Severity>('critical');
-  const load = useLoad<Coverage | null>(() => api.getRoutingCoverage(severity), [severity, rules], {
-    initial: null,
-  });
+  const load = useLoad<Coverage | null>(
+    () => api.getRoutingCoverage(severity),
+    [severity, rules, catchAll.join(',')],
+    { initial: null },
+  );
   const cov = load.data;
   const ruleName = (id: string) => rules.find((r) => r.id === id)?.name;
   const channelName = (id: string) => channels.find((c) => c.id === id)?.name ?? id;
   const painted = cov ? paintedChannels(cov.rows) : [];
   const colour = (id: string) => channelColour(Math.max(0, painted.indexOf(id)));
   const gaps = cov ? coverageGaps(cov.rows) : { held: 0, nowhere: 0 };
+  const total = cov ? coverageNodes(cov.rows) : 0;
+  const fix = onEditCatchAll && (
+    <Button variant="outline" onClick={onEditCatchAll}>
+      {t('routing.coverage.setCatchAll')}
+    </Button>
+  );
 
   return (
-    <Stack gap={8} className="routing-coverage">
+    <Stack as="section" gap={12} className="routing-coverage">
       <SectionHead
-        title={t('routing.coverage.title')}
-        tools={
+        level={2}
+        title={t('routing.coverage.titleFor', { severity: severityLabel(severity) })}
+        actions={
           <Segmented
             size="sm"
             ariaLabel={t('routing.coverage.severity')}
@@ -57,18 +81,27 @@ export function RoutingCoverage({
             options={SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) }))}
           />
         }
-        actions={
-          cov && (gaps.held > 0 || gaps.nowhere > 0) ? (
-            <span className="routing-coverage-gaps">
-              {t('routing.coverage.gaps', { held: gaps.held, nowhere: gaps.nowhere })}
-            </span>
-          ) : null
-        }
       />
+      <Card>
       {cov && (
-        <>
+        <Stack gap={8}>
+          {gaps.nowhere > 0 ? (
+            <Callout tone="critical" status className="routing-coverage-gaps">
+              <Inline gap={12} justify="between">
+                <span>{t('routing.coverage.nowhere', { count: gaps.nowhere, total })}</span>
+                {fix}
+              </Inline>
+            </Callout>
+          ) : gaps.held > 0 ? (
+            <Callout tone="warning" status className="routing-coverage-gaps">
+              <Inline gap={12} justify="between">
+                <span>{t('routing.coverage.held', { count: gaps.held, total })}</span>
+                {fix}
+              </Inline>
+            </Callout>
+          ) : null}
           <div className="coverage-row">
-            <span />
+            <span className="muted">{t('routing.coverage.rowsHead')}</span>
             <div className="coverage-week coverage-days">
               {WEEKDAYS.map((d) => (
                 <span key={d}>{weekdayName(t, d)}</span>
@@ -77,15 +110,15 @@ export function RoutingCoverage({
           </div>
           {cov.rows.map((row) => (
             <div className="coverage-row" key={`${row.rule_ids.join(',')}|${row.zone ?? ''}`}>
-              <span className="coverage-label">
+              <Stack gap={2}>
                 <span className="yt-name-txt">
-                  {rowRuleNames(row, ruleName) ?? t('routing.coverage.noRule')}
-                </span>{' '}
-                <span className="muted">
                   {t('routing.coverage.nodes', { count: row.node_count })}
+                </span>
+                <span className="muted">
+                  {rowRuleNames(row, ruleName) ?? t('routing.coverage.noRule')}
                   {row.zone ? ` · ${row.zone}` : ''}
                 </span>
-              </span>
+              </Stack>
               <div className="coverage-week">
                 {WEEKDAYS.map((d) => (
                   <div className="coverage-day" key={d}>
@@ -127,8 +160,9 @@ export function RoutingCoverage({
               {t('routing.coverage.kind.nowhere')}
             </span>
           </Inline>
-        </>
+        </Stack>
       )}
+      </Card>
     </Stack>
   );
 }

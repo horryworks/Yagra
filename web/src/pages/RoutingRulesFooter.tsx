@@ -1,12 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The parts of Notification delivery that sit with the routing rules but are not rules (ADR-262):
-// the catch-all line under the rule list, the zone a rule's hours are read in when no folder names
+// the catch-all's channels and its dialog, the environment's copy line under the rule list, the zone a rule's hours are read in when no folder names
 // one, and the schedules an earlier version kept, which hold nothing any more.
 
 import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import type { DeliverySchedule, NodeGroup, NotificationChannel } from '../types/api';
+import type {
+  DeliverySchedule,
+  NodeGroup,
+  NotificationChannel,
+  NotificationDefaultRoute,
+} from '../types/api';
+import { defaultRouteChannels } from './defaultRoute';
 import { useLoad } from '../lib/useLoad';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
@@ -24,50 +30,23 @@ import { done } from '../lib/submitState';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { daysText, hoursText } from './deliveryHours';
 
-/** The catch-all, as the last line of the rule list: where an alert goes when no rule that matches
- *  it is open. A line rather than a table row, for the reason the default route is one: the rules
- *  table is filtered and counted in the browser, and a row that is not a rule would be too. */
-export function CatchAllLine({
-  channels,
-  canSystem,
-}: {
-  channels: NotificationChannel[];
-  canSystem: boolean;
-}) {
+/** The environment's route (`YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*`), sent a copy of every alert
+ *  whatever the rules say. One line under the rule table, only while one is set: it is changed in
+ *  the deployment's `.env`, not here, so it is not drawn as a row beside rows that are edited
+ *  (ADR-262 decision 12). */
+export function EnvCopyLine({ route }: { route: NotificationDefaultRoute | null }) {
   const { t } = useTranslation('alertsConfig');
-  const load = useLoad(() => api.getRoutingCatchAll(), [], { initial: { channel_ids: [] } });
-  const [editing, setEditing] = useState(false);
-  const names = load.data.channel_ids
-    .map((id) => channels.find((c) => c.id === id)?.name)
-    .filter((n): n is string => n !== undefined);
+  const to = route ? defaultRouteChannels(route) : null;
+  if (to === null) return null;
   return (
     <Inline as="p" gap={8} className="routing-default-route">
-      <span className="yt-name-txt">{t('routing.catchAll.title')}</span>
-      <Badge tone="neutral">{t('routing.catchAll.when')}</Badge>
-      <span className="muted">
-        {names.length > 0 ? names.join(', ') : t('routing.catchAll.held')}
-      </span>
-      {canSystem && (
-        <Button variant="outline" onClick={() => setEditing(true)}>
-          {t('routing.catchAll.edit')}
-        </Button>
-      )}
-      {editing && (
-        <CatchAllModal
-          channels={channels}
-          initial={load.data.channel_ids}
-          onClose={() => setEditing(false)}
-          onDone={() => {
-            setEditing(false);
-            load.reload();
-          }}
-        />
-      )}
+      <span>{t('routing.envCopy', { to })}</span>
+      <Badge tone="neutral">.env</Badge>
     </Inline>
   );
 }
 
-function CatchAllModal({
+export function CatchAllModal({
   channels,
   initial,
   onClose,

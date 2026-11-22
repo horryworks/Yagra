@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { CoverageRow } from '../types/api';
-import { channelColour, coverageGaps, daySlices, paintedChannels, rowRuleNames } from './coverageWeek';
+import {
+  channelColour,
+  coverageGaps,
+  coverageNodes,
+  daySlices,
+  paintedChannels,
+  rowRuleNames,
+} from './coverageWeek';
 
 const row = (over: Partial<CoverageRow>): CoverageRow => ({
   rule_ids: [],
@@ -42,6 +49,7 @@ describe('coverage strip', () => {
       row({ node_count: 9, segments: [{ start: 0, end: 10, kind: 'rules', channel_ids: ['m'] }] }),
     ];
     expect(coverageGaps(rows)).toEqual({ held: 3, nowhere: 2 });
+    expect(coverageNodes(rows)).toBe(rows.reduce((n, r) => n + r.node_count, 0));
     expect(paintedChannels(rows)).toEqual(['m']);
     expect(channelColour(8)).toBe(channelColour(0));
   });

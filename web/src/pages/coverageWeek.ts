@@ -40,6 +40,11 @@ export function coverageGaps(rows: readonly CoverageRow[]): { held: number; nowh
   return { held, nowhere };
 }
 
+/** How many nodes the week covers: every row, once each. */
+export function coverageNodes(rows: readonly CoverageRow[]): number {
+  return rows.reduce((n, r) => n + r.node_count, 0);
+}
+
 /** A channel's colour on the strip: the categorical series, by the order channels are first met. */
 export function channelColour(index: number): string {
   return `var(--series-${(index % 8) + 1})`;

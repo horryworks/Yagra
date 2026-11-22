@@ -50,13 +50,8 @@
       "delete": "ルールを削除",
       "deleteTitle": "ルーティングルールを削除",
       "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？このルールのチャネルには届かなくなります。",
-      "defaultRoute": {
-        "allAlerts": "すべてのアラート",
-        "notSet": "未設定"
-      },
       "allSeverities": "すべての重大度",
-      "edit": "ルールを編集",
-      "alwaysAlso": "常にこちらにも送る"
+      "edit": "ルールを編集"
     },
     "channelModal": {
       "title": "通知チャネルを追加",
@@ -491,15 +486,21 @@
       "edit": "チャネルを選ぶ",
       "err": "Catch-all を保存できませんでした。"
     },
+    "envCopy": "すべてのアラートの写しを {{to}} にも送ります",
     "oldSchedules": {
       "title_one": "前の版の配信時間 {{count}} 件は効いていません。ルールに作り直してから削除してください。",
       "title_other": "前の版の配信時間 {{count}} 件は効いていません。ルールに作り直してから削除してください。",
       "delete": "配信時間を削除"
     },
     "coverage": {
-      "title": "届き先の週",
+      "titleFor": "{{severity}} のアラートが届く先（曜日ごと）",
+      "rowsHead": "ノード · ルール",
+      "nowhere_one": "{{total}} 台のうち {{count}} 台は、誰にも届かない時間があります",
+      "nowhere_other": "{{total}} 台のうち {{count}} 台は、誰にも届かない時間があります",
+      "held_one": "{{total}} 台のうち {{count}} 台は、保留になる時間があります",
+      "held_other": "{{total}} 台のうち {{count}} 台は、保留になる時間があります",
+      "setCatchAll": "Catch-all のチャネルを選ぶ",
       "severity": "重大度",
-      "gaps": "保留になる時間がある {{held}} 台 · 誰にも届かない時間がある {{nowhere}} 台",
       "noRule": "ルールなし",
       "nodes_one": "{{count}} 台",
       "nodes_other": "{{count}} 台",

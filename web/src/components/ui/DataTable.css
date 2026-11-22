@@ -227,3 +227,14 @@
   text-overflow: ellipsis;
   font-size: var(--font-sm);
 }
+
+/* The row after the last that is not one of the rows (`pinnedRow`, ADR-262 decision 12): in the
+   flow rather than positioned, set apart by a heavier line and the muted surface. */
+.dt-row.dt-pinned,
+.dt-card.dt-pinned {
+  position: static;
+  transform: none;
+  flex: none;
+  border-top: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}

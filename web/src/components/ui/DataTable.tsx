@@ -164,6 +164,11 @@ interface Props<T> {
     /** While a bulk action is in flight. */
     disabled?: boolean;
   };
+  /** One row after the last that is not one of `rows`: never sorted, filtered, counted or
+   *  virtualized, and drawn even when `rows` is empty (the routing catch-all, ADR-262 decision 12).
+   *  Its cells are keyed by column key; a column it does not name is left empty. On a phone it is
+   *  a card like the others, after them. */
+  pinnedRow?: { key: string; cells: Partial<Record<string, ReactNode>> };
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -192,6 +197,7 @@ export function DataTable<T>({
   autoRowHeight,
   sortable,
   selection,
+  pinnedRow,
 }: Props<T>) {
   const { t } = useTranslation();
   // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
@@ -557,6 +563,31 @@ export function DataTable<T>({
           </SortableBody>
         )}
       </div>
+      {pinnedRow &&
+        (cardMode ? (
+          <div className="dt-card dt-pinned" data-pinned={pinnedRow.key}>
+            <dl className="dt-card-auto">
+              {columns.map((c) => (
+                <div key={c.key} className="dt-card-pair">
+                  <dt className="dt-card-k">{c.header}</dt>
+                  <dd className="dt-card-v">{pinnedRow.cells[c.key]}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ) : (
+          <div
+            className="dt-row dt-pinned"
+            data-pinned={pinnedRow.key}
+            style={{ gridTemplateColumns: template, ...widthStyle }}
+          >
+            {columns.map((c) => (
+              <div key={c.key} className={c.align === 'right' ? 'dt-cell right' : 'dt-cell'}>
+                {pinnedRow.cells[c.key]}
+              </div>
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

@@ -74,14 +74,18 @@ import { testVerdict, testWarnings, VERDICT_KEYS, verdictOk } from './channelTes
 import { useSubmit } from '../lib/useSubmit';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { AlertGroupingSection } from './AlertGroupingSection';
-import { CatchAllLine, DefaultZoneSelect, OldSchedules } from './RoutingRulesFooter';
+import {
+  CatchAllModal,
+  DefaultZoneSelect,
+  EnvCopyLine,
+  OldSchedules,
+} from './RoutingRulesFooter';
 import { RoutingCoverage } from './RoutingCoverage';
 import { WEEKDAYS, weekdayName } from './deliveryHours';
 import { WHEN_MODES, whenBodyFrom, whenDraftFrom, whenText, type WhenDraft } from './ruleWhen';
 import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 import { zoneLine, zoneQuery, type ReachZone } from './ruleZones';
 import { Segmented } from '../components/ui/Segmented';
-import { defaultRouteChannels } from './defaultRoute';
 import { deliveryLogFor } from './deliveryLogQuery';
 
 /** Inline status (dot + label) shared by channels and rules. */
@@ -136,6 +140,12 @@ export function RoutingPage() {
   const { data: groups } = useLoad<NodeGroup[]>(() => api.listNodeGroups(), [rules], {
     initial: [],
   });
+  // The catch-all (ADR-262 decision 12): the last row of the rule table, and the way out of a
+  // Coverage that shows alerts reaching nobody. One read and one dialog for both.
+  const catchAll = useLoad(() => api.getRoutingCatchAll(), [], {
+    initial: { channel_ids: [] as string[] },
+  });
+  const [editingCatchAll, setEditingCatchAll] = useState(false);
 
   // A channel row opens the delivery log narrowed to that channel (ADR-262 decision 7).
   const navigate = useNavigate();
@@ -164,13 +174,31 @@ export function RoutingPage() {
           groups={groups}
           defaultRoute={defaultRoute}
           channels={channels}
+          catchAll={catchAll.data.channel_ids}
+          onEditCatchAll={() => setEditingCatchAll(true)}
           canSystem={canSystem}
           loading={loading}
           onChange={load}
           onError={setError}
         />
-        <RoutingCoverage rules={rules} channels={channels} />
+        <RoutingCoverage
+          rules={rules}
+          channels={channels}
+          catchAll={catchAll.data.channel_ids}
+          onEditCatchAll={canSystem ? () => setEditingCatchAll(true) : undefined}
+        />
         <AlertGroupingSection canSystem={canSystem} onError={setError} />
+        {editingCatchAll && (
+          <CatchAllModal
+            channels={channels}
+            initial={catchAll.data.channel_ids}
+            onClose={() => setEditingCatchAll(false)}
+            onDone={() => {
+              setEditingCatchAll(false);
+              catchAll.reload();
+            }}
+          />
+        )}
       </LoadGate>
     </Page>
   );
@@ -618,6 +646,8 @@ function RulesSection({
   groups,
   defaultRoute,
   channels,
+  catchAll,
+  onEditCatchAll,
   canSystem,
   loading,
   onChange,
@@ -628,6 +658,8 @@ function RulesSection({
   groups: NodeGroup[];
   defaultRoute: NotificationDefaultRoute | null;
   channels: NotificationChannel[];
+  catchAll: string[];
+  onEditCatchAll: () => void;
   canSystem: boolean;
   loading: boolean;
   onChange: () => void;
@@ -749,6 +781,35 @@ function RulesSection({
 
   // In the URL, under `rules.` — see the channels table above.
   const filtering = useClientFilters(columns, rules, { prefix: ROUTING_RULE_FILTER_PREFIX });
+  // The catch-all as the table's last row (ADR-262 decision 12): in the columns every rule has, but
+  // not a rule, so it is never filtered, sorted or counted with them.
+  const catchAllNames = catchAll
+    .map((id) => channels.find((c) => c.id === id)?.name)
+    .filter((n): n is string => n !== undefined);
+  const catchAllRow = {
+    key: 'catch-all',
+    cells: {
+      name: <span className="yt-name-txt">{t('routing.catchAll.title')}</span>,
+      severity: <Badge tone="neutral">{t('routing.rules.any')}</Badge>,
+      target: t('appliesTo.allNodes'),
+      when: t('routing.catchAll.when'),
+      channels:
+        catchAllNames.length > 0 ? (
+          <ClippedText className="muted" text={catchAllNames.join(', ')} />
+        ) : (
+          <Badge tone="warning">{t('routing.catchAll.held')}</Badge>
+        ),
+      actions: canSystem ? (
+        <span className="ytable-actions">
+          <OverflowMenu
+            actions={[
+              { label: t('routing.catchAll.edit'), icon: <EditIcon />, onClick: onEditCatchAll },
+            ]}
+          />
+        </span>
+      ) : null,
+    },
+  };
   const { filters, setFilters, shown, counts, anyFiltered } = filtering;
   const sorting = useClientSort(columns, filtering.shown, { prefix: ROUTING_RULE_FILTER_PREFIX });
 
@@ -786,6 +847,7 @@ function RulesSection({
         onFiltersChange={setFilters}
         filterCounts={counts}
         loading={loading}
+        pinnedRow={catchAllRow}
         empty={
           anyFiltered ? (
             t('common:filter.noMatch')
@@ -807,20 +869,7 @@ function RulesSection({
         }
       />
 
-      {/* The two lines after the last rule (ADR-262 decision 5): where an alert goes when no rule
-          that matches it is open, and the environment's route, sent every alert whatever the rules
-          say. Lines rather than pinned rows, because the rules table is filtered and counted in the
-          browser and a row that is not a rule would be filtered and counted with them. */}
-      <CatchAllLine channels={channels} canSystem={canSystem} />
-      {defaultRoute && (
-        <Inline as="p" gap={8} className="routing-default-route">
-          <span className="yt-name-txt">{t('routing.rules.alwaysAlso')}</span>
-          <Badge tone="neutral">{t('routing.rules.defaultRoute.allAlerts')}</Badge>
-          <span className="muted">
-            {defaultRouteChannels(defaultRoute) ?? t('routing.rules.defaultRoute.notSet')}
-          </span>
-        </Inline>
-      )}
+      <EnvCopyLine route={defaultRoute} />
 
       {adding && (
         <RuleModal
