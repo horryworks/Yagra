@@ -254,7 +254,6 @@ impl RuleWhen {
     }
 }
 
-/// Parse a severity DB token (None for NULL/unknown ⇒ matches all severities).
 /// A rule's days as the column stores them: the ISO weekdays it names, in order, once each.
 fn days_column(days: &[u8]) -> Vec<i16> {
     let mut out: Vec<i16> = days
@@ -272,6 +271,7 @@ fn minute_column(minute: u16) -> i16 {
     i16::try_from(minute.min(1439)).unwrap_or(0)
 }
 
+/// Parse a severity DB token (None for NULL/unknown ⇒ matches all severities).
 fn parse_severity(s: Option<String>) -> Option<Severity> {
     s.as_deref().and_then(Severity::from_token)
 }
@@ -356,12 +356,21 @@ impl NotificationRepo {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Delete a channel (and drop it from any rule's channel list). Returns whether removed.
+    /// Delete a channel (and drop it from any rule's channel list and from the catch-all). Returns
+    /// whether removed.
     pub async fn delete_channel(&self, id: Uuid) -> anyhow::Result<bool> {
         sqlx::query("UPDATE routing_rules SET channel_ids = array_remove(channel_ids, $1)")
             .bind(id)
             .execute(&self.pool)
             .await?;
+        // Left behind, the id would keep the catch-all "set" with nothing to send to, so an alert
+        // whose rules are all closed would be routed to nobody instead of held (ADR-262).
+        sqlx::query(
+            "UPDATE app_settings SET catch_all_channel_ids = array_remove(catch_all_channel_ids, $1)",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         let res = sqlx::query("DELETE FROM notification_channels WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
@@ -843,8 +852,16 @@ mod tests {
             )
             .await
             .expect("rule");
+        repo.set_catch_all(&[doomed, kept])
+            .await
+            .expect("catch-all");
 
         assert!(repo.delete_channel(doomed).await.expect("delete"));
+
+        // The catch-all is a third list naming channels (ADR-262). A deleted id left in it keeps it
+        // "set" with nothing to send to, so an alert whose rules are closed goes nowhere instead of
+        // being held.
+        assert_eq!(repo.catch_all().await.expect("catch-all"), vec![kept]);
 
         // 🚨 This is two statements, and the first one is the one that matters. Without the
         // `array_remove` the rules keep an id that no longer names a channel, and the fan-out then

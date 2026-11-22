@@ -1700,11 +1700,16 @@ impl Notifier {
                 let clock = self.clock();
                 let catch_all = self.catch_all();
                 let node = alert.subject.node();
-                let matched: BTreeSet<Uuid> = match route_at(&rules, &catch_all, &clock, node, now)
-                {
+                // Only a channel this notifier would dispatch to hears the alert: a switched-off
+                // one is not in `routing.channels`, and counting it would keep the alert from the
+                // catch-all and from being held.
+                let hears = |id: &Uuid| routing.channels.contains_key(id);
+                let matched: BTreeSet<Uuid> = match route_at(
+                    &rules, &catch_all, &hears, &clock, node, now,
+                ) {
                     RouteNow::Held if releasing => return false,
                     RouteNow::Held => {
-                        let until = next_change(&rules, &catch_all, &clock, node, now);
+                        let until = next_change(&rules, &catch_all, &hears, &clock, node, now);
                         match self.held_store() {
                             Some(store) => match store.hold(HeldEvent::Fire, &alert, until).await {
                                 Ok(()) => {
@@ -1868,9 +1873,11 @@ impl Notifier {
         // the end goes out at once, whatever the hour (ADR-262 decision 4).
         let reach = self.rule_reach();
         let rules = routing.matched(alert.severity, tags_of(facts), alert.subject.node(), &reach);
+        let hears = |id: &Uuid| routing.channels.contains_key(id);
         let matched = route_at(
             &rules,
             &self.catch_all(),
+            &hears,
             &self.clock(),
             alert.subject.node(),
             now,

@@ -100,35 +100,50 @@ impl RouteNow {
 /// already decided) and the catch-all's channels.
 ///
 /// An open rule naming no channel sends nowhere, so it does not stop the catch-all: what counts is
-/// whether some channel would hear the alert.
+/// whether some channel would hear the alert. `hears` says which channel ids can: a channel that
+/// is switched off (or no longer exists) is not dispatched to, so it counts as no channel at all -
+/// otherwise a rule whose only channel is off would keep an alert from the catch-all and from being
+/// held, and nobody would hear it.
 #[must_use]
 pub fn route_at(
     matched: &[&RoutingRule],
     catch_all: &[Uuid],
+    hears: Hears<'_>,
     clock: &RuleClock,
     node: Option<NodeId>,
     now: DateTime<Utc>,
 ) -> RouteNow {
     let (day, minute) = clock.local(node, now);
-    route_local(matched, catch_all, day, minute)
+    route_local(matched, catch_all, hears, day, minute)
 }
+
+/// Which channel ids can hear an alert: the ones the notifier would dispatch to.
+pub type Hears<'a> = &'a dyn Fn(&Uuid) -> bool;
 
 /// [`route_at`] at minute `minute` of ISO weekday `day`, local time: the one judgement, which the
 /// weekly coverage (ADR-262 decision 8) asks a slot at a time.
 #[must_use]
-pub fn route_local(matched: &[&RoutingRule], catch_all: &[Uuid], day: u8, minute: u16) -> RouteNow {
+pub fn route_local(
+    matched: &[&RoutingRule],
+    catch_all: &[Uuid],
+    hears: Hears<'_>,
+    day: u8,
+    minute: u16,
+) -> RouteNow {
     let open: BTreeSet<Uuid> = matched
         .iter()
         .filter(|r| r.when.open_at(day, minute))
         .flat_map(|r| r.channel_ids.iter().copied())
+        .filter(|c| hears(c))
         .collect();
     if !open.is_empty() {
         return RouteNow::Rules(open);
     }
+    let catch_all: BTreeSet<Uuid> = catch_all.iter().copied().filter(|c| hears(c)).collect();
     if !catch_all.is_empty() {
-        return RouteNow::CatchAll(catch_all.iter().copied().collect());
+        return RouteNow::CatchAll(catch_all);
     }
-    if matched.iter().any(|r| !r.channel_ids.is_empty()) {
+    if matched.iter().any(|r| r.channel_ids.iter().any(hears)) {
         RouteNow::Held
     } else {
         RouteNow::Nowhere
@@ -142,6 +157,7 @@ pub fn route_local(matched: &[&RoutingRule], catch_all: &[Uuid], day: u8, minute
 pub fn next_change(
     matched: &[&RoutingRule],
     catch_all: &[Uuid],
+    hears: Hears<'_>,
     clock: &RuleClock,
     node: Option<NodeId>,
     now: DateTime<Utc>,
@@ -149,14 +165,14 @@ pub fn next_change(
     if matched.iter().all(|r| r.when.mode == WhenMode::Always) {
         return None;
     }
-    let here = route_at(matched, catch_all, clock, node, now);
+    let here = route_at(matched, catch_all, hears, clock, node, now);
     let start = now
         .with_second(0)
         .and_then(|t| t.with_nanosecond(0))
         .unwrap_or(now);
     (1..=LOOKAHEAD_MINUTES)
         .map(|m| start + Duration::minutes(m))
-        .find(|t| route_at(matched, catch_all, clock, node, *t) != here)
+        .find(|t| route_at(matched, catch_all, hears, clock, node, *t) != here)
 }
 
 /// The zone each node keeps time in: its nearest folder's, else `default`. `nodes` is every node's
@@ -233,13 +249,17 @@ pub struct CoverageNode {
 
 /// The week of one set of matching rules, slot by slot, merged into stretches.
 #[must_use]
-pub fn week_of(matched: &[&RoutingRule], catch_all: &[Uuid]) -> Vec<CoverageSegment> {
+pub fn week_of(
+    matched: &[&RoutingRule],
+    catch_all: &[Uuid],
+    hears: Hears<'_>,
+) -> Vec<CoverageSegment> {
     let mut out: Vec<CoverageSegment> = Vec::new();
     for day in 1..=7u8 {
         for slot in 0..(1440 / COVERAGE_SLOT_MINUTES) {
             let minute = slot * COVERAGE_SLOT_MINUTES;
             let start = u16::from(day - 1) * 1440 + minute;
-            let route = route_local(matched, catch_all, day, minute);
+            let route = route_local(matched, catch_all, hears, day, minute);
             let kind = match route {
                 RouteNow::Rules(_) => CoverageKind::Rules,
                 RouteNow::CatchAll(_) => CoverageKind::CatchAll,
@@ -270,6 +290,7 @@ pub fn week_of(matched: &[&RoutingRule], catch_all: &[Uuid]) -> Vec<CoverageSegm
 pub fn coverage(
     rules: &[RoutingRule],
     catch_all: &[Uuid],
+    hears: Hears<'_>,
     severity: yagra_common::Severity,
     nodes: &[CoverageNode],
     edges: &[(Uuid, Option<Uuid>)],
@@ -316,7 +337,7 @@ pub fn coverage(
                 .filter(|r| rule_ids.contains(&r.id))
                 .collect();
             CoverageRow {
-                segments: week_of(&matched, catch_all),
+                segments: week_of(&matched, catch_all, hears),
                 rule_ids,
                 zone,
                 node_count: members.len(),
@@ -391,8 +412,10 @@ impl PlaceRoutes {
             .get(&group)
             .map_or_else(|| self.default.clone(), |(z, _)| z.clone());
         let clock = RuleClock::new(HashMap::new(), zone);
-        let route = route_at(&matched, &self.catch_all, &clock, None, now);
-        let until = next_change(&matched, &self.catch_all, &clock, None, now);
+        // A switched-off channel hears nothing (`names` holds the enabled ones only).
+        let hears = |id: &Uuid| self.names.contains_key(id);
+        let route = route_at(&matched, &self.catch_all, &hears, &clock, None, now);
+        let until = next_change(&matched, &self.catch_all, &hears, &clock, None, now);
         let name_of = |id: &Uuid| self.names.get(id).cloned();
         let answer = match route {
             RouteNow::Rules(c) => Some(DeliveryNow {
@@ -442,6 +465,9 @@ mod tests {
     use crate::alerts::notifications::RuleWhen;
     use chrono::TimeZone;
 
+    /// Every channel hears: the channels these tests name all exist and are switched on.
+    const ALL: fn(&Uuid) -> bool = |_| true;
+
     fn rule(channel: Uuid, mode: WhenMode) -> RoutingRule {
         RoutingRule {
             id: Uuid::new_v4(),
@@ -476,15 +502,15 @@ mod tests {
         let clock = RuleClock::default();
         let both = [&day, &night];
         assert_eq!(
-            route_at(&both, &[], &clock, None, at(23, 10, 0)),
+            route_at(&both, &[], &ALL, &clock, None, at(23, 10, 0)),
             RouteNow::Rules([mail].into_iter().collect())
         );
         assert_eq!(
-            route_at(&both, &[], &clock, None, at(23, 22, 0)),
+            route_at(&both, &[], &ALL, &clock, None, at(23, 22, 0)),
             RouteNow::Rules([oncall].into_iter().collect())
         );
         assert_eq!(
-            next_change(&both, &[], &clock, None, at(23, 10, 0)),
+            next_change(&both, &[], &ALL, &clock, None, at(23, 10, 0)),
             Some(at(23, 17, 20)),
             "the day rule closes at 17:20, local"
         );
@@ -497,15 +523,15 @@ mod tests {
         let clock = RuleClock::default();
         let saturday = at(28, 10, 0);
         assert_eq!(
-            route_at(&[&day], &[chat], &clock, None, saturday),
+            route_at(&[&day], &[chat], &ALL, &clock, None, saturday),
             RouteNow::CatchAll([chat].into_iter().collect())
         );
         assert_eq!(
-            route_at(&[&day], &[], &clock, None, saturday),
+            route_at(&[&day], &[], &ALL, &clock, None, saturday),
             RouteNow::Held
         );
         assert_eq!(
-            next_change(&[&day], &[], &clock, None, saturday),
+            next_change(&[&day], &[], &ALL, &clock, None, saturday),
             Some(at(30, 8, 30)),
             "held until Monday 08:30"
         );
@@ -516,11 +542,11 @@ mod tests {
         let chat = Uuid::new_v4();
         let clock = RuleClock::default();
         assert_eq!(
-            route_at(&[], &[chat], &clock, None, at(23, 10, 0)),
+            route_at(&[], &[chat], &ALL, &clock, None, at(23, 10, 0)),
             RouteNow::CatchAll([chat].into_iter().collect())
         );
         assert_eq!(
-            route_at(&[], &[], &clock, None, at(23, 10, 0)),
+            route_at(&[], &[], &ALL, &clock, None, at(23, 10, 0)),
             RouteNow::Nowhere
         );
     }
@@ -531,7 +557,7 @@ mod tests {
         let always = rule(mail, WhenMode::Always);
         let clock = RuleClock::default();
         assert_eq!(
-            next_change(&[&always], &[], &clock, None, at(23, 3, 0)),
+            next_change(&[&always], &[], &ALL, &clock, None, at(23, 3, 0)),
             None
         );
         let empty = RoutingRule {
@@ -539,12 +565,48 @@ mod tests {
             ..rule(mail, WhenMode::Always)
         };
         assert_eq!(
-            route_at(&[&empty], &[chat], &clock, None, at(23, 3, 0)),
+            route_at(&[&empty], &[chat], &ALL, &clock, None, at(23, 3, 0)),
             RouteNow::CatchAll([chat].into_iter().collect())
         );
         assert_eq!(
-            route_at(&[&empty], &[], &clock, None, at(23, 3, 0)),
+            route_at(&[&empty], &[], &ALL, &clock, None, at(23, 3, 0)),
             RouteNow::Nowhere
+        );
+    }
+
+    /// A channel that is switched off (or deleted) hears nothing, so it neither keeps an alert from
+    /// the catch-all nor counts as a place to hold it for, and the catch-all naming only such a
+    /// channel is no catch-all.
+    #[test]
+    fn a_channel_that_cannot_hear_counts_as_no_channel() {
+        let (off, chat) = (Uuid::new_v4(), Uuid::new_v4());
+        let hears = |id: &Uuid| *id != off;
+        let clock = RuleClock::default();
+        let open = rule(off, WhenMode::Always);
+        assert_eq!(
+            route_at(&[&open], &[chat], &hears, &clock, None, at(23, 10, 0)),
+            RouteNow::CatchAll([chat].into_iter().collect()),
+            "an open rule whose only channel is off falls to the catch-all"
+        );
+        assert_eq!(
+            route_at(&[&open], &[], &hears, &clock, None, at(23, 10, 0)),
+            RouteNow::Nowhere,
+            "and without one it reaches nobody, which is not a reason to hold"
+        );
+        let day = rule(chat, WhenMode::During);
+        assert_eq!(
+            route_at(&[&day], &[off], &hears, &clock, None, at(28, 10, 0)),
+            RouteNow::Held,
+            "a catch-all naming only an off channel does not take a closed rule's alert"
+        );
+        assert_eq!(
+            week_of(&[&open], &[off], &hears),
+            vec![CoverageSegment {
+                start: 0,
+                end: 7 * 1440,
+                kind: CoverageKind::Nowhere,
+                channel_ids: Vec::new(),
+            }]
         );
     }
 
@@ -579,6 +641,7 @@ mod tests {
         let rows = coverage(
             &rules,
             &[],
+            &ALL,
             yagra_common::Severity::Critical,
             &nodes,
             &edges,
@@ -604,7 +667,14 @@ mod tests {
             }]
         );
         // At warning, the critical-only rule no longer reaches the core node.
-        let warn = coverage(&rules, &[], yagra_common::Severity::Warning, &nodes, &edges);
+        let warn = coverage(
+            &rules,
+            &[],
+            &ALL,
+            yagra_common::Severity::Warning,
+            &nodes,
+            &edges,
+        );
         assert_eq!(warn.len(), 2);
     }
 

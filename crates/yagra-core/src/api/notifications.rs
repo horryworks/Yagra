@@ -1352,6 +1352,16 @@ pub(crate) async fn coverage_in(
     };
     let rules = admin.notifications.list_rules().await.map_err(fail)?;
     let catch_all = admin.notifications.catch_all().await.map_err(fail)?;
+    // A switched-off channel hears nothing, so a stretch sent only to one is not covered.
+    let enabled: std::collections::HashSet<Uuid> = admin
+        .notifications
+        .list_channels()
+        .await
+        .map_err(fail)?
+        .into_iter()
+        .filter(|c| c.enabled)
+        .map(|c| c.id)
+        .collect();
     let nodes = admin.repo.list_nodes().await.map_err(fail)?;
     let rows = admin.groups.time_zone_rows().await.map_err(fail)?;
     let edges: Vec<(Uuid, Option<Uuid>)> = rows.iter().map(|(g, p, _)| (*g, *p)).collect();
@@ -1371,7 +1381,14 @@ pub(crate) async fn coverage_in(
         .collect();
     Ok(RoutingCoverage {
         severity,
-        rows: crate::alerts::rule_time::coverage(&rules, &catch_all, severity, &nodes, &edges),
+        rows: crate::alerts::rule_time::coverage(
+            &rules,
+            &catch_all,
+            &|id: &Uuid| enabled.contains(id),
+            severity,
+            &nodes,
+            &edges,
+        ),
         catch_all,
     })
 }

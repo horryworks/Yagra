@@ -654,17 +654,22 @@ pub(crate) async fn load_routing(
     repo: &NodeRepo,
     groups: &groups::GroupRepo,
 ) {
-    let channels = notifications
-        .list_open_channels()
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to load notification channels");
-            Vec::new()
-        });
-    let rules = notifications.list_rules().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "failed to load routing rules");
-        Vec::new()
-    });
+    // A failed read keeps the whole previous snapshot (ADR-080): an empty rule list would send
+    // every alert to the catch-all and drop every folder rule's reach until the next refresh.
+    let channels = match notifications.list_open_channels().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load notification channels; keeping the last");
+            return;
+        }
+    };
+    let rules = match notifications.list_rules().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to load routing rules; keeping the last");
+            return;
+        }
+    };
     if rules.iter().any(|r| r.enabled && !r.group_ids.is_empty()) {
         match tokio::try_join!(repo.folder_rows(), groups.edges()) {
             Ok((nodes, edges)) => {

@@ -38,6 +38,13 @@
 - **Notification delivery reads more plainly: the catch-all is the rule table's last row, and Coverage stands on its own.** The catch-all sits under the last rule in the same columns (All nodes, "No other rule sends it", its channels or "None: waits for a rule's hours") and is set from that row; it is not counted or filtered with the rules. The environment's route (`YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*`) is no longer drawn as an "Always also sends to" line: while one is set, one line under the table says every alert is also copied there (`.env`), and nothing is drawn when none is. Coverage has its own heading naming what it draws ("Who gets a Critical alert, by day"), says above the week how many of all the nodes reach nobody (or are held) at times with a button to set the catch-all's channels, and labels each row with its node count over its rules and zone (ADR-262 decision 12).
 - **The delivery log is its own page, Alerts ▸ Delivery log** (under Monitor, beside History). It used to sit at the foot of Notification delivery. A channel's **Show delivery log** now opens that page narrowed to the channel (`/alerts/deliveries?channel=<id>`). The log's filters keep their names but lose the `log.` prefix in the address, so a link saved from the old place opens Notification delivery without the log.
 
+
+### Bug Fixes
+
+- **A routing rule or catch-all whose channels are switched off no longer swallows the alert.** A switched-off channel hears nothing, so a rule naming only such channels now lets the alert fall to the catch-all, or be held until a rule opens, instead of sending it nowhere. The catch-all naming only switched-off channels counts as none. Coverage and the "Goes to …" line beside a site's clock read the same way.
+- **Deleting a channel takes it out of the catch-all too.** Left there, it kept the catch-all "set" with nothing to send to, so an alert whose rules were all closed reached nobody instead of being held, while the rule table said it would wait.
+- **A failed read of the routing rules keeps the previous routing** instead of dropping every rule until the next refresh, which would have sent every alert to the catch-all for up to 30 seconds.
+
 ## v0.3.83 — Send a routing rule's alerts only for nodes carrying its tags, link every notification to the node's page in Yagra, and save Cisco Nexus configs
 
 ### Breaking changes
