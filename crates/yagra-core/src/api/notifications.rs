@@ -1745,8 +1745,9 @@ pub(crate) struct RuleOrder {
 /// Replace the order of the routing rules (ADR-262 decision 14).
 ///
 /// Rules are read top to bottom, and the first enabled one whose severity and target match an
-/// alert alone decides where it goes: to its channels while its hours are open, otherwise held
-/// until they open. The body names **every** rule: one naming a different set - because a rule
+/// alert and whose hours are open alone decides where it goes: to its channels, or, for a
+/// holding rule, nowhere until another rule decides. A rule whose hours are closed is passed
+/// over. The body names **every** rule: one naming a different set - because a rule
 /// was added or deleted after the caller read the list - is refused with 409 and changes nothing.
 #[utoipa::path(
     put, path = "/api/v1/routing-rules/order", tag = "notifications",

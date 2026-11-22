@@ -23238,7 +23238,7 @@
           "notifications"
         ],
         "summary": "Replace the order of the routing rules (ADR-262 decision 14).",
-        "description": "Rules are read top to bottom, and the first enabled one whose severity and target match an\nalert alone decides where it goes: to its channels while its hours are open, otherwise held\nuntil they open. The body names **every** rule: one naming a different set - because a rule\nwas added or deleted after the caller read the list - is refused with 409 and changes nothing.",
+        "description": "Rules are read top to bottom, and the first enabled one whose severity and target match an\nalert and whose hours are open alone decides where it goes: to its channels, or, for a\nholding rule, nowhere until another rule decides. A rule whose hours are closed is passed\nover. The body names **every** rule: one naming a different set - because a rule\nwas added or deleted after the caller read the list - is refused with 409 and changes nothing.",
         "operationId": "set_routing_rule_order",
         "requestBody": {
           "content": {

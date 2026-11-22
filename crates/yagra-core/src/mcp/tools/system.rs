@@ -901,11 +901,14 @@ impl YagraMcp {
                        notification_channels, routing_rules (each with the `group_ids` a node \
                        must be inside and the `tags` it must carry one of, joined by `join` \
                        (`or`: either is enough, `and`: both); both empty = every node; and `when`: `always`, or `during` / `outside` a weekly window of ISO \
-                       weekdays and minutes after midnight, read in the node's own zone — a rule \
-                       is only sent to while it is open), node_tags (every tag some node carries \
+                       weekdays and minutes after midnight, read in the node's own zone; listed in \
+                       order, and only the first open rule that matches an alert decides where it \
+                       goes — rules below it do not hear it; `hold` true means that rule sends \
+                       nowhere and keeps the alert back until another rule decides), node_tags (every tag some node carries \
                        among its effective labels, with how many nodes carry it — the names a \
                        routing rule can usefully name), routing_catch_all (the channels an alert \
-                       goes to when no rule that matches it is open; empty = it is held until one \
+                       goes to when no open rule that matches it decides — a holding rule \
+                       keeps it from the catch-all too; empty = it is held until one \
                        opens if a rule matches, and reaches no channel if none does), routing_coverage (every node grouped by the rules of one `severity`, critical unless asked, \
                        that match it and the zone it keeps time in, with where its alerts go across \
                        the week in stretches of minutes from Monday 00:00 local: to the rules' \
