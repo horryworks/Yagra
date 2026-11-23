@@ -78,17 +78,18 @@ pub enum DeleteOutcome {
     Blocked(DeleteBlocked),
 }
 
-/// The six places, as `(table, column)`. Read by both writes, so a seventh column is added once.
+/// The six places, as `(table, column, kind)`. Read by both writes and by [`uses`], so a seventh
+/// column is added once. `kind` names the [`TagUses`] field the place counts towards.
 ///
 /// ⚠️ `nodes` is first and is the only table with an `updated_at` the writes keep current; the
 /// statement builder below special-cases it by name.
-const PLACES: [(&str, &str); 6] = [
-    ("nodes", "tags"),
-    ("nodes", "tags_excluded"),
-    ("node_groups", "tags"),
-    ("node_groups", "tags_excluded"),
-    ("routing_rules", "tags"),
-    ("alert_grouping_exceptions", "tags"),
+const PLACES: [(&str, &str, &str); 6] = [
+    ("nodes", "tags", "node"),
+    ("nodes", "tags_excluded", "refusal"),
+    ("node_groups", "tags", "folder"),
+    ("node_groups", "tags_excluded", "refusal"),
+    ("routing_rules", "tags", "rule"),
+    ("alert_grouping_exceptions", "tags", "exception"),
 ];
 
 fn into_rewrite(counts: [u64; 6]) -> TagRewrite {
@@ -113,16 +114,16 @@ fn touch(table: &str) -> &'static str {
 /// Every tag named anywhere, with where. A tag named only by a rule, an exception or a refusal is
 /// listed too: it is exactly the kind of leftover the list is for.
 pub async fn uses(pool: &PgPool) -> anyhow::Result<BTreeMap<String, TagUses>> {
-    let rows = sqlx::query(
-        "SELECT t, kind, count(*) AS n FROM ( \
-             SELECT unnest(tags) AS t, 'node' AS kind FROM nodes \
-             UNION ALL SELECT unnest(tags), 'folder' FROM node_groups \
-             UNION ALL SELECT unnest(tags_excluded), 'refusal' FROM nodes \
-             UNION ALL SELECT unnest(tags_excluded), 'refusal' FROM node_groups \
-             UNION ALL SELECT unnest(tags), 'rule' FROM routing_rules \
-             UNION ALL SELECT unnest(tags), 'exception' FROM alert_grouping_exceptions \
-         ) s GROUP BY t, kind",
-    )
+    let places = PLACES
+        .iter()
+        .map(|(table, col, kind)| {
+            format!("SELECT unnest({col}) AS t, '{kind}' AS kind FROM {table}")
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    let rows = sqlx::query(&format!(
+        "SELECT t, kind, count(*) AS n FROM ({places}) s GROUP BY t, kind"
+    ))
     .fetch_all(pool)
     .await?;
     let mut out: BTreeMap<String, TagUses> = BTreeMap::new();
@@ -152,7 +153,7 @@ pub async fn uses(pool: &PgPool) -> anyhow::Result<BTreeMap<String, TagUses>> {
 pub async fn rename(pool: &PgPool, from: &str, to: &str) -> anyhow::Result<TagRewrite> {
     let mut tx = pool.begin().await?;
     let mut counts = [0u64; 6];
-    for (i, (table, col)) in PLACES.iter().enumerate() {
+    for (i, (table, col, _)) in PLACES.iter().enumerate() {
         let res = sqlx::query(&format!(
             "UPDATE {table} SET {col} = CASE WHEN $2 = ANY({col}) \
                  THEN array_remove({col}, $1) ELSE array_replace({col}, $1, $2) END{touch} \
@@ -210,7 +211,7 @@ pub async fn delete(pool: &PgPool, tag: &str) -> anyhow::Result<DeleteOutcome> {
         }));
     }
     let mut counts = [0u64; 6];
-    for (i, (table, col)) in PLACES.iter().enumerate() {
+    for (i, (table, col, _)) in PLACES.iter().enumerate() {
         let res = sqlx::query(&format!(
             "UPDATE {table} SET {col} = array_remove({col}, $1){touch} WHERE $1 = ANY({col})",
             touch = touch(table),
