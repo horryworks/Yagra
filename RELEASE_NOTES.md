@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.87 — Rename, merge or delete a tag everywhere at once from Nodes ▸ Tags, an upgrade's maintenance window that covers the restart, and the pre-upgrade backup's progress on screen
+
 ### New Features
 
 - **Nodes ▸ Tags lists every tag the deployment names and renames or deletes one everywhere at once.** Each row says how many nodes carry the tag (with what they inherit from their folders), how many carry it themselves, how many folders hand it down, and how many notification routing rules and alert-grouping exceptions name it. A rename reaches nodes, folders, the tags they refuse to inherit, routing rules and grouping exceptions in one transaction, so a rule never keeps waiting for the old spelling; renaming onto a tag that already exists merges the two. A delete is refused (`409 tag_still_targeted`) while a routing rule or a grouping exception would widen without the tag: one naming only that tag and no folder would reach every node, and one joining it to its folders with *and* would reach the whole folders. New endpoints: `POST /api/v1/node-tags/rename` (`from`, `to`) and `POST /api/v1/node-tags/delete` (`tag`), Admin only, each answering how many rows changed per place. `GET /api/v1/node-tags` (and MCP `get_config(kind=node_tags)`) now gives each tag `own`, `folders`, `refusals`, `rules` and `exceptions`, and also lists tags no node carries but something still names, with `nodes` 0 (ADR-263).
