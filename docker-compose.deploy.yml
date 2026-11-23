@@ -976,10 +976,16 @@ services:
         set -u
         TAG="$$1"; RUN="$$2"; BY="$$3"; BUNDLE="$${4:-}"; D=/data/upgrade
         if [ -n "$$BUNDLE" ]; then CMD=bundle; else CMD=apply; fi
-        say() { # <state> <step> <message>
+        # `put_status` alone is what the Upgrade page reads; `say` also appends to the run's log.
+        # The backup's progress ticks use `put_status` only (ADR-050 decision 27): one line every
+        # 15 s for a 40-minute copy would bury the log's real steps under 160 copies of one.
+        put_status() { # <state> <step> <message>
           printf '{"id":"%s","command":"%s","target":"%s","state":"%s","step":"%s","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
             "$$RUN" "$$CMD" "$$TAG" "$$1" "$$2" "$$3" "$$START" "$${FIN:-null}" "$$BY" > "$$D/status.json.tmp"
           mv "$$D/status.json.tmp" "$$D/status.json"
+        }
+        say() { # <state> <step> <message>
+          put_status "$$1" "$$2" "$$3"
           printf '{"at":%s,"step":"%s","message":"%s"}\n' "$$(date +%s)" "$$2" "$$3" >> "$$D/log.ndjson"
         }
         fail() { FIN=$$(date +%s); say failed "$$1" "$$2"; exit 1; }
@@ -1237,9 +1243,63 @@ services:
             say running backup "backing up the keys, the database and the metrics, because VictoriaMetrics changes from $${VM_NOW:-unknown} to $${VM_NEXT:-unknown}"
           fi
         fi
-        ( cd "$$WORKDIR" && YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
+        # 2c. Show the metrics copy moving (ADR-050 Inc.8, decisions 25-27). The step above says
+        #     its sentence once, and the copy then ran in silence: measured 2026-11-23 on a PoC
+        #     deployment, 7.7 GB at 2.7 MB/s left the page on one unchanging line for 40 minutes,
+        #     and a slow step cannot be told from a stuck one. So a watcher re-states the step
+        #     every 15 s with what has been written against what `du` measured above. "about",
+        #     because VictoriaMetrics' parts are already compressed and gzip barely shrinks them.
+        #     The archive is found by NAME: the newest `yagra-backup-*` that was not there before
+        #     the backup started. Passing the script a directory would be simpler, but the script
+        #     is the one in the RUNNING core image, so this must work with every version of it.
+        #     🚨 The watcher decides nothing: the backup's own exit status is the verdict, and the
+        #     watcher is stopped and reaped on either outcome before anything else writes status.
+        BK_PREV=$$(ls -d "$$WORKDIR"/yagra-backup-* 2>/dev/null | sort | tail -1)
+        commas() { awk -v n="$$1" 'BEGIN { s = sprintf("%d", n); while (s ~ /[0-9][0-9][0-9][0-9]/) sub(/[0-9][0-9][0-9]($$|,)/, ",&", s); print s }'; }
+        backup_progress() { # <pid of the backup>
+          n=0
+          while kill -0 "$$1" 2>/dev/null; do
+            sleep 1; n=$$((n + 1))
+            [ $$((n % 15)) -eq 0 ] || continue
+            b=$$(ls -d "$$WORKDIR"/yagra-backup-* 2>/dev/null | sort | tail -1)
+            { [ -n "$$b" ] && [ "$$b" != "$$BK_PREV" ] && [ -f "$$b/vm/snapshot.tar.gz" ]; } || continue
+            mb=$$(du -k "$$b/vm/snapshot.tar.gz" 2>/dev/null | awk 'NR==1 && $$1 ~ /^[0-9]+$$/ {print int($$1 / 1024)}')
+            [ -n "$$mb" ] || continue
+            if [ -n "$${VM_KB:-}" ]; then
+              m="copying the metrics: $$(commas "$$mb") of about $$(commas $$((VM_KB / 1024))) MB"
+            else
+              m="copying the metrics: $$(commas "$$mb") MB so far"
+            fi
+            put_status running backup "$$m" 2>/dev/null || true
+          done
+        }
+        ( cd "$$WORKDIR" && YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh ) &
+        BK_PID=$$!
+        WATCH_PID=
+        if [ "$$SKIPM" = 0 ]; then backup_progress "$$BK_PID" & WATCH_PID=$$!; fi
+        wait "$$BK_PID"; BK_RC=$$?
+        if [ -n "$$WATCH_PID" ]; then kill "$$WATCH_PID" 2>/dev/null; wait "$$WATCH_PID" 2>/dev/null; fi
+        [ "$$BK_RC" -eq 0 ] || fail backup "the pre-upgrade backup failed"
 
         # 3. Install the staged composition. The host's .env is never touched.
+        #
+        #    First, have core pause alerting for the restart (ADR-050 Inc.9, decisions 28-29). The
+        #    window is opened HERE, not at the click: on a PoC deployment the backup took 40 minutes,
+        #    and a window opened at the click had expired 26 minutes before anything restarted.
+        #    The core that wrote the request watches status.json, opens the window when this run
+        #    reaches `compose`, and answers in `restart-window` with this run's id. Up to 20 s, then
+        #    go on regardless: a restart that alerts is better than an upgrade that does not happen,
+        #    and a core that never answers is either gone or older than this procedure.
+        say running compose "asking core to pause alerting for the restart"
+        i=0
+        while [ $$i -lt 20 ] && [ "$$(cat "$$D/restart-window" 2>/dev/null)" != "$$RUN" ]; do
+          sleep 1; i=$$((i+1))
+        done
+        if [ "$$(cat "$$D/restart-window" 2>/dev/null)" = "$$RUN" ]; then
+          say running compose "core paused alerting for the restart"
+        else
+          say running compose "core did not answer within 20 seconds; restarting without pausing alerting"
+        fi
         say running compose "installing the $$TAG composition"
         cp /tmp/target-compose.yml "$$WORKDIR/docker-compose.deploy.yml" \
           || fail compose "could not write the $$TAG composition into the deployment directory"

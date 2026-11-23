@@ -26,25 +26,51 @@ use sqlx::{PgPool, Row};
 
 use yagra_base::atomic_file::write_atomically;
 
-/// How long the fleet-wide maintenance window opened by an apply may last.
+/// How long the fleet-wide maintenance window opened for an upgrade's restart may last.
 ///
-/// **Bounded before the run starts *and* closed when it ends** (ADR-050 decision 12). core is
+/// **Bounded when it opens *and* closed when the run ends** (ADR-050 decision 12). core is
 /// restarted by the operation it requested, so the process that opens the window is never the one
 /// that could close it — the core that comes back does that, in
 /// [`UpgradeRepo::settle_finished_run`]. This bound is the backstop for the run that never reports
-/// at all: a run that dies partway must not leave the whole fleet silent for good.
+/// at all, and while it holds the engine judges nothing fleet-wide (ADR-160) — so shorter is safer.
 ///
-/// ⚠️ Fifteen minutes is a placeholder and now a demonstrably generous one: the first measured
-/// apply on real hardware (2026-08-11, v0.2.1→v0.2.2, test server) took **65 seconds** end to end —
-/// backup 5s, pull 34s, recreate 24s. It fits inside `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` (300s)
-/// with room to spare, which is what ADR-050 asked this number to be checked against. It stays at
-/// 900 because it now only bounds the *pathological* case, and one measurement on one link is not a
-/// distribution: shortening it would trade a harmless idle margin for a fleet that starts alerting
-/// about itself mid-upgrade on a slower connection.
-pub const MAINTENANCE_WINDOW_SECS: i64 = 900;
+/// Five minutes since ADR-050 Inc.9 (decision 30, the user's choice; it was 900). The window no
+/// longer opens at the click but when the run reaches its restart step
+/// ([`UpgradeRepo::open_window_before_restart`]), so all it has to cover is the recreate and the
+/// verify: measured at 24 seconds on the test server and under two minutes on a PoC deployment.
+/// The fifteen minutes it used to be was spent on the backup instead — 40 minutes there, so the
+/// window expired 26 minutes before anything restarted. A release whose migration outlasts this
+/// alerts a little at the restart, which is the better side of the trade.
+pub const MAINTENANCE_WINDOW_SECS: i64 = 300;
+
+/// How long [`UpgradeRepo::settle_finished_run`] waits for the run that replaced this process to
+/// report an outcome.
+///
+/// Kept apart from [`MAINTENANCE_WINDOW_SECS`] since ADR-050 Inc.9 (decision 30): the window's
+/// bound became five minutes, but the audit row this watch writes is just as true after that, and
+/// the updater's own verify waits up to five minutes for core before it reports.
+const SETTLE_WATCH_SECS: u64 = 900;
 
 /// How often [`UpgradeRepo::settle_finished_run`] re-reads `status.json` while a run is in flight.
 const RUN_WATCH_TICK: Duration = Duration::from_secs(5);
+
+/// The file core writes into the hand-off directory once it has opened the restart window, holding
+/// the run's id (ADR-050 Inc.9, decision 29). The updater waits for it before recreating anything.
+///
+/// ⚠️ The updater spells this name in `docker-compose.deploy.yml`;
+/// `tests::the_updater_waits_for_the_restart_window_before_it_recreates` pins the two together.
+pub const RESTART_WINDOW_FILE: &str = "restart-window";
+
+/// How often [`UpgradeRepo::open_window_before_restart`] reads `status.json`. One second, not
+/// [`RUN_WATCH_TICK`]: the updater waits at most 20 seconds for the answer.
+const RESTART_WATCH_TICK: Duration = Duration::from_secs(1);
+
+/// How long the updater may take to pick the request up before the restart watch gives up on it.
+const RESTART_WATCH_UNCLAIMED: Duration = Duration::from_secs(300);
+
+/// The longest a run may take to reach its restart step before the watch gives up. A metrics copy
+/// has been measured at 40 minutes; this only has to stop a watch that would otherwise never end.
+const RESTART_WATCH_MAX: Duration = Duration::from_secs(12 * 60 * 60);
 
 /// The request-file format version core writes and the updater checks (ADR-050 decision 14).
 ///
@@ -985,6 +1011,55 @@ fn watch_step(run: Option<&RunStatus>, expired: bool) -> WatchStep {
     }
 }
 
+/// What [`UpgradeRepo::open_window_before_restart`] does with the status it just read.
+#[derive(Debug, PartialEq, Eq)]
+enum RestartWatch {
+    /// The run reached its restart step: open the window now.
+    Open,
+    /// Not yet. Sleep and look again.
+    Wait,
+    /// The run will not restart anything, or the watch has run out of time.
+    Stop,
+}
+
+/// The step the updater announces just before it recreates the containers. The verify step comes
+/// after it, so a run read there has already restarted and the window is still worth opening.
+fn is_restart_step(step: Option<&str>) -> bool {
+    matches!(step, Some("compose" | "verify"))
+}
+
+/// Split out from the loop for the reason [`watch_step`] is: the decision is testable without a
+/// filesystem or a clock.
+///
+/// `unclaimed_expired` is "the updater has had long enough to pick the request up"; `expired` is
+/// the watch's overall bound.
+fn restart_watch(
+    run: Option<&RunStatus>,
+    id: &str,
+    unclaimed_expired: bool,
+    expired: bool,
+) -> RestartWatch {
+    match run {
+        // status.json still names the previous run, or none: the updater has not picked this one
+        // up yet. That is normal for a few seconds and a dead updater after that.
+        Some(run) if run.id == id => {
+            if !run.is_running() {
+                // Finished before the restart step: it failed earlier (a backup, a pull), and a
+                // failed run restarts nothing, so there is nothing to pause alerting for.
+                RestartWatch::Stop
+            } else if is_restart_step(run.step.as_deref()) {
+                RestartWatch::Open
+            } else if expired {
+                RestartWatch::Stop
+            } else {
+                RestartWatch::Wait
+            }
+        }
+        _ if unclaimed_expired || expired => RestartWatch::Stop,
+        _ => RestartWatch::Wait,
+    }
+}
+
 /// Reads the migration history, and the shared volume the updater sidecar talks over.
 ///
 /// `dir` is `None` when `YAGRA_UPGRADE_DIR` is unset, which is the default and means the whole
@@ -1252,6 +1327,68 @@ impl UpgradeRepo {
         }
     }
 
+    /// Open the fleet-wide window when run `id` reaches its restart step, then tell the updater
+    /// (ADR-050 Inc.9, decisions 28-29).
+    ///
+    /// Run by the core that wrote the request, right after writing it. The window used to open at
+    /// the click and last fifteen minutes; a 40-minute metrics copy on a PoC deployment meant it
+    /// had paused every judgement through the first part of the backup — while core was running
+    /// normally — and expired 26 minutes before the restart it existed for.
+    ///
+    /// The answer file is written whether or not the window could be opened: the updater waits
+    /// for it only so it does not restart before the window exists, and a window that failed to
+    /// open will not exist any sooner for waiting. Returns whether the window was opened.
+    ///
+    /// Ends on its own (see [`restart_watch`]); when this process is stopped first, the updater
+    /// waits 20 seconds and restarts without the window.
+    pub async fn open_window_before_restart(
+        &self,
+        id: &str,
+        name: &str,
+        windows: &dyn crate::UpgradeWindows,
+    ) -> bool {
+        let Some(dir) = self.dir.as_deref() else {
+            return false;
+        };
+        let start = tokio::time::Instant::now();
+        loop {
+            let waited = start.elapsed();
+            match restart_watch(
+                self.last_run().as_ref(),
+                id,
+                waited >= RESTART_WATCH_UNCLAIMED,
+                waited >= RESTART_WATCH_MAX,
+            ) {
+                RestartWatch::Wait => tokio::time::sleep(RESTART_WATCH_TICK).await,
+                RestartWatch::Stop => {
+                    tracing::info!(run = %id, "the upgrade did not reach its restart; no window opened");
+                    return false;
+                }
+                RestartWatch::Open => break,
+            }
+        }
+        let opened = match windows.open_upgrade_window(name).await {
+            Ok(()) => {
+                tracing::info!(run = %id, "opened the maintenance window for the upgrade's restart");
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e, run = %id,
+                    "could not open the maintenance window; the restart may alert"
+                );
+                false
+            }
+        };
+        if let Err(e) = write_atomically(&dir.join(RESTART_WINDOW_FILE), id.as_bytes(), 0o644) {
+            tracing::warn!(
+                error = %e, run = %id,
+                "could not answer the updater; it restarts after waiting 20 seconds"
+            );
+        }
+        opened
+    }
+
     /// Wait for the run that replaced this process to report an outcome, then settle it: one audit
     /// row, and the fleet-wide maintenance window closed.
     ///
@@ -1268,7 +1405,7 @@ impl UpgradeRepo {
     /// deployment: `status.json` unclaimed, no outcome row, only the `POST` that requested it.
     ///
     /// Spawned, never awaited — it sleeps for as long as the run does, bounded by
-    /// [`MAINTENANCE_WINDOW_SECS`], past which both things it exists to do are moot.
+    /// [`SETTLE_WATCH_SECS`].
     /// Returns the settled run, so the caller can start the poller convergence that must follow a
     /// successful one (ADR-051). `None` when there was nothing to settle or another core claimed it
     /// — in both cases this process must not also drive the pollers, or two cores would issue the
@@ -1279,8 +1416,7 @@ impl UpgradeRepo {
         maintenance: &dyn crate::UpgradeWindows,
     ) -> Option<RunStatus> {
         let dir = self.dir.as_deref()?;
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_secs(MAINTENANCE_WINDOW_SECS.unsigned_abs());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(SETTLE_WATCH_SECS);
         let run = loop {
             let run = self.last_run();
             match watch_step(run.as_ref(), tokio::time::Instant::now() >= deadline) {
@@ -2053,6 +2189,129 @@ pub mod tests {
     #[test]
     fn no_run_at_all_stops_immediately() {
         assert_eq!(watch_step(None, false), WatchStep::Stop);
+    }
+
+    fn run_at(state: &str, step: &str) -> RunStatus {
+        RunStatus {
+            step: Some(step.to_owned()),
+            ..run_in_state(state)
+        }
+    }
+
+    /// ADR-050 Inc.9: the restart watch opens the window at the restart and at no other step.
+    ///
+    /// The backup is the step that matters: 40 minutes on a PoC deployment, with core up the whole
+    /// time. Opening there is what paused the fleet for nothing and let the window expire first.
+    #[test]
+    fn the_restart_watch_opens_only_at_the_restart() {
+        let id = run_in_state("running").id;
+        for step in ["start", "pull", "backup"] {
+            assert_eq!(
+                restart_watch(Some(&run_at("running", step)), &id, false, false),
+                RestartWatch::Wait,
+                "{step} restarts nothing yet"
+            );
+        }
+        for step in ["compose", "verify"] {
+            assert_eq!(
+                restart_watch(Some(&run_at("running", step)), &id, false, false),
+                RestartWatch::Open,
+                "{step} is the restart, or just past it"
+            );
+        }
+    }
+
+    /// A run that ended before its restart failed earlier, and restarts nothing to pause for.
+    #[test]
+    fn a_run_that_ends_before_its_restart_opens_no_window() {
+        let id = run_in_state("running").id;
+        for state in ["failed", "rejected", "succeeded"] {
+            assert_eq!(
+                restart_watch(Some(&run_at(state, "backup")), &id, false, false),
+                RestartWatch::Stop,
+                "{state}"
+            );
+        }
+        // An outcome written at the restart step is still an outcome, not a restart to come.
+        assert_eq!(
+            restart_watch(Some(&run_at("failed", "compose")), &id, false, false),
+            RestartWatch::Stop
+        );
+    }
+
+    /// status.json names the previous run until the updater picks this one up: wait for that, but
+    /// not for ever, and never act on another run's restart.
+    #[test]
+    fn the_restart_watch_waits_for_its_own_run_and_gives_up_on_an_updater_that_never_comes() {
+        let other = run_at("running", "compose");
+        assert_eq!(
+            restart_watch(Some(&other), "another-run", false, false),
+            RestartWatch::Wait,
+            "another run's restart is not this one's"
+        );
+        assert_eq!(
+            restart_watch(None, "another-run", false, false),
+            RestartWatch::Wait
+        );
+        assert_eq!(
+            restart_watch(Some(&other), "another-run", true, false),
+            RestartWatch::Stop
+        );
+        assert_eq!(
+            restart_watch(None, "another-run", true, false),
+            RestartWatch::Stop
+        );
+        // A run that has been picked up is no longer subject to the pick-up bound…
+        let id = other.id.clone();
+        assert_eq!(
+            restart_watch(Some(&run_at("running", "backup")), &id, true, false),
+            RestartWatch::Wait
+        );
+        // …only to the overall one.
+        assert_eq!(
+            restart_watch(Some(&run_at("running", "backup")), &id, true, true),
+            RestartWatch::Stop
+        );
+    }
+
+    /// ADR-050 Inc.9 decision 29: the updater asks for the window and waits for core's answer
+    /// after the backup's verdict and before anything is installed or recreated, at the step the
+    /// restart watch opens on, under the file name core writes.
+    #[test]
+    fn the_updater_waits_for_the_restart_window_before_it_recreates() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let at = |what: &str, needle: &str| {
+            apply
+                .find(needle)
+                .unwrap_or_else(|| panic!("{what} is gone from the apply procedure"))
+        };
+        let verdict = at(
+            "the backup's verdict",
+            r#"[ "$$BK_RC" -eq 0 ] || fail backup "the pre-upgrade backup failed""#,
+        );
+        let ask = at(
+            "asking core for the window, at the step the watch opens on",
+            r#"say running compose "asking core to pause alerting for the restart""#,
+        );
+        let wait = at(
+            "waiting for core's answer, by the name core writes",
+            &format!(r#"[ "$$(cat "$$D/{RESTART_WINDOW_FILE}" 2>/dev/null)" != "$$RUN" ]"#),
+        );
+        let install = at(
+            "installing the target composition",
+            r#"say running compose "installing the $$TAG composition""#,
+        );
+        let recreate = at(
+            "recreating the containers",
+            r#"docker compose -p "$$PROJ" -f docker-compose.deploy.yml $$LOCAL up -d"#,
+        );
+        assert!(
+            verdict < ask && ask < wait && wait < install && install < recreate,
+            "the window must be asked for after the backup and before anything restarts"
+        );
+        assert!(is_restart_step(Some("compose")));
     }
 
     /// Claiming must not consume the status: `last_run` still has to answer afterwards, because the
@@ -3587,6 +3846,57 @@ pub mod tests {
             apply.matches("sh /tmp/backup.sh").count(),
             1,
             "the backup is run on more than one path, and only one of them decides on the metrics"
+        );
+    }
+
+    /// The metrics copy shows progress, and the progress cannot change the outcome (ADR-050 Inc.8).
+    ///
+    /// On a PoC deployment the copy ran 40 minutes behind one unchanging sentence, so a watcher
+    /// now re-states the step while the backup runs. What this pins is the part that would hurt
+    /// if it drifted: the backup's own exit status is the verdict, the watcher is stopped and
+    /// reaped on BOTH outcomes before `fail` can write the final status, its ticks go to
+    /// `status.json` alone (not 160 lines of `log.ndjson`), and it is started only when the
+    /// metrics are actually being copied. The loop itself was exercised against a growing file in
+    /// the `docker:*-cli` image the procedure runs in.
+    #[test]
+    fn the_backup_progress_watcher_never_decides_the_backup() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let apply = apply_procedure(&compose);
+        let at = |what: &str, needle: &str| {
+            apply
+                .find(needle)
+                .unwrap_or_else(|| panic!("{what} is gone from the apply procedure"))
+        };
+        let run = at(
+            "the backup run in the background",
+            "YAGRA_BACKUP_SKIP_METRICS=$$SKIPM sh /tmp/backup.sh ) &",
+        );
+        let watch = at(
+            "the watcher, started only when the metrics are copied",
+            r#"if [ "$$SKIPM" = 0 ]; then backup_progress "$$BK_PID" & WATCH_PID=$$!; fi"#,
+        );
+        let verdict = at(
+            "the backup's own exit status",
+            r#"wait "$$BK_PID"; BK_RC=$$?"#,
+        );
+        let reap = at(
+            "stopping and reaping the watcher",
+            r#"kill "$$WATCH_PID" 2>/dev/null; wait "$$WATCH_PID" 2>/dev/null"#,
+        );
+        let fail = at(
+            "the failure decided by the backup alone",
+            r#"[ "$$BK_RC" -eq 0 ] || fail backup "the pre-upgrade backup failed""#,
+        );
+        assert!(
+            run < watch && watch < verdict && verdict < reap && reap < fail,
+            "the watcher is no longer started after the backup and stopped before its verdict \
+             is written"
+        );
+        let body = &apply[at("the watcher", "backup_progress() {")..run];
+        assert!(
+            body.contains("put_status running backup") && !body.contains("say running"),
+            "the progress ticks must write status.json only, never the run's log"
         );
     }
 

@@ -383,7 +383,22 @@ describe('runPhase', () => {
 
   it('reports the phase and its position once the sidecar is writing', () => {
     const phase = runPhase(ran({ state: 'running', step: 'pull' }), 'r1');
-    expect(phase).toEqual({ kind: 'running', step: 'pull', index: 1, total: 5 });
+    expect(phase).toEqual({ kind: 'running', step: 'pull', index: 1, total: 5, message: null });
+  });
+
+  // ADR-050 Inc.8: the metrics copy re-writes its line every 15 s, and the page has to show that
+  // line -- before, the in-flight view showed the step's name only, so 40 minutes of copying read
+  // exactly like a hang.
+  it('carries the sidecar line for the step, and no line when it is blank', () => {
+    const line = 'copying the metrics: 3,844 of about 7,700 MB';
+    expect(runPhase(ran({ state: 'running', step: 'backup', message: line }), 'r1')).toMatchObject({
+      kind: 'running',
+      step: 'backup',
+      message: line,
+    });
+    expect(runPhase(ran({ state: 'running', step: 'backup', message: '  ' }), 'r1')).toMatchObject({
+      message: null,
+    });
   });
 
   it('is running even for a run this browser did not start', () => {

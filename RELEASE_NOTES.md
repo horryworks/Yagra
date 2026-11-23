@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### Improvements
+
+- **Settings ▸ Upgrade shows the pre-upgrade backup moving.** When an upgrade changes VictoriaMetrics, the backup copies the whole metrics store, which can take most of an hour on a large one. The page now shows how much has been copied every 15 seconds — for example `copying the metrics: 3,844 of about 7,700 MB` — instead of one unchanging line, so a slow copy can be told from a stuck one. The page also keeps reading the run for as long as it lasts; it used to stop after fifteen minutes. It takes effect for upgrades started from this release onward.
+
+### Bug Fixes
+
+- **An upgrade's maintenance window now covers the restart.** It used to open the moment the button was pressed and close fifteen minutes later, so on a deployment with a long backup (40 minutes in one case) it had expired before core and the pollers restarted — and while it was open it paused every judgement, during a backup in which core was running normally. It now opens just before the restart, once the backup is done, and lasts at most five minutes; the core that comes back still closes it as soon as the run reports. `maintenance_window_id` in the response to `POST /api/v1/system/upgrade` is now always `null`, because no window exists yet when the run is accepted. Switching remote pollers on or off still opens its window at the click, now also bounded at five minutes. It takes effect for upgrades started from this release onward.
+
 ## v0.3.86 — Move the bundled images past the weekly image scan: nginx 1.30.7 in the WebUI, oxidized 0.38.0, a Docker 29 upgrade helper, and newer VictoriaMetrics and VictoriaLogs
 
 ### Breaking changes

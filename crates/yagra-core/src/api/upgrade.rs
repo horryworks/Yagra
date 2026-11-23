@@ -40,8 +40,6 @@ use super::extract::{Admin, Caller, Leader, RequireManageSystem, Upgrade};
 use super::ApiState;
 use yagra_ops::upgrade::{AvailableVersions, BundleError, Command, RunStatus, SchemaState};
 
-use yagra_ops::upgrade::MAINTENANCE_WINDOW_SECS;
-
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(OpenApi)]
 #[openapi(paths(
@@ -294,8 +292,9 @@ pub(crate) struct RunAccepted {
     id: String,
     /// The release the run targets.
     target_tag: String,
-    /// The fleet-wide maintenance window opened for the duration, or `null` if one could not be
-    /// opened (the run still proceeds — silencing is a courtesy, not a precondition).
+    /// Always `null` since ADR-050 Inc.9: the fleet-wide maintenance window is no longer opened
+    /// when the run is accepted, but when it reaches its restart, after the backup. The field is
+    /// kept so a client that reads it still parses the response.
     maintenance_window_id: Option<String>,
 }
 
@@ -1025,10 +1024,23 @@ pub(super) async fn reachable(
     Ok(())
 }
 
+/// When a hand-off opens its fleet-wide window (ADR-050 Inc.9, decisions 28 and 31).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindowAt {
+    /// Before the request is written. For a run with nothing long ahead of its restart — the bus
+    /// change, which only reissues a certificate first.
+    HandOff,
+    /// When the run reaches its restart step, after the backup. For an upgrade, whose backup can
+    /// take most of an hour while core runs normally.
+    Restart,
+}
+
 /// What a hand-off to the updater needs, owned, so it can run in a task the request cannot cancel.
 pub(super) struct Handoff {
     /// The fleet-wide window's name, as the Maintenance page lists it.
     pub(super) window_name: String,
+    /// When that window opens.
+    pub(super) window_at: WindowAt,
     pub(super) command: Command,
     pub(super) id: String,
     pub(super) tag: Option<String>,
@@ -1041,13 +1053,15 @@ pub(super) struct Handoff {
 
 /// Open the bounded maintenance window, then hand the request over — **in a task of its own**.
 ///
-/// Shared so the upgrade and the bus change cannot drift on the order. It matters: core stops
-/// moments after the request file appears, so the window has to exist first or it never will.
+/// Shared so the upgrade and the bus change cannot drift on the order. It matters for a
+/// [`WindowAt::HandOff`] run: core stops moments after the request file appears, so the window has
+/// to exist first or it never will. A [`WindowAt::Restart`] run (an upgrade) opens it later, when
+/// the updater reaches its restart and waits for core's answer (ADR-050 Inc.9).
 ///
 /// 🚨 In a task of its own because of what the request can no longer do once the window exists
 /// (ADR-172 decision 4). A tab closed while the window's `INSERT` was in flight used to drop the
 /// handler there: a fleet-wide window with no request behind it, pausing every judgement for the
-/// full fifteen minutes with nothing to close it. The task finishes the hand-off whoever is left
+/// window's whole bound with nothing to close it. The task finishes the hand-off whoever is left
 /// waiting.
 ///
 /// Nothing here closes the window on success — this process will not be alive to. The core that
@@ -1077,7 +1091,8 @@ pub(super) async fn open_window_then_request(
 /// Three things happen in a fixed order: the request is **checked** (so one the updater would
 /// refuse refuses here, before anything is opened), the window is **opened**, and the request is
 /// **written**. If the write fails the window is closed at once — before ADR-172 it stayed open
-/// for its fifteen minutes behind a 500.
+/// for its whole bound behind a 500. For a [`WindowAt::Restart`] run the second step is instead a
+/// watch started after the write, which opens the window when the run reaches its restart.
 pub(super) async fn hand_off(
     upgrade: Arc<yagra_ops::upgrade::UpgradeRepo>,
     maintenance: Arc<crate::alerts::maintenance::MaintenanceRepo>,
@@ -1096,18 +1111,14 @@ pub(super) async fn hand_off(
         .map_err(refused)?;
 
     // Failure is not fatal: a run that goes noisily is better than one that does not go.
-    let ends = chrono::Utc::now() + chrono::Duration::seconds(MAINTENANCE_WINDOW_SECS);
-    let window = maintenance
-        .create_window(
-            &h.window_name,
-            crate::alerts::maintenance::WindowScope::System.as_str(),
-            crate::alerts::maintenance::UPGRADE_SCOPE_ID,
-            chrono::Utc::now(),
-            ends,
-        )
-        .await
-        .map_err(|e| tracing::warn!(error = %e, "could not open the maintenance window"))
-        .ok();
+    let window = match h.window_at {
+        WindowAt::HandOff => maintenance
+            .open_upgrade_window(&h.window_name)
+            .await
+            .map_err(|e| tracing::warn!(error = %e, "could not open the maintenance window"))
+            .ok(),
+        WindowAt::Restart => None,
+    };
 
     if let Err(e) = upgrade.request_with(h.command, &h.id, h.tag.as_deref(), &h.by, h.now, &extra) {
         // No run will report, so nothing else would close this window before its backstop — and
@@ -1121,6 +1132,17 @@ pub(super) async fn hand_off(
             }
         }
         return Err(refused(e));
+    }
+    if h.window_at == WindowAt::Restart {
+        // This process lives until the run's compose step recreates it, which is exactly the
+        // moment the watch is waiting for, so the watch ends on its own: it opens the window and
+        // answers, or the run fails before restarting, or its bounds run out.
+        let (id, name) = (h.id.clone(), h.window_name.clone());
+        tokio::spawn(async move {
+            upgrade
+                .open_window_before_restart(&id, &name, &*maintenance)
+                .await;
+        });
     }
     Ok(window)
 }
@@ -1140,6 +1162,7 @@ async fn dispatch(
         Arc::clone(&admin.maintenance),
         Handoff {
             window_name: format!("Upgrade to {tag}"),
+            window_at: WindowAt::Restart,
             command,
             id: id.to_owned(),
             tag: Some(tag.to_owned()),
@@ -1526,7 +1549,7 @@ mod tests {
 
 #[cfg(test)]
 mod hand_off_tests {
-    use super::{hand_off, Handoff};
+    use super::{hand_off, Handoff, WindowAt};
     use crate::alerts::maintenance::MaintenanceRepo;
     use std::sync::Arc;
     use yagra_ops::upgrade::{Command, UpgradeRepo};
@@ -1534,6 +1557,7 @@ mod hand_off_tests {
     fn bus_change(id: &str) -> Handoff {
         Handoff {
             window_name: "Enabling remote pollers".to_owned(),
+            window_at: WindowAt::HandOff,
             command: Command::Bus,
             id: id.to_owned(),
             tag: None,
@@ -1547,7 +1571,7 @@ mod hand_off_tests {
     /// ADR-172 decision 4: a request the updater never receives must not leave the fleet paused.
     ///
     /// Before, a failed write answered 500 and the fleet-wide window it had just opened stayed open
-    /// for its fifteen minutes — every judgement paused, with nothing that would ever close it.
+    /// for its whole bound — every judgement paused, with nothing that would ever close it.
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn a_request_that_cannot_be_written_closes_the_window_it_opened(pool: sqlx::PgPool) {
@@ -1568,7 +1592,7 @@ mod hand_off_tests {
         );
         assert!(
             !windows[0].active,
-            "…and closed when the write failed, instead of pausing the fleet for fifteen minutes"
+            "…and closed when the write failed, instead of pausing the fleet for its whole bound"
         );
     }
 
@@ -1591,8 +1615,13 @@ mod hand_off_tests {
         let windows = maintenance.list_windows().await.expect("list");
         assert_eq!(windows.len(), 1);
         assert_eq!(Some(windows[0].id), window);
-        assert!(
-            windows[0].active,
+        // Still its whole bound long, i.e. not closed (closing moves `ends_at` to now). Not read as
+        // `active`, which compares the host clock's `starts_at` with PostgreSQL's `now()` and
+        // failed 4 runs in 5 on a Windows workstation where those are two clocks.
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).expect("rfc3339");
+        assert_eq!(
+            (at(&windows[0].ends_at) - at(&windows[0].starts_at)).num_seconds(),
+            yagra_ops::upgrade::MAINTENANCE_WINDOW_SECS,
             "the core that comes back closes it; closing it here would unpause the fleet mid-restart"
         );
     }
@@ -1613,6 +1642,85 @@ mod hand_off_tests {
         assert!(
             maintenance.list_windows().await.expect("list").is_empty(),
             "nothing is opened for a request that was never going to be written"
+        );
+    }
+
+    /// ADR-050 Inc.9: an upgrade's window opens at its restart, not at the click.
+    ///
+    /// On a PoC deployment the backup ran 40 minutes, so a window opened at the click had paused
+    /// every judgement while core ran normally and expired 26 minutes before the restart. Here the
+    /// run sits in `backup` (no window), then reaches `compose` — and only then is the window
+    /// opened and the updater answered with this run's id.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_upgrade_opens_its_window_when_the_run_reaches_its_restart(pool: sqlx::PgPool) {
+        let maintenance = Arc::new(MaintenanceRepo::new(pool.clone()));
+        let dir = std::env::temp_dir().join(format!("yagra-handoff-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let upgrade = Arc::new(UpgradeRepo::new(pool.clone(), Some(dir.clone()), 0));
+        let id = yagra_ops::upgrade::new_run_id();
+        let status = |step: &str| {
+            let body = format!(
+                r#"{{"id":"{id}","command":"apply","target":"v9.9.9","state":"running","step":"{step}","message":"","started_at":1,"finished_at":null,"requested_by":"admin"}}"#
+            );
+            std::fs::write(dir.join("status.json"), body).expect("status");
+        };
+
+        let window = hand_off(
+            Arc::clone(&upgrade),
+            Arc::clone(&maintenance),
+            Handoff {
+                window_name: "Upgrade to v9.9.9".to_owned(),
+                window_at: WindowAt::Restart,
+                command: Command::Apply,
+                id: id.clone(),
+                tag: Some("v9.9.9".to_owned()),
+                by: "admin".to_owned(),
+                now: chrono::Utc::now().timestamp(),
+                extra: Vec::new(),
+                what: "hand the upgrade request to the updater",
+            },
+        )
+        .await
+        .expect("hand-off");
+        assert_eq!(window, None, "the click opens nothing");
+
+        status("backup");
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        assert!(
+            maintenance.list_windows().await.expect("list").is_empty(),
+            "the backup runs with core up; pausing the fleet through it is what Inc.9 removed"
+        );
+        assert!(!dir.join(yagra_ops::upgrade::RESTART_WINDOW_FILE).exists());
+
+        status("compose");
+        let answer = dir.join(yagra_ops::upgrade::RESTART_WINDOW_FILE);
+        let mut answered = None;
+        for _ in 0..50 {
+            if let Ok(body) = std::fs::read_to_string(&answer) {
+                answered = Some(body);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let windows = maintenance.list_windows().await.expect("list");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            answered.as_deref(),
+            Some(id.as_str()),
+            "the updater is answered with its run id"
+        );
+        assert_eq!(windows.len(), 1, "the restart opened exactly one window");
+        assert_eq!(windows[0].name, "Upgrade to v9.9.9");
+        // Not `active`: that is `starts_at <= now()` in PostgreSQL, and on a Windows workstation the
+        // start comes from the host clock while `now()` is WSL's, a few milliseconds apart. What
+        // this increment decided is the bound, so assert that (ADR-050 Inc.9 decision 30).
+        let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).expect("rfc3339");
+        assert_eq!(
+            (at(&windows[0].ends_at) - at(&windows[0].starts_at)).num_seconds(),
+            yagra_ops::upgrade::MAINTENANCE_WINDOW_SECS,
+            "the window opened at the restart lasts at most five minutes"
         );
     }
 }

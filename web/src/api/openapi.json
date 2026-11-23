@@ -47325,7 +47325,7 @@
               "string",
               "null"
             ],
-            "description": "The fleet-wide maintenance window opened for the duration, or `null` if one could not be\nopened (the run still proceeds — silencing is a courtesy, not a precondition)."
+            "description": "Always `null` since ADR-050 Inc.9: the fleet-wide maintenance window is no longer opened\nwhen the run is accepted, but when it reaches its restart, after the backup. The field is\nkept so a client that reads it still parses the response."
           },
           "target_tag": {
             "type": "string",

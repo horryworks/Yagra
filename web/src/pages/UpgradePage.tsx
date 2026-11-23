@@ -85,8 +85,9 @@ import './UpgradePage.css';
  *  as an error. */
 const POLL_RUNNING_MS = 2_000;
 
-/** Give up polling a run that never reports. The sidecar's own verify loop caps at five minutes and
- *  core closes the window at fifteen, so past this there is nothing left to wait for. */
+/** Stop waiting for a run the updater never picked up. Past this the page shows what the server
+ *  says rather than "starting"; it keeps reading while the server still reports the run as running,
+ *  because a metrics copy alone has taken 40 minutes (ADR-050 Inc.8/9). */
 const POLL_CEILING_MS = 15 * 60_000;
 
 /** How long to keep watching for a manual registry check to land before calling it a miss. The
@@ -140,6 +141,11 @@ function Progress({
             : t('run.working')}
         {target ? ` — ${target}` : ''}
       </p>
+      {/* The sidecar's own line for the step. A metrics copy can run for most of an hour, and this
+          is the line that moves while it does (ADR-050 Inc.8). */}
+      {phase.kind === 'running' && phase.message && (
+        <p className="upgrade-note muted">{phase.message}</p>
+      )}
       <ProgressBar value={pct} label={t('run.inFlight')} />
       {/* The track spelled out, so "pull" is placed rather than merely named: an operator who has
           not read the ADR still learns that a backup came first and a check comes last. */}
@@ -325,10 +331,13 @@ export function UpgradePage() {
     if (!polling) return undefined;
     const started = Date.now();
     const h = window.setInterval(() => {
-      // A run that never reports must not be polled for ever. Dropping `pending` returns the page
-      // to whatever the server last said, which is the honest thing to show.
+      // A run that never reports must not be waited for for ever. Dropping `pending` returns the
+      // page to whatever the server says, which is the honest thing to show — and the read goes on
+      // regardless: while the server still reports the run as running, `polling` stays true and
+      // this interval is all that moves the page. It used to stop reading here, which froze a
+      // 40-minute backup's progress at minute 15.
       if (Date.now() - started > POLL_CEILING_MS) setPending(null);
-      else void load();
+      void load();
     }, POLL_RUNNING_MS);
     return () => window.clearInterval(h);
   }, [polling, load]);

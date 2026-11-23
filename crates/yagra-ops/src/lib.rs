@@ -56,10 +56,14 @@ pub trait PollerRegistry: Send + Sync {
     fn live_pollers(&self) -> Vec<LivePoller>;
 }
 
-/// The fleet-wide maintenance window an upgrade opens (ADR-050 decision 12), as settling a
-/// finished run closes it. Implemented by core's `MaintenanceRepo`.
+/// The fleet-wide maintenance window an upgrade opens just before its restart and settling the
+/// finished run closes (ADR-050 decision 12, Inc.9). Implemented by core's `MaintenanceRepo`.
 #[async_trait]
 pub trait UpgradeWindows: Send + Sync {
+    /// Open the upgrade's window now, bounded by `upgrade::MAINTENANCE_WINDOW_SECS`, and make the
+    /// alert engine read it at once rather than on its next refresh.
+    async fn open_upgrade_window(&self, name: &str) -> anyhow::Result<()>;
+
     /// End every open upgrade window now. Returns how many were open.
     async fn end_upgrade_windows(&self) -> anyhow::Result<u64>;
 }

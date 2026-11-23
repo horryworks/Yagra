@@ -242,7 +242,7 @@ async fn set_bus_remote(
     // 🚨 Everything from the first write on runs in a task of its own (ADR-172 decision 4). A tab
     // closed mid-way used to drop the handler wherever it stood: a reissued certificate the running
     // bus does not serve, or — worse — a fleet-wide maintenance window with no request behind it,
-    // pausing every judgement for fifteen minutes with nothing to close it. The task finishes the
+    // pausing every judgement for the window's whole bound with nothing to close it. The task finishes the
     // change whoever is left waiting for the answer.
     let enabled = body.enabled;
     let by_id = caller.as_ref().map(|c| c.0.user_id);
@@ -306,6 +306,9 @@ async fn set_bus_remote(
                     "Disabling remote pollers"
                 }
                 .to_owned(),
+                // Nothing long runs before this restart, so the window opens at the hand-off
+                // (ADR-050 Inc.9, decision 31).
+                window_at: super::upgrade::WindowAt::HandOff,
                 command: Command::Bus,
                 id: run_id,
                 tag: None,

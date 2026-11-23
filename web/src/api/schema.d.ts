@@ -15070,8 +15070,9 @@ export interface components {
             /** @description Correlation id for this run; it appears on the status the updater writes. */
             id: string;
             /**
-             * @description The fleet-wide maintenance window opened for the duration, or `null` if one could not be
-             *     opened (the run still proceeds — silencing is a courtesy, not a precondition).
+             * @description Always `null` since ADR-050 Inc.9: the fleet-wide maintenance window is no longer opened
+             *     when the run is accepted, but when it reaches its restart, after the backup. The field is
+             *     kept so a client that reads it still parses the response.
              */
             maintenance_window_id?: string | null;
             /** @description The release the run targets. */

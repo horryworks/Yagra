@@ -519,6 +519,27 @@ impl MaintenanceRepo {
             .collect()
     }
 
+    /// Open an upgrade's fleet-wide window now, bounded by
+    /// [`yagra_ops::upgrade::MAINTENANCE_WINDOW_SECS`], and bump the config generation so the
+    /// alert engine pauses at once rather than on its next 30-second refresh.
+    ///
+    /// The one place the upgrade family's window is spelled: system scope, [`UPGRADE_SCOPE_ID`],
+    /// starting now — which is what [`Self::end_upgrade_windows`] matches to close it again.
+    pub async fn open_upgrade_window(&self, name: &str) -> anyhow::Result<Uuid> {
+        let now = Utc::now();
+        let id = self
+            .create_window(
+                name,
+                WindowScope::System.as_str(),
+                UPGRADE_SCOPE_ID,
+                now,
+                now + chrono::Duration::seconds(yagra_ops::upgrade::MAINTENANCE_WINDOW_SECS),
+            )
+            .await?;
+        yagra_base::config_gen::bump();
+        Ok(id)
+    }
+
     /// End every still-open upgrade window now. Returns how many were closed.
     ///
     /// Called by the core that comes back after an upgrade, once the run has reported an outcome
@@ -860,6 +881,12 @@ pub(crate) async fn reconcile_exemptions(
 /// What settling a finished upgrade closes (ADR-050 decision 12), as `yagra-ops` reaches it.
 #[async_trait::async_trait]
 impl yagra_ops::UpgradeWindows for MaintenanceRepo {
+    async fn open_upgrade_window(&self, name: &str) -> anyhow::Result<()> {
+        MaintenanceRepo::open_upgrade_window(self, name)
+            .await
+            .map(|_| ())
+    }
+
     async fn end_upgrade_windows(&self) -> anyhow::Result<u64> {
         MaintenanceRepo::end_upgrade_windows(self).await
     }

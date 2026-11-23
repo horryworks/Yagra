@@ -129,7 +129,16 @@ export type RunPhase =
   | { kind: 'idle' }
   /** Requested, and the sidecar has not picked it up yet. */
   | { kind: 'starting' }
-  | { kind: 'running'; step: UpgradeRunStep | null; index: number; total: number }
+  /** `message` is the sidecar's own line for the step. During a long metrics copy it is re-written
+   *  every 15 s with how much has been copied (ADR-050 Inc.8), so it is what tells a slow step from
+   *  a stuck one; `null` when the sidecar said nothing. */
+  | {
+      kind: 'running';
+      step: UpgradeRunStep | null;
+      index: number;
+      total: number;
+      message: string | null;
+    }
   | { kind: 'done'; state: UpgradeRunState };
 
 export function runPhase(status: UpgradeStatus, pending: string | null): RunPhase {
@@ -137,7 +146,13 @@ export function runPhase(status: UpgradeStatus, pending: string | null): RunPhas
   if (last?.state === 'running') {
     const step = runStep(last.step);
     const index = UPGRADE_PROGRESS_STEPS.findIndex((s) => s === step);
-    return { kind: 'running', step, index, total: UPGRADE_PROGRESS_STEPS.length };
+    return {
+      kind: 'running',
+      step,
+      index,
+      total: UPGRADE_PROGRESS_STEPS.length,
+      message: last.message?.trim() || null,
+    };
   }
   // A run this browser started, which the server has now reported an outcome for.
   if (pending !== null && last?.id === pending) {
