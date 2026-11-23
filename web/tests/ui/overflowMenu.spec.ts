@@ -39,6 +39,7 @@ const SCREENS: Record<string, string> = {
   'pages/MaintenancePage.tsx': '/alerts/maintenance',
   'pages/ProfilesPage.tsx': '/nodes/collection',
   'pages/RoutingPage.tsx': '/alerts/routing',
+  'pages/TagsPage.tsx': '/nodes/tags',
   'pages/UsersPage.tsx': '/settings/users',
   'troubleshoot/ScheduledPage.tsx': '/troubleshoot/scheduled',
 };
