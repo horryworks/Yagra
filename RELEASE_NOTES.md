@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Improvements
+
+- **The What filter on Alerts ▸ Active alerts and Alerts ▸ History finds an alert by the name it shows.** Typing `Node` now finds "Node not responding" and `SNMP` finds "SNMP not responding"; before, only the metric name underneath was searched (`liveness`, `snmp_up`). The English and the Japanese names both match whatever the screen's language, and the metric name still does. The `metric` parameter of `GET /api/v1/alerts/history` and of the MCP tool `get_alert_history` match the same way, so a term can now find more rows than before (`up` also finds "Startup config last written").
+
 ## v0.3.87 — Rename, merge or delete a tag everywhere at once from Nodes ▸ Tags, an upgrade's maintenance window that covers the restart, and the pre-upgrade backup's progress on screen
 
 ### New Features

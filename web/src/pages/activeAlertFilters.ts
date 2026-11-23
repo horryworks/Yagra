@@ -19,6 +19,7 @@
 // moves between the two screens by changing the path. Notes is this screen's own column and key. The scope (all / a folder / a node) is History's
 // too, read from the same `node_id` / `group_id` keys, but decided here in the browser.
 
+import { alertNameTexts } from '../lib/alertName';
 import { alertSubject, subjectNodeId, subjectText, type HasSubject } from '../lib/alertSubject';
 import { NOTE_KINDS, type NoteKind } from '../lib/alertNotes';
 import { TEXT_MODES, type ColumnFilterSpec } from '../lib/columnFilter';
@@ -110,9 +111,10 @@ export function activeAlertFilters<A extends FilterableAlert>(
       kind: 'text',
       modes: TEXT_MODES,
       not: true,
-      // The metric name, as History filters it. A liveness alert stores none and so never matches a
-      // term — the same rule as History, so one term means the same thing on both screens.
-      readText: (a) => [a.metric],
+      // The alert's name as the row shows it, its English and Japanese names, then the metric
+      // name — what History's server matches (ADR-196 decision 7), so one term means the
+      // same thing on both screens. The shown name comes first because sorting reads the first.
+      readText: (a) => [...(a.metric ? alertNameTexts(a.metric) : []), a.metric],
       containsSemantics: 'substring',
     },
     state: {

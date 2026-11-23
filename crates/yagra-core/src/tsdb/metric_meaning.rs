@@ -341,6 +341,49 @@ pub fn alert_title_of(metric: &str) -> Option<String> {
     (!metric.is_empty()).then(|| alert_title(metric))
 }
 
+/// The Japanese alert names, read from the WebUI's own translation (ADR-196 decision 8). English
+/// lives in this file; Japanese is hand-written beside the generated English file and nowhere else,
+/// so the server reads that copy rather than keeping a second one that could disagree with the
+/// screen.
+const JA_ALERT_NAMES_JSON: &str = include_str!("../../../../web/src/locales/ja/alertNames.json");
+
+static JA_ALERT_NAMES: std::sync::LazyLock<Vec<(String, String)>> =
+    std::sync::LazyLock::new(|| {
+        serde_json::from_str::<std::collections::BTreeMap<String, String>>(JA_ALERT_NAMES_JSON)
+            .expect("web/src/locales/ja/alertNames.json is a flat object of strings")
+            .into_iter()
+            .collect()
+    });
+
+/// Every metric whose alert name — English or Japanese — contains `term`, case-insensitively
+/// (ADR-196 decision 7). What a "What" search adds to matching the metric name itself, so that
+/// `Node` finds `__liveness__` ("Node not responding") and so does a word of its Japanese name. Both languages
+/// regardless of the reader's: one term must find the same rows on Alerts ▸ History (this, on the
+/// server) and on Active alerts (the same rule in `web/src/lib/alertName.ts`), whichever language
+/// the screen is in. An event rule's "Event rule: …" is not a name in either table and is not
+/// matched here; its rule name is part of the metric (`event:<name>`) and matches there.
+#[must_use]
+pub fn metrics_named_like(term: &str) -> Vec<String> {
+    let term = term.trim().to_lowercase();
+    if term.is_empty() {
+        return Vec::new();
+    }
+    let english = METRIC_MEANINGS
+        .iter()
+        .map(|(metric, _, _, name)| (*metric, name.text()))
+        .chain(NON_RULE_ALERT_NAMES.iter().map(|(m, n)| (*m, n.text())))
+        .filter(|(_, name)| name.to_lowercase().contains(&term))
+        .map(|(metric, _)| metric.to_owned());
+    let japanese = JA_ALERT_NAMES
+        .iter()
+        .filter(|(_, name)| name.to_lowercase().contains(&term))
+        .map(|(metric, _)| metric.clone());
+    let mut out: Vec<String> = english.chain(japanese).collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// One sentence per metric, and what its number is, sorted by metric name.
 ///
 /// Sorted, and pinned sorted by a test: the generated locale file is written in this order, so an
@@ -538,6 +581,43 @@ pub fn metric_source(metric: &str) -> &'static str {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    /// What the History "What" search adds to the metric name (ADR-196 decision 7): the alert's
+    /// name, in English and Japanese, whatever case it was typed in.
+    #[test]
+    fn a_word_of_an_alert_name_finds_its_metric_in_either_language() {
+        let liveness = "__liveness__".to_owned();
+        assert!(metrics_named_like("Node").contains(&liveness));
+        assert!(metrics_named_like("  node NOT  ").contains(&liveness));
+        assert!(metrics_named_like("ノード").contains(&liveness));
+        assert!(metrics_named_like("SNMP not").contains(&"snmp_up".to_owned()));
+        // A name outside `METRIC_MEANINGS` (an alert the engine raises itself) is found too.
+        assert!(metrics_named_like("pollers in pool").contains(&"live_pollers".to_owned()));
+        assert!(metrics_named_like("").is_empty());
+        assert!(metrics_named_like("   ").is_empty());
+        assert!(metrics_named_like("no alert is called this").is_empty());
+        let both = metrics_named_like("o");
+        assert!(both.windows(2).all(|w| w[0] < w[1]), "sorted, each once");
+    }
+
+    /// The Japanese names are read from the WebUI's file, so a key there that is not an alert
+    /// Yagra names would be a search hit nothing can display, and a name missing there would be an
+    /// alert a Japanese term cannot find.
+    #[test]
+    fn the_japanese_names_cover_exactly_the_alerts_named_in_english() {
+        let english: BTreeSet<&str> = METRIC_MEANINGS
+            .iter()
+            .map(|(m, _, _, _)| *m)
+            .chain(NON_RULE_ALERT_NAMES.iter().map(|(m, _)| *m))
+            .collect();
+        let japanese: BTreeSet<&str> = JA_ALERT_NAMES.iter().map(|(m, _)| m.as_str()).collect();
+        assert!(
+            japanese.len() > 100,
+            "the file was read: {}",
+            japanese.len()
+        );
+        assert_eq!(english, japanese);
+    }
 
     /// `binary_search_by_key` is only a lookup if the table is ordered, and an out-of-order row
     /// does not fail to compile — it just stops being findable, for that one metric, silently.

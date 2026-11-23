@@ -320,8 +320,8 @@ pub(crate) struct HistoryQuery {
     pub state: Option<String>,
     /// `false` for fires only, `true` for clears only. Omit for both.
     pub resolved: Option<bool>,
-    /// Only transitions whose metric name contains this text (case-insensitive). Liveness rows
-    /// store no metric and therefore never match.
+    /// Only transitions whose metric name, or whose alert name in English or Japanese, contains
+    /// this text (case-insensitive): `Node` finds `__liveness__`, "Node not responding".
     pub metric: Option<String>,
     /// Only transitions about this node. Rows about something other than a node (a poller pool)
     /// are excluded by construction.

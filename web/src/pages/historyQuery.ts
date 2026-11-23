@@ -104,12 +104,12 @@ export function historyFilters(
       containsSemantics: 'substring',
       placeholder: t('history.cols.node'),
     },
-    // The metric name, matched as a substring by the server (`metric`).
+    // The metric name or the alert's name (English or Japanese), matched as a substring by the
+    // server (`metric`, ADR-196 decision 7).
     //
     // ⚠️ **A more selective term is the slower one here**, which is the opposite of the intuition:
     // the index still serves the ordering and the page size, so the planner walks it until the page
-    // is full — a metric matching one row in a million walks the whole index. Liveness transitions
-    // store no metric and never match.
+    // is full — a metric matching one row in a million walks the whole index.
     metric: {
       kind: 'text',
       modes: ['contains'],

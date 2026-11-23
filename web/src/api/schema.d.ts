@@ -17742,8 +17742,8 @@ export interface operations {
                 /** @description `false` for fires only, `true` for clears only. Omit for both. */
                 resolved?: boolean;
                 /**
-                 * @description Only transitions whose metric name contains this text (case-insensitive). Liveness rows
-                 *     store no metric and therefore never match.
+                 * @description Only transitions whose metric name, or whose alert name in English or Japanese, contains
+                 *     this text (case-insensitive): `Node` finds `__liveness__`, "Node not responding".
                  */
                 metric?: string;
                 /**

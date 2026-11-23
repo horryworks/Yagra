@@ -180,7 +180,9 @@ pub struct HistoryFilter<'a> {
     /// Restrict to node subjects currently in these folder groups — the **caller's requested**
     /// group, already expanded to its subtree. Not the caller's RBAC scope; see the const below.
     pub in_group: Option<&'a [Uuid]>,
-    /// Case-insensitive substring of the metric name.
+    /// Case-insensitive substring of the metric name **or of the alert's name** in English or
+    /// Japanese (ADR-196 decision 7): `Node` finds `__liveness__`, "Node not responding". The
+    /// names are turned into metric names in Rust ([`AlertHistoryStore::search`]), never in SQL.
     ///
     /// ⚠️ **A more selective term is the slower one.** `alert_history_cursor_idx` still serves the
     /// ordering and the `LIMIT`, so this does not change the access method — but the planner walks
@@ -200,8 +202,12 @@ pub struct HistoryFilter<'a> {
     pub limit: i64,
 }
 
-/// The `WHERE` of a page of alert history. Binds `$1..=$11` in the order [`bind_history_filter`]
-/// writes them; `$12` is the page size.
+/// The `WHERE` of a page of alert history. Binds `$1..=$12` in the order [`bind_history_filter`]
+/// writes them; `$13` is the page size.
+///
+/// `$12` belongs to `$10`'s arm rather than having one of its own: it is the metrics whose alert
+/// **name** contains the same term (ADR-196 decision 8), so it widens a metric search and never
+/// filters on its own. It is always bound, empty when there is no term.
 ///
 /// Every clause is **always present** with a `NULL` bind meaning "no filter", rather than being
 /// appended when set — the same rule [`AlertHistoryStore::SCOPE_PREDICATE`] is written to, and for
@@ -232,7 +238,7 @@ const HISTORY_FILTER_WHERE: &str = "\
      AND ($8::uuid IS NULL OR (subject_kind = 'node' AND node = $8)) \
      AND ($9::uuid[] IS NULL OR (subject_kind = 'node' \
           AND node IN (SELECT id FROM nodes WHERE group_id = ANY($9)))) \
-     AND ($10::text IS NULL OR metric ILIKE '%' || $10 || '%') \
+     AND ($10::text IS NULL OR metric ILIKE '%' || $10 || '%' OR metric = ANY($12::text[])) \
      AND ($11::text IS NULL OR (subject_kind = 'node' \
           AND node IN (SELECT id FROM nodes WHERE name ILIKE '%' || $11 || '%')))";
 
@@ -253,7 +259,7 @@ fn history_page_sql() -> String {
         "SELECT {HISTORY_COLUMNS} \
          FROM alert_history \
          WHERE {HISTORY_FILTER_WHERE} \
-         ORDER BY recorded_at DESC, id DESC LIMIT $12"
+         ORDER BY recorded_at DESC, id DESC LIMIT $13"
     )
 }
 
@@ -369,13 +375,17 @@ fn set_or_null(tokens: impl IntoIterator<Item = &'static str>) -> Option<Vec<Str
     (!v.is_empty()).then_some(v)
 }
 
-/// Bind `$1..=$11` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
+/// Bind `$1..=$12` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
 ///
 /// One helper because the sequence is positional and silent when wrong: swapping `$3` and `$4`
 /// still compiles, still runs, and just answers a different question.
+///
+/// `named` is `$12`, the metrics whose alert name contains `f.metric`; [`AlertHistoryStore::search`]
+/// derives it, so no caller can send a term without its names.
 fn bind_history_filter<'q>(
     q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     f: &'q HistoryFilter<'_>,
+    named: &'q [String],
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
     q.bind(f.before)
         .bind(f.before_id)
@@ -388,6 +398,7 @@ fn bind_history_filter<'q>(
         .bind(f.in_group)
         .bind(f.metric)
         .bind(f.node_q)
+        .bind(named)
 }
 
 /// PostgreSQL-backed alert history.
@@ -689,7 +700,11 @@ impl AlertHistoryStore {
     /// the caller's RBAC scope is deliberately **not** part of this query.
     pub async fn search(&self, filter: &HistoryFilter<'_>) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let sql = history_page_sql();
-        let rows = bind_history_filter(sqlx::query(&sql), filter)
+        let named = filter
+            .metric
+            .map(crate::tsdb::metric_meaning::metrics_named_like)
+            .unwrap_or_default();
+        let rows = bind_history_filter(sqlx::query(&sql), filter, &named)
             .bind(filter.limit.clamp(1, 1000))
             .fetch_all(&self.pool)
             .await?;
@@ -1145,13 +1160,13 @@ mod tests {
     fn the_history_filter_binds_every_placeholder_it_names() {
         // Positional and silent when wrong: swapping two binds still compiles, still runs, and just
         // answers a different question.
-        let named = (1..=11)
+        let named = (1..=12)
             .filter(|n| HISTORY_FILTER_WHERE.contains(&format!("${n}")))
             .count();
-        assert_eq!(named, 11, "the predicate should name exactly $1..=$11");
+        assert_eq!(named, 12, "the predicate should name exactly $1..=$12");
         assert!(
-            !HISTORY_FILTER_WHERE.contains("$12"),
-            "$12 is the page size"
+            !HISTORY_FILTER_WHERE.contains("$13"),
+            "$13 is the page size"
         );
         let binds = production_source()
             .split("fn bind_history_filter")
@@ -1163,7 +1178,7 @@ mod tests {
             .matches(".bind(")
             .count();
         assert_eq!(binds, named, "one bind per placeholder");
-        assert!(history_page_sql().contains("LIMIT $12"));
+        assert!(history_page_sql().contains("LIMIT $13"));
     }
 
     #[test]
@@ -1192,10 +1207,12 @@ mod tests {
         // The fail-open shape: a conditionally-built WHERE has a branch someone can forget, and the
         // branch that gets forgotten returns *more* rows, not fewer.
         //
-        // Ten arms for eleven binds, and `$2` is the deliberate exception: `before_id` has no
+        // Ten arms for twelve binds, and two deliberate exceptions. `before_id` (`$2`) has no
         // meaning without `before`, so instead of its own "no filter" arm it is absorbed by the
         // `coalesce` inside `$1`'s. That is what makes a cursor of `before` alone degrade to
-        // "strictly before this instant" rather than matching nothing.
+        // "strictly before this instant" rather than matching nothing. The named metrics (`$12`)
+        // only widen `$10`'s search, so they sit inside `$10`'s arm: an arm of their own would
+        // filter on names when no term was given.
         assert_eq!(
             HISTORY_FILTER_WHERE.matches(" IS NULL").count(),
             10,
@@ -1204,6 +1221,10 @@ mod tests {
         assert!(
             !HISTORY_FILTER_WHERE.contains("$2::uuid IS NULL"),
             "before_id gained its own arm — then a cursor without it matches nothing"
+        );
+        assert!(
+            !HISTORY_FILTER_WHERE.contains("$12::text[] IS NULL"),
+            "the named metrics gained their own arm — then they filter without a term"
         );
     }
 
@@ -1411,6 +1432,53 @@ mod tests {
             base + 11 * H,
             "the clear's own recorded time"
         );
+    }
+
+    /// **The What search finds an alert by the name the screen shows** (ADR-196 decision 7).
+    ///
+    /// `__liveness__` reads "Node not responding" and contains none of those words, so before this
+    /// a search for `Node` answered nothing on a page full of them. The metric name still matches,
+    /// and a term no name or metric contains still matches nothing.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn the_metric_search_matches_the_alert_name_in_either_language(pool: sqlx::PgPool) {
+        let node = yagra_base::pgtest::node(&pool, "n1", 1, None).await;
+        let store = AlertHistoryStore::new(pool.clone());
+        let liveness = Alert {
+            metric: yagra_alert::rules::LIVENESS.to_owned(),
+            ..fire(node, Severity::Critical, 1)
+        };
+        store
+            .record_batch(&[
+                (liveness, false),
+                (fire(node, Severity::Critical, 2), false),
+            ])
+            .await
+            .expect("record");
+        let metrics = |term: &'static str| {
+            let store = &store;
+            async move {
+                let mut found: Vec<Option<String>> = store
+                    .search(&HistoryFilter {
+                        metric: Some(term),
+                        limit: 100,
+                        ..HistoryFilter::default()
+                    })
+                    .await
+                    .expect("search")
+                    .into_iter()
+                    .map(|r| r.metric)
+                    .collect();
+                found.sort();
+                found
+            }
+        };
+        let liveness = vec![Some(yagra_alert::rules::LIVENESS.to_owned())];
+        assert_eq!(metrics("node").await, liveness, "the English name");
+        assert_eq!(metrics("ノード").await, liveness, "the Japanese name");
+        assert_eq!(metrics("liveness").await, liveness, "the metric name still");
+        assert_eq!(metrics("icmp").await, vec![Some("icmp_rtt_ms".to_owned())]);
+        assert!(metrics("no such words").await.is_empty());
     }
 
     /// **A fire is `resolved = false`, at or after the window's start.**

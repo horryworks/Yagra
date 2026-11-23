@@ -56,8 +56,8 @@ pub(crate) struct AlertHistoryParams {
     state: Option<String>,
     /// `false` for fires only, `true` for clears only. Omit for both.
     resolved: Option<bool>,
-    /// Only transitions whose metric name contains this text (case-insensitive), e.g. `cpu`.
-    /// Liveness transitions store no metric and never match.
+    /// Only transitions whose metric name, or whose alert name in English or Japanese, contains
+    /// this text (case-insensitive), e.g. `cpu`, or `Node not responding` for liveness.
     metric: Option<String>,
     /// Only transitions about this node.
     node_id: Option<Uuid>,
@@ -185,7 +185,7 @@ impl YagraMcp {
     #[tool(
         description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
                        (default 100). Narrow with `severity` and `state` (each comma-separated for \
-                       several values), `resolved` (false=fires, true=clears), `metric` (substring of the metric name), \
+                       several values), `resolved` (false=fires, true=clears), `metric` (substring of the metric name or the alert's name), \
                        `node_id`, `node_q` (substring of the node's name), `group_id` (that folder \
                        and everything beneath it), `site` (Site folder ids, comma-separated) and `since`/`until` — the window to search, which \
                        is separate from the cursor. To page, pass the oldest returned row's \

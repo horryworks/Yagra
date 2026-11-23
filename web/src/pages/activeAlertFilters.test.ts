@@ -153,10 +153,25 @@ describe('the predicate', () => {
     expect(matches(a, withFilters({ node_q: 'icmp' }))).toBe(false);
   });
 
-  it('finds the metric in the What column, and never a liveness alert that stores none', () => {
+  it('finds the metric in the What column, and a row with no metric never', () => {
     expect(matches(nodeAlert(), withFilters({ metric: 'icmp' }))).toBe(true);
     expect(matches(nodeAlert(), withFilters({ metric: 'disk' }))).toBe(false);
     expect(matches(nodeAlert({ metric: null }), withFilters({ metric: 'icmp' }))).toBe(false);
+  });
+
+  it('finds an alert by the name the What column shows, in English or Japanese (ADR-196 decision 7)', () => {
+    // Found on the PoC: `Node` left nothing on a page full of "Node not responding" rows, because
+    // the search read only `__liveness__`.
+    const liveness = nodeAlert({ metric: '__liveness__' });
+    expect(matches(liveness, withFilters({ metric: 'Node' }))).toBe(true);
+    expect(matches(liveness, withFilters({ metric: 'not resp' }))).toBe(true);
+    expect(matches(liveness, withFilters({ metric: 'ノード' }))).toBe(true);
+    expect(matches(liveness, withFilters({ metric: 'liveness' }))).toBe(true);
+    expect(matches(liveness, withFilters({ metric: 'SNMP' }))).toBe(false);
+    expect(matches(nodeAlert({ metric: 'snmp_up' }), withFilters({ metric: 'SNMP not' }))).toBe(true);
+    // NOT excludes a row when any of its names matches, so "not Node" really hides every one.
+    expect(matches(liveness, withFilters({ metric: '!Node' }))).toBe(false);
+    expect(matches(nodeAlert({ metric: 'snmp_up' }), withFilters({ metric: '!Node' }))).toBe(true);
   });
 
   it('excludes with NOT and matches with a regex', () => {

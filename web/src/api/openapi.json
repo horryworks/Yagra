@@ -581,7 +581,7 @@
           {
             "name": "metric",
             "in": "query",
-            "description": "Only transitions whose metric name contains this text (case-insensitive). Liveness rows\nstore no metric and therefore never match.",
+            "description": "Only transitions whose metric name, or whose alert name in English or Japanese, contains\nthis text (case-insensitive): `Node` finds `__liveness__`, \"Node not responding\".",
             "required": false,
             "schema": {
               "type": "string"
