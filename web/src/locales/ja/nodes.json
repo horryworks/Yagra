@@ -1526,5 +1526,33 @@
     "makeOwn": "この機器用のプロファイルを作る"
   },
   "notesAdd": "メモを追加",
-  "notesEdit": "メモを編集"
+  "notesEdit": "メモを編集",
+  "tags": {
+    "cols": {
+      "tag": "タグ",
+      "nodes": "ノード",
+      "own": "自身で",
+      "folders": "フォルダ",
+      "rules": "振り分けルール",
+      "exceptions": "まとめ方の例外",
+      "actions": "操作"
+    },
+    "rename": "名前を変更",
+    "merge": "統合",
+    "delete": "削除",
+    "renameTitle": "タグ「{{tag}}」の名前を変更",
+    "newName": "新しい名前",
+    "mergesInto_other": "{{tag}} に統合（{{count}} ノード）",
+    "renameWarn": "PagerDuty と Jira Service Management への通知にも、これからは新しい名前が載ります。",
+    "problem": {
+      "same": "今の名前と同じです。"
+    },
+    "deleteTitle": "タグ「{{tag}}」を削除",
+    "deleteBody_other": "<b>{{tag}}</b> を {{count}} か所から外します。",
+    "empty": "タグはまだありません。",
+    "err": {
+      "rename": "タグの名前を変更できませんでした。",
+      "delete": "タグを削除できませんでした。"
+    }
+  }
 }

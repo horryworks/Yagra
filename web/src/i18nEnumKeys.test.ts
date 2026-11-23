@@ -110,6 +110,7 @@ import {
 } from './components/NodeDetail/neighbors';
 import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
 import { LABEL_PROBLEMS } from './components/ui/labelRules';
+import { RENAME_PROBLEMS } from './pages/tagCatalog';
 import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
 import { WHEN_ERRORS, WHEN_MODES } from './pages/ruleWhen';
 import { CREATABLE_USER_KINDS } from './pages/userKinds';
@@ -1376,6 +1377,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enNodes, ja: jaNodes },
       'field.tagErr.',
       [...LABEL_PROBLEMS],
+    );
+    expectKeys(
+      'tag rename problem',
+      { en: enNodes, ja: jaNodes },
+      'tags.problem.',
+      [...RENAME_PROBLEMS],
     );
     expectKeys('ai form problem', { en: enSettingsAi, ja: jaSettingsAi }, 'err.', AI_FORM_PROBLEMS);
     expectKeys(

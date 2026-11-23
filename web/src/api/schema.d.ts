@@ -2672,6 +2672,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/node-tags/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove a tag from every node, folder, refusal, routing rule and grouping exception at once
+         *     (ADR-263). Refused while a routing rule or an exception would widen without it: one naming
+         *     this tag and no folder would reach every node, and one joining this tag to its folders by
+         *     `and` would reach the whole of those folders.
+         */
+        post: operations["delete_node_tag"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/node-tags/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rename a tag on every node, folder, refusal, routing rule and grouping exception at once
+         *     (ADR-263). Renaming onto a tag that already exists merges the two.
+         */
+        post: operations["rename_node_tag"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes": {
         parameters: {
             query?: never;
@@ -8239,6 +8281,11 @@ export interface components {
          * @enum {string}
          */
         DefaultRouteKind: "webhook" | "email";
+        /** @description Delete one tag everywhere it is named. */
+        DeleteTagBody: {
+            /** @description The tag as it is stored, case included. */
+            tag: string;
+        };
         /** @description One call to the channel inside a delivery. */
         DeliveryAttempt: {
             /**
@@ -12960,10 +13007,35 @@ export interface components {
         NodeTag: {
             /**
              * Format: int64
+             * @description How many alert-grouping exceptions name it.
+             */
+            exceptions: number;
+            /**
+             * Format: int64
+             * @description How many folders carry it, handing it to everything beneath them.
+             */
+            folders: number;
+            /**
+             * Format: int64
              * @description How many nodes carry it among their effective labels (their own plus their folders',
-             *     minus the ones they refuse).
+             *     minus the ones they refuse). `0` for a tag only a rule, an exception or a refusal names.
              */
             nodes: number;
+            /**
+             * Format: int64
+             * @description How many nodes carry it among their own labels (ADR-263).
+             */
+            own: number;
+            /**
+             * Format: int64
+             * @description How many nodes and folders refuse to inherit it.
+             */
+            refusals: number;
+            /**
+             * Format: int64
+             * @description How many notification routing rules name it.
+             */
+            rules: number;
             /** @description The tag as nodes carry it, case included. */
             tag: string;
         };
@@ -12983,7 +13055,11 @@ export interface components {
              *     neither tags nor folders.
              */
             reach_zones?: components["schemas"]["ReachZone"][] | null;
-            /** @description Every tag at least one node carries, most-carried first, then by name. */
+            /**
+             * @description Every tag named anywhere — carried by a node or a folder, refused, or named by a routing
+             *     rule or a grouping exception — most-carried first, then by name (ADR-263). A tag no node
+             *     carries has `nodes` 0 and sorts last.
+             */
             tags: components["schemas"]["NodeTag"][];
         };
         /** @description One VLAN of a node (ADR-257). */
@@ -14698,6 +14774,16 @@ export interface components {
             /** @description The HTTPS user name. The token is never returned. */
             username?: string | null;
         };
+        /** @description Rename one tag everywhere it is named. */
+        RenameTagBody: {
+            /**
+             * @description The tag as it is stored now, case included. Not length-checked, so an old label the
+             *     current rules would refuse can still be renamed away.
+             */
+            from: string;
+            /** @description The new name. When a row already carries it, the two become one. */
+            to: string;
+        };
         /**
          * @description A report's contents: the answer, the evidence it was grounded in, and the language it was
          *     requested in.
@@ -16001,6 +16087,42 @@ export interface components {
             table: string;
             /** Format: int32 */
             updated: number;
+        };
+        /**
+         * @description What a tag rename or delete changed, per place (ADR-263). All zero means the tag was named
+         *     nowhere, which is not an error.
+         */
+        TagRewritten: {
+            /**
+             * Format: int64
+             * @description Grouping exceptions whose tags changed.
+             */
+            exceptions: number;
+            /**
+             * Format: int64
+             * @description Folders whose refusals changed.
+             */
+            folder_refusals: number;
+            /**
+             * Format: int64
+             * @description Folders whose labels changed.
+             */
+            folders: number;
+            /**
+             * Format: int64
+             * @description Nodes whose refusals changed.
+             */
+            node_refusals: number;
+            /**
+             * Format: int64
+             * @description Nodes whose own labels changed.
+             */
+            nodes: number;
+            /**
+             * Format: int64
+             * @description Routing rules whose tags changed.
+             */
+            rules: number;
         };
         /** @description Where a covered pool's members should be pointed. */
         TakeOverPoolRequest: {
@@ -27283,6 +27405,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeTags"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    delete_node_tag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteTagBody"];
+            };
+        };
+        responses: {
+            /** @description Deleted; how many rows changed in each place */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagRewritten"];
+                };
+            };
+            /** @description The tag is empty */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A routing rule or a grouping exception would widen without this tag (its only tag, with no folder or joined to its folders by `and`); nothing was changed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    rename_node_tag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameTagBody"];
+            };
+        };
+        responses: {
+            /** @description Renamed; how many rows changed in each place */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagRewritten"];
+                };
+            };
+            /** @description `from` is empty, `to` is not a valid tag, or the two are the same */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */

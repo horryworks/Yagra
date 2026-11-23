@@ -49,6 +49,7 @@ pub mod seed_ids;
 #[cfg(any(test, feature = "test-util"))]
 pub mod sql_tables;
 pub mod stored_enum;
+pub mod tag_catalog;
 /// The TLS client configuration for the outbound connections that are not HTTP: syslog over TLS
 /// and directory sign-in. Beside `http` for the same reason.
 pub mod tls;

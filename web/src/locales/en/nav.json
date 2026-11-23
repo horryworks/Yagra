@@ -27,7 +27,8 @@
     "metricSets": "Metric sets",
     "mib": "MIB repository",
     "credentials": "Credentials & secrets",
-    "collectionSetup": "Collection setup"
+    "collectionSetup": "Collection setup",
+    "tags": "Tags"
   },
   "topology": {
     "map": "Network map",
@@ -125,7 +126,8 @@
     "settingsAudit": "Who changed or acknowledged what, and when",
     "dashboardPublic": "The one board people can see without signing in",
     "alertsAlertRules": "Thresholds on polled metrics and patterns on received events",
-    "troubleshootInvestigate": "Pick a question and confirm a hunch about a node or a whole site"
+    "troubleshootInvestigate": "Pick a question and confirm a hunch about a node or a whole site",
+    "nodesTags": "Every tag in use, and where each one is named"
   },
   "shell": {
     "home": "Home",

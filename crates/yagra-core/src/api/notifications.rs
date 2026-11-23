@@ -41,6 +41,8 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     get_builtin_template,
     list_routing_rules,
     list_node_tags,
+    rename_node_tag,
+    delete_node_tag,
     get_notification_default_route,
     create_routing_rule,
     set_routing_rule_enabled,
@@ -102,6 +104,8 @@ pub(super) fn routes() -> Router<ApiState> {
             get(list_routing_rules).post(create_routing_rule),
         )
         .route("/api/v1/node-tags", get(list_node_tags))
+        .route("/api/v1/node-tags/rename", post(rename_node_tag))
+        .route("/api/v1/node-tags/delete", post(delete_node_tag))
         // Registered beside `/:id`, which matchit lets a fixed segment win over.
         .route("/api/v1/routing-rules/order", put(set_routing_rule_order))
         .route(
@@ -1037,19 +1041,31 @@ pub(super) struct NodeTagsQuery {
 }
 
 /// One tag some node carries, and on how many nodes.
-#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[derive(Debug, Default, Serialize, PartialEq, Eq, utoipa::ToSchema)]
 pub(crate) struct NodeTag {
     /// The tag as nodes carry it, case included.
     tag: String,
     /// How many nodes carry it among their effective labels (their own plus their folders',
-    /// minus the ones they refuse).
+    /// minus the ones they refuse). `0` for a tag only a rule, an exception or a refusal names.
     nodes: u64,
+    /// How many nodes carry it among their own labels (ADR-263).
+    own: u64,
+    /// How many folders carry it, handing it to everything beneath them.
+    folders: u64,
+    /// How many nodes and folders refuse to inherit it.
+    refusals: u64,
+    /// How many notification routing rules name it.
+    rules: u64,
+    /// How many alert-grouping exceptions name it.
+    exceptions: u64,
 }
 
 /// The tags in use on this deployment's nodes (ADR-259 Inc.2).
 #[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
 pub(crate) struct NodeTags {
-    /// Every tag at least one node carries, most-carried first, then by name.
+    /// Every tag named anywhere — carried by a node or a folder, refused, or named by a routing
+    /// rule or a grouping exception — most-carried first, then by name (ADR-263). A tag no node
+    /// carries has `nodes` 0 and sorts last.
     tags: Vec<NodeTag>,
     /// How many nodes a setting naming the `reach` tags and the `reach_groups` folders, joined by
     /// `reach_join`, reaches, each node counted once. Absent when the request named neither.
@@ -1148,7 +1164,11 @@ fn count_node_tags(
     }
     let mut tags: Vec<NodeTag> = counts
         .into_iter()
-        .map(|(tag, nodes)| NodeTag { tag, nodes })
+        .map(|(tag, nodes)| NodeTag {
+            tag,
+            nodes,
+            ..NodeTag::default()
+        })
         .collect();
     tags.sort_by(|a, b| b.nodes.cmp(&a.nodes).then_with(|| a.tag.cmp(&b.tag)));
     NodeTags {
@@ -1258,7 +1278,42 @@ pub(crate) async fn node_tags_in(
         zones,
         default_zone,
     });
-    Ok(count_node_tags(&rows, &resolver, reach.as_ref()))
+    let mut answer = count_node_tags(&rows, &resolver, reach.as_ref());
+    let uses = yagra_base::tag_catalog::uses(&admin.repo.pool())
+        .await
+        .map_err(fail)?;
+    with_places(&mut answer.tags, uses);
+    Ok(answer)
+}
+
+/// Fill in where each tag is named, and add the tags no node carries but something still names
+/// (ADR-263). Pure, so the merge is tested without a database. Re-sorts with the same order
+/// `count_node_tags` uses, so a tag carried by nobody lands at the end.
+fn with_places(
+    tags: &mut Vec<NodeTag>,
+    mut uses: std::collections::BTreeMap<String, yagra_base::tag_catalog::TagUses>,
+) {
+    let fill = |t: &mut NodeTag, u: yagra_base::tag_catalog::TagUses| {
+        t.own = u.nodes;
+        t.folders = u.folders;
+        t.refusals = u.refusals;
+        t.rules = u.rules;
+        t.exceptions = u.exceptions;
+    };
+    for t in tags.iter_mut() {
+        if let Some(u) = uses.remove(&t.tag) {
+            fill(t, u);
+        }
+    }
+    for (tag, u) in uses {
+        let mut row = NodeTag {
+            tag,
+            ..NodeTag::default()
+        };
+        fill(&mut row, u);
+        tags.push(row);
+    }
+    tags.sort_by(|a, b| b.nodes.cmp(&a.nodes).then_with(|| a.tag.cmp(&b.tag)));
 }
 
 /// The env-configured default notification route (ADR-200 Inc.28): whether it exists, and which
@@ -1819,6 +1874,152 @@ async fn delete_routing_rule(
             e.as_ref(),
             "delete routing rule",
             "failed to delete routing rule",
+        )),
+    }
+}
+
+/// What a tag rename or delete changed, per place (ADR-263). All zero means the tag was named
+/// nowhere, which is not an error.
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct TagRewritten {
+    /// Nodes whose own labels changed.
+    nodes: u64,
+    /// Nodes whose refusals changed.
+    node_refusals: u64,
+    /// Folders whose labels changed.
+    folders: u64,
+    /// Folders whose refusals changed.
+    folder_refusals: u64,
+    /// Routing rules whose tags changed.
+    rules: u64,
+    /// Grouping exceptions whose tags changed.
+    exceptions: u64,
+}
+
+impl From<yagra_base::tag_catalog::TagRewrite> for TagRewritten {
+    fn from(r: yagra_base::tag_catalog::TagRewrite) -> Self {
+        Self {
+            nodes: r.nodes,
+            node_refusals: r.node_refusals,
+            folders: r.folders,
+            folder_refusals: r.folder_refusals,
+            rules: r.rules,
+            exceptions: r.exceptions,
+        }
+    }
+}
+
+/// Rename one tag everywhere it is named.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct RenameTagBody {
+    /// The tag as it is stored now, case included. Not length-checked, so an old label the
+    /// current rules would refuse can still be renamed away.
+    from: String,
+    /// The new name. When a row already carries it, the two become one.
+    to: String,
+}
+
+/// Delete one tag everywhere it is named.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct DeleteTagBody {
+    /// The tag as it is stored, case included.
+    tag: String,
+}
+
+/// Rename a tag on every node, folder, refusal, routing rule and grouping exception at once
+/// (ADR-263). Renaming onto a tag that already exists merges the two.
+#[utoipa::path(
+    post, path = "/api/v1/node-tags/rename", tag = "notifications",
+    request_body = RenameTagBody,
+    responses(
+        (status = 200, description = "Renamed; how many rows changed in each place", body = TagRewritten),
+        (status = 400, description = "`from` is empty, `to` is not a valid tag, or the two are the same", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn rename_node_tag(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Json(body): Json<RenameTagBody>,
+) -> ApiResult<Json<TagRewritten>> {
+    let from = body.from.trim().to_owned();
+    if from.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_tag",
+            "the tag to rename cannot be empty",
+        ));
+    }
+    let to = super::nodes::validated_labels(vec![body.to])?
+        .pop()
+        .ok_or_else(|| ApiError::bad_request("invalid_tag", "a tag cannot be empty"))?;
+    if to == from {
+        return Err(ApiError::bad_request(
+            "same_tag",
+            "the new name is the same as the old one",
+        ));
+    }
+    let done = yagra_base::tag_catalog::rename(&admin.repo.pool(), &from, &to)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "rename tag", "failed to rename the tag")
+        })?;
+    // The audit middleware records the method and path only; this says which tag and how far.
+    tracing::info!(from = %from, to = %to, rows = done.total(), ?done, "tag rename");
+    Ok(Json(done.into()))
+}
+
+/// Remove a tag from every node, folder, refusal, routing rule and grouping exception at once
+/// (ADR-263). Refused while a routing rule or an exception would widen without it: one naming
+/// this tag and no folder would reach every node, and one joining this tag to its folders by
+/// `and` would reach the whole of those folders.
+#[utoipa::path(
+    post, path = "/api/v1/node-tags/delete", tag = "notifications",
+    request_body = DeleteTagBody,
+    responses(
+        (status = 200, description = "Deleted; how many rows changed in each place", body = TagRewritten),
+        (status = 400, description = "The tag is empty", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 409, description = "A routing rule or a grouping exception would widen without this tag (its only tag, with no folder or joined to its folders by `and`); nothing was changed", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn delete_node_tag(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Json(body): Json<DeleteTagBody>,
+) -> ApiResult<Json<TagRewritten>> {
+    let tag = body.tag.trim().to_owned();
+    if tag.is_empty() {
+        return Err(ApiError::bad_request(
+            "invalid_tag",
+            "a tag cannot be empty",
+        ));
+    }
+    let outcome = yagra_base::tag_catalog::delete(&admin.repo.pool(), &tag)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "delete tag", "failed to delete the tag")
+        })?;
+    match outcome {
+        yagra_base::tag_catalog::DeleteOutcome::Deleted(done) => {
+            tracing::info!(tag = %tag, rows = done.total(), ?done, "tag delete");
+            Ok(Json(done.into()))
+        }
+        yagra_base::tag_catalog::DeleteOutcome::Blocked(b) => Err(ApiError::conflict(
+            "tag_still_targeted",
+            format!(
+                "{} routing rule(s) and {} grouping exception(s) would widen without this tag{}",
+                b.rules.len(),
+                b.exceptions,
+                if b.rules.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", b.rules.join(", "))
+                },
+            ),
         )),
     }
 }
@@ -2844,11 +3045,13 @@ at 2026-08-04T09:41:07+00:00"
             vec![
                 NodeTag {
                     tag: "TeamA".to_owned(),
-                    nodes: 2
+                    nodes: 2,
+                    ..NodeTag::default()
                 },
                 NodeTag {
                     tag: "core".to_owned(),
-                    nodes: 2
+                    nodes: 2,
+                    ..NodeTag::default()
                 },
             ],
             "most-carried first, then by name"
@@ -2937,7 +3140,11 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(
             body,
             serde_json::json!({
-                "tags": [{ "tag": "TeamA", "nodes": 1 }],
+                // ADR-263: where the tag is named. The folder carries it; no node does itself.
+                "tags": [{
+                    "tag": "TeamA", "nodes": 1, "own": 0, "folders": 1,
+                    "refusals": 0, "rules": 0, "exceptions": 0,
+                }],
                 "reach": 1,
                 "reach_zones": [{ "zone": "UTC", "nodes": 1, "default": true }],
             })
@@ -2984,6 +3191,150 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(
             body,
             serde_json::json!({ "configured": true, "kinds": ["webhook", "email"] })
+        );
+    }
+
+    /// ADR-263: the list carries where each tag is named, and a tag nobody carries but a rule
+    /// still names is listed last with `nodes` 0.
+    #[test]
+    fn the_tag_list_adds_where_each_tag_is_named() {
+        use yagra_base::tag_catalog::TagUses;
+        let mut tags = vec![NodeTag {
+            tag: "core".to_owned(),
+            nodes: 3,
+            ..NodeTag::default()
+        }];
+        let uses = [
+            (
+                "core".to_owned(),
+                TagUses {
+                    nodes: 1,
+                    folders: 1,
+                    ..TagUses::default()
+                },
+            ),
+            (
+                "TeamA".to_owned(),
+                TagUses {
+                    rules: 2,
+                    ..TagUses::default()
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        with_places(&mut tags, uses);
+        assert_eq!(
+            tags,
+            vec![
+                NodeTag {
+                    tag: "core".to_owned(),
+                    nodes: 3,
+                    own: 1,
+                    folders: 1,
+                    ..NodeTag::default()
+                },
+                NodeTag {
+                    tag: "TeamA".to_owned(),
+                    rules: 2,
+                    ..NodeTag::default()
+                },
+            ]
+        );
+    }
+
+    /// ADR-263: a rename is accepted and reaches the node and the rule that named the tag; a
+    /// delete that would widen that rule is refused and changes nothing; an Operator is refused.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_tag_is_renamed_everywhere_and_a_delete_that_widens_a_rule_is_refused(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        use axum::http::StatusCode;
+        let node = yagra_base::pgtest::node(&pool, "core-01", 1, None).await;
+        sqlx::query("UPDATE nodes SET tags = ARRAY['TeamA'] WHERE id = $1")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("label");
+        let st = live_state(pool.clone()).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, created) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(serde_json::json!({
+                "name": "team a", "severity": null, "channel_ids": [], "tags": ["TeamA"],
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+
+        let operator = token(&st, yagra_common::Role::Operator);
+        let (status, _) = send(
+            &st,
+            "POST",
+            "/api/v1/node-tags/rename",
+            &operator,
+            Some(serde_json::json!({ "from": "TeamA", "to": "TeamB" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, same) = send(
+            &st,
+            "POST",
+            "/api/v1/node-tags/rename",
+            &tok,
+            Some(serde_json::json!({ "from": "TeamA", "to": " TeamA " })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{same}");
+
+        let (status, done) = send(
+            &st,
+            "POST",
+            "/api/v1/node-tags/rename",
+            &tok,
+            Some(serde_json::json!({ "from": "TeamA", "to": "TeamB" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(
+            (done["nodes"].as_u64(), done["rules"].as_u64()),
+            (Some(1), Some(1))
+        );
+        let node_tags: Vec<String> = sqlx::query_scalar("SELECT tags FROM nodes WHERE id = $1")
+            .bind(node)
+            .fetch_one(&pool)
+            .await
+            .expect("node");
+        assert_eq!(node_tags, vec!["TeamB".to_owned()]);
+
+        let (status, listed) = send(&st, "GET", "/api/v1/node-tags", &tok, None).await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert_eq!(listed["tags"][0]["tag"], "TeamB");
+        assert_eq!(listed["tags"][0]["rules"], 1);
+
+        let (status, refused) = send(
+            &st,
+            "POST",
+            "/api/v1/node-tags/delete",
+            &tok,
+            Some(serde_json::json!({ "tag": "TeamB" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+        let rule_tags: Vec<String> = sqlx::query_scalar("SELECT tags FROM routing_rules")
+            .fetch_one(&pool)
+            .await
+            .expect("rule");
+        assert_eq!(
+            rule_tags,
+            vec!["TeamB".to_owned()],
+            "a refused delete writes nothing"
         );
     }
 }

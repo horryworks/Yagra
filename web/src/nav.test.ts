@@ -125,12 +125,14 @@ describe('nav IA', () => {
     ]);
     // Config backups (ADR-210 stage 3) is the fleet's view of what the inventory backs up, so it
     // sits with the inventory rather than among the checks. Credentials joined it with ADR-231:
-    // with the node itself, it is all that monitoring an ordinary device needs.
+    // with the node itself, it is all that monitoring an ordinary device needs. Tags (ADR-263)
+    // come last: they tidy what the steps above created.
     expect(nodes.groups[0].items.map((i) => i.path)).toEqual([
       '/nodes',
       '/nodes/discovery',
       '/nodes/config-backups',
       '/nodes/credentials',
+      '/nodes/tags',
     ]);
     expect(nodes.groups[1].items.map((i) => i.path)).toEqual([
       '/nodes/duplicates',

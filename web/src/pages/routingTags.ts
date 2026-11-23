@@ -22,7 +22,7 @@ export function tagChoices(ruleTags: readonly string[], tags: NodeTags | null): 
   const gone = tagsNoNodeCarries(ruleTags, tags) ?? new Set<string>();
   return [
     ...ruleTags.filter((t) => gone.has(t)).map((tag) => ({ tag, nodes: 0, gone: true })),
-    ...tags.tags.map((t) => ({ tag: t.tag, nodes: t.nodes, gone: false })),
+    ...carriedTags(tags).map((t) => ({ tag: t.tag, nodes: t.nodes, gone: false })),
   ];
 }
 
@@ -35,6 +35,15 @@ export function tagsNoNodeCarries(
   tags: NodeTags | null,
 ): Set<string> | null {
   if (tags === null) return null;
-  const carried = new Set(tags.tags.map((t) => t.tag));
+  const carried = new Set(carriedTags(tags).map((t) => t.tag));
   return new Set(ruleTags.filter((t) => !carried.has(t)));
+}
+
+/**
+ * The tags at least one node carries. Since ADR-263 the list also holds tags only a rule, an
+ * exception or a refusal names (`nodes` 0), so the Tags screen can show leftovers; a rule's picker
+ * offers what a node carries, and a tag nobody carries is the `gone` case above.
+ */
+function carriedTags(tags: NodeTags): NodeTags['tags'] {
+  return tags.tags.filter((t) => t.nodes > 0);
 }

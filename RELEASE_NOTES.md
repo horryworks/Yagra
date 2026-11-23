@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Nodes ▸ Tags lists every tag the deployment names and renames or deletes one everywhere at once.** Each row says how many nodes carry the tag (with what they inherit from their folders), how many carry it themselves, how many folders hand it down, and how many notification routing rules and alert-grouping exceptions name it. A rename reaches nodes, folders, the tags they refuse to inherit, routing rules and grouping exceptions in one transaction, so a rule never keeps waiting for the old spelling; renaming onto a tag that already exists merges the two. A delete is refused (`409 tag_still_targeted`) while a routing rule or a grouping exception would widen without the tag: one naming only that tag and no folder would reach every node, and one joining it to its folders with *and* would reach the whole folders. New endpoints: `POST /api/v1/node-tags/rename` (`from`, `to`) and `POST /api/v1/node-tags/delete` (`tag`), Admin only, each answering how many rows changed per place. `GET /api/v1/node-tags` (and MCP `get_config(kind=node_tags)`) now gives each tag `own`, `folders`, `refusals`, `rules` and `exceptions`, and also lists tags no node carries but something still names, with `nodes` 0 (ADR-263).
+
 ### Improvements
 
 - **Settings ▸ Upgrade shows the pre-upgrade backup moving.** When an upgrade changes VictoriaMetrics, the backup copies the whole metrics store, which can take most of an hour on a large one. The page now shows how much has been copied every 15 seconds — for example `copying the metrics: 3,844 of about 7,700 MB` — instead of one unchanging line, so a slow copy can be told from a stuck one. The page also keeps reading the run for as long as it lasts; it used to stop after fifteen minutes. It takes effect for upgrades started from this release onward.

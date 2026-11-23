@@ -162,6 +162,7 @@ import type {
   Severity,
   GroupingExceptionBody,
   NodeTags,
+  TagRewritten,
   DeliveryHoursConfig,
   HeldNotification,
   ChannelKind,
@@ -2480,6 +2481,16 @@ export const api = {
             }
           : undefined,
     }),
+
+  /** Rename a tag on every node, folder, refusal, routing rule and grouping exception at once;
+   *  onto an existing tag, the two merge (ADR-263). */
+  renameNodeTag: (from: string, to: string): Promise<TagRewritten> =>
+    apiPost('/api/v1/node-tags/rename', { body: { from, to } }),
+
+  /** Remove a tag everywhere. `409 tag_still_targeted` while a routing rule or a grouping
+   *  exception names this tag and nothing else (ADR-263). */
+  deleteNodeTag: (tag: string): Promise<TagRewritten> =>
+    apiPost('/api/v1/node-tags/delete', { body: { tag } }),
 
   /** Enable/disable a rule. */
   setRoutingRuleEnabled: (id: string, enabled: boolean): Promise<void> =>

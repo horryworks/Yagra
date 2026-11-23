@@ -771,6 +771,10 @@ mod tests {
             "api/public_dashboard.rs",
             "the widgets the caller sent that the public board refuses — not the allowed set",
         ),
+        (
+            "api/notifications.rs",
+            "the routing rules blocking a tag delete (ADR-263) — names, not allowed values",
+        ),
     ];
 
     /// ADR-184: the sentences an API edge says about a timestamp, a cursor and a set of allowed

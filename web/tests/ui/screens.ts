@@ -179,6 +179,8 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/nodes/collection/rules': MARKER,
   '/nodes/collection/reclassify': MARKER,
   '/nodes/duplicates': MARKER,
+  // The tag list is patched to real-looking tags in bootstrap.ts (no `ymock-` string to find).
+  '/nodes/tags': { kind: 'text', text: 'TeamA' },
   '/nodes/subnet-overlaps': MARKER,
   '/nodes/missing-prefixes': MARKER,
   '/nodes/collection/metric-sets': MARKER,

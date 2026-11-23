@@ -77,9 +77,12 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // "no node" mark could never be seen. Two real-looking tags, neither the rule's, give the picker
   // something to offer and leave the rule's tag marked.
   '/api/v1/node-tags': {
+    // Since ADR-263 each row also says where the tag is named, and a tag only a rule names is
+    // listed with `nodes` 0: `string` is the sample rule's, so the Tags screen has that row too.
     tags: [
-      { tag: 'APAC', nodes: 5 },
-      { tag: 'TeamA', nodes: 3 },
+      { tag: 'APAC', nodes: 5, own: 2, folders: 1, refusals: 0, rules: 0, exceptions: 0 },
+      { tag: 'TeamA', nodes: 3, own: 3, folders: 0, refusals: 1, rules: 0, exceptions: 1 },
+      { tag: 'string', nodes: 0, own: 0, folders: 0, refusals: 0, rules: 1, exceptions: 0 },
     ],
     reach: 3,
     // The zones the reached nodes keep time in (ADR-262 decision 11): one site zone and the

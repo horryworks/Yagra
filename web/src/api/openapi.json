@@ -12776,6 +12776,158 @@
         }
       }
     },
+    "/api/v1/node-tags/delete": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Remove a tag from every node, folder, refusal, routing rule and grouping exception at once\n(ADR-263). Refused while a routing rule or an exception would widen without it: one naming\nthis tag and no folder would reach every node, and one joining this tag to its folders by\n`and` would reach the whole of those folders.",
+        "operationId": "delete_node_tag",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteTagBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted; how many rows changed in each place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagRewritten"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The tag is empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A routing rule or a grouping exception would widen without this tag (its only tag, with no folder or joined to its folders by `and`); nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/node-tags/rename": {
+      "post": {
+        "tags": [
+          "notifications"
+        ],
+        "summary": "Rename a tag on every node, folder, refusal, routing rule and grouping exception at once\n(ADR-263). Renaming onto a tag that already exists merges the two.",
+        "operationId": "rename_node_tag",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameTagBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed; how many rows changed in each place",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagRewritten"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`from` is empty, `to` is not a valid tag, or the two are the same",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes": {
       "get": {
         "tags": [
@@ -33304,6 +33456,19 @@
           "email"
         ]
       },
+      "DeleteTagBody": {
+        "type": "object",
+        "description": "Delete one tag everywhere it is named.",
+        "required": [
+          "tag"
+        ],
+        "properties": {
+          "tag": {
+            "type": "string",
+            "description": "The tag as it is stored, case included."
+          }
+        }
+      },
       "DeliveryAttempt": {
         "type": "object",
         "description": "One call to the channel inside a delivery.",
@@ -42701,13 +42866,48 @@
         "description": "One tag some node carries, and on how many nodes.",
         "required": [
           "tag",
-          "nodes"
+          "nodes",
+          "own",
+          "folders",
+          "refusals",
+          "rules",
+          "exceptions"
         ],
         "properties": {
+          "exceptions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many alert-grouping exceptions name it.",
+            "minimum": 0
+          },
+          "folders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many folders carry it, handing it to everything beneath them.",
+            "minimum": 0
+          },
           "nodes": {
             "type": "integer",
             "format": "int64",
-            "description": "How many nodes carry it among their effective labels (their own plus their folders',\nminus the ones they refuse).",
+            "description": "How many nodes carry it among their effective labels (their own plus their folders',\nminus the ones they refuse). `0` for a tag only a rule, an exception or a refusal names.",
+            "minimum": 0
+          },
+          "own": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes carry it among their own labels (ADR-263).",
+            "minimum": 0
+          },
+          "refusals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes and folders refuse to inherit it.",
+            "minimum": 0
+          },
+          "rules": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many notification routing rules name it.",
             "minimum": 0
           },
           "tag": {
@@ -42758,7 +42958,7 @@
             "items": {
               "$ref": "#/components/schemas/NodeTag"
             },
-            "description": "Every tag at least one node carries, most-carried first, then by name."
+            "description": "Every tag named anywhere — carried by a node or a folder, refused, or named by a routing\nrule or a grouping exception — most-carried first, then by name (ADR-263). A tag no node\ncarries has `nodes` 0 and sorts last."
           }
         }
       },
@@ -46411,6 +46611,24 @@
           }
         }
       },
+      "RenameTagBody": {
+        "type": "object",
+        "description": "Rename one tag everywhere it is named.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The tag as it is stored now, case included. Not length-checked, so an old label the\ncurrent rules would refuse can still be renamed away."
+          },
+          "to": {
+            "type": "string",
+            "description": "The new name. When a row already carries it, the two become one."
+          }
+        }
+      },
       "ReportBody": {
         "type": "object",
         "description": "A report's contents: the answer, the evidence it was grounded in, and the language it was\nrequested in.",
@@ -49253,6 +49471,56 @@
           "updated": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "TagRewritten": {
+        "type": "object",
+        "description": "What a tag rename or delete changed, per place (ADR-263). All zero means the tag was named\nnowhere, which is not an error.",
+        "required": [
+          "nodes",
+          "node_refusals",
+          "folders",
+          "folder_refusals",
+          "rules",
+          "exceptions"
+        ],
+        "properties": {
+          "exceptions": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Grouping exceptions whose tags changed.",
+            "minimum": 0
+          },
+          "folder_refusals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Folders whose refusals changed.",
+            "minimum": 0
+          },
+          "folders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Folders whose labels changed.",
+            "minimum": 0
+          },
+          "node_refusals": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes whose refusals changed.",
+            "minimum": 0
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes whose own labels changed.",
+            "minimum": 0
+          },
+          "rules": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Routing rules whose tags changed.",
             "minimum": 0
           }
         }

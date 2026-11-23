@@ -52,6 +52,7 @@ export const TABLE_IDS = [
   'nodes.missingPrefixesSubnets',
   'nodes.reclassify',
   'nodes.subnetOverlaps',
+  'nodes.tags',
   // Events
   'events.log',
   'events.sources',

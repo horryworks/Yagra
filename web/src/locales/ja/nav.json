@@ -27,7 +27,8 @@
     "metricSets": "メトリクスセット",
     "mib": "MIB リポジトリ",
     "credentials": "認証情報とシークレット",
-    "collectionSetup": "収集の作り込み"
+    "collectionSetup": "収集の作り込み",
+    "tags": "タグ"
   },
   "topology": {
     "map": "ネットワークマップ",
@@ -125,7 +126,8 @@
     "settingsAudit": "誰が何を変更・ACK したか、その時刻",
     "dashboardPublic": "サインインしなくても見える 1 枚",
     "alertsAlertRules": "集めた値のしきい値と、届いたイベントの一致条件",
-    "troubleshootInvestigate": "問いを選び、ノードやサイトへの心当たりを確かめる"
+    "troubleshootInvestigate": "問いを選び、ノードやサイトへの心当たりを確かめる",
+    "nodesTags": "使われているタグと、それぞれを使っている所"
   },
   "shell": {
     "home": "ホーム",

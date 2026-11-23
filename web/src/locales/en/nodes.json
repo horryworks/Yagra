@@ -1536,5 +1536,35 @@
     "makeOwn": "Make a profile for this device"
   },
   "notesAdd": "Add note",
-  "notesEdit": "Edit note"
+  "notesEdit": "Edit note",
+  "tags": {
+    "cols": {
+      "tag": "Tag",
+      "nodes": "Nodes",
+      "own": "Own",
+      "folders": "Folders",
+      "rules": "Routing rules",
+      "exceptions": "Grouping exceptions",
+      "actions": "Actions"
+    },
+    "rename": "Rename",
+    "merge": "Merge",
+    "delete": "Delete",
+    "renameTitle": "Rename tag {{tag}}",
+    "newName": "New name",
+    "mergesInto_one": "Merges into {{tag}} ({{count}} node)",
+    "mergesInto_other": "Merges into {{tag}} ({{count}} nodes)",
+    "renameWarn": "Notifications to PagerDuty and Jira Service Management carry the new name from now on.",
+    "problem": {
+      "same": "This is the current name."
+    },
+    "deleteTitle": "Delete tag {{tag}}",
+    "deleteBody_one": "Removes <b>{{tag}}</b> from {{count}} place.",
+    "deleteBody_other": "Removes <b>{{tag}}</b> from {{count}} places.",
+    "empty": "No tags yet.",
+    "err": {
+      "rename": "Could not rename the tag.",
+      "delete": "Could not delete the tag."
+    }
+  }
 }

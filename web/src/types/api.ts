@@ -839,6 +839,10 @@ export type CoverageSegment = components['schemas']['CoverageSegment'];
 /** Where an alert goes in one stretch of the coverage week, as the strip and its legend name it. */
 export const COVERAGE_KINDS = ['rules', 'catch_all', 'held', 'nowhere'] as const satisfies readonly CoverageSegment['kind'][];
 export type NodeTags = components['schemas']['NodeTags'];
+/** One row of the tag list: the tag and every place it is named (ADR-263). */
+export type NodeTag = components['schemas']['NodeTag'];
+/** How many rows a tag rename or delete changed, per place (ADR-263). */
+export type TagRewritten = components['schemas']['TagRewritten'];
 
 /** The env-configured default notification route (`GET /api/v1/notification-default-route`):
  *  whether it exists and which kinds of channel it sends every alert to (ADR-200 Inc.28). */

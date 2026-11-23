@@ -125,6 +125,14 @@ export const NAV: NavSection[] = [
             path: '/nodes/credentials',
             implemented: true,
           },
+          // Every tag the deployment names, and a rename or delete that reaches every place at once
+          // (ADR-263). Last in the inventory group because a tag is a property of nodes and folders.
+          {
+            labelKey: 'nodes.tags',
+            descKey: 'descriptions.nodesTags',
+            path: '/nodes/tags',
+            implemented: true,
+          },
         ],
       },
       {

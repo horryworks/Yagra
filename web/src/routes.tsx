@@ -34,6 +34,7 @@ import { ClassificationRulesPage } from './pages/ClassificationRulesPage';
 import { ReclassifyPage } from './pages/ReclassifyPage';
 import { DuplicateNodesPage } from './pages/DuplicateNodesPage';
 import { ConfigBackupsPage } from './pages/ConfigBackupsPage';
+import { TagsPage } from './pages/TagsPage';
 import { SubnetOverlapsPage } from './pages/SubnetOverlapsPage';
 import { MissingPrefixesPage } from './pages/MissingPrefixesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
@@ -122,6 +123,7 @@ export function AppRoutes() {
         <Route path="nodes/discovery" element={<DiscoveryPage />} />
         <Route path="nodes/duplicates" element={<DuplicateNodesPage />} />
         <Route path="nodes/config-backups" element={<ConfigBackupsPage />} />
+        <Route path="nodes/tags" element={<TagsPage />} />
         <Route path="nodes/subnet-overlaps" element={<SubnetOverlapsPage />} />
         <Route path="nodes/missing-prefixes" element={<MissingPrefixesPage />} />
         {/* The dependency screen is gone (ADR-236); how alerts are grouped is set on Routing. Kept as
