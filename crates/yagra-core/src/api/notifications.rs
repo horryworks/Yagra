@@ -1944,8 +1944,10 @@ async fn rename_node_tag(
     admin: Admin,
     Json(body): Json<RenameTagBody>,
 ) -> ApiResult<Json<TagRewritten>> {
-    let from = body.from.trim().to_owned();
-    if from.is_empty() {
+    // Matched as stored, not trimmed: a config bundle import writes labels verbatim, so a tag can
+    // carry surrounding whitespace, and trimming it here would match nothing and answer 200.
+    let from = body.from;
+    if from.trim().is_empty() {
         return Err(ApiError::bad_request(
             "invalid_tag",
             "the tag to rename cannot be empty",
@@ -1991,8 +1993,9 @@ async fn delete_node_tag(
     admin: Admin,
     Json(body): Json<DeleteTagBody>,
 ) -> ApiResult<Json<TagRewritten>> {
-    let tag = body.tag.trim().to_owned();
-    if tag.is_empty() {
+    // As stored, for the reason given in `rename_node_tag`.
+    let tag = body.tag;
+    if tag.trim().is_empty() {
         return Err(ApiError::bad_request(
             "invalid_tag",
             "a tag cannot be empty",
@@ -3336,5 +3339,23 @@ at 2026-08-04T09:41:07+00:00"
             vec!["TeamB".to_owned()],
             "a refused delete writes nothing"
         );
+
+        // A label written verbatim (a config bundle import does not trim) is matched as stored:
+        // trimming the request would match nothing and answer 200 with every count zero.
+        sqlx::query("UPDATE nodes SET tags = ARRAY[' padded'] WHERE id = $1")
+            .bind(node)
+            .execute(&pool)
+            .await
+            .expect("padded label");
+        let (status, gone) = send(
+            &st,
+            "POST",
+            "/api/v1/node-tags/delete",
+            &tok,
+            Some(serde_json::json!({ "tag": " padded" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{gone}");
+        assert_eq!(gone["nodes"].as_u64(), Some(1), "{gone}");
     }
 }
