@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.89 — Filter All nodes by tag, and tag fields that list the registered tags as soon as they are clicked
+
 ### New Features
 
 - **All nodes can be filtered by tag.** The filter menu has a **Tag** section: with nothing typed it offers the tags carried by the most nodes, and typing finds any tag (names starting with the text first), each with how many of your nodes carry it. A node matches when its tags, including those its folders give it and minus the ones it excludes, hold any of the chosen tags. The choice is in the URL as `tag=`. `GET /api/v1/nodes` and MCP `list_nodes` take `tag` (comma-separated, case-sensitive); the new `GET /api/v1/nodes/tag-suggestions` (`q`, `limit`, `chosen`; View, limited to the caller's folders) answers the picker; when it cannot be read, the section shows **Retry** rather than an empty list (ADR-265).
