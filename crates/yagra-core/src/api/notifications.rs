@@ -1072,9 +1072,9 @@ pub(crate) struct NodeTag {
 /// The tags in use on this deployment's nodes (ADR-259 Inc.2).
 #[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
 pub(crate) struct NodeTags {
-    /// Every tag named anywhere — carried by a node or a folder, refused, or named by a routing
-    /// rule or a grouping exception — most-carried first, then by name (ADR-263). A tag no node
-    /// carries has `nodes` 0 and sorts last.
+    /// Every tag named anywhere — carried by a node or a folder, refused, named by a routing rule
+    /// or a grouping exception, or registered by name (ADR-263 Inc.2) — most-carried first, then
+    /// by name (ADR-263). A tag no node carries has `nodes` 0 and sorts last.
     tags: Vec<NodeTag>,
     /// How many nodes a setting naming the `reach` tags and the `reach_groups` folders, joined by
     /// `reach_join`, reaches, each node counted once. Absent when the request named neither.
@@ -1210,8 +1210,8 @@ fn reach_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
-/// The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that
-/// exists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective
+/// The tags in use or registered, with how many nodes carry each, so a routing rule can name a
+/// tag that exists rather than one typed from memory (ADR-259 Inc.2, ADR-263 Inc.2). Counted over every node's effective
 /// labels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),
 /// joined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones
 /// those nodes keep time in.
@@ -1219,7 +1219,7 @@ fn reach_tags(raw: &str) -> Vec<String> {
     get, path = "/api/v1/node-tags", tag = "notifications",
     params(NodeTagsQuery),
     responses(
-        (status = 200, description = "Tags in use, most-carried first", body = NodeTags),
+        (status = 200, description = "Tags in use or registered, most-carried first", body = NodeTags),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),

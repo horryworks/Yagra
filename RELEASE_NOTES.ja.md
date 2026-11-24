@@ -20,6 +20,8 @@
 
 - **Alerts ▸ Active alerts と Alerts ▸ History の What の絞り込みで、画面に出ている名前でも探せるようになった。** `Node` と入れれば「Node not responding」、`SNMP` なら「SNMP not responding」が残る。これまでは裏のメトリクス名（`liveness`・`snmp_up`）しか見ていなかった。画面の言語によらず、英語の名前と日本語の名前の両方で当たる。メトリクス名でも今までどおり当たる。`GET /api/v1/alerts/history` と MCP の `get_alert_history` の `metric` も同じ動きになるので、同じ語で前より多くの行が当たることがある（`up` で「Startup config last written」も当たる）。
 
+- **MAC アドレスのメーカー名が、いちばん新しい登録まで分かるようになった。** Yagra に組み込んである IEEE の登録表を更新した（31 件増えた）。
+
 ## v0.3.87 — Nodes ▸ Tags でタグの名前の変更・統合・削除を全部の場所で一度に。アップグレードの保守窓が再起動を覆い、アップグレード前のバックアップの進み具合が画面に出る
 
 ### 新機能

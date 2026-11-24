@@ -2657,8 +2657,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The tags nodes carry, with how many nodes carry each, so a routing rule can name a tag that
-         *     exists rather than one typed from memory (ADR-259 Inc.2). Counted over every node's effective
+         * The tags in use or registered, with how many nodes carry each, so a routing rule can name a
+         *     tag that exists rather than one typed from memory (ADR-259 Inc.2, ADR-263 Inc.2). Counted over every node's effective
          *     labels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),
          *     joined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones
          *     those nodes keep time in.
@@ -13087,9 +13087,9 @@ export interface components {
              */
             reach_zones?: components["schemas"]["ReachZone"][] | null;
             /**
-             * @description Every tag named anywhere — carried by a node or a folder, refused, or named by a routing
-             *     rule or a grouping exception — most-carried first, then by name (ADR-263). A tag no node
-             *     carries has `nodes` 0 and sorts last.
+             * @description Every tag named anywhere — carried by a node or a folder, refused, named by a routing rule
+             *     or a grouping exception, or registered by name (ADR-263 Inc.2) — most-carried first, then
+             *     by name (ADR-263). A tag no node carries has `nodes` 0 and sorts last.
              */
             tags: components["schemas"]["NodeTag"][];
         };
@@ -27444,7 +27444,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Tags in use, most-carried first */
+            /** @description Tags in use or registered, most-carried first */
             200: {
                 headers: {
                     [name: string]: unknown;

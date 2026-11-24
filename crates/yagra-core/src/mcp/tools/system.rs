@@ -908,9 +908,10 @@ impl YagraMcp {
                        weekdays and minutes after midnight, read in the node's own zone; listed in \
                        order, and only the first open rule that matches an alert decides where it \
                        goes — rules below it do not hear it; `hold` true means that rule sends \
-                       nowhere and keeps the alert back until another rule decides), node_tags (every tag some node carries \
-                       among its effective labels, with how many nodes carry it — the names a \
-                       routing rule can usefully name), registered_tags (the tags an Admin \
+                       nowhere and keeps the alert back until another rule decides), node_tags (every tag named anywhere — \
+                       carried, refused, named by a rule or exception, or registered — with how \
+                       many nodes carry it among their effective labels; the names a routing \
+                       rule can usefully name), registered_tags (the tags an Admin \
                        registered by name, offered as suggestions whether or not anything carries \
                        them), routing_catch_all (the channels an alert \
                        goes to when no open rule that matches it decides — a holding rule \

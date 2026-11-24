@@ -4,7 +4,756 @@
 # a later version of the same image — still fails the run. Each carries why it is waited on and
 # when it can go, the rule deny.toml follows.
 #
-# Empty since oxidized moved from 0.37.0 to 0.38.0 (2026-11-23): the 0.37.0 list (the Brotli
-# exception and the out-of-reach block of ADR-215 increment 2) was removed with that pin, as it said
-# to be. Whatever 0.38.0 still carries fails the scan until it is judged afresh.
-ignore: []
+# ── The 2026-11-23 scan, everything Yagra cannot reach (ADR-215 increment 3) ──
+# Generated 2026-11-24 from that run, one rule per (vulnerability, package, version), each package
+# with why it is out of reach — checked against each advisory's text and against what the running
+# containers load on a lab deployment (ldd and /proc/<pid>/maps). Upstream had no fixed image for
+# any of the seven except VictoriaMetrics v1.157.0, one day old. Nothing needs removing by hand:
+# when a pinned image moves or a floating tag (postgres, redis, nats) is rebuilt, the versions stop
+# matching, and any finding they no longer cover turns the scan red again, which is the point.
+# ⚠️ A rule matches the package and version in ANY image, so a new image carrying libssl3 3.5.9-r0
+# (for one) is not scanned for these five. Judge the rule again before adding such an image.
+ignore:
+  # libcrypto3 3.5.9-r0 (alpine:3.24.4, docker:29.10.0-cli, postgres:17-alpine, victoriametrics/victoria-metrics:v1.156.0): the five are OpenSSL's QUIC (88822, 95691), AES-GCM-SIV (88823, 95692) and CMS encryption to an EC recipient (107496); the advisory says TLS does not reach them. postgres runs with ssl=off, wget/ssl_client and curl speak HTTPS over TCP, and the VictoriaMetrics and nats binaries are static Go that never load it (ldd, 2026-11-24). Nothing uses QUIC, GCM-SIV or CMS
+  - vulnerability: CVE-2026-107496
+    package:
+      name: libcrypto3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-88822
+    package:
+      name: libcrypto3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-88823
+    package:
+      name: libcrypto3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-95691
+    package:
+      name: libcrypto3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-95692
+    package:
+      name: libcrypto3
+      version: 3.5.9-r0
+  # libssl3 3.5.9-r0 (alpine:3.24.4, docker:29.10.0-cli, postgres:17-alpine, victoriametrics/victoria-metrics:v1.156.0): same five findings as libcrypto3 above
+  - vulnerability: CVE-2026-107496
+    package:
+      name: libssl3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-88822
+    package:
+      name: libssl3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-88823
+    package:
+      name: libssl3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-95691
+    package:
+      name: libssl3
+      version: 3.5.9-r0
+  - vulnerability: CVE-2026-95692
+    package:
+      name: libssl3
+      version: 3.5.9-r0
+  # zlib 1.3.2-r1 (alpine:3.24.4, docker:29.10.0-cli, nats:2-alpine, redis:7-alpine, victoriametrics/victoria-metrics:v1.156.0): CVE-2026-4738 is GDAL's copy of zlib contrib/infback9, which Alpine maps onto zlib; this libz.so has no inflateBack9 symbol (checked 2026-11-24)
+  - vulnerability: CVE-2026-4738
+    package:
+      name: zlib
+      version: 1.3.2-r1
+  # github.com/moby/go-archive v0.2.0 (docker:29.10.0-cli): docker CLI tar extraction of an attacker's archive; yagra-updater only runs `docker cp` out of Yagra's own published images, and `docker load` is done by the host daemon
+  - vulnerability: GHSA-hfg8-hc9c-6c3h
+    package:
+      name: github.com/moby/go-archive
+      version: v0.2.0
+  # go.opentelemetry.io/otel/sdk v1.46.0 (docker:29.10.0-cli): attribute length limit bypass in the CLI's own spans; nothing outside sets their attributes
+  - vulnerability: GHSA-q7gw-24fr-5p69
+    package:
+      name: go.opentelemetry.io/otel/sdk
+      version: v1.46.0
+  # go.opentelemetry.io/otel/trace v1.46.0 (docker:29.10.0-cli): same as otel/sdk
+  - vulnerability: GHSA-q7gw-24fr-5p69
+    package:
+      name: go.opentelemetry.io/otel/trace
+      version: v1.46.0
+  # libc-bin 2.41-12+deb13u4 (oxidized/oxidized:0.38.0): same as libc6
+  - vulnerability: CVE-2026-18374
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-19499
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-19542
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-5435
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-6238
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-6368
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-6791
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-77117
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-80489
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-8674
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-86805
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-89092
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-95818
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-97399
+    package:
+      name: libc-bin
+      version: 2.41-12+deb13u4
+  # libc6 2.41-12+deb13u4 (oxidized/oxidized:0.38.0): strfmon, the ns_printrr/fp_nquery debug printers, an empty fopen ccs=, deep tdelete, wordexp, JIS X 0213 iconv, a hostile resolv.conf, setuid $ORIGIN and nscd; oxidized and git call none of them, Ruby and ICU do their own transcoding, and Docker writes resolv.conf
+  - vulnerability: CVE-2026-18374
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-19499
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-19542
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-5435
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-6238
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-6368
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-6791
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-77117
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-80489
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-8674
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-86805
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-89092
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-95818
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  - vulnerability: CVE-2026-97399
+    package:
+      name: libc6
+      version: 2.41-12+deb13u4
+  # libgpgme11t64 1.24.2-3 (oxidized/oxidized:0.38.0): not loaded by the running oxidized process; nothing lists or imports keys
+  - vulnerability: CVE-2026-129975
+    package:
+      name: libgpgme11t64
+      version: 1.24.2-3
+  # libgssapi-krb5-2 1.21.3-5+deb13u1 (oxidized/oxidized:0.38.0): loaded by the running oxidized process, but the findings are in kadmind, the KDC and GSS-RPC, none of which runs or is called here; 71200 and 107364 name no component (MIT groups them as DoS) and are accepted on that basis
+  - vulnerability: CVE-2026-107364
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-107884
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-111423
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112314
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112315
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112316
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112317
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112318
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112319
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112320
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112321
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112322
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112323
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-118380
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-11850
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-119079
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71199
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71200
+    package:
+      name: libgssapi-krb5-2
+      version: 1.21.3-5+deb13u1
+  # libk5crypto3 1.21.3-5+deb13u1 (oxidized/oxidized:0.38.0): same as libgssapi-krb5-2
+  - vulnerability: CVE-2026-107364
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-107884
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-111423
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112314
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112315
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112316
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112317
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112318
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112319
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112320
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112321
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112322
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112323
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-118380
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-11850
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-119079
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71199
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71200
+    package:
+      name: libk5crypto3
+      version: 1.21.3-5+deb13u1
+  # libkrb5-3 1.21.3-5+deb13u1 (oxidized/oxidized:0.38.0): same as libgssapi-krb5-2
+  - vulnerability: CVE-2026-107364
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-107884
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-111423
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112314
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112315
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112316
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112317
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112318
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112319
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112320
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112321
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112322
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112323
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-118380
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-11850
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-119079
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71199
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71200
+    package:
+      name: libkrb5-3
+      version: 1.21.3-5+deb13u1
+  # libkrb5support0 1.21.3-5+deb13u1 (oxidized/oxidized:0.38.0): same as libgssapi-krb5-2
+  - vulnerability: CVE-2026-107364
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-107884
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-111423
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112314
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112315
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112316
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112317
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112318
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112319
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112320
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112321
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112322
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-112323
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-118380
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-11850
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-119079
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71199
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  - vulnerability: CVE-2026-71200
+    package:
+      name: libkrb5support0
+      version: 1.21.3-5+deb13u1
+  # libmariadb3 1:11.8.6-0+deb13u1 (oxidized/oxidized:0.38.0): not loaded by the running oxidized process (/proc/<pid>/maps, 2026-11-24): the node source is HTTP. Only CVE-2026-44172 is in the client library (big5 escaping); the rest are MariaDB server or server-tool CVEs attached to the shared source package
+  - vulnerability: CVE-2026-102523
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107815
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107816
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107817
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107818
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107821
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107822
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107823
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44168
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44169
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44171
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44172
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44173
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-47023
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-48163
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-48165
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-49261
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60184
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60331
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60585
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60747
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-61081
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-85745
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-85746
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-85985
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-86047
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-92262
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-97380
+    package:
+      name: libmariadb3
+      version: 1:11.8.6-0+deb13u1
+  # libnghttp2-14 1.64.0-1.1+deb13u1 (oxidized/oxidized:0.38.0): the nghttpx proxy only, which the image does not run
+  - vulnerability: CVE-2026-58055
+    package:
+      name: libnghttp2-14
+      version: 1.64.0-1.1+deb13u1
+  # libruby3.3 3.3.13-0+deb13u1 (oxidized/oxidized:0.38.0): same as ruby3.3
+  - vulnerability: CVE-2026-132825
+    package:
+      name: libruby3.3
+      version: 3.3.13-0+deb13u1
+  # mariadb-common 1:11.8.6-0+deb13u1 (oxidized/oxidized:0.38.0): same as libmariadb3
+  - vulnerability: CVE-2026-102523
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107815
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107816
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107817
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107818
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107821
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107822
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-107823
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44168
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44169
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44171
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44172
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-44173
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-47023
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-48163
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-48165
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-49261
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60184
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60331
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60585
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-60747
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-61081
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-85745
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-85746
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-85985
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-86047
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-92262
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  - vulnerability: CVE-2026-97380
+    package:
+      name: mariadb-common
+      version: 1:11.8.6-0+deb13u1
+  # patch 2.8-2 (oxidized/oxidized:0.38.0): the patch command, which nothing runs
+  - vulnerability: CVE-2026-115207
+    package:
+      name: patch
+      version: 2.8-2
+  # ruby3.3 3.3.13-0+deb13u1 (oxidized/oxidized:0.38.0): case conversion of a string in a single-byte encoding; oxidized runs with LANG=C.UTF-8 so command and device output is UTF-8 (checked 2026-11-24), and oxidized-web converts with ICU
+  - vulnerability: CVE-2026-132825
+    package:
+      name: ruby3.3
+      version: 3.3.13-0+deb13u1
+  # zlib1g 1:1.3.dfsg+really1.3.1-1+b1 (oxidized/oxidized:0.38.0): gzFile writes after a failed write, and crc32_combine64 with crafted lengths; git and libgit2 use the deflate stream API
+  - vulnerability: CVE-2026-27171
+    package:
+      name: zlib1g
+      version: 1:1.3.dfsg+really1.3.1-1+b1
+  - vulnerability: CVE-2026-85091
+    package:
+      name: zlib1g
+      version: 1:1.3.dfsg+really1.3.1-1+b1
+  # libxml2 2.13.9-r2 (postgres:17-alpine): XInclude processing with a network resource loader; Yagra's SQL calls no XML function and postgres publishes no port
+  - vulnerability: CVE-2026-86144
+    package:
+      name: libxml2
+      version: 2.13.9-r2
+  # github.com/klauspost/compress v1.20.0 (docker:29.10.0-cli): a panic decoding a crafted two-block zstd frame (fse/huff0); the CLI never decompresses untrusted zstd: pulls and `docker load` are decoded by the host daemon, and `docker cp` streams plain tar. A panic would end one updater command
+  - vulnerability: GO-2026-6865
+    package:
+      name: github.com/klauspost/compress
+      version: v1.20.0
+  # go.opentelemetry.io/otel v1.46.0 (docker:29.10.0-cli): allocation amplification parsing an inbound W3C baggage header (baggage.Parse, Baggage.Extract); the CLI serves no HTTP and extracts no inbound baggage
+  - vulnerability: GO-2026-6975
+    package:
+      name: go.opentelemetry.io/otel
+      version: v1.46.0

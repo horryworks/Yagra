@@ -887,10 +887,10 @@ mod tests {
         out
     }
 
-    /// The metrics whose name is a fault rather than a noun, so the WebUI leaves the condition and
-    /// value off. Language-free, so it is generated beside the units rather than into a locale.
-    /// Every 0/1 metric, mapped to the value that is its fault (ADR-264 decision 3). A
-    /// `BTreeMap` for a name-sorted file, so the diff of an added flag is one line.
+    /// Every 0/1 metric (a name that is a fault rather than a noun, so the WebUI leaves the
+    /// condition and value off), mapped to the value that is its fault (ADR-264 decision 3).
+    /// Language-free, so it is generated beside the units rather than into a locale. A `BTreeMap`
+    /// for a name-sorted file, so the diff of an added flag is one line.
     fn alert_flags_json() -> String {
         let flags: std::collections::BTreeMap<&str, u8> = METRIC_MEANINGS
             .iter()

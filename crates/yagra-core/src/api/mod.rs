@@ -764,6 +764,12 @@ fn changes_monitoring_config(path: &str) -> bool {
         // spurious rebuilds in the product. Measured on the test server 2026-08-15: fourteen page
         // reloads, no other write in the window, and the next scheduler sweep lost its cache.
         || path == "/api/v1/node-names"
+        // Registering a tag by name (ADR-263 Inc.2). It writes `registered_tags`, which only the
+        // tag list and the suggestion list read; no rebuild input does. A ManageSystem route, so
+        // the read-shape check cannot see it and the test beside this function holds it. The
+        // accepted cost: another open Routing tab offers the new tag only once it re-reads. Exact
+        // match: `…/rename` and `…/delete` change the labels nodes carry and stay dirty.
+        || path == "/api/v1/node-tags"
         // Proposing which folder's IP range each selected node falls into (ADR-124 decision 5). It is
         // a POST because the id list is too long for a query string, and it writes nothing — the
         // move that may follow is `POST /nodes/move`, which is **not** listed here and does bump
@@ -1848,6 +1854,17 @@ mod tests {
             "/api/v1/notification-channels/abc",
             "/api/v1/notification-channels/abc/template",
         ] {
+            assert!(changes_monitoring_config(path), "{path} must invalidate");
+        }
+    }
+
+    /// Registering a tag (ADR-263 Inc.2) writes a table no rebuild reads, and it demands
+    /// ManageSystem, so the read-shaped check cannot see it. Renaming or deleting a tag rewrites
+    /// the labels nodes carry, so both still invalidate.
+    #[test]
+    fn registering_a_tag_does_not_dirty_the_config_generation() {
+        assert!(!changes_monitoring_config("/api/v1/node-tags"));
+        for path in ["/api/v1/node-tags/rename", "/api/v1/node-tags/delete"] {
             assert!(changes_monitoring_config(path), "{path} must invalidate");
         }
     }

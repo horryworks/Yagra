@@ -2,8 +2,9 @@
 //! The deployment's tags as one list, and the two writes that act on every place a tag is named
 //! (ADR-263).
 //!
-//! A tag (ADR-135) is free text stored where it is used. It lives in six columns: a node's and a folder's own labels, the labels each refuses to inherit, the tags a
-//! notification routing rule names (ADR-259) and the tags an alert-grouping exception names
+//! A tag (ADR-135) is free text stored where it is used. It lives in six columns: a node's and a
+//! folder's own labels, the labels each refuses to inherit, the tags a notification routing rule
+//! names (ADR-259) and the tags an alert-grouping exception names
 //! (ADR-262). This module is the one place that knows all six, so a rename or a delete cannot fix
 //! the nodes and forget the rule that was waiting for them.
 //!
