@@ -108,6 +108,11 @@
       "clearAll": "すべて解除",
       "done": "閉じる"
     },
+    "tagFilter": {
+      "search": "タグを探す",
+      "more_one": "ほか {{count}} 件",
+      "more_other": "ほか {{count}} 件"
+    },
     "chips": {
       "label": "有効な絞り込み",
       "remove": "「{{name}}」を外す",
@@ -118,7 +123,8 @@
     "cols": {
       "state": "状態",
       "kind": "種別",
-      "pool": "プール"
+      "pool": "プール",
+      "tag": "タグ"
     },
     "filter": {
       "allStates": "すべての状態",
@@ -126,7 +132,8 @@
       "allKinds": "すべての種別",
       "kindAria": "種別で絞り込み",
       "allPools": "すべてのプール",
-      "poolAria": "ポーリングプールで絞り込み"
+      "poolAria": "ポーリングプールで絞り込み",
+      "allTags": "すべてのタグ"
     }
   },
   "add": {

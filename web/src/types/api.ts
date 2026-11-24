@@ -845,6 +845,7 @@ export type NodeTag = components['schemas']['NodeTag'];
 export type TagRewritten = components['schemas']['TagRewritten'];
 /** The tags an Admin registered by name, offered by the tag fields (ADR-263 Inc.2). */
 export type RegisteredTags = components['schemas']['RegisteredTags'];
+export type TagSuggestions = components['schemas']['TagSuggestions'];
 
 /** The env-configured default notification route (`GET /api/v1/notification-default-route`):
  *  whether it exists and which kinds of channel it sends every alert to (ADR-200 Inc.28). */

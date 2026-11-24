@@ -1768,6 +1768,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/nodes/tag-suggestions",
+        GroupFiltered,
+        // ADR-265: the picker in the Nodes tree's filter. The question it serves, "which nodes
+        // carry this tag", is `list_nodes(tag=...)`; the fleet-wide tag counts are
+        // `get_config(kind=node_tags)`.
+        Tool("list_nodes"),
+    ),
+    (
+        "GET",
         "/api/v1/nodes/inventory",
         GroupFiltered,
         // ADR-249 decision 8. No WebUI screen reads this route — it exists so a script can stop

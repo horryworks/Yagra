@@ -108,6 +108,11 @@
       "clearAll": "Clear all",
       "done": "Done"
     },
+    "tagFilter": {
+      "search": "Find a tag",
+      "more_one": "{{count}} more",
+      "more_other": "{{count}} more"
+    },
     "chips": {
       "label": "Filters in force",
       "remove": "Remove {{name}}",
@@ -118,7 +123,8 @@
     "cols": {
       "state": "State",
       "kind": "Kind",
-      "pool": "Pool"
+      "pool": "Pool",
+      "tag": "Tag"
     },
     "filter": {
       "allStates": "All states",
@@ -126,7 +132,8 @@
       "allKinds": "All kinds",
       "kindAria": "Filter by kind",
       "allPools": "All pools",
-      "poolAria": "Filter by poll pool"
+      "poolAria": "Filter by poll pool",
+      "allTags": "All tags"
     }
   },
   "add": {

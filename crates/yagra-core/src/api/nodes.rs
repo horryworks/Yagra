@@ -42,6 +42,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
 #[derive(utoipa::OpenApi)]
 #[openapi(paths(
     list_nodes,
+    suggest_node_tags,
     create_node,
     search_nodes,
     list_group_nodes,
@@ -77,6 +78,7 @@ pub(crate) fn routes() -> Router<ApiState> {
         // literal over a parameter regardless of order, but keeping them adjacent is what stops
         // someone "tidying" `search` below the param route and assuming it still works.
         .route("/api/v1/nodes/search", get(search_nodes))
+        .route("/api/v1/nodes/tag-suggestions", get(suggest_node_tags))
         .route("/api/v1/nodes/by-group", get(list_group_nodes))
         .route("/api/v1/nodes/inventory", get(list_node_inventory))
         .route("/api/v1/node-names", post(node_names_batch))
@@ -294,6 +296,10 @@ pub(crate) struct NodePageQuery {
     /// operator, so there is no vocabulary to reject against: an unknown name simply matches
     /// nothing.
     pub pool: Option<String>,
+    /// Comma-separated tags; a node is returned when its **effective** tags (its own, plus every
+    /// one its folder chain supplies, minus the ones it excludes) hold **any** of them. Compared
+    /// exactly as stored, since tags are case-sensitive. An unknown tag simply matches nothing.
+    pub tag: Option<String>,
 }
 
 /// Why three of the four filters are applied in-process rather than as a `WHERE` clause — and it
@@ -321,13 +327,19 @@ pub(crate) struct NodeFilter {
     pub state: Vec<NodeState>,
     pub kind: Vec<NodeKind>,
     pub pool: Vec<String>,
+    /// Effective tags (ADR-265): inherited from the folder chain like `pool`, so the answer is the
+    /// [`crate::inventory::tagres::TagResolver`]'s, never the node row's own column.
+    pub tag: Vec<String>,
 }
 
 impl NodeFilter {
     /// Whether anything at all is set. `search` is handled separately — it is the one filter SQL
     /// can serve, so it narrows the scan rather than the survivors.
     pub(crate) fn is_set(&self) -> bool {
-        !self.state.is_empty() || !self.kind.is_empty() || !self.pool.is_empty()
+        !self.state.is_empty()
+            || !self.kind.is_empty()
+            || !self.pool.is_empty()
+            || !self.tag.is_empty()
     }
 }
 
@@ -678,7 +690,12 @@ async fn list_nodes(
         .clamp(1, yagra_base::repo::NODE_SEARCH_MAX);
     let words = search_words_for(&st, &scope, q.search.as_deref().unwrap_or("")).await?;
     let address = parse_address_filter(q.address.as_deref())?;
-    let filter = parse_node_filter(q.state.as_deref(), q.kind.as_deref(), q.pool.as_deref())?;
+    let filter = parse_node_filter(
+        q.state.as_deref(),
+        q.kind.as_deref(),
+        q.pool.as_deref(),
+        q.tag.as_deref(),
+    )?;
     // Filter mode: any of search / address / state / kind / pool returns a single capped page (no
     // keyset cursor) — the tree narrows the fleet without loading it.
     if !words.is_empty() || address.is_some() || filter.is_set() {
@@ -893,6 +910,7 @@ pub(crate) fn parse_node_filter(
     state: Option<&str>,
     kind: Option<&str>,
     pool: Option<&str>,
+    tag: Option<&str>,
 ) -> Result<NodeFilter, ApiError> {
     Ok(NodeFilter {
         state: super::util::parse_set_with(
@@ -920,6 +938,8 @@ pub(crate) fn parse_node_filter(
             NodeKind::from_token,
         )?,
         pool: super::util::split_set(pool),
+        // Like `pool`, a tag is a name the operator invented, so an unknown one matches nothing.
+        tag: super::util::split_set(tag),
     })
 }
 
@@ -955,7 +975,15 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
             _ => None,
         }
     };
-    let (states, kinds, pools) = tokio::join!(states, kinds, pools);
+    let tags = async {
+        match (filter.tag.is_empty(), st.admin.as_ref()) {
+            (true, _) => None,
+            (false, Some(admin)) => Some(super::util::tag_resolver(admin).await),
+            // Skeleton mode has no folders, so a node's effective tags are its own.
+            (false, None) => Some(crate::inventory::tagres::TagResolver::empty()),
+        }
+    };
+    let (states, kinds, pools, tags) = tokio::join!(states, kinds, pools, tags);
     nodes
         .into_iter()
         .filter(|n| {
@@ -987,9 +1015,147 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
                     return false;
                 }
             }
+            if let Some(resolver) = tags.as_ref() {
+                if !carries_any(&resolver.effective(n), &filter.tag) {
+                    return false;
+                }
+            }
             true
         })
         .collect()
+}
+
+/// Whether a node whose effective tags are `have` matches a tag filter of `want`: **any** of them
+/// (ADR-265 decision 3), compared exactly as stored. An empty `want` is no filter.
+fn carries_any(have: &[String], want: &[String]) -> bool {
+    want.is_empty() || want.iter().any(|w| have.contains(w))
+}
+
+/// Query for the tag picker in the Nodes tree's filter (ADR-265).
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct TagSuggestQuery {
+    /// Text typed so far. Empty or absent returns the tags carried by the most nodes; otherwise
+    /// the tags holding it (case-insensitive), the ones starting with it first.
+    q: Option<String>,
+    /// How many to return (1 to 50, default 20).
+    limit: Option<u32>,
+    /// Comma-separated tags already chosen. Their counts come back in `chosen` whether or not they
+    /// match `q`, so the picker can show a count beside every ticked tag.
+    chosen: Option<String>,
+}
+
+/// One tag and how many nodes the caller can see carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct TagCount {
+    pub tag: String,
+    /// Visible nodes whose effective tags hold this one.
+    pub nodes: u64,
+}
+
+/// The tag picker's answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub(crate) struct TagSuggestions {
+    pub tags: Vec<TagCount>,
+    /// How many more tags matched than were returned.
+    pub more: u64,
+    /// The counts of the tags named in `chosen`, in the order named; 0 when no visible node
+    /// carries one.
+    pub chosen: Vec<TagCount>,
+}
+
+/// Rank the counted tags for the picker. Pure, so the order is tested without a database.
+///
+/// No text: most-carried first. Text: case-insensitive substring, the tags that **start** with it
+/// before the rest, then most-carried, then by name, so `co` offers `core` before `telco`.
+fn rank_tag_suggestions(counts: HashMap<String, u64>, typed: &str, limit: usize) -> TagSuggestions {
+    let needle = typed.trim().to_lowercase();
+    let mut hits: Vec<(bool, TagCount)> = counts
+        .into_iter()
+        .filter_map(|(tag, nodes)| {
+            let low = tag.to_lowercase();
+            if needle.is_empty() {
+                Some((false, TagCount { tag, nodes }))
+            } else if low.contains(&needle) {
+                Some((low.starts_with(&needle), TagCount { tag, nodes }))
+            } else {
+                None
+            }
+        })
+        .collect();
+    hits.sort_by(|(pa, a), (pb, b)| {
+        pb.cmp(pa)
+            .then_with(|| b.nodes.cmp(&a.nodes))
+            .then_with(|| a.tag.cmp(&b.tag))
+    });
+    let more = u64::try_from(hits.len().saturating_sub(limit)).unwrap_or(u64::MAX);
+    hits.truncate(limit);
+    TagSuggestions {
+        tags: hits.into_iter().map(|(_, t)| t).collect(),
+        more,
+        chosen: Vec::new(),
+    }
+}
+
+/// The counts of the chosen tags, in the order chosen.
+fn chosen_counts(counts: &HashMap<String, u64>, chosen: &[String]) -> Vec<TagCount> {
+    chosen
+        .iter()
+        .map(|t| TagCount {
+            tag: t.clone(),
+            nodes: counts.get(t).copied().unwrap_or(0),
+        })
+        .collect()
+}
+
+/// Count the effective tags of the nodes the caller can see. Every node is read (three columns)
+/// because ranking by "most carried" needs every count; only the page leaves this function.
+fn count_visible_tags(
+    rows: &[yagra_base::repo::NodeLabelRow],
+    resolver: &crate::inventory::tagres::TagResolver,
+    scope: &super::scope::NodeScope,
+) -> HashMap<String, u64> {
+    let mut counts: HashMap<String, u64> = HashMap::new();
+    for row in rows.iter().filter(|r| scope.allows_group(r.group_id)) {
+        for t in resolver.effective_parts(row.group_id, &row.tags, &row.tags_excluded) {
+            *counts.entry(t).or_default() += 1;
+        }
+    }
+    counts
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/nodes/tag-suggestions", tag = "nodes",
+    params(TagSuggestQuery),
+    responses(
+        (status = 200, description = "Tags carried by the nodes the caller can see, with how many carry each", body = TagSuggestions),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "Too many inventory reads in flight — retry shortly (`list_busy`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn suggest_node_tags(
+    _perm: RequireView,
+    _seat: ListSlot,
+    Scoped(scope): Scoped,
+    axum::extract::State(st): axum::extract::State<ApiState>,
+    Query(q): Query<TagSuggestQuery>,
+) -> ApiResult<Json<TagSuggestions>> {
+    let limit = usize::try_from(q.limit.unwrap_or(20).clamp(1, 50)).unwrap_or(20);
+    // Skeleton mode has no inventory to count, so the picker is simply empty.
+    let Some(admin) = st.admin.as_ref() else {
+        return Ok(Json(rank_tag_suggestions(HashMap::new(), "", limit)));
+    };
+    let rows = admin.repo.label_rows().await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "count node tags", "failed to list tags")
+    })?;
+    let resolver = super::util::tag_resolver(admin).await;
+    let counts = count_visible_tags(&rows, &resolver, &scope);
+    let chosen = chosen_counts(&counts, &super::util::split_set(q.chosen.as_deref()));
+    Ok(Json(TagSuggestions {
+        chosen,
+        ..rank_tag_suggestions(counts, q.q.as_deref().unwrap_or(""), limit)
+    }))
 }
 
 /// Query for the node-picker typeahead: `?q=<substr>&limit=<n>`. Empty/absent `q` returns the
@@ -4126,15 +4292,15 @@ mod tests {
         // The inversion that would be silent: an empty set read as "match nothing" makes the whole
         // tree go blank the moment any *other* filter is set. Every set filter in this codebase
         // spells "no filter" as empty, and this is where the node list agrees.
-        let none = parse_node_filter(None, None, None).expect("no filter parses");
+        let none = parse_node_filter(None, None, None, None).expect("no filter parses");
         assert!(!none.is_set());
-        let empty = parse_node_filter(Some(""), Some(""), Some("")).expect("empty parses");
+        let empty = parse_node_filter(Some(""), Some(""), Some(""), None).expect("empty parses");
         assert!(
             !empty.is_set(),
             "an empty value is no filter, not an empty result"
         );
 
-        let f = parse_node_filter(Some("warning,critical,unreachable"), None, None)
+        let f = parse_node_filter(Some("warning,critical,unreachable"), None, None, None)
             .expect("a set parses");
         assert_eq!(
             f.state,
@@ -4153,15 +4319,131 @@ mod tests {
         // mistake worth a 400 — dropping it would widen the answer and read as "there are no Meraki
         // nodes". A pool is a name the operator invented, so there is nothing to check against and
         // an unrecognised one must simply match nothing.
-        assert!(parse_node_filter(Some("melted"), None, None).is_err());
-        assert!(parse_node_filter(None, Some("toaster"), None).is_err());
+        assert!(parse_node_filter(Some("melted"), None, None, None).is_err());
+        assert!(parse_node_filter(None, Some("toaster"), None, None).is_err());
         // …and the message names the real vocabulary rather than a copy of it.
-        let err = parse_node_filter(Some("melted"), None, None).unwrap_err();
+        let err = parse_node_filter(Some("melted"), None, None, None).unwrap_err();
         let body = format!("{err:?}");
         assert!(body.contains("unreachable"), "{body}");
 
-        let f = parse_node_filter(None, None, Some(" tokyo , , osaka ")).expect("pools parse");
+        let f =
+            parse_node_filter(None, None, Some(" tokyo , , osaka "), None).expect("pools parse");
         assert_eq!(f.pool, vec!["tokyo".to_owned(), "osaka".to_owned()]);
+    }
+
+    #[test]
+    fn a_tag_filter_is_a_set_of_names_matched_by_any() {
+        // ADR-265 decisions 3 and 5: tags are operator names (no vocabulary to refuse), several
+        // are a union, and the comparison is exact because tags are stored case-sensitively.
+        let f = parse_node_filter(None, None, None, Some(" core , , wan ")).expect("tags parse");
+        assert_eq!(f.tag, vec!["core".to_owned(), "wan".to_owned()]);
+        assert!(f.is_set());
+        let have = vec!["wan".to_owned(), "fw".to_owned()];
+        assert!(carries_any(&have, &f.tag), "one of the two is enough");
+        assert!(!carries_any(&have, &["core".to_owned()]));
+        assert!(!carries_any(&have, &["WAN".to_owned()]), "case-sensitive");
+        assert!(carries_any(&have, &[]), "an empty set is no filter");
+    }
+
+    #[tokio::test]
+    async fn a_tag_nobody_carries_selects_no_node() {
+        // The demo inventory carries no tags, so asking for one must answer nothing rather than
+        // fall through to "unfiltered".
+        let st = public_state();
+        let scope = super::super::scope::NodeScope::All;
+        let f = NodeFilter {
+            tag: vec!["core".to_owned()],
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, &[], None, &f, 100)
+            .await
+            .expect("filter succeeds");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn tag_counts_follow_inheritance_and_exclusion_and_the_callers_scope() {
+        // ADR-265 decision 2: a folder's tag counts for every node below it, a node that excludes
+        // it does not carry it, and a node the caller cannot see is not counted at all.
+        use yagra_base::repo::NodeLabelRow;
+        let site_a = Uuid::from_u128(1);
+        let site_b = Uuid::from_u128(2);
+        let resolver = crate::inventory::tagres::TagResolver::build(vec![
+            (site_a, None, vec!["core".to_owned()], vec![]),
+            (site_b, None, vec![], vec![]),
+        ]);
+        let row = |g: Uuid, own: &[&str], ex: &[&str]| NodeLabelRow {
+            group_id: Some(g),
+            tags: own.iter().map(|s| (*s).to_owned()).collect(),
+            tags_excluded: ex.iter().map(|s| (*s).to_owned()).collect(),
+        };
+        let rows = vec![
+            row(site_a, &["wan"], &[]),
+            row(site_a, &[], &[]),
+            row(site_a, &[], &["core"]),
+            row(site_b, &["core"], &[]),
+        ];
+        let all = count_visible_tags(&rows, &resolver, &super::super::scope::NodeScope::All);
+        assert_eq!(
+            all.get("core"),
+            Some(&3),
+            "two inherit it, one excludes it, one owns it"
+        );
+        assert_eq!(all.get("wan"), Some(&1));
+
+        let only_a = super::super::scope::NodeScope::Groups(std::sync::Arc::new(
+            super::super::scope::expand(&[(site_a, None), (site_b, None)], &[site_a]),
+        ));
+        let scoped = count_visible_tags(&rows, &resolver, &only_a);
+        assert_eq!(scoped.get("core"), Some(&2), "site-b's node is not counted");
+    }
+
+    #[test]
+    fn tag_suggestions_rank_prefix_first_then_most_carried_and_count_the_rest() {
+        let counts: HashMap<String, u64> = [
+            ("telco", 50),
+            ("core", 9),
+            ("Core-dc", 30),
+            ("wifi", 100),
+            ("wan", 20),
+        ]
+        .into_iter()
+        .map(|(t, n)| (t.to_owned(), n))
+        .collect();
+
+        let top = rank_tag_suggestions(counts.clone(), "", 2);
+        let names: Vec<&str> = top.tags.iter().map(|t| t.tag.as_str()).collect();
+        assert_eq!(names, vec!["wifi", "telco"], "no text: most carried first");
+        assert_eq!(top.more, 3);
+
+        let typed = rank_tag_suggestions(counts.clone(), " CO ", 20);
+        let names: Vec<&str> = typed.tags.iter().map(|t| t.tag.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Core-dc", "core", "telco"],
+            "case-insensitive, a prefix before a substring, then most carried"
+        );
+        assert_eq!(typed.more, 0);
+
+        let none = rank_tag_suggestions(counts.clone(), "zzz", 20);
+        assert!(none.tags.is_empty());
+        assert_eq!(none.more, 0);
+
+        // A chosen tag is counted whether or not it matched, and one nobody carries is 0.
+        let chosen = chosen_counts(&counts, &["wan".to_owned(), "gone".to_owned()]);
+        assert_eq!(
+            chosen,
+            vec![
+                TagCount {
+                    tag: "wan".to_owned(),
+                    nodes: 20
+                },
+                TagCount {
+                    tag: "gone".to_owned(),
+                    nodes: 0
+                },
+            ]
+        );
     }
 
     #[tokio::test]

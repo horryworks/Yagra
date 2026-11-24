@@ -133,6 +133,10 @@ pub(super) struct ListNodesParams {
     /// ancestor that sets one, else `default`). Omit for all. Pool names are chosen by the
     /// operator, so an unrecognised one matches nothing rather than being an error.
     pool: Option<String>,
+    /// Tags to include, comma-separated: a node matches when its effective tags (its own plus
+    /// those its folders supply, minus the ones it excludes) hold any of them. Case-sensitive;
+    /// an unrecognised tag matches nothing. Omit for all.
+    tag: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -500,6 +504,7 @@ impl YagraMcp {
             p.state.as_deref(),
             p.kind.as_deref(),
             p.pool.as_deref(),
+            p.tag.as_deref(),
         ) {
             Ok(f) => f,
             Err(e) => return tool_api_error(TOOL, &e),

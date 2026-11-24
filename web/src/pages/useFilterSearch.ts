@@ -95,7 +95,7 @@ export function useFilterSearch(filter: string, filters: FilterState): FilterSea
   // being filtered at all.
   const term = typed ? settled : '';
   const query = inventoryQuery(filters);
-  const narrowed = Boolean(query.state || query.kind || query.pool);
+  const narrowed = Boolean(query.state || query.kind || query.pool || query.tag);
   // Typing has already invalidated what is on screen, so report `loading` from the keystroke
   // rather than from the moment the request goes out — but only when a search is actually coming.
   // Without that condition, clearing the last filter would show a spinner over a tree that is not

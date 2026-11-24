@@ -82,6 +82,7 @@ describe('inventoryQuery', () => {
       state: undefined,
       kind: undefined,
       pool: undefined,
+      tag: undefined,
     });
   });
 
@@ -125,6 +126,27 @@ describe('inventoryKey', () => {
   it('does not collide across fields', () => {
     // A naive concatenation would make {kind:'a b'} and {kind:'a', pool:'b'} the same string.
     expect(inventoryKey(f({ pool: 'url' }))).not.toBe(inventoryKey(f({ kind: 'url' })));
+  });
+
+  it('keeps a tag holding a space apart from the field before it (ADR-265)', () => {
+    // A tag is free text, so it may hold the very space the key joins on.
+    expect(inventoryKey(f({ pool: 'a', tag: 'b c' }))).not.toBe(
+      inventoryKey(f({ pool: 'a b', tag: 'c' })),
+    );
+  });
+});
+
+describe('the tag column (ADR-265)', () => {
+  it('offers no options, so the menu draws its own search-first picker', () => {
+    const tag = COLS.find((c) => c.key === 'tag');
+    expect(tag?.filter.kind).toBe('enum');
+    expect(tag?.filter.kind === 'enum' ? tag.filter.options : null).toEqual([]);
+  });
+
+  it('keeps a tag from a link, which no list could have validated', () => {
+    const p = new URLSearchParams('tag=core,wan');
+    expect(readInventoryFilters(COLS, p).tag).toBe('core,wan');
+    expect(inventoryQuery(readInventoryFilters(COLS, p)).tag).toBe('core,wan');
   });
 });
 

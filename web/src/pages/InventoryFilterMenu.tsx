@@ -3,7 +3,7 @@
 //
 // Everything that narrows or reshapes the tree sits behind this one button: Pinned only (ADR-146),
 // Needs attention (ADR-163), Hide empty folders (ADR-159's "With nodes", renamed) and the State /
-// Kind / Pool sets (ADR-053 Inc.6). Before ADR-177 they were four look-alike buttons in a row under
+// Kind / Pool sets (ADR-053 Inc.6) and, since ADR-265, the Tag set. Before ADR-177 they were four look-alike buttons in a row under
 // the pane head, plus a third row the Filter button opened — and every one of them pushed the tree
 // down.
 //
@@ -30,11 +30,12 @@ import {
   type FilterableColumn,
 } from '../lib/columnFilter';
 import { inventoryChips, type InventoryChip } from './inventoryFilters';
+import { TagFilterSection } from './TagFilterSection';
 import './InventoryFilterMenu.css';
 
 export interface InventoryFilterProps {
   columns: readonly FilterableColumn<never>[];
-  /** Plain-text names for the three columns. */
+  /** Plain-text names for the four columns. */
   labels: Record<string, string>;
   filters: FilterState;
   onChange: (next: FilterState) => void;
@@ -150,6 +151,17 @@ export function InventoryFilterButton(p: InventoryFilterProps) {
             />
           </div>
           {p.columns.map((c) => {
+            // The tag column has no options of its own: it searches the server (ADR-265).
+            if (c.key === 'tag') {
+              return (
+                <TagFilterSection
+                  key={c.key}
+                  label={p.labels[c.key] ?? c.key}
+                  value={p.filters[c.key] ?? ''}
+                  onChange={(next) => p.onChange({ ...p.filters, [c.key]: next })}
+                />
+              );
+            }
             if (c.filter.kind !== 'enum' || c.filter.options.length === 0) return null;
             const order = c.filter.options.map((o) => o.value);
             const chosen = new Set(decodeSet(p.filters[c.key] ?? ''));

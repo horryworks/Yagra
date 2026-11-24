@@ -164,6 +164,7 @@ import type {
   NodeTags,
   TagRewritten,
   RegisteredTags,
+  TagSuggestions,
   DeliveryHoursConfig,
   HeldNotification,
   ChannelKind,
@@ -826,6 +827,8 @@ export const api = {
     state?: string;
     kind?: string;
     pool?: string;
+    /** Comma-joined tags; a node matches when its effective tags hold any of them (ADR-265). */
+    tag?: string;
     /** One exact IP address, compared as an address by the server (ADR-139 Inc.2). */
     address?: string;
   }): Promise<NodePage> =>
@@ -838,7 +841,15 @@ export const api = {
         state: opts?.state || undefined,
         kind: opts?.kind || undefined,
         pool: opts?.pool || undefined,
+        tag: opts?.tag || undefined,
       },
+    }),
+
+  /** Tags carried by the nodes the caller can see, with how many carry each, for the tree's tag
+   *  filter (ADR-265). No text: the most carried. Text: the tags holding it, prefixes first. */
+  suggestNodeTags: (q: string, limit: number, chosen: string): Promise<TagSuggestions> =>
+    apiGet('/api/v1/nodes/tag-suggestions', {
+      query: { q: q || undefined, limit, chosen: chosen || undefined },
     }),
 
   /** Create a node. Optional profile/credential/parent bindings + descriptive maker/model. */

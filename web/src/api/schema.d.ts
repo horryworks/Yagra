@@ -3001,6 +3001,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/tag-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["suggest_node_tags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/tags": {
         parameters: {
             query?: never;
@@ -16129,6 +16145,15 @@ export interface components {
             /** Format: int32 */
             updated: number;
         };
+        /** @description One tag and how many nodes the caller can see carry it. */
+        TagCount: {
+            /**
+             * Format: int64
+             * @description Visible nodes whose effective tags hold this one.
+             */
+            nodes: number;
+            tag: string;
+        };
         /**
          * @description What a tag rename or delete changed, per place (ADR-263). All zero means the tag was named
          *     nowhere, which is not an error.
@@ -16169,6 +16194,20 @@ export interface components {
              * @description Routing rules whose tags changed.
              */
             rules: number;
+        };
+        /** @description The tag picker's answer. */
+        TagSuggestions: {
+            /**
+             * @description The counts of the tags named in `chosen`, in the order named; 0 when no visible node
+             *     carries one.
+             */
+            chosen: components["schemas"]["TagCount"][];
+            /**
+             * Format: int64
+             * @description How many more tags matched than were returned.
+             */
+            more: number;
+            tags: components["schemas"]["TagCount"][];
         };
         /** @description Where a covered pool's members should be pointed. */
         TakeOverPoolRequest: {
@@ -27705,6 +27744,12 @@ export interface operations {
                  *     nothing.
                  */
                 pool?: string;
+                /**
+                 * @description Comma-separated tags; a node is returned when its **effective** tags (its own, plus every
+                 *     one its folder chain supplies, minus the ones it excludes) hold **any** of them. Compared
+                 *     exactly as stored, since tags are case-sensitive. An unknown tag simply matches nothing.
+                 */
+                tag?: string;
             };
             header?: never;
             path?: never;
@@ -28577,6 +28622,66 @@ export interface operations {
             };
             /** @description Role lacks the View permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    suggest_node_tags: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Text typed so far. Empty or absent returns the tags carried by the most nodes; otherwise
+                 *     the tags holding it (case-insensitive), the ones starting with it first.
+                 */
+                q?: string;
+                /** @description How many to return (1 to 50, default 20). */
+                limit?: number;
+                /**
+                 * @description Comma-separated tags already chosen. Their counts come back in `chosen` whether or not they
+                 *     match `q`, so the picker can show a count beside every ticked tag.
+                 */
+                chosen?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tags carried by the nodes the caller can see, with how many carry each */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagSuggestions"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Too many inventory reads in flight — retry shortly (`list_busy`) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

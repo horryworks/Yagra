@@ -87,6 +87,15 @@ export function inventoryFilterSpecs(
       options: pools.map((p) => ({ value: p.name, label: p.name })),
       allLabel: t('inventory.filter.allPools'),
     },
+    // ADR-265. **No options, on purpose**: a deployment may carry thousands of tags, so the menu
+    // draws its own search-first picker (`TagFilterSection`) instead of a checkbox per value, and
+    // the generic checkbox list skips a column with none. Being an `enum` column is still what
+    // makes the URL key, the chip and "clear all filters" work with no code of their own.
+    tag: {
+      kind: 'enum',
+      options: [],
+      allLabel: t('inventory.filter.allTags'),
+    },
   };
 }
 
@@ -103,6 +112,7 @@ export function inventoryFilterLabels(t: TFunction): Record<string, string> {
     state: t('inventory.cols.state'),
     kind: t('inventory.cols.kind'),
     pool: t('inventory.cols.pool'),
+    tag: t('inventory.cols.tag'),
   };
 }
 
@@ -115,11 +125,13 @@ export function inventoryQuery(f: FilterState): {
   state?: string;
   kind?: string;
   pool?: string;
+  tag?: string;
 } {
   return {
     state: f.state || undefined,
     kind: f.kind || undefined,
     pool: f.pool || undefined,
+    tag: f.tag || undefined,
   };
 }
 
@@ -133,12 +145,16 @@ export function inventoryQuery(f: FilterState): {
  *  stable key: without that, ticking `ok` then `warning` and ticking them the other way round would
  *  produce two different strings and refetch. */
 export function inventoryKey(f: FilterState): string {
-  return `${f.state ?? ''} ${f.kind ?? ''} ${f.pool ?? ''}`;
+  // A tag may hold a space, so the tag part is JSON-quoted: `a b` + `c` and `a` + `b c` must not
+  // produce one key.
+  return `${f.state ?? ''} ${f.kind ?? ''} ${f.pool ?? ''} ${JSON.stringify(f.tag ?? '')}`;
 }
 
 /** Whether anything is narrowing the tree. */
 export function isInventoryFiltered(f: FilterState): boolean {
-  return (f.state ?? '') !== '' || (f.kind ?? '') !== '' || (f.pool ?? '') !== '';
+  return (
+    (f.state ?? '') !== '' || (f.kind ?? '') !== '' || (f.pool ?? '') !== '' || (f.tag ?? '') !== ''
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +236,8 @@ export function readInventoryFilters(
 ): FilterState {
   const raw = readFilterParams(columns, params);
   for (const c of columns) {
-    if (c.key === 'pool' || c.filter.kind !== 'enum') continue;
+    // `pool` and `tag` are operator names fetched (or searched) later, so a link must not lose them.
+    if (c.key === 'pool' || c.key === 'tag' || c.filter.kind !== 'enum') continue;
     const order = c.filter.options.map((o) => o.value);
     raw[c.key] = encodeSet(
       decodeSet(raw[c.key] ?? '').filter((v) => order.includes(v)),
