@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { NodeTag } from '../types/api';
-import { placesNamed, planRename } from './tagCatalog';
+import { placesNamed, planAdd, planRename } from './tagCatalog';
 
 const row = (tag: string, over: Partial<NodeTag> = {}): NodeTag => ({
   tag,
@@ -11,6 +11,7 @@ const row = (tag: string, over: Partial<NodeTag> = {}): NodeTag => ({
   refusals: 0,
   rules: 0,
   exceptions: 0,
+  registered: false,
   ...over,
 });
 
@@ -42,7 +43,26 @@ describe('planRename', () => {
 });
 
 describe('placesNamed', () => {
+  it('counts a registration as one place', () => {
+    expect(placesNamed(row('x', { registered: true }))).toBe(1);
+  });
+
   it('adds every place, not the effective node count', () => {
     expect(placesNamed(row('x', { nodes: 9, own: 1, folders: 2, refusals: 1, rules: 3, exceptions: 1 }))).toBe(8);
+  });
+});
+
+describe('planAdd', () => {
+  it('accepts a new name and finds nothing listed', () => {
+    expect(planAdd(' TeamC ', tags)).toEqual({ problem: null, listed: null });
+  });
+
+  it('names the row a listed name already has', () => {
+    expect(planAdd('core', tags)).toEqual({ problem: null, listed: tags[0] });
+  });
+
+  it('applies the label rules', () => {
+    expect(planAdd('  ', tags).problem).toBe('empty');
+    expect(planAdd('x'.repeat(65), tags).problem).toBe('tooLong');
   });
 });

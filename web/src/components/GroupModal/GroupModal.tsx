@@ -16,6 +16,7 @@ import { geoBodyFrom, geoChanged, geoDraftFrom, inheritedPin } from './geoFields
 import { knownTimeZones } from '../../lib/timeZone';
 import { tagDraftFrom, tagsChanged } from './tagFields';
 import { ChipInput } from '../ui/ChipInput';
+import { useRegisteredTags } from '../../lib/useRegisteredTags';
 import { labelsAreValid } from '../ui/labelRules';
 import { Badge } from '../ui/Badge';
 import {
@@ -58,6 +59,7 @@ export function GroupModal({
   onSaved: (groupId: string) => void;
 }) {
   const { t } = useTranslation('nodes');
+  const registeredTags = useRegisteredTags();
   const editing = state.mode === 'edit';
   const [name, setName] = useState(state.group?.name ?? '');
   const [type, setType] = useState<GroupType>(asGroupType(state.group?.group_type));
@@ -215,6 +217,7 @@ export function GroupModal({
         <FieldGroup label={t('group.tags')} infoKey="nodes:group.tagsInherit.info">
           <ChipInput
             value={tagDraft.tags}
+            suggestions={registeredTags}
             onChange={(next) => setTagDraft((prev) => ({ ...prev, tags: next }))}
             placeholder={t('field.tagPlaceholder')}
             inputLabel={t('group.tags')}

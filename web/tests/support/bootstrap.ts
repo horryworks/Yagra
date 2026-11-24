@@ -80,9 +80,11 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     // Since ADR-263 each row also says where the tag is named, and a tag only a rule names is
     // listed with `nodes` 0: `string` is the sample rule's, so the Tags screen has that row too.
     tags: [
-      { tag: 'APAC', nodes: 5, own: 2, folders: 1, refusals: 0, rules: 0, exceptions: 0 },
-      { tag: 'TeamA', nodes: 3, own: 3, folders: 0, refusals: 1, rules: 0, exceptions: 1 },
-      { tag: 'string', nodes: 0, own: 0, folders: 0, refusals: 0, rules: 1, exceptions: 0 },
+      { tag: 'APAC', nodes: 5, own: 2, folders: 1, refusals: 0, rules: 0, exceptions: 0, registered: true },
+      { tag: 'TeamA', nodes: 3, own: 3, folders: 0, refusals: 1, rules: 0, exceptions: 1, registered: false },
+      { tag: 'string', nodes: 0, own: 0, folders: 0, refusals: 0, rules: 1, exceptions: 0, registered: false },
+      // Registered by name and carried by nothing (ADR-263 Inc.2).
+      { tag: 'TeamC', nodes: 0, own: 0, folders: 0, refusals: 0, rules: 0, exceptions: 0, registered: true },
     ],
     reach: 3,
     // The zones the reached nodes keep time in (ADR-262 decision 11): one site zone and the
@@ -92,6 +94,9 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
       { zone: 'UTC', nodes: 1, default: true },
     ],
   } satisfies Schemas['NodeTags'] as unknown as Json,
+
+  // The registered tags the tag fields suggest (ADR-263 Inc.2): the two the list above marks.
+  '/api/v1/registered-tags': { tags: ['APAC', 'TeamC'] } satisfies Schemas['RegisteredTags'] as unknown as Json,
 
   // What is not being watched (ADR-227). The generator answers every integer with `1`, which reads
   // as "the one pool-polled node has no live poller" — the shell's nothing-is-polled sentence on

@@ -75,7 +75,7 @@ const PROSE_CEILING: Record<string, [number, number]> = {
   metrics: [127, 65],
   monitoring: [11387, 6815], // Discovery's folded scan settings say what they will use (ADR-244, 2026-11-07)
   nav: [2751, 1245], // + the Tags menu item and its description: a new screen, Nodes > Tags (ADR-263, 2026-11-24)
-  nodes: [16534, 9487], // + the Tags screen: its columns, the rename and delete dialogs, the warning that notifications carry the new name (ADR-263, 2026-11-24)
+  nodes: [16556, 9501], // + the Add tag dialog's state line (the name is already listed) and its error (ADR-263 Inc.2, 2026-11-24)
   rca: [1022, 528],
   reports: [643, 402],
   settings: [217, 101],

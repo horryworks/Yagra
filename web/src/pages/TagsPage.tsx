@@ -7,6 +7,9 @@
 // delete a routing rule or an exception depends on is refused by the server (409), and its message
 // names the rules, so the error line is the explanation.
 //
+// Since ADR-263 Inc.2 a tag can also be added by name before anything carries it ("+ Add tag"):
+// it is registered, listed with every count at zero, and offered by the tag fields.
+//
 // The judgement (the new name's rules, which tag a rename merges into) is `tagCatalog.ts`, where
 // a test can reach it.
 
@@ -24,6 +27,8 @@ import { Field, TextInput } from '../components/ui/Field';
 import { Fields } from '../components/ui/FormLayout';
 import { FormError, FormFooter } from '../components/ui/FormFooter';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
+import { TableToolbar, TableSpacer } from '../components/ui/TableToolbar';
+import { Button } from '../components/ui/Button';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import { useLoad } from '../lib/useLoad';
 import { useSubmit } from '../lib/useSubmit';
@@ -31,13 +36,14 @@ import { done } from '../lib/submitState';
 import { isImeComposing } from '../lib/ime';
 import { rowActionsWidth } from '../lib/rowActions';
 import { useCan } from '../store';
-import { placesNamed, planRename } from './tagCatalog';
+import { placesNamed, planAdd, planRename } from './tagCatalog';
 
 export function TagsPage() {
   const { t } = useTranslation('nodes');
   const canSystem = useCan('manage_system');
   const [renaming, setRenaming] = useState<NodeTag | null>(null);
   const [deleting, setDeleting] = useState<NodeTag | null>(null);
+  const [adding, setAdding] = useState(false);
 
   const list = useLoad(() => api.listNodeTags(), [], { initial: null as NodeTags | null });
   const { data, loading, reload } = list;
@@ -63,6 +69,13 @@ export function TagsPage() {
       count('folders', t('tags.cols.folders')),
       count('rules', t('tags.cols.rules')),
       count('exceptions', t('tags.cols.exceptions'), '170px'),
+      {
+        key: 'registered',
+        header: t('tags.cols.registered'),
+        width: '110px',
+        align: 'right',
+        render: (r) => (r.registered ? '✓' : <span className="muted">—</span>),
+      },
       {
         key: 'actions',
         header: t('tags.cols.actions'),
@@ -96,6 +109,12 @@ export function TagsPage() {
         trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.tags') }]}
       />
       <LoadGate load={list} permission="manage_system">
+        {canSystem && (
+          <TableToolbar>
+            <TableSpacer />
+            <Button onClick={() => setAdding(true)}>{t('tags.add')}</Button>
+          </TableToolbar>
+        )}
         <DataTable
           tableId="nodes.tags"
           rows={rows}
@@ -106,6 +125,16 @@ export function TagsPage() {
         />
       </LoadGate>
 
+      {adding && (
+        <AddTagModal
+          tags={rows}
+          onClose={() => setAdding(false)}
+          onDone={() => {
+            setAdding(false);
+            reload();
+          }}
+        />
+      )}
       {renaming && (
         <RenameTagModal
           tag={renaming}
@@ -206,6 +235,64 @@ function RenameTagModal({
           />
         </Field>
         <p className="modal-confirm-text">{t('tags.renameWarn')}</p>
+        <FormError form={form} />
+      </Fields>
+    </Modal>
+  );
+}
+
+function AddTagModal({
+  tags,
+  onClose,
+  onDone,
+}: {
+  tags: readonly NodeTag[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('nodes');
+  const [name, setName] = useState('');
+  const form = useSubmit({ errorFallback: t('tags.err.add'), onDone });
+  const plan = planAdd(name, tags);
+
+  const submit = () => {
+    if (plan.problem !== null) return;
+    form.submit(() => api.registerNodeTag(name.trim()).then(() => done()));
+  };
+
+  return (
+    <Modal
+      title={t('tags.addTitle')}
+      onClose={onClose}
+      footer={
+        <FormFooter
+          form={form}
+          onClose={onClose}
+          onSubmit={submit}
+          submitLabel={t('tags.register')}
+          canSubmit={plan.problem === null}
+        />
+      }
+    >
+      <Fields>
+        <Field
+          label={t('tags.name')}
+          status={plan.listed ? t('tags.alreadyListed') : undefined}
+          error={name === '' || plan.problem === null ? null : t(`field.tagErr.${plan.problem}`)}
+        >
+          <TextInput
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              // A tag is often Japanese: Enter that commits an IME candidate must not save.
+              if (e.key === 'Enter' && !isImeComposing(e)) submit();
+            }}
+            disabled={form.busy}
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
         <FormError form={form} />
       </Fields>
     </Modal>

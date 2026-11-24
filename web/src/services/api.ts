@@ -163,6 +163,7 @@ import type {
   GroupingExceptionBody,
   NodeTags,
   TagRewritten,
+  RegisteredTags,
   DeliveryHoursConfig,
   HeldNotification,
   ChannelKind,
@@ -2481,6 +2482,14 @@ export const api = {
             }
           : undefined,
     }),
+
+  /** Register a tag by name, so the tag fields offer it before anything carries it (ADR-263
+   *  Inc.2). Registering one twice is not an error. */
+  registerNodeTag: (tag: string): Promise<void> =>
+    apiPost('/api/v1/node-tags', { body: { tag } }),
+
+  /** The registered tags, by name: what the tag fields suggest (ADR-263 Inc.2). */
+  listRegisteredTags: (): Promise<RegisteredTags> => apiGet('/api/v1/registered-tags'),
 
   /** Rename a tag on every node, folder, refusal, routing rule and grouping exception at once;
    *  onto an existing tag, the two merge (ADR-263). */

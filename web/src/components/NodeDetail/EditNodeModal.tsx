@@ -44,6 +44,7 @@ import {
   type NodeEditField,
 } from './nodeEditForm';
 import { ChipInput } from '../ui/ChipInput';
+import { useRegisteredTags } from '../../lib/useRegisteredTags';
 import { LABELS_MAX, firstLabelProblem, labelsAreValid } from '../ui/labelRules';
 import { Badge } from '../ui/Badge';
 import { FormError, FormFooter } from '../ui/FormFooter';
@@ -60,6 +61,7 @@ export function EditNodeModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('nodes');
+  const registeredTags = useRegisteredTags();
   const spec = NODE_EDIT_KIND_SPEC[node.kind];
   const fields = visibleNodeEditFields(node.kind);
   const headed = visibleNodeEditSections(node.kind).length > 1;
@@ -261,6 +263,7 @@ export function EditNodeModal({
         >
           <ChipInput
             value={d.tags}
+            suggestions={registeredTags}
             onChange={(next) => set('tags', next)}
             placeholder={t('field.tagPlaceholder')}
             inputLabel={t('field.tags')}

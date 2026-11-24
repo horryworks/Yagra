@@ -12,7 +12,7 @@
 //! resolved addresses as well — defence in depth, since DNS can change between the two.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageSystem};
+use super::extract::{Admin, RequireManageConfig, RequireManageSystem};
 use super::util::{CreatedId, EnabledBody};
 use super::ApiState;
 use crate::alerts::notifications::{ChannelConfig, ChannelKind};
@@ -41,6 +41,8 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     get_builtin_template,
     list_routing_rules,
     list_node_tags,
+    register_node_tag,
+    list_registered_tags,
     rename_node_tag,
     delete_node_tag,
     get_notification_default_route,
@@ -103,7 +105,11 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/routing-rules",
             get(list_routing_rules).post(create_routing_rule),
         )
-        .route("/api/v1/node-tags", get(list_node_tags))
+        .route(
+            "/api/v1/node-tags",
+            get(list_node_tags).post(register_node_tag),
+        )
+        .route("/api/v1/registered-tags", get(list_registered_tags))
         .route("/api/v1/node-tags/rename", post(rename_node_tag))
         .route("/api/v1/node-tags/delete", post(delete_node_tag))
         // Registered beside `/:id`, which matchit lets a fixed segment win over.
@@ -1058,6 +1064,9 @@ pub(crate) struct NodeTag {
     rules: u64,
     /// How many alert-grouping exceptions name it.
     exceptions: u64,
+    /// An Admin registered it by name (ADR-263 Inc.2). A registered tag nothing carries is listed
+    /// with every count at zero.
+    registered: bool,
 }
 
 /// The tags in use on this deployment's nodes (ADR-259 Inc.2).
@@ -1299,6 +1308,7 @@ fn with_places(
         t.refusals = u.refusals;
         t.rules = u.rules;
         t.exceptions = u.exceptions;
+        t.registered = u.registered;
     };
     for t in tags.iter_mut() {
         if let Some(u) = uses.remove(&t.tag) {
@@ -1894,6 +1904,8 @@ pub(crate) struct TagRewritten {
     rules: u64,
     /// Grouping exceptions whose tags changed.
     exceptions: u64,
+    /// Registered names changed: 1 when the tag was registered (ADR-263 Inc.2), else 0.
+    registered: u64,
 }
 
 impl From<yagra_base::tag_catalog::TagRewrite> for TagRewritten {
@@ -1905,8 +1917,86 @@ impl From<yagra_base::tag_catalog::TagRewrite> for TagRewritten {
             folder_refusals: r.folder_refusals,
             rules: r.rules,
             exceptions: r.exceptions,
+            registered: r.registered,
         }
     }
+}
+
+/// Register one tag by name (ADR-263 Inc.2).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct RegisterTagBody {
+    /// The tag, as it will be offered. Held to the rules every tag field applies.
+    tag: String,
+}
+
+/// The tags an Admin registered, by name: what the tag fields suggest (ADR-263 Inc.2).
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub(crate) struct RegisteredTags {
+    /// Registered tags, by name.
+    tags: Vec<String>,
+}
+
+/// Register a tag by name, so the tag fields offer it before anything carries it (ADR-263 Inc.2).
+/// Registering one that is already registered changes nothing and is not an error.
+#[utoipa::path(
+    post, path = "/api/v1/node-tags", tag = "notifications",
+    request_body = RegisterTagBody,
+    responses(
+        (status = 204, description = "The tag is registered"),
+        (status = 400, description = "An empty tag, one over 64 characters, or one carrying a control character", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn register_node_tag(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Json(body): Json<RegisterTagBody>,
+) -> ApiResult<StatusCode> {
+    let tag = super::nodes::validated_labels(vec![body.tag])?
+        .pop()
+        .ok_or_else(|| ApiError::bad_request("invalid_tag", "a tag cannot be empty"))?;
+    yagra_base::tag_catalog::register(&admin.repo.pool(), &tag)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "register tag", "failed to register the tag")
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The registered tags, by name: what the node, folder and bulk tag fields suggest (ADR-263
+/// Inc.2). ManageConfig, the permission those fields' writes need. Not narrowed by folder scope,
+/// because a registered tag is a name chosen for the whole deployment and says nothing about a
+/// node.
+#[utoipa::path(
+    get, path = "/api/v1/registered-tags", tag = "notifications",
+    responses(
+        (status = 200, description = "Registered tags, by name", body = RegisteredTags),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_registered_tags(
+    _guard: RequireManageConfig,
+    admin: Admin,
+) -> ApiResult<Json<RegisteredTags>> {
+    Ok(Json(registered_tags_in(&admin).await?))
+}
+
+/// What `GET /api/v1/registered-tags` answers, shared with the MCP `get_config(kind=registered_tags)`.
+pub(crate) async fn registered_tags_in(admin: &super::AdminState) -> ApiResult<RegisteredTags> {
+    let tags = yagra_base::tag_catalog::registered(&admin.repo.pool())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "list registered tags",
+                "failed to list registered tags",
+            )
+        })?;
+    Ok(RegisteredTags { tags })
 }
 
 /// Rename one tag everywhere it is named.
@@ -3146,7 +3236,7 @@ at 2026-08-04T09:41:07+00:00"
                 // ADR-263: where the tag is named. The folder carries it; no node does itself.
                 "tags": [{
                     "tag": "TeamA", "nodes": 1, "own": 0, "folders": 1,
-                    "refusals": 0, "rules": 0, "exceptions": 0,
+                    "refusals": 0, "rules": 0, "exceptions": 0, "registered": false,
                 }],
                 "reach": 1,
                 "reach_zones": [{ "zone": "UTC", "nodes": 1, "default": true }],
@@ -3357,5 +3447,52 @@ at 2026-08-04T09:41:07+00:00"
         .await;
         assert_eq!(status, StatusCode::OK, "{gone}");
         assert_eq!(gone["nodes"].as_u64(), Some(1), "{gone}");
+    }
+
+    /// ADR-263 Inc.2: an Admin's register is accepted and the tag is listed with nothing carrying
+    /// it; registering it twice is still 204; an Operator may not register but may read the names
+    /// the tag fields suggest, and a Viewer may read neither.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_tag_is_registered_by_an_admin_and_suggested_to_an_operator(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use axum::http::StatusCode;
+        let st = live_state(pool).await;
+        let admin = token(&st, yagra_common::Role::Admin);
+        let operator = token(&st, yagra_common::Role::Operator);
+        let viewer = token(&st, yagra_common::Role::Viewer);
+        let body = || Some(serde_json::json!({ "tag": " TeamC " }));
+
+        let (status, _) = send(&st, "POST", "/api/v1/node-tags", &operator, body()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, refused) = send(
+            &st,
+            "POST",
+            "/api/v1/node-tags",
+            &admin,
+            Some(serde_json::json!({ "tag": "   " })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+        for _ in 0..2 {
+            let (status, answer) = send(&st, "POST", "/api/v1/node-tags", &admin, body()).await;
+            assert_eq!(status, StatusCode::NO_CONTENT, "{answer}");
+        }
+
+        let (status, listed) = send(&st, "GET", "/api/v1/node-tags", &admin, None).await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert_eq!(
+            listed["tags"],
+            serde_json::json!([{
+                "tag": "TeamC", "nodes": 0, "own": 0, "folders": 0,
+                "refusals": 0, "rules": 0, "exceptions": 0, "registered": true,
+            }]),
+        );
+
+        let (status, names) = send(&st, "GET", "/api/v1/registered-tags", &operator, None).await;
+        assert_eq!(status, StatusCode::OK, "{names}");
+        assert_eq!(names, serde_json::json!({ "tags": ["TeamC"] }));
+        let (status, _) = send(&st, "GET", "/api/v1/registered-tags", &viewer, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 }

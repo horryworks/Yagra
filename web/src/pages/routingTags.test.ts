@@ -2,13 +2,15 @@
 import { describe, expect, it } from 'vitest';
 import { tagChoices, tagsNoNodeCarries } from './routingTags';
 
-const places = { own: 0, folders: 0, refusals: 0, rules: 0, exceptions: 0 };
+const places = { own: 0, folders: 0, refusals: 0, rules: 0, exceptions: 0, registered: false };
 const carried = {
   tags: [
     { tag: 'APAC', nodes: 388, ...places },
     { tag: 'TeamA', nodes: 214, ...places },
     // Named only by a rule (ADR-263): listed by the server, offered by no picker.
     { tag: 'KOREA', nodes: 0, ...places, rules: 1 },
+    // Registered and carried by nobody (ADR-263 Inc.2): offered, after the carried ones.
+    { tag: 'TeamC', nodes: 0, ...places, registered: true },
   ],
 };
 
@@ -18,6 +20,13 @@ describe('the routing rule tag list', () => {
       { tag: 'KOREA', nodes: 0, gone: true },
       { tag: 'APAC', nodes: 388, gone: false },
       { tag: 'TeamA', nodes: 214, gone: false },
+      { tag: 'TeamC', nodes: 0, gone: false },
+    ]);
+  });
+
+  it('shows a registered tag the rule already names once, as its no-node row', () => {
+    expect(tagChoices(['TeamC'], carried).filter((c) => c.tag === 'TeamC')).toEqual([
+      { tag: 'TeamC', nodes: 0, gone: true },
     ]);
   });
 

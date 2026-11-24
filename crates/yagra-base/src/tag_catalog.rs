@@ -2,11 +2,15 @@
 //! The deployment's tags as one list, and the two writes that act on every place a tag is named
 //! (ADR-263).
 //!
-//! A tag (ADR-135) is free text stored where it is used — there is no table of tags. It lives in
-//! six columns: a node's and a folder's own labels, the labels each refuses to inherit, the tags a
+//! A tag (ADR-135) is free text stored where it is used. It lives in six columns: a node's and a folder's own labels, the labels each refuses to inherit, the tags a
 //! notification routing rule names (ADR-259) and the tags an alert-grouping exception names
 //! (ADR-262). This module is the one place that knows all six, so a rename or a delete cannot fix
 //! the nodes and forget the rule that was waiting for them.
+//!
+//! Since ADR-263 Inc.2 a tag may also be **registered** by name (`registered_tags`, migration
+//! 0189) before anything carries it. Registration is a suggestion, not a restriction: a tag no one
+//! registered is still carried, listed and renamed like any other. The rename and the delete keep
+//! the registry in step inside the same transaction as the six columns.
 //!
 //! 🚨 **Every write here touches all six columns in one transaction.** Renaming the nodes' copy
 //! alone is the accident this module exists to prevent: the rule still names the old spelling,
@@ -34,6 +38,8 @@ pub struct TagUses {
     pub rules: u64,
     /// Alert-grouping exceptions naming it.
     pub exceptions: u64,
+    /// An Admin registered it by name (ADR-263 Inc.2).
+    pub registered: bool,
 }
 
 /// How many rows each place changed in one rename or delete. `0` everywhere means the tag was
@@ -46,6 +52,8 @@ pub struct TagRewrite {
     pub folder_refusals: u64,
     pub rules: u64,
     pub exceptions: u64,
+    /// Registered names changed (0 or 1).
+    pub registered: u64,
 }
 
 impl TagRewrite {
@@ -58,6 +66,7 @@ impl TagRewrite {
             + self.folder_refusals
             + self.rules
             + self.exceptions
+            + self.registered
     }
 }
 
@@ -92,8 +101,9 @@ const PLACES: [(&str, &str, &str); 6] = [
     ("alert_grouping_exceptions", "tags", "exception"),
 ];
 
-fn into_rewrite(counts: [u64; 6]) -> TagRewrite {
+fn into_rewrite(counts: [u64; 6], registered: u64) -> TagRewrite {
     TagRewrite {
+        registered,
         nodes: counts[0],
         node_refusals: counts[1],
         folders: counts[2],
@@ -111,8 +121,9 @@ fn touch(table: &str) -> &'static str {
     }
 }
 
-/// Every tag named anywhere, with where. A tag named only by a rule, an exception or a refusal is
-/// listed too: it is exactly the kind of leftover the list is for.
+/// Every tag named anywhere, with where, and every registered one. A tag named only by a rule, an
+/// exception or a refusal is listed too: it is exactly the kind of leftover the list is for. A
+/// registered tag nothing carries is listed with every count at zero.
 pub async fn uses(pool: &PgPool) -> anyhow::Result<BTreeMap<String, TagUses>> {
     let places = PLACES
         .iter()
@@ -141,7 +152,29 @@ pub async fn uses(pool: &PgPool) -> anyhow::Result<BTreeMap<String, TagUses>> {
             other => anyhow::bail!("unexpected tag place {other:?}"),
         }
     }
+    for tag in registered(pool).await? {
+        out.entry(tag).or_default().registered = true;
+    }
     Ok(out)
+}
+
+/// The registered tags, by name (ADR-263 Inc.2). What the tag fields suggest.
+pub async fn registered(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    Ok(
+        sqlx::query_scalar("SELECT tag FROM registered_tags ORDER BY tag")
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+/// Register `tag` by name. `true` when it was not registered before; registering one twice is not
+/// an error. The caller validates it (`api::nodes::validated_labels`).
+pub async fn register(pool: &PgPool, tag: &str) -> anyhow::Result<bool> {
+    let res = sqlx::query("INSERT INTO registered_tags (tag) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(tag)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected() > 0)
 }
 
 /// Rename `from` to `to` everywhere. When `to` is already named in a row, `from` is dropped from
@@ -166,8 +199,23 @@ pub async fn rename(pool: &PgPool, from: &str, to: &str) -> anyhow::Result<TagRe
         .await?;
         counts[i] = res.rows_affected();
     }
+    // A registered name follows the rename; onto a name already registered, the old one just goes.
+    sqlx::query(
+        "INSERT INTO registered_tags (tag) \
+         SELECT $2 WHERE EXISTS (SELECT 1 FROM registered_tags WHERE tag = $1) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(from)
+    .bind(to)
+    .execute(&mut *tx)
+    .await?;
+    let registered = sqlx::query("DELETE FROM registered_tags WHERE tag = $1")
+        .bind(from)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     tx.commit().await?;
-    Ok(into_rewrite(counts))
+    Ok(into_rewrite(counts, registered))
 }
 
 /// Remove `tag` everywhere — unless that would change what a rule or an exception means, in which
@@ -221,8 +269,13 @@ pub async fn delete(pool: &PgPool, tag: &str) -> anyhow::Result<DeleteOutcome> {
         .await?;
         counts[i] = res.rows_affected();
     }
+    let registered = sqlx::query("DELETE FROM registered_tags WHERE tag = $1")
+        .bind(tag)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     tx.commit().await?;
-    Ok(DeleteOutcome::Deleted(into_rewrite(counts)))
+    Ok(DeleteOutcome::Deleted(into_rewrite(counts, registered)))
 }
 
 #[cfg(test)]
@@ -289,7 +342,8 @@ mod tests {
                 folders: 1,
                 refusals: 2,
                 rules: 1,
-                exceptions: 1
+                exceptions: 1,
+                registered: false,
             }
         );
 
@@ -382,5 +436,44 @@ mod tests {
             column(&pool, "SELECT tags FROM routing_rules").await,
             vec![Vec::<String>::new()]
         );
+    }
+
+    /// ADR-263 Inc.2: a registered tag is listed with nothing carrying it, registering it twice
+    /// keeps one row, a rename carries the registration to the new name (and a merge drops the old
+    /// one), and a delete removes it.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_registered_tag_follows_its_rename_and_goes_with_its_delete(pool: PgPool) {
+        assert!(register(&pool, "TeamC").await.expect("register"));
+        assert!(
+            !register(&pool, "TeamC").await.expect("again"),
+            "a second register is a no-op"
+        );
+        assert!(register(&pool, "TeamD").await.expect("register"));
+        let listed = uses(&pool).await.expect("uses");
+        assert_eq!(
+            listed["TeamC"],
+            TagUses {
+                registered: true,
+                ..TagUses::default()
+            }
+        );
+
+        let renamed = rename(&pool, "TeamC", "TeamE").await.expect("rename");
+        assert_eq!(renamed.registered, 1);
+        assert_eq!(
+            registered(&pool).await.expect("list"),
+            vec!["TeamD", "TeamE"]
+        );
+
+        // Onto a name already registered: the two become one.
+        rename(&pool, "TeamE", "TeamD").await.expect("merge");
+        assert_eq!(registered(&pool).await.expect("list"), vec!["TeamD"]);
+
+        match delete(&pool, "TeamD").await.expect("delete") {
+            DeleteOutcome::Deleted(d) => assert_eq!(d.registered, 1),
+            other => panic!("expected a delete, got {other:?}"),
+        }
+        assert!(registered(&pool).await.expect("list").is_empty());
     }
 }

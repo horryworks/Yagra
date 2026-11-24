@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### New Features
+
+- **Nodes ▸ Tags can add a tag by name before anything carries it.** **+ Add tag** registers the name; it is listed with every count at zero and a ✓ in the new **Registered** column, and the tag fields of the node editor, the folder dialog and the bulk tag dialog offer registered tags as you type. A notification routing rule's tag list offers them too. Registering is a suggestion, not a restriction: any other tag can still be typed. Renaming a registered tag renames its registration, merging drops the old one, and deleting removes it. New endpoints: `POST /api/v1/node-tags` (`tag`, Admin only, `204`, registering one twice is not an error) and `GET /api/v1/registered-tags` (the names, for anyone who may edit nodes; MCP `get_config(kind=registered_tags)`). `GET /api/v1/node-tags` gives each tag `registered`, and a rename or delete answers `registered` too. Migration 0189 adds the `registered_tags` table; a core older than 0.3.88 does not start against this database (ADR-263 Inc.2).
+
 ### Improvements
 
 - **A threshold rule's dialog names its Warning and Critical columns, and a rule on a yes/no metric is a severity rather than a number.** The two bound columns now carry a Warning and a Critical heading that stays when the boxes are filled; before, only the grey placeholder said which was which, and it vanished as soon as a value was typed. A rule on a metric that only reads 1 or 0 (`snmp_up`, `http_up`, `dns_up`, `meraki_device_up`, `meraki_uplink_failed` and the like) shows the alert it raises ("SNMP not responding") and a Warning / Critical choice instead of four number boxes, and the rules list shows it as `C SNMP not responding` rather than `C ≤ 0.5`. Nothing stored changes: the choice is saved as the same single bound (0.5 on the side of the fault), and a rule written in any other shape keeps the four boxes (ADR-264).

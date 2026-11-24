@@ -2665,7 +2665,11 @@ export interface paths {
          */
         get: operations["list_node_tags"];
         put?: never;
-        post?: never;
+        /**
+         * Register a tag by name, so the tag fields offer it before anything carries it (ADR-263 Inc.2).
+         *     Registering one that is already registered changes nothing and is not an error.
+         */
+        post: operations["register_node_tag"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4598,6 +4602,28 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["lock_reclassify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/registered-tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The registered tags, by name: what the node, folder and bulk tag fields suggest (ADR-263
+         *     Inc.2). ManageConfig, the permission those fields' writes need. Not narrowed by folder scope,
+         *     because a registered tag is a name chosen for the whole deployment and says nothing about a
+         *     node.
+         */
+        get: operations["list_registered_tags"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -13032,6 +13058,11 @@ export interface components {
              */
             refusals: number;
             /**
+             * @description An Admin registered it by name (ADR-263 Inc.2). A registered tag nothing carries is listed
+             *     with every count at zero.
+             */
+            registered: boolean;
+            /**
              * Format: int64
              * @description How many notification routing rules name it.
              */
@@ -14562,6 +14593,16 @@ export interface components {
             scan_id: string;
             /** @description `waiting` and `reading` say nothing about the device yet — never "nothing changed". */
             state: components["schemas"]["RediscoverState"];
+        };
+        /** @description Register one tag by name (ADR-263 Inc.2). */
+        RegisterTagBody: {
+            /** @description The tag, as it will be offered. Held to the rules every tag field applies. */
+            tag: string;
+        };
+        /** @description The tags an Admin registered, by name: what the tag fields suggest (ADR-263 Inc.2). */
+        RegisteredTags: {
+            /** @description Registered tags, by name. */
+            tags: string[];
         };
         /** @description Which nodes to take out of maintenance now. */
         ReleaseBody: {
@@ -16118,6 +16159,11 @@ export interface components {
              * @description Nodes whose own labels changed.
              */
             nodes: number;
+            /**
+             * Format: int64
+             * @description Registered names changed: 1 when the tag was registered (ADR-263 Inc.2), else 0.
+             */
+            registered: number;
             /**
              * Format: int64
              * @description Routing rules whose tags changed.
@@ -27436,6 +27482,64 @@ export interface operations {
             };
         };
     };
+    register_node_tag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterTagBody"];
+            };
+        };
+        responses: {
+            /** @description The tag is registered */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An empty tag, one over 64 characters, or one carrying a control character */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     delete_node_tag: {
         parameters: {
             query?: never;
@@ -34725,6 +34829,53 @@ export interface operations {
                 };
             };
             /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_registered_tags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered tags, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisteredTags"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

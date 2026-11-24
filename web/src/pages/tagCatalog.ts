@@ -30,7 +30,27 @@ export function planRename(from: string, raw: string, tags: readonly NodeTag[]):
   return { problem, mergeInto };
 }
 
-/** Every place a tag is named, added up: what a rename or a delete will touch. */
+/** Every place a tag is named, added up: what a rename or a delete will touch. A registration
+ *  (ADR-263 Inc.2) is one place, so deleting a tag only registered does not read as "0 places". */
 export function placesNamed(t: NodeTag): number {
-  return t.own + t.folders + t.refusals + t.rules + t.exceptions;
+  return t.own + t.folders + t.refusals + t.rules + t.exceptions + (t.registered ? 1 : 0);
+}
+
+/** What the add dialog knows before it sends (ADR-263 Inc.2). */
+export interface AddPlan {
+  problem: LabelProblem | null;
+  /** The listed row the name already has. Adding it still registers it, and changes nothing else. */
+  listed: NodeTag | null;
+}
+
+/**
+ * Judge adding the typed `raw` by name. The label rules every tag field applies, against no list
+ * (registering touches no node's labels, so the per-row cap cannot be crossed). An empty box is
+ * `empty`, which the dialog shows only once something was typed.
+ */
+export function planAdd(raw: string, tags: readonly NodeTag[]): AddPlan {
+  const name = normalizeLabel(raw);
+  const problem = labelProblem(name, []);
+  const listed = problem === null ? (tags.find((t) => t.tag === name) ?? null) : null;
+  return { problem, listed };
 }

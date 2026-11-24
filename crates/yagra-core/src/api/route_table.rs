@@ -2101,6 +2101,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("GET", "/api/v1/node-tags", ADMIN_CFG, Tool("get_config")),
     // ADR-263: rewrite one tag in every place it is named. ManageSystem, so only an unscoped Admin.
     ("POST", "/api/v1/node-tags/rename", ADMIN_CFG, NO_MCP_WRITE),
+    // ADR-263 Inc.2: register a tag by name, and read the registered names back.
+    ("POST", "/api/v1/node-tags", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "GET",
+        "/api/v1/registered-tags",
+        Global(
+            "names an Admin registered for the whole deployment; says nothing about any node, so \
+             there is nothing for a folder scope to narrow",
+        ),
+        Tool("get_config"),
+    ),
     ("POST", "/api/v1/node-tags/delete", ADMIN_CFG, NO_MCP_WRITE),
     ("POST", "/api/v1/routing-rules", ADMIN_CFG, NO_MCP_WRITE),
     (

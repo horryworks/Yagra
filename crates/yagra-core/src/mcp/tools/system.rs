@@ -156,6 +156,7 @@ pub(super) enum ConfigKind {
     NotificationChannels,
     RoutingRules,
     NodeTags,
+    RegisteredTags,
     RoutingCatchAll,
     RoutingCoverage,
     NotificationDefaultRoute,
@@ -200,6 +201,7 @@ yagra_base::stored_enum::token_enum!(ConfigKind, [
     NotificationChannels => "notification_channels",
     RoutingRules => "routing_rules",
     NodeTags => "node_tags",
+    RegisteredTags => "registered_tags",
     RoutingCatchAll => "routing_catch_all",
     RoutingCoverage => "routing_coverage",
     NotificationDefaultRoute => "notification_default_route",
@@ -265,6 +267,7 @@ impl ConfigKind {
             | Self::NotificationChannels
             | Self::RoutingRules
             | Self::NodeTags
+            | Self::RegisteredTags
             | Self::RoutingCatchAll
             | Self::RoutingCoverage
             | Self::NotificationDefaultRoute
@@ -304,6 +307,7 @@ impl ConfigKind {
             Self::NotificationChannels => "notification_channels",
             Self::RoutingRules => "routing_rules",
             Self::NodeTags => "node_tags",
+            Self::RegisteredTags => "registered_tags",
             Self::RoutingCatchAll => "routing_catch_all",
             Self::RoutingCoverage => "routing_coverage",
             Self::NotificationDefaultRoute => "notification_default_route",
@@ -359,7 +363,7 @@ pub(super) fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub(super) struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 41 values.
+    /// Which configuration to read. Required; see the tool description for the 42 values.
     pub(super) kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -906,7 +910,9 @@ impl YagraMcp {
                        goes — rules below it do not hear it; `hold` true means that rule sends \
                        nowhere and keeps the alert back until another rule decides), node_tags (every tag some node carries \
                        among its effective labels, with how many nodes carry it — the names a \
-                       routing rule can usefully name), routing_catch_all (the channels an alert \
+                       routing rule can usefully name), registered_tags (the tags an Admin \
+                       registered by name, offered as suggestions whether or not anything carries \
+                       them), routing_catch_all (the channels an alert \
                        goes to when no open rule that matches it decides — a holding rule \
                        keeps it from the catch-all too; empty = it is held until one \
                        opens if a rule matches, and reaches no channel if none does), routing_coverage (every node grouped by the rules of one `severity`, critical unless asked, \
@@ -1130,6 +1136,12 @@ impl YagraMcp {
                 )
                 .await
                 {
+                    Ok(t) => ok_json(TOOL, &t),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
+            ConfigKind::RegisteredTags => {
+                match crate::api::notifications::registered_tags_in(a).await {
                     Ok(t) => ok_json(TOOL, &t),
                     Err(e) => tool_api_error(TOOL, &e),
                 }
@@ -1723,7 +1735,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            41,
+            42,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

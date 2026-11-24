@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { KeyboardEvent, ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { TextInput, FieldError } from './Field';
@@ -47,6 +47,12 @@ interface Props {
    */
   lenient?: boolean;
   disabled?: boolean;
+  /**
+   * Values the entry box offers as it is typed in (ADR-263 Inc.2: the registered tags). Offered,
+   * never required: a value outside the list is accepted as before. One already in the list is
+   * not offered again.
+   */
+  suggestions?: readonly string[];
 }
 
 export function ChipInput({
@@ -56,9 +62,14 @@ export function ChipInput({
   inputLabel,
   lenient = false,
   disabled = false,
+  suggestions = [],
 }: Props) {
   const { t } = useTranslation('nodes');
   const [draft, setDraft] = useState('');
+  // The browser's own list under the box: positioned by the browser, so it cannot be clipped by
+  // the dialog it sits in, and read out by screen readers with no code of ours.
+  const listId = useId();
+  const offered = suggestions.filter((s) => !value.includes(s));
 
   // Marked per chip rather than blocking the whole dialog: migration 0109 can hand back a label
   // longer than the rules now allow, and an operator who cannot save *and* cannot see why has no
@@ -126,6 +137,7 @@ export function ChipInput({
         value={draft}
         placeholder={placeholder}
         aria-label={inputLabel}
+        list={offered.length > 0 ? listId : undefined}
         disabled={disabled || (!lenient && value.length >= LABELS_MAX)}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={onKeyDown}
@@ -136,6 +148,13 @@ export function ChipInput({
           if (draft.trim() !== '' && draftProblem === null) commit(draft);
         }}
       />
+      {offered.length > 0 && (
+        <datalist id={listId}>
+          {offered.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+      )}
       {draftProblem && <FieldError>{t(`field.tagErr.${draftProblem}`)}</FieldError>}
     </div>
   );

@@ -1545,7 +1545,8 @@
       "folders": "Folders",
       "rules": "Routing rules",
       "exceptions": "Grouping exceptions",
-      "actions": "Actions"
+      "actions": "Actions",
+      "registered": "Registered"
     },
     "rename": "Rename",
     "merge": "Merge",
@@ -1564,7 +1565,13 @@
     "empty": "No tags yet.",
     "err": {
       "rename": "Could not rename the tag.",
-      "delete": "Could not delete the tag."
-    }
+      "delete": "Could not delete the tag.",
+      "add": "Could not add the tag."
+    },
+    "add": "+ Add tag",
+    "addTitle": "Add tag",
+    "name": "Name",
+    "register": "Add",
+    "alreadyListed": "Already listed"
   }
 }

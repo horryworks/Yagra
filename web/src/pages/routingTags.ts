@@ -20,9 +20,12 @@ export interface TagChoice {
 export function tagChoices(ruleTags: readonly string[], tags: NodeTags | null): TagChoice[] {
   if (tags === null) return ruleTags.map((tag) => ({ tag, nodes: null, gone: false }));
   const gone = tagsNoNodeCarries(ruleTags, tags) ?? new Set<string>();
+  // A registered tag nothing carries is offered too (ADR-263 Inc.2), after the carried ones, which
+  // is where the server sorts a count of 0. One the rule already names is its `gone` row instead.
+  const offered = tags.tags.filter((t) => (t.nodes > 0 || t.registered) && !gone.has(t.tag));
   return [
     ...ruleTags.filter((t) => gone.has(t)).map((tag) => ({ tag, nodes: 0, gone: true })),
-    ...carriedTags(tags).map((t) => ({ tag: t.tag, nodes: t.nodes, gone: false })),
+    ...offered.map((t) => ({ tag: t.tag, nodes: t.nodes, gone: false })),
   ];
 }
 

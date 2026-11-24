@@ -843,6 +843,8 @@ export type NodeTags = components['schemas']['NodeTags'];
 export type NodeTag = components['schemas']['NodeTag'];
 /** How many rows a tag rename or delete changed, per place (ADR-263). */
 export type TagRewritten = components['schemas']['TagRewritten'];
+/** The tags an Admin registered by name, offered by the tag fields (ADR-263 Inc.2). */
+export type RegisteredTags = components['schemas']['RegisteredTags'];
 
 /** The env-configured default notification route (`GET /api/v1/notification-default-route`):
  *  whether it exists and which kinds of channel it sends every alert to (ADR-200 Inc.28). */

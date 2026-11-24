@@ -25,6 +25,7 @@ import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
 import { FieldGroup, Fields } from '../ui/FormLayout';
 import { ChipInput } from '../ui/ChipInput';
+import { useRegisteredTags } from '../../lib/useRegisteredTags';
 import { labelsAreValid } from '../ui/labelRules';
 
 export function BulkTagModal({
@@ -37,6 +38,7 @@ export function BulkTagModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('nodes');
+  const registeredTags = useRegisteredTags();
   const [add, setAdd] = useState<string[]>([]);
   /** Labels to strip from every selected node. A separate list from `add` because the two are
    *  independent instructions, and because this one is `lenient`: a label already stored may
@@ -87,6 +89,7 @@ export function BulkTagModal({
         <FieldGroup label={t('bulkTag.add')}>
           <ChipInput
             value={add}
+            suggestions={registeredTags}
             onChange={setAdd}
             placeholder={t('field.tagPlaceholder')}
             inputLabel={t('bulkTag.add')}
