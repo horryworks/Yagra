@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A tag field lists the registered tags as soon as it is clicked.** In 0.3.88 the node editor, the folder dialog and the bulk tag dialog offered registered tags only once a match was typed, and picking one still needed Enter, so a registered tag could look missing. The list now opens under the box, narrows as you type, and a click or Enter on a row adds the tag at once; Escape closes it (ADR-263 Inc.3).
+
 ## v0.3.88 — Register a tag by name before anything carries it, Warning and Critical columns in the threshold dialog with a yes/no metric as a severity, and alerts found by the name they show
 
 ### New Features

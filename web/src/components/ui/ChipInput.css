@@ -68,3 +68,27 @@
 .chipinput-chip button:hover {
   opacity: 1;
 }
+
+/* The suggestion list under the entry box (ADR-263 Inc.3). The surface is `.apop`; this styles the
+   rows only, matching `.amenu-item` so every list that opens from a control reads the same. */
+.chipinput-pop {
+  display: flex;
+  flex-direction: column;
+  min-width: 176px;
+  max-width: 320px;
+  padding: var(--space-1);
+}
+
+.chipinput-option {
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.chipinput-option:hover,
+.chipinput-option.active {
+  background: var(--bg-tertiary);
+}

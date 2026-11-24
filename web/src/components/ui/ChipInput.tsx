@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useId, useState } from 'react';
+import { useCallback, useId, useRef, useState } from 'react';
 import type { KeyboardEvent, ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { TextInput, FieldError } from './Field';
 import { IconButton } from './IconButton';
+import { AnchoredPopover } from './AnchoredPopover';
+import { enterValue, moveActive, shownSuggestions } from './chipSuggest';
 import {
   LABELS_MAX,
   addLabel,
@@ -48,9 +50,10 @@ interface Props {
   lenient?: boolean;
   disabled?: boolean;
   /**
-   * Values the entry box offers as it is typed in (ADR-263 Inc.2: the registered tags). Offered,
-   * never required: a value outside the list is accepted as before. One already in the list is
-   * not offered again.
+   * Values the entry box offers (ADR-263 Inc.2: the registered tags). Offered, never required: a
+   * value outside the list is accepted as before. One already in the list is not offered again.
+   * Since Inc.3 they open as a list under the box as soon as it has focus, narrowed by what is
+   * typed; a pick becomes a chip at once.
    */
   suggestions?: readonly string[];
 }
@@ -66,10 +69,17 @@ export function ChipInput({
 }: Props) {
   const { t } = useTranslation('nodes');
   const [draft, setDraft] = useState('');
-  // The browser's own list under the box: positioned by the browser, so it cannot be clipped by
-  // the dialog it sits in, and read out by screen readers with no code of ours.
+  // The list is open while the box has focus, unless Escape closed it; typing or clicking the box
+  // opens it again. A native `datalist` was used before Inc.3 and showed nothing until a match was
+  // typed, so an operator who clicked the box saw no suggestions at all.
+  const [focused, setFocused] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const [active, setActive] = useState(-1);
+  const anchorRef = useRef<HTMLDivElement>(null);
   const listId = useId();
-  const offered = suggestions.filter((s) => !value.includes(s));
+  const shown = shownSuggestions(suggestions, value, draft);
+  const open = focused && !dismissed && !disabled && shown.length > 0;
+  const onDismiss = useCallback(() => setDismissed(true), []);
 
   // Marked per chip rather than blocking the whole dialog: migration 0109 can hand back a label
   // longer than the rules now allow, and an operator who cannot save *and* cannot see why has no
@@ -83,16 +93,28 @@ export function ChipInput({
       : splitPastedLabels(raw).reduce<string[]>((acc, l) => addLabel(acc, l), [...value]);
     if (next.length !== value.length) onChange(next);
     setDraft('');
+    setActive(-1);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     // An IME owns the key while it is composing — Enter confirms a conversion, the arrows walk its
     // candidates. See `lib/ime.ts`.
     if (isImeComposing(e)) return;
+    if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      setActive((a) => moveActive(a, shown.length, e.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if (e.key === 'ArrowDown' && dismissed) {
+      e.preventDefault();
+      setDismissed(false);
+      return;
+    }
     if (e.key === 'Enter' || e.key === ',') {
       // Enter would submit the dialog and `,` would land in the box; both mean "that is one label".
       e.preventDefault();
-      if (draft.trim() !== '') commit(draft);
+      const picked = enterValue(open ? shown : [], open ? active : -1, draft);
+      if (picked !== null) commit(picked);
       return;
     }
     if (e.key === 'Backspace' && draft === '' && value.length > 0) {
@@ -133,28 +155,63 @@ export function ChipInput({
           })}
         </ul>
       )}
-      <TextInput
-        value={draft}
-        placeholder={placeholder}
-        aria-label={inputLabel}
-        list={offered.length > 0 ? listId : undefined}
-        disabled={disabled || (!lenient && value.length >= LABELS_MAX)}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={onKeyDown}
-        onPaste={onPaste}
-        // Committing on blur as well as on Enter: a half-typed label the operator then clicks Save
-        // on would otherwise be dropped without a word.
-        onBlur={() => {
-          if (draft.trim() !== '' && draftProblem === null) commit(draft);
-        }}
-      />
-      {offered.length > 0 && (
-        <datalist id={listId}>
-          {offered.map((s) => (
-            <option key={s} value={s} />
+      <div ref={anchorRef} className="chipinput-entry">
+        <TextInput
+          value={draft}
+          placeholder={placeholder}
+          aria-label={inputLabel}
+          role={suggestions.length > 0 ? 'combobox' : undefined}
+          aria-haspopup={suggestions.length > 0 ? 'listbox' : undefined}
+          aria-expanded={suggestions.length > 0 ? open : undefined}
+          aria-controls={open ? listId : undefined}
+          aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
+          autoComplete="off"
+          disabled={disabled || (!lenient && value.length >= LABELS_MAX)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setActive(-1);
+            setDismissed(false);
+          }}
+          onFocus={() => setFocused(true)}
+          onClick={() => setDismissed(false)}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          // Committing on blur as well as on Enter: a half-typed label the operator then clicks Save
+          // on would otherwise be dropped without a word.
+          onBlur={() => {
+            setFocused(false);
+            setDismissed(false);
+            if (draft.trim() !== '' && draftProblem === null) commit(draft);
+          }}
+        />
+      </div>
+      <AnchoredPopover
+        open={open}
+        anchorRef={anchorRef}
+        role="listbox"
+        label={t('field.tagSuggestions')}
+        onDismiss={onDismiss}
+        align="start"
+        className="chipinput-pop"
+      >
+        <div id={listId}>
+          {shown.map((s, i) => (
+            <div
+              key={s}
+              id={`${listId}-${i}`}
+              role="option"
+              aria-selected={i === active}
+              className={i === active ? 'chipinput-option active' : 'chipinput-option'}
+              // Keep focus in the box: a blur would commit the half-typed text first.
+              onMouseDown={(e) => e.preventDefault()}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => commit(s)}
+            >
+              {s}
+            </div>
           ))}
-        </datalist>
-      )}
+        </div>
+      </AnchoredPopover>
       {draftProblem && <FieldError>{t(`field.tagErr.${draftProblem}`)}</FieldError>}
     </div>
   );

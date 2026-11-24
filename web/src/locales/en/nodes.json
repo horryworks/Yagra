@@ -36,6 +36,7 @@
     "tags": "Tags",
     "tagPlaceholder": "JAPAN",
     "tagRemove": "Remove the tag {{label}}",
+    "tagSuggestions": "Registered tags",
     "tagNoNode": "no node",
     "tagExclude": "Do not inherit the tag {{label}} on this one",
     "tagsInherited": "Inherited from its folder",
