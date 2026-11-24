@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '../components/ui/Button';
 import { MultiSelectList } from '../components/ui/MultiSelectList';
 import { SearchField } from '../components/ui/SearchField';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '../lib/useDebouncedValue';
@@ -29,6 +30,10 @@ export function TagFilterSection({
   const { t } = useTranslation('nodes');
   const [typed, setTyped] = useState('');
   const [answer, setAnswer] = useState<TagSuggestions | null>(null);
+  // A failed read is shown as a Retry button rather than as an empty list, which would read as
+  // "no node carries a tag".
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const settled = useDebouncedValue(typed, typed.trim() ? SEARCH_DEBOUNCE_MS : 0);
   const chosen = decodeSet(value);
   const limit = tagRequestLimit(settled, chosen.length);
@@ -38,16 +43,20 @@ export function TagFilterSection({
     api
       .suggestNodeTags(settled.trim(), limit, value)
       .then((a) => {
-        if (!cancelled) setAnswer(a);
+        if (cancelled) return;
+        setAnswer(a);
+        setFailed(false);
       })
       .catch(() => {
         // The chosen tags still show; only the offer is missing.
-        if (!cancelled) setAnswer(null);
+        if (cancelled) return;
+        setAnswer(null);
+        setFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [settled, limit, value]);
+  }, [settled, limit, value, attempt]);
 
   const view = tagPickerView(answer, value, settled);
   return (
@@ -69,6 +78,11 @@ export function TagFilterSection({
         label={label}
         searchThreshold={Number.POSITIVE_INFINITY}
       />
+      {failed && (
+        <Button type="button" variant="ghost" onClick={() => setAttempt((n) => n + 1)}>
+          {t('common:actions.retry')}
+        </Button>
+      )}
       {view.more > 0 && (
         <p className="form-status">
           {t('inventory.tagFilter.more', { count: view.more })}

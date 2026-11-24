@@ -37,3 +37,14 @@ export function enterValue(shown: readonly string[], active: number, draft: stri
   if (draft.trim() === '') return null;
   return shown.find((s) => fold(s) === fold(draft)) ?? draft;
 }
+
+/**
+ * `label` spelled the way a known value is when it names one exactly but for case, so `matsuyama`
+ * does not become a second tag beside `MATSUYAMA` — whichever way it is committed (Enter, blur or
+ * paste). A label naming no known value is returned as it is.
+ */
+export function canonicalLabel(label: string, known: readonly string[]): string {
+  const f = fold(label);
+  if (f === '') return label;
+  return known.find((k) => fold(k) === f) ?? label;
+}

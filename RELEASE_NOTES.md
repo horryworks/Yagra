@@ -12,11 +12,11 @@
 
 ### New Features
 
-- **All nodes can be filtered by tag.** The filter menu has a **Tag** section: with nothing typed it offers the tags carried by the most nodes, and typing finds any tag (names starting with the text first), each with how many of your nodes carry it. A node matches when its tags, including those its folders give it and minus the ones it excludes, hold any of the chosen tags. The choice is in the URL as `tag=`. `GET /api/v1/nodes` and MCP `list_nodes` take `tag` (comma-separated, case-sensitive); the new `GET /api/v1/nodes/tag-suggestions` (`q`, `limit`, `chosen`; View, limited to the caller's folders) answers the picker (ADR-265).
+- **All nodes can be filtered by tag.** The filter menu has a **Tag** section: with nothing typed it offers the tags carried by the most nodes, and typing finds any tag (names starting with the text first), each with how many of your nodes carry it. A node matches when its tags, including those its folders give it and minus the ones it excludes, hold any of the chosen tags. The choice is in the URL as `tag=`. `GET /api/v1/nodes` and MCP `list_nodes` take `tag` (comma-separated, case-sensitive); the new `GET /api/v1/nodes/tag-suggestions` (`q`, `limit`, `chosen`; View, limited to the caller's folders) answers the picker; when it cannot be read, the section shows **Retry** rather than an empty list (ADR-265).
 
 ### Bug Fixes
 
-- **A tag field lists the registered tags as soon as it is clicked.** In 0.3.88 the node editor, the folder dialog and the bulk tag dialog offered registered tags only once a match was typed, and picking one still needed Enter, so a registered tag could look missing. The list now opens under the box, narrows as you type, and a click or Enter on a row adds the tag at once; Escape closes it (ADR-263 Inc.3).
+- **A tag field lists the registered tags as soon as it is clicked.** In 0.3.88 the node editor, the folder dialog and the bulk tag dialog offered registered tags only once a match was typed, and picking one still needed Enter, so a registered tag could look missing. The list now opens under the box, narrows as you type, and a click or Enter on a row adds the tag at once; Escape closes it. A tag typed in another case, such as `matsuyama` beside a registered `MATSUYAMA`, takes the registered spelling however it is added (Enter, leaving the box, or a paste), instead of becoming a second tag (ADR-263 Inc.3).
 
 ## v0.3.88 — Register a tag by name before anything carries it, Warning and Critical columns in the threshold dialog with a yes/no metric as a severity, and alerts found by the name they show
 

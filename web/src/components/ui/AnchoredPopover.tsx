@@ -63,6 +63,8 @@ interface Props {
   role: PopoverRole;
   /** Accessible name for the popover itself. */
   label: string;
+  /** The surface's own id, for a trigger whose `aria-controls` must name the listbox itself. */
+  id?: string;
   /** Called to close. `restoreFocus` is true for Escape (focus goes back to the trigger) and false
    *  for an outside click (focus belongs wherever the operator just clicked). */
   onDismiss: (restoreFocus: boolean) => void;
@@ -83,6 +85,7 @@ export function AnchoredPopover({
   at,
   role,
   label,
+  id,
   onDismiss,
   align = 'end',
   className,
@@ -197,6 +200,7 @@ export function AnchoredPopover({
     <div
       ref={popRef}
       className={['apop', className].filter(Boolean).join(' ')}
+      id={id}
       role={role}
       aria-label={label}
       style={

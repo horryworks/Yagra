@@ -1141,7 +1141,7 @@ async fn suggest_node_tags(
     axum::extract::State(st): axum::extract::State<ApiState>,
     Query(q): Query<TagSuggestQuery>,
 ) -> ApiResult<Json<TagSuggestions>> {
-    let limit = usize::try_from(q.limit.unwrap_or(20).clamp(1, 50)).unwrap_or(20);
+    let limit = usize::try_from(super::util::page_limit(q.limit, 20u32, 50)).unwrap_or(20);
     // Skeleton mode has no inventory to count, so the picker is simply empty.
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(rank_tag_suggestions(HashMap::new(), "", limit)));

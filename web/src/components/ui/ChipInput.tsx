@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { TextInput, FieldError } from './Field';
 import { IconButton } from './IconButton';
 import { AnchoredPopover } from './AnchoredPopover';
-import { enterValue, moveActive, shownSuggestions } from './chipSuggest';
+import { canonicalLabel, enterValue, moveActive, shownSuggestions } from './chipSuggest';
 import {
   LABELS_MAX,
   addLabel,
@@ -88,9 +88,13 @@ export function ChipInput({
   const draftProblem = draft.trim() === '' || lenient ? null : labelProblem(draft, value);
 
   const commit = (raw: string) => {
+    // Every path folds a case-only variant onto the spelling already known — the chosen chips
+    // first, then the suggestions — not only Enter on an open list.
+    const known = [...value, ...suggestions];
+    const labels = splitPastedLabels(raw).map((l) => canonicalLabel(l, known));
     const next = lenient
-      ? [...value, ...splitPastedLabels(raw).filter((l) => !value.includes(l))]
-      : splitPastedLabels(raw).reduce<string[]>((acc, l) => addLabel(acc, l), [...value]);
+      ? [...value, ...labels.filter((l) => !value.includes(l))]
+      : labels.reduce<string[]>((acc, l) => addLabel(acc, l), [...value]);
     if (next.length !== value.length) onChange(next);
     setDraft('');
     setActive(-1);
@@ -193,8 +197,9 @@ export function ChipInput({
         onDismiss={onDismiss}
         align="start"
         className="chipinput-pop"
+        id={listId}
       >
-        <div id={listId}>
+        <div>
           {shown.map((s, i) => (
             <div
               key={s}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { enterValue, moveActive, shownSuggestions } from './chipSuggest';
+import { canonicalLabel, enterValue, moveActive, shownSuggestions } from './chipSuggest';
 
 const TAGS = ['MATSUYAMA', 'OSAKA', 'core'];
 
@@ -54,5 +54,19 @@ describe('enterValue', () => {
 
   it('adds nothing for an empty box', () => {
     expect(enterValue(['MATSUYAMA'], -1, '  ')).toBeNull();
+  });
+});
+
+describe('canonicalLabel', () => {
+  // Blur and paste commit through this too, not only Enter on an open list: a case-only variant
+  // of a known tag must not become a second tag.
+  it('takes the known spelling for a case-only difference', () => {
+    expect(canonicalLabel('matsuyama', ['MATSUYAMA', 'core'])).toBe('MATSUYAMA');
+    expect(canonicalLabel(' Core ', ['MATSUYAMA', 'core'])).toBe('core');
+  });
+
+  it('keeps a label that names nothing known', () => {
+    expect(canonicalLabel('tokyo', ['MATSUYAMA'])).toBe('tokyo');
+    expect(canonicalLabel('', ['MATSUYAMA'])).toBe('');
   });
 });
