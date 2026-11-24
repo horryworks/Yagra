@@ -15,6 +15,7 @@
 // One module for both modes on purpose. Two would be two answers to "what does this form send",
 // and the add path and the edit path would drift the way every mirror in this repo has.
 
+import { flagBounds, flagFault, flagSeverity, type FlagSeverity } from '../lib/flagRule';
 import { LIVENESS_METRIC } from '../lib/format';
 import { isInterfaceScopeId } from '../lib/interfaceScope';
 import type { Direction, ScopeLevel, StoredThreshold, ThresholdInput } from '../types/api';
@@ -209,4 +210,35 @@ export function derivedDirection(f: ThresholdForm): Direction {
   const hasBelow =
     optionalNumber(f.warningBelow) !== undefined || optionalNumber(f.criticalBelow) !== undefined;
   return hasAbove || !hasBelow ? 'above' : 'below';
+}
+
+/** How the dialog should draw the bounds of `f` (ADR-264): `'boxes'` for the four bound boxes, or
+ *  the severity of a 0/1 metric's rule (`'unset'` until one is picked). */
+export function formFlagSeverity(f: ThresholdForm): FlagSeverity | 'unset' | 'boxes' {
+  const fault = flagFault(f.metric);
+  if (fault === null) return 'boxes';
+  return (
+    flagSeverity(fault, {
+      warningBelow: optionalNumber(f.warningBelow),
+      criticalBelow: optionalNumber(f.criticalBelow),
+      warningAbove: optionalNumber(f.warningAbove),
+      criticalAbove: optionalNumber(f.criticalAbove),
+    }) ?? 'boxes'
+  );
+}
+
+/** `f` with its bounds replaced by the one a 0/1 metric's `severity` is stored as. Every other box
+ *  is cleared, so a severity picked twice cannot leave the first one behind. A metric that is not
+ *  0/1 is returned unchanged. */
+export function withFlagSeverity(f: ThresholdForm, severity: FlagSeverity): ThresholdForm {
+  const fault = flagFault(f.metric);
+  if (fault === null) return f;
+  const b = flagBounds(fault, severity);
+  return {
+    ...f,
+    warningBelow: numberText(b.warningBelow),
+    criticalBelow: numberText(b.criticalBelow),
+    warningAbove: numberText(b.warningAbove),
+    criticalAbove: numberText(b.criticalAbove),
+  };
 }

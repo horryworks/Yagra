@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useTranslation } from 'react-i18next';
+import { alertTitle } from '../../lib/alertName';
+import { flagFault, flagSeverity } from '../../lib/flagRule';
 import { boundText } from '../../lib/portRuleForm';
 import type { StoredThreshold } from '../../types/api';
 import { Badge } from '../ui/Badge';
@@ -12,6 +14,28 @@ import { Badge } from '../ui/Badge';
  *  stored in bits per second (ADR-076 decision 9). */
 export function RuleBounds({ rule }: { rule: StoredThreshold }) {
   const { t } = useTranslation('alertsConfig');
+  // ADR-264: a 0/1 metric's rule in its one simple shape reads as the alert it raises. Any other
+  // shape keeps the bounds, as the dialog keeps the boxes for it.
+  const fault = flagFault(rule.metric);
+  const sev =
+    fault === null
+      ? null
+      : flagSeverity(fault, {
+          warningBelow: rule.warning_below ?? undefined,
+          criticalBelow: rule.critical_below ?? undefined,
+          warningAbove: rule.warning_above ?? undefined,
+          criticalAbove: rule.critical_above ?? undefined,
+        });
+  if (sev === 'warning' || sev === 'critical') {
+    return (
+      <span className="thresholds-bounds">
+        <Badge tone={sev}>
+          {t(sev === 'warning' ? 'thresholds.warnShort' : 'thresholds.critShort')}{' '}
+          {alertTitle(rule.metric)?.text ?? rule.metric}
+        </Badge>
+      </span>
+    );
+  }
   return (
     <span className="thresholds-bounds">
       {(

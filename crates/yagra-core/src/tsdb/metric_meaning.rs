@@ -259,8 +259,14 @@ impl MetricUnit {
 /// stays short and the meaning sentence says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlertName {
-    /// A 0/1 metric; the payload names the fault.
+    /// A 0/1 metric whose fault is `0` (`snmp_up`, `http_up`); the payload names the fault.
     Flag(&'static str),
+    /// A 0/1 metric whose fault is `1` (`meraki_uplink_failed`); the payload names the fault.
+    ///
+    /// Separate from [`AlertName::Flag`] because the threshold dialog writes the one bound such a
+    /// rule needs on the side of the fault (ADR-264 decision 3), and nothing else says which side
+    /// that is — a `_failed` metric and an `_up` metric look the same to every other reader.
+    FlagOnOne(&'static str),
     /// A numeric metric; the payload is a noun the condition follows.
     Value(&'static str),
 }
@@ -270,14 +276,27 @@ impl AlertName {
     #[must_use]
     pub const fn text(self) -> &'static str {
         match self {
-            AlertName::Flag(t) | AlertName::Value(t) => t,
+            AlertName::Flag(t) | AlertName::FlagOnOne(t) | AlertName::Value(t) => t,
         }
     }
 
     /// `true` for a 0/1 metric, whose condition and value are not shown beside the name.
     #[must_use]
     pub const fn is_flag(self) -> bool {
-        matches!(self, AlertName::Flag(_))
+        self.fault_value().is_some()
+    }
+
+    /// The value that is the fault, for a 0/1 metric; `None` for a numeric one.
+    ///
+    /// ⚠️ Read only for a metric a threshold rule can name. The alerts in [`NON_RULE_ALERT_NAMES`]
+    /// are raised by the engine itself, so for them the answer describes nothing a rule writes.
+    #[must_use]
+    pub const fn fault_value(self) -> Option<u8> {
+        match self {
+            AlertName::Flag(_) => Some(0),
+            AlertName::FlagOnOne(_) => Some(1),
+            AlertName::Value(_) => None,
+        }
     }
 }
 
@@ -469,7 +488,7 @@ pub const METRIC_MEANINGS: [(&str, &str, MetricUnit, AlertName); 157] = [
     ("meraki_device_up", "Does the Meraki dashboard report the device online. 1 = online, 0 = offline.", MetricUnit::None, AlertName::Flag("Device offline in Meraki Dashboard")),
     ("meraki_port_in_bps", "Traffic one port of a Meraki switch received, in bits per second — the average over a five-minute bucket the Dashboard had finished filling, so the line runs twelve to seventeen minutes behind the port. One row per port; the Interfaces tab and its charts read it in place of an octet counter.", MetricUnit::Symbol("bps"), AlertName::Value("Switch port inbound traffic")),
     ("meraki_port_out_bps", "Traffic one port of a Meraki switch sent, in bits per second — the average over a five-minute bucket the Dashboard had finished filling, so the line runs twelve to seventeen minutes behind the port. One row per port; the Interfaces tab and its charts read it in place of an octet counter.", MetricUnit::Symbol("bps"), AlertName::Value("Switch port outbound traffic")),
-    ("meraki_uplink_failed", "Does the Meraki dashboard report this WAN uplink of an MX failed. 1 = failed, 0 = any other status — including not connected, which on a real organization was almost always a port with no line behind it. One row per uplink.", MetricUnit::None, AlertName::Flag("WAN uplink failed")),
+    ("meraki_uplink_failed", "Does the Meraki dashboard report this WAN uplink of an MX failed. 1 = failed, 0 = any other status — including not connected, which on a real organization was almost always a port with no line behind it. One row per uplink.", MetricUnit::None, AlertName::FlagOnOne("WAN uplink failed")),
     ("meraki_uplink_latency_ms", "Latency of one WAN uplink of a Meraki MX to the Dashboard's test address, in milliseconds — the latest minute the Dashboard reported. One row per uplink.", MetricUnit::Symbol("ms"), AlertName::Value("WAN uplink latency")),
     ("meraki_uplink_loss_pct", "Packet loss of one WAN uplink of a Meraki MX to the Dashboard's test address, in percent — the latest minute the Dashboard reported. One row per uplink.", MetricUnit::Symbol("%"), AlertName::Value("WAN uplink packet loss")),
     ("meraki_uplink_recv_bps", "Receive rate of one WAN uplink of a Meraki MX (WAN1, WAN2 or cellular), in bits per second — the average over the traffic collect's interval, not a peak. One row per uplink. The Dashboard reports it for MX appliances only.", MetricUnit::Symbol("bps"), AlertName::Value("WAN uplink receive rate")),
@@ -870,15 +889,15 @@ mod tests {
 
     /// The metrics whose name is a fault rather than a noun, so the WebUI leaves the condition and
     /// value off. Language-free, so it is generated beside the units rather than into a locale.
+    /// Every 0/1 metric, mapped to the value that is its fault (ADR-264 decision 3). A
+    /// `BTreeMap` for a name-sorted file, so the diff of an added flag is one line.
     fn alert_flags_json() -> String {
-        let mut flags: Vec<&str> = METRIC_MEANINGS
+        let flags: std::collections::BTreeMap<&str, u8> = METRIC_MEANINGS
             .iter()
             .map(|(name, _, _, n)| (*name, *n))
             .chain(NON_RULE_ALERT_NAMES)
-            .filter(|(_, n)| n.is_flag())
-            .map(|(name, _)| name)
+            .filter_map(|(name, n)| n.fault_value().map(|v| (name, v)))
             .collect();
-        flags.sort_unstable();
         let mut out = serde_json::to_string_pretty(&flags).expect("serialize alert flags");
         out.push('\n');
         out
@@ -968,6 +987,19 @@ mod tests {
         // A metric a newer core introduced still prints something truthful.
         assert_eq!(alert_title("vendor_x_new_gauge"), "vendor_x_new_gauge");
         assert!(alert_name("snmp_up").is_some_and(AlertName::is_flag));
+        // The fault side, which the threshold dialog writes its one bound on (ADR-264).
+        assert_eq!(
+            alert_name("snmp_up").and_then(AlertName::fault_value),
+            Some(0)
+        );
+        assert_eq!(
+            alert_name("meraki_uplink_failed").and_then(AlertName::fault_value),
+            Some(1)
+        );
+        assert_eq!(
+            alert_name("icmp_loss_pct").and_then(AlertName::fault_value),
+            None
+        );
         assert!(alert_name("icmp_loss_pct").is_some_and(|n| !n.is_flag()));
         // Every row is findable by the binary search, not only the three above.
         for (metric, _, _, name) in METRIC_MEANINGS {

@@ -9,12 +9,13 @@ import { alertNameKey, alertNameTexts, alertTitle } from './alertName';
 describe('alert names (ADR-196)', () => {
   it('names every flag it lists, and lists more than a handful of each shape', () => {
     const named = Object.keys(enAlertNames);
-    for (const flag of alertNameFlags) expect(named).toContain(flag);
+    const flags = Object.keys(alertNameFlags);
+    for (const flag of flags) expect(named).toContain(flag);
     // A floor in both directions: the generator emitting nothing must not read as "no names",
     // and every metric becoming a flag would hide every condition on every alert.
     expect(named.length).toBeGreaterThan(150);
-    expect(alertNameFlags.length).toBeGreaterThan(5);
-    expect(alertNameFlags.length).toBeLessThan(named.length / 4);
+    expect(flags.length).toBeGreaterThan(5);
+    expect(flags.length).toBeLessThan(named.length / 4);
   });
 
   it('answers in the operator language and keeps a raw spelling it has no name for', async () => {

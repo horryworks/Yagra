@@ -12,6 +12,8 @@
 
 ### Improvements
 
+- **A threshold rule's dialog names its Warning and Critical columns, and a rule on a yes/no metric is a severity rather than a number.** The two bound columns now carry a Warning and a Critical heading that stays when the boxes are filled; before, only the grey placeholder said which was which, and it vanished as soon as a value was typed. A rule on a metric that only reads 1 or 0 (`snmp_up`, `http_up`, `dns_up`, `meraki_device_up`, `meraki_uplink_failed` and the like) shows the alert it raises ("SNMP not responding") and a Warning / Critical choice instead of four number boxes, and the rules list shows it as `C SNMP not responding` rather than `C ≤ 0.5`. Nothing stored changes: the choice is saved as the same single bound (0.5 on the side of the fault), and a rule written in any other shape keeps the four boxes (ADR-264).
+
 - **The What filter on Alerts ▸ Active alerts and Alerts ▸ History finds an alert by the name it shows.** Typing `Node` now finds "Node not responding" and `SNMP` finds "SNMP not responding"; before, only the metric name underneath was searched (`liveness`, `snmp_up`). The English and the Japanese names both match whatever the screen's language, and the metric name still does. The `metric` parameter of `GET /api/v1/alerts/history` and of the MCP tool `get_alert_history` match the same way, so a term can now find more rows than before (`up` also finds "Startup config last written").
 
 ## v0.3.87 — Rename, merge or delete a tag everywhere at once from Nodes ▸ Tags, an upgrade's maintenance window that covers the restart, and the pre-upgrade backup's progress on screen

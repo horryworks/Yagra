@@ -28,9 +28,9 @@
   color: var(--accent-hover);
 }
 
-/* Compact warn/crit/dwell inputs (add modal). */
+/* A bound column, box or heading (ADR-264): equal shares, so a heading sits over its box. */
 .thresholds-num {
-  width: 72px;
+  flex: 1 1 0;
 }
 
 /* W/C badge pairing — shared by the modal bounds row and the Bounds table cell. */

@@ -18,7 +18,8 @@ import alertNameFlags from '../api/alertNameFlags.json';
 export const EVENT_METRIC_PREFIX = 'event:';
 
 const NAMED: ReadonlySet<string> = new Set(Object.keys(enAlertNames));
-const FLAGS: ReadonlySet<string> = new Set(alertNameFlags);
+// Keyed by metric; the value (which reading is the fault) is `flagRule.ts`'s concern (ADR-264).
+const FLAGS: ReadonlySet<string> = new Set(Object.keys(alertNameFlags));
 
 export interface AlertTitle {
   /** The name in the operator's language. */

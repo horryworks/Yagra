@@ -448,7 +448,7 @@ test('a rule opens for editing with its own values, and reachability offers no b
   // ⚠️ This rule is one-sided (`above`), so the two `below` boxes must be EMPTY — a form that
   // filled them from the legacy `warning`/`critical` would turn every existing rule into a band
   // on the next save, and every assertion about the other two would still pass.
-  const nums = dialog.locator('.thresholds-num');
+  const nums = dialog.locator('input.thresholds-num');
   await expect(nums).toHaveCount(5);
   await expect(nums.nth(0)).toHaveValue('');
   await expect(nums.nth(1)).toHaveValue('');
@@ -461,7 +461,7 @@ test('a rule opens for editing with its own values, and reachability offers no b
   const bandRow = page.locator('.dt-row').filter({ hasText: BAND_RULE_METRIC }).first();
   await bandRow.getByRole('button', { name: 'Edit' }).click();
   const band = page.getByRole('dialog');
-  const bandNums = band.locator('.thresholds-num');
+  const bandNums = band.locator('input.thresholds-num');
   await expect(bandNums).toHaveCount(5);
   await expect(bandNums.nth(0)).toHaveValue('-18');
   await expect(bandNums.nth(1)).toHaveValue('-20');
@@ -474,8 +474,8 @@ test('a rule opens for editing with its own values, and reachability offers no b
   const liveness = page.getByRole('dialog');
   // The engine reads no bound off this rule, so only the breach count is offered — and the
   // engine's internal sentinel is never shown, which is the one string this screen hides.
-  await expect(liveness.locator('.thresholds-num')).toHaveCount(1);
-  await expect(liveness.locator('.thresholds-num')).toHaveValue('3');
+  await expect(liveness.locator('input.thresholds-num')).toHaveCount(1);
+  await expect(liveness.locator('input.thresholds-num')).toHaveValue('3');
   await expect(liveness).toContainText('Reachability');
   await expect(liveness).not.toContainText('__liveness__');
 });
@@ -540,7 +540,7 @@ test('Escape closes the metric list without throwing away the rule behind it', a
   await page.goto('/alerts/rules');
   await page.getByRole('button', { name: '+ Add rule' }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.locator('.thresholds-num').first().fill('42');
+  await dialog.locator('input.thresholds-num').first().fill('42');
 
   await dialog.locator('.metricpick-trigger').click();
   await expect(page.locator('.metricpick-list')).toBeVisible();
@@ -549,7 +549,7 @@ test('Escape closes the metric list without throwing away the rule behind it', a
   await expect(page.locator('.metricpick-list')).toHaveCount(0);
   // Still open, and still holding what was typed.
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('.thresholds-num').first()).toHaveValue('42');
+  await expect(dialog.locator('input.thresholds-num').first()).toHaveValue('42');
 
   // …and the second press still closes the dialog, so the fix did not just break Escape.
   await page.keyboard.press('Escape');

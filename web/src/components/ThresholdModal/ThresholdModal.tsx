@@ -17,13 +17,17 @@ import { done } from '../../lib/submitState';
 import { useSubmit } from '../../lib/useSubmit';
 import { LIVENESS_METRIC } from '../../lib/format';
 import { interfaceScopeLabel } from '../../lib/interfaceScope';
+import { alertTitle } from '../../lib/alertName';
+import type { FlagSeverity } from '../../lib/flagRule';
 import {
   DEFAULT_DWELL,
+  formFlagSeverity,
   isThresholdReady,
   scopeAcceptsRowMatch,
   scopeIdKind,
   thresholdBody,
   thresholdFormFrom,
+  withFlagSeverity,
   type ThresholdForm,
 } from '../../pages/thresholdRequest';
 import {
@@ -39,8 +43,10 @@ import { portChoices, type PortChoice } from './portChoice';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Modal } from '../ui/Modal';
+import { Badge } from '../ui/Badge';
 import { Field, Select, TextInput } from '../ui/Field';
-import { FieldGroup, Fields } from '../ui/FormLayout';
+import { FieldGroup, FieldValue, Fields } from '../ui/FormLayout';
+import { Segmented } from '../ui/Segmented';
 import { MultiSelectList } from '../ui/MultiSelectList';
 import { useEntityNames } from '../ui/entityNames';
 import { groupOptions } from '../../lib/nodeTree';
@@ -410,7 +416,13 @@ export function ThresholdModal({
           />
         )}
         {!portMode && (
-          <ThresholdFields form={form} set={set} lockedMetric={lockedMetric} noBounds={noBounds} />
+          <ThresholdFields
+            form={form}
+            set={set}
+            setSeverity={(sev) => setForm((f) => withFlagSeverity(f, sev))}
+            lockedMetric={lockedMetric}
+            noBounds={noBounds}
+          />
         )}
         <FormError form={save} />
       </Fields>
@@ -422,15 +434,22 @@ export function ThresholdModal({
 function ThresholdFields({
   form,
   set,
+  setSeverity,
   lockedMetric,
   noBounds,
 }: {
   form: ThresholdForm;
   set: <K extends keyof ThresholdForm>(key: K, value: ThresholdForm[K]) => void;
+  setSeverity: (severity: FlagSeverity) => void;
   lockedMetric: boolean;
   noBounds: boolean;
 }) {
   const { t } = useTranslation('alertsConfig');
+  // ADR-264: a 0/1 metric's rule is "which alert, at which severity", unless the operator wrote a
+  // shape that is not that one - then the four boxes, as written (decision 4).
+  const flag = noBounds ? 'boxes' : formFlagSeverity(form);
+  const warnLabel = t('format:severity.warning');
+  const critLabel = t('format:severity.critical');
   return (
     <>
       <Field label={t('thresholds.addModal.metric')}>
@@ -473,38 +492,62 @@ function ThresholdFields({
           one, from one rule. A selector beside the numbers was a second statement of the same fact,
           and the two could disagree: the form let a rule be saved saying `above` with bounds that
           only made sense downward, which stored, listed, and never fired. */}
-      {!noBounds && (
+      {!noBounds && flag !== 'boxes' && (
+        <>
+          <Field label={t('thresholds.addModal.flagAlert')}>
+            <FieldValue>{alertTitle(form.metric)?.text ?? form.metric}</FieldValue>
+          </Field>
+          <FieldGroup label={t('thresholds.addModal.flagSeverity')}>
+            <Segmented
+              ariaLabel={t('thresholds.addModal.flagSeverity')}
+              options={[
+                { value: 'warning', label: warnLabel },
+                { value: 'critical', label: critLabel },
+              ]}
+              value={flag === 'unset' ? '' : flag}
+              onChange={(v) => setSeverity(v as FlagSeverity)}
+            />
+          </FieldGroup>
+        </>
+      )}
+      {!noBounds && flag === 'boxes' && (
         <FieldGroup label={t('thresholds.addModal.bounds')}>
-          <div className="thresholds-bound-row">
-            <span className="thresholds-bound-side">{t('thresholds.addModal.belowSide')}</span>
-            <TextInput
-              className="thresholds-num"
-              placeholder={t('thresholds.addModal.warnPlaceholder')}
-              value={form.warningBelow}
-              onChange={(e) => set('warningBelow', e.target.value)}
-            />
-            <TextInput
-              className="thresholds-num"
-              placeholder={t('thresholds.addModal.critPlaceholder')}
-              value={form.criticalBelow}
-              onChange={(e) => set('criticalBelow', e.target.value)}
-            />
+          {/* ADR-264 decision 1: the columns are named above them, always. A placeholder said it
+              only while the box was empty, so a filled box no longer said which severity it was. */}
+          <div className="thresholds-bound-row" aria-hidden="true">
+            <span className="thresholds-bound-side" />
+            <span className="thresholds-num">
+              <Badge tone="warning">{warnLabel}</Badge>
+            </span>
+            <span className="thresholds-num">
+              <Badge tone="critical">{critLabel}</Badge>
+            </span>
           </div>
-          <div className="thresholds-bound-row">
-            <span className="thresholds-bound-side">{t('thresholds.addModal.aboveSide')}</span>
-            <TextInput
-              className="thresholds-num"
-              placeholder={t('thresholds.addModal.warnPlaceholder')}
-              value={form.warningAbove}
-              onChange={(e) => set('warningAbove', e.target.value)}
-            />
-            <TextInput
-              className="thresholds-num"
-              placeholder={t('thresholds.addModal.critPlaceholder')}
-              value={form.criticalAbove}
-              onChange={(e) => set('criticalAbove', e.target.value)}
-            />
-          </div>
+          {(
+            [
+              ['belowSide', 'warningBelow', 'criticalBelow'],
+              ['aboveSide', 'warningAbove', 'criticalAbove'],
+            ] as const
+          ).map(([side, warnKey, critKey]) => {
+            const sideLabel = t(`thresholds.addModal.${side}`);
+            return (
+              <div key={side} className="thresholds-bound-row">
+                <span className="thresholds-bound-side">{sideLabel}</span>
+                <TextInput
+                  className="thresholds-num"
+                  aria-label={`${sideLabel}: ${warnLabel}`}
+                  value={form[warnKey]}
+                  onChange={(e) => set(warnKey, e.target.value)}
+                />
+                <TextInput
+                  className="thresholds-num"
+                  aria-label={`${sideLabel}: ${critLabel}`}
+                  value={form[critKey]}
+                  onChange={(e) => set(critKey, e.target.value)}
+                />
+              </div>
+            );
+          })}
         </FieldGroup>
       )}
       {/* The label and the unit say what the number is; the ⓘ is the one case where a reading is
