@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.3.87 — Rename, merge or delete a tag everywhere at once from Nodes ▸ Tags, an upgrade's maintenance window that covers the restart, and the pre-upgrade backup's progress on screen**
+> Status: **v0.3.88 — Register a tag by name before anything carries it, Warning and Critical columns in the threshold dialog with a yes/no metric as a severity, and alerts found by the name they show**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, a folder tree pulled read-only from NetBox, passive event
 > monitoring, discovery & classification, alerting, dashboards, and reports) over PostgreSQL,

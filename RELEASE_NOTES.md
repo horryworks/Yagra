@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.88 — Register a tag by name before anything carries it, Warning and Critical columns in the threshold dialog with a yes/no metric as a severity, and alerts found by the name they show
+
 ### New Features
 
 - **Nodes ▸ Tags can add a tag by name before anything carries it.** **+ Add tag** registers the name; it is listed with every count at zero and a ✓ in the new **Registered** column, and the tag fields of the node editor, the folder dialog and the bulk tag dialog offer registered tags as you type. A notification routing rule's tag list offers them too. Registering is a suggestion, not a restriction: any other tag can still be typed. Renaming a registered tag renames its registration, merging drops the old one, and deleting removes it. New endpoints: `POST /api/v1/node-tags` (`tag`, Admin only, `204`, registering one twice is not an error) and `GET /api/v1/registered-tags` (the names, for anyone who may edit nodes; MCP `get_config(kind=registered_tags)`). `GET /api/v1/node-tags` gives each tag `registered`, and a rename or delete answers `registered` too. Migration 0189 adds the `registered_tags` table; a core older than 0.3.88 does not start against this database (ADR-263 Inc.2).
