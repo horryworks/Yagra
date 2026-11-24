@@ -88,7 +88,9 @@ pub use interfaces::{
     InterfaceBatchRow, InterfaceIdent, InterfaceMeta, InterfaceUpsert, INTERFACE_STALE_SECS,
     INTERFACE_TOUCH_SECS,
 };
-pub use listing::{NodeListing, SearchWord, StaticNodeList, NODE_SCAN_MAX, NODE_SEARCH_MAX};
+pub use listing::{
+    NodeListing, SearchWord, StaticNodeList, TagNarrowing, NODE_SCAN_MAX, NODE_SEARCH_MAX,
+};
 pub use migrate::embedded_migrations;
 // The static itself is read by `embedded_migrations` above; only *this name* is test-only, and it
 // exists because `#[sqlx::test(migrator = "crate::repo::MIGRATIONS")]` needs a path it can spell

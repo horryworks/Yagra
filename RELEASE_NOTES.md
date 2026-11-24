@@ -10,6 +10,10 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Filtering All nodes by tag finds every node that carries the tag.** On a deployment with more than 5,000 nodes the tag filter examined only the first 5,000 by name, so tagged nodes whose names sorted later were missing from the tree, and only the "some matches are not shown" notice hinted at it. The tag now narrows the search in the database first, so the limit applies only when more than 5,000 nodes actually carry the tag. `GET /api/v1/nodes?tag=` and MCP `list_nodes` change the same way (ADR-265).
+
 ## v0.3.89 — Filter All nodes by tag, and tag fields that list the registered tags as soon as they are clicked
 
 ### New Features

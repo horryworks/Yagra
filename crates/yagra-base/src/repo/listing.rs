@@ -97,13 +97,50 @@ pub trait NodeListing: Send + Sync {
     /// narrowing beside the substring rather than a spelling of it: a substring of `10.0.0.1` also
     /// matches `10.0.0.10`, and a name-ordered page capped at `limit` can hold every one of those
     /// and not the node that is actually at the address.
+    ///
+    /// `tags`, when given, keeps only nodes that **may** carry one of its tags (see
+    /// [`TagNarrowing`]). It is a superset: the caller still decides, per node, with the full
+    /// effective-tag rule.
     async fn search(
         &self,
         groups: GroupFilter<'_>,
         words: &[SearchWord],
         address: Option<IpAddr>,
+        tags: Option<&TagNarrowing>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>>;
+}
+
+/// The candidates a tag filter can possibly select, in a form the query can serve (ADR-265 Inc.2).
+///
+/// A node's effective tags are its own plus those its folder chain supplies, minus the ones it
+/// excludes — a fold the store cannot do (`inventory::tagres` in core owns it). But the store can
+/// keep every node for which the answer could be yes: one whose own tags hold a wanted tag, or one
+/// filed in a folder whose chain supplies one. The caller then applies the exact rule to what
+/// comes back.
+///
+/// 🚨 **Without this the tag filter ran over the first [`NODE_SCAN_MAX`] nodes by name and judged
+/// only those**, so on a fleet larger than that a tagged node sorting late was never examined —
+/// measured on a 6,841-node deployment, where whole sites vanished from the filtered tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TagNarrowing {
+    /// The wanted tags, compared exactly (tags are case-sensitive) against a node's own tags.
+    pub tags: Vec<String>,
+    /// Every folder whose own tags or whose ancestors' tags hold a wanted tag.
+    pub folders: Vec<Uuid>,
+}
+
+impl TagNarrowing {
+    /// Whether `node` may carry one of the tags: the in-memory twin of the SQL predicate.
+    #[must_use]
+    pub fn admits(&self, node: &Node) -> bool {
+        node.tags
+            .iter()
+            .any(|t| self.tags.iter().any(|w| w == t.trim()))
+            || node
+                .group
+                .is_some_and(|g| self.folders.contains(&g.as_uuid()))
+    }
 }
 
 /// One word of a node search (ADR-258), as the stores receive it.
@@ -188,6 +225,7 @@ impl NodeListing for NodeRepo {
         groups: GroupFilter<'_>,
         words: &[SearchWord],
         address: Option<IpAddr>,
+        tags: Option<&TagNarrowing>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let limit = limit.clamp(1, NODE_SCAN_MAX);
@@ -209,6 +247,15 @@ impl NodeListing for NodeRepo {
             sql.push_str(" AND ");
             sql.push_str(&word_predicate(4 + 2 * i, ports));
         }
+        if tags.is_some() {
+            // `btrim` because a stored tag counts by its meaningful form (`tagres::meaningful`);
+            // a row written before validation trimmed must not fall out of the superset.
+            let t = 4 + 2 * words.len();
+            let f = t + 1;
+            sql.push_str(&format!(
+                " AND (EXISTS (SELECT 1 FROM unnest(tags) AS own(tag)                    WHERE btrim(own.tag) = ANY(${t}::text[]))                    OR group_id = ANY(${f}::uuid[]))"
+            ));
+        }
         sql.push_str(" ORDER BY name, id LIMIT $3");
         let mut query = sqlx::query(&sql)
             .bind(Self::scope_bind(groups))
@@ -218,6 +265,9 @@ impl NodeListing for NodeRepo {
             query = query
                 .bind(yagra_common::node_search::like_escape(&word.text))
                 .bind(&word.folders);
+        }
+        if let Some(n) = tags {
+            query = query.bind(&n.tags).bind(&n.folders);
         }
         let rows = query.fetch_all(&self.pool).await?;
         rows.iter().map(node_from_row).collect()
@@ -295,6 +345,7 @@ impl NodeListing for StaticNodeList {
         groups: GroupFilter<'_>,
         words: &[SearchWord],
         address: Option<IpAddr>,
+        tags: Option<&TagNarrowing>,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let mut nodes: Vec<Node> = self
@@ -303,6 +354,8 @@ impl NodeListing for StaticNodeList {
             .filter(|n| Self::in_scope(groups, n))
             // Mirrors `address = $n::inet`: an address compared as an address, never as text.
             .filter(|n| address.is_none_or(|a| n.address == a))
+            // Mirrors the tag predicate.
+            .filter(|n| tags.is_none_or(|t| t.admits(n)))
             // Mirrors the per-word predicate. The skeleton has no port addresses, so that arm has
             // nothing to read here.
             .filter(|n| {
@@ -384,7 +437,7 @@ mod tests {
         // The inversion that would be a privilege escalation: an empty set matches nothing.
         assert_eq!(list.count(Some(&[])).await.unwrap(), 0);
         assert!(list
-            .search(Some(&[]), &w(""), None, 50)
+            .search(Some(&[]), &w(""), None, None, 50)
             .await
             .unwrap()
             .is_empty());
@@ -392,7 +445,7 @@ mod tests {
 
         // Scope is applied before the search term, not instead of it.
         let hits = list
-            .search(Some(&[tokyo]), &w("in-"), None, 50)
+            .search(Some(&[tokyo]), &w("in-"), None, None, 50)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
@@ -408,15 +461,21 @@ mod tests {
         ]);
         // Name substring, case-insensitive.
         assert_eq!(
-            list.search(None, &w("EDGE"), None, 50).await.unwrap().len(),
+            list.search(None, &w("EDGE"), None, None, 50)
+                .await
+                .unwrap()
+                .len(),
             2
         );
         // Address substring.
-        let by_addr = list.search(None, &w("192.168"), None, 50).await.unwrap();
+        let by_addr = list
+            .search(None, &w("192.168"), None, None, 50)
+            .await
+            .unwrap();
         assert_eq!(by_addr.len(), 1);
         assert_eq!(by_addr[0].name, "nagoya-edge");
         // Empty term returns all, ordered by name and capped.
-        let capped = list.search(None, &w(""), None, 2).await.unwrap();
+        let capped = list.search(None, &w(""), None, None, 2).await.unwrap();
         assert_eq!(capped.len(), 2);
         assert_eq!(capped[0].name, "nagoya-edge"); // nagoya < osaka < tokyo
         assert_eq!(capped[1].name, "osaka-core");
@@ -431,14 +490,14 @@ mod tests {
         // A caller asking for one page gets one page — the repo does not quietly cut it shorter,
         // which was the original defect.
         let page = list
-            .search(None, &w("sw-"), None, NODE_SEARCH_MAX)
+            .search(None, &w("sw-"), None, None, NODE_SEARCH_MAX)
             .await
             .unwrap();
         assert_eq!(page.len() as i64, NODE_SEARCH_MAX);
         // Asking for more than the scan ceiling yields exactly the ceiling, not some smaller
         // inner limit.
         let hits = list
-            .search(None, &w("sw-"), None, NODE_SCAN_MAX * 2)
+            .search(None, &w("sw-"), None, None, NODE_SCAN_MAX * 2)
             .await
             .unwrap();
         assert_eq!(hits.len(), 600, "fewer nodes exist than the ceiling allows");
@@ -496,14 +555,14 @@ mod tests {
             assert_eq!(a, b, "node_group_map disagrees with {label}");
             for term in ["", "in-", "10.0.0."] {
                 let mut a: Vec<Uuid> = sql
-                    .search(scope, &w(term), None, 50)
+                    .search(scope, &w(term), None, None, 50)
                     .await
                     .unwrap()
                     .iter()
                     .map(|n| n.id.as_uuid())
                     .collect();
                 let mut b: Vec<Uuid> = memory
-                    .search(scope, &w(term), None, 50)
+                    .search(scope, &w(term), None, None, 50)
                     .await
                     .unwrap()
                     .iter()
@@ -542,11 +601,20 @@ mod tests {
             crate::pgtest::node(&pool, &format!("node-{i}"), i, None).await;
         }
         let sql = crate::pgtest::repo(pool.clone());
-        assert_eq!(sql.search(None, &w(""), None, 50).await.unwrap().len(), 5);
-        assert_eq!(sql.search(None, &w(""), None, 2).await.unwrap().len(), 2);
+        assert_eq!(
+            sql.search(None, &w(""), None, None, 50)
+                .await
+                .unwrap()
+                .len(),
+            5
+        );
+        assert_eq!(
+            sql.search(None, &w(""), None, None, 2).await.unwrap().len(),
+            2
+        );
         // A caller asking for more than the shared cap gets the cap, not its own number.
         assert_eq!(
-            sql.search(None, &w(""), None, NODE_SEARCH_MAX * 10)
+            sql.search(None, &w(""), None, None, NODE_SEARCH_MAX * 10)
                 .await
                 .unwrap()
                 .len(),
@@ -574,7 +642,7 @@ mod tests {
             let addr: IpAddr = addr.parse().expect("addr");
             for (label, store) in [("sql", &sql as &dyn NodeListing), ("memory", &memory)] {
                 let ids: Vec<Uuid> = store
-                    .search(None, &w(""), Some(addr), 50)
+                    .search(None, &w(""), Some(addr), None, 50)
                     .await
                     .unwrap()
                     .iter()
@@ -586,23 +654,91 @@ mod tests {
         // Nobody there is an empty answer, not every node.
         let nobody: IpAddr = "192.0.2.1".parse().expect("addr");
         assert!(sql
-            .search(None, &w(""), Some(nobody), 50)
+            .search(None, &w(""), Some(nobody), None, 50)
             .await
             .unwrap()
             .is_empty());
         // And it narrows alongside the substring rather than replacing it.
         let one_addr: IpAddr = "10.0.0.1".parse().expect("addr");
         assert!(sql
-            .search(None, &w("ten"), Some(one_addr), 50)
+            .search(None, &w("ten"), Some(one_addr), None, 50)
             .await
             .unwrap()
             .is_empty());
     }
 
+    /// 🚨 **The tag narrowing keeps every node that may carry a wanted tag, in both stores**
+    /// (ADR-265 Inc.2).
+    ///
+    /// The store cannot fold effective tags, so this is a superset the caller narrows again. What
+    /// must hold is that nothing which could carry the tag is dropped: a node's own tag (also one
+    /// stored with stray spaces, which the resolver counts by its trimmed form) and a node filed in
+    /// a folder that supplies it. A case variant is a different tag and must not come back.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn both_node_stores_narrow_by_tag_identically(pool: sqlx::PgPool) {
+        let site = crate::pgtest::group(&pool, "site").await;
+        let other = crate::pgtest::group(&pool, "other").await;
+        let own = crate::pgtest::node(&pool, "own", 1, None).await;
+        let padded = crate::pgtest::node(&pool, "padded", 2, None).await;
+        let in_site = crate::pgtest::node(&pool, "in-site", 3, Some(site)).await;
+        let _cased = crate::pgtest::node(&pool, "cased", 4, None).await;
+        let _elsewhere = crate::pgtest::node(&pool, "elsewhere", 5, Some(other)).await;
+        for (name, tags) in [
+            ("own", vec!["core", "wan"]),
+            ("padded", vec![" core "]),
+            ("cased", vec!["CORE"]),
+        ] {
+            sqlx::query("UPDATE nodes SET tags = $1 WHERE name = $2")
+                .bind(&tags)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("tag the fixture");
+        }
+        let sql = crate::pgtest::repo(pool.clone());
+        let memory = StaticNodeList(sql.list_nodes().await.expect("read the fixture back"));
+        let narrowing = TagNarrowing {
+            tags: vec!["core".to_owned()],
+            folders: vec![site],
+        };
+        let mut want = vec![own, padded, in_site];
+        want.sort_unstable();
+        for (label, store) in [("sql", &sql as &dyn NodeListing), ("memory", &memory)] {
+            let mut got: Vec<Uuid> = store
+                .search(None, &[], None, Some(&narrowing), 50)
+                .await
+                .unwrap()
+                .iter()
+                .map(|n| n.id.as_uuid())
+                .collect();
+            got.sort_unstable();
+            assert_eq!(got, want, "{label}");
+            // It narrows alongside the words rather than replacing them.
+            let with_word: Vec<Uuid> = store
+                .search(None, &w("site"), None, Some(&narrowing), 50)
+                .await
+                .unwrap()
+                .iter()
+                .map(|n| n.id.as_uuid())
+                .collect();
+            assert_eq!(with_word, vec![in_site], "{label} with a word");
+            // Nothing wanted is nothing, not everything.
+            assert!(
+                store
+                    .search(None, &[], None, Some(&TagNarrowing::default()), 50)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "{label} with an empty narrowing"
+            );
+        }
+    }
+
     /// Ids a store answered, sorted.
     async fn ids(store: &dyn NodeListing, words: &[SearchWord]) -> Vec<Uuid> {
         let mut v: Vec<Uuid> = store
-            .search(None, words, None, 50)
+            .search(None, words, None, None, 50)
             .await
             .unwrap()
             .iter()

@@ -99,6 +99,21 @@ impl TagResolver {
         group.and_then(|g| self.by_group.get(&g)).unwrap_or(&EMPTY)
     }
 
+    /// Every folder whose effective tags hold one of `want` — the folder half of the candidate
+    /// set a tag filter hands the store ([`yagra_base::repo::TagNarrowing`], ADR-265 Inc.2).
+    /// Sorted, so the query it ends up in is deterministic.
+    #[must_use]
+    pub fn folders_carrying(&self, want: &[String]) -> Vec<Uuid> {
+        let mut out: Vec<Uuid> = self
+            .by_group
+            .iter()
+            .filter(|(_, tags)| want.iter().any(|w| tags.contains(w)))
+            .map(|(id, _)| *id)
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
     /// Just the half a node inherits: what its folder chain supplies, minus what it excludes, and
     /// minus anything it already carries itself. This is what the detail pane draws as a second,
     /// marked group of badges.
@@ -193,6 +208,40 @@ impl TagResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folders_carrying_a_tag_include_every_folder_below_the_one_that_sets_it() {
+        // ADR-265 Inc.2: the store's narrowing is only a superset if a node two folders below the
+        // tagged one is in a listed folder too, and a folder that refuses the tag is not.
+        let (apac, japan, saga, refuses, other) = (
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            Uuid::from_u128(4),
+            Uuid::from_u128(5),
+        );
+        let r = TagResolver::build(vec![
+            (apac, None, vec!["8x5x5".into()], vec![]),
+            (japan, Some(apac), vec![], vec![]),
+            (saga, Some(japan), vec![], vec![]),
+            (refuses, Some(japan), vec![], vec!["8x5x5".into()]),
+            (other, None, vec!["24x7".into()], vec![]),
+        ]);
+        assert_eq!(
+            r.folders_carrying(&["8x5x5".to_owned()]),
+            vec![apac, japan, saga]
+        );
+        assert_eq!(
+            r.folders_carrying(&["8x5x5".to_owned(), "24x7".to_owned()]),
+            vec![apac, japan, saga, other],
+            "several tags are a union"
+        );
+        assert!(
+            r.folders_carrying(&["8X5X5".to_owned()]).is_empty(),
+            "case-sensitive"
+        );
+        assert!(r.folders_carrying(&[]).is_empty());
+    }
     use std::net::{IpAddr, Ipv4Addr};
     use yagra_common::{GroupId, NodeId};
 

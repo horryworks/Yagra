@@ -319,6 +319,10 @@ pub(crate) struct NodePageQuery {
 /// filter that selected it. What it costs is the bound: past it the answer is a subset, and
 /// `NodePage::truncated` says so rather than letting "no matches" mean "none among the first N".
 ///
+/// **tag** is decided in-process too, by the same fold, but it also narrows the scan: the store
+/// keeps only the nodes that may carry a wanted tag ([`yagra_base::repo::TagNarrowing`]), so the
+/// bound bites only when that many nodes carry it (ADR-265 Inc.2).
+///
 /// Each field is a **set**, empty meaning unfiltered (ADR-053 Inc.6). Selecting several states is
 /// how an operator asks the question this screen is for — "show me everything that is not healthy"
 /// is three states, and with one value per filter it was three separate looks at the tree.
@@ -365,15 +369,30 @@ pub(crate) async fn filtered_node_page(
     } else {
         limit
     };
+    // The tag filter is the one post-query filter the store can narrow for (ADR-265 Inc.2): it
+    // keeps every node that MAY carry a wanted tag, and the exact rule below decides. Without it
+    // the scan was the first NODE_SCAN_MAX nodes by name, so a tagged node sorting past them was
+    // never examined at all.
+    let tags = tag_resolver_for(st, filter).await;
+    let narrowing = tags.as_ref().map(|r| yagra_base::repo::TagNarrowing {
+        tags: filter.tag.clone(),
+        folders: r.folders_carrying(&filter.tag),
+    });
     let candidates = st
         .nodes
-        .search(scope.group_filter(), words, address, scan)
+        .search(
+            scope.group_filter(),
+            words,
+            address,
+            narrowing.as_ref(),
+            scan,
+        )
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
         })?;
     let scan_hit_ceiling = i64::try_from(candidates.len()).unwrap_or(i64::MAX) >= scan;
-    let mut nodes = apply_node_filter(st, candidates, filter).await;
+    let mut nodes = apply_node_filter(st, candidates, filter, tags.as_ref()).await;
     let over_page = i64::try_from(nodes.len()).unwrap_or(i64::MAX) > limit;
     if over_page {
         nodes.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
@@ -948,7 +967,26 @@ pub(crate) fn parse_node_filter(
 /// Each resolver is consulted only when its filter is set — a state filter must not pay for the
 /// folder tree, and a pool filter must not pay for a TSDB freshness probe. `search` already
 /// applied the caller's scope, so nothing here can widen it.
-async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter) -> Vec<Node> {
+/// The tag resolver a filter needs, or `None` when it names no tag — read once per request, so
+/// the store's narrowing and the exact rule fold the same folder tree.
+async fn tag_resolver_for(
+    st: &ApiState,
+    filter: &NodeFilter,
+) -> Option<crate::inventory::tagres::TagResolver> {
+    match (filter.tag.is_empty(), st.admin.as_ref()) {
+        (true, _) => None,
+        (false, Some(admin)) => Some(super::util::tag_resolver(admin).await),
+        // Skeleton mode has no folders, so a node's effective tags are its own.
+        (false, None) => Some(crate::inventory::tagres::TagResolver::empty()),
+    }
+}
+
+async fn apply_node_filter(
+    st: &ApiState,
+    nodes: Vec<Node>,
+    filter: &NodeFilter,
+    tags: Option<&crate::inventory::tagres::TagResolver>,
+) -> Vec<Node> {
     if !filter.is_set() {
         return nodes;
     }
@@ -975,15 +1013,7 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
             _ => None,
         }
     };
-    let tags = async {
-        match (filter.tag.is_empty(), st.admin.as_ref()) {
-            (true, _) => None,
-            (false, Some(admin)) => Some(super::util::tag_resolver(admin).await),
-            // Skeleton mode has no folders, so a node's effective tags are its own.
-            (false, None) => Some(crate::inventory::tagres::TagResolver::empty()),
-        }
-    };
-    let (states, kinds, pools, tags) = tokio::join!(states, kinds, pools, tags);
+    let (states, kinds, pools) = tokio::join!(states, kinds, pools);
     nodes
         .into_iter()
         .filter(|n| {
@@ -1015,7 +1045,7 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
                     return false;
                 }
             }
-            if let Some(resolver) = tags.as_ref() {
+            if let Some(resolver) = tags {
                 if !carries_any(&resolver.effective(n), &filter.tag) {
                     return false;
                 }
@@ -1203,7 +1233,7 @@ async fn search_nodes(
     let limit = q.limit.unwrap_or(50);
     let nodes = st
         .nodes
-        .search(scope.group_filter(), &words, None, limit)
+        .search(scope.group_filter(), &words, None, None, limit)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "node search", "failed to search nodes")
@@ -1307,7 +1337,7 @@ async fn list_group_nodes(
         // an ungrouped node is outside every group scope, which `search` enforces for us.
         let nodes = if q.group.is_none() && batch.is_none() {
             st.nodes
-                .search(scope.group_filter(), &[], None, GROUP_NODES_CAP)
+                .search(scope.group_filter(), &[], None, None, GROUP_NODES_CAP)
                 .await
                 .unwrap_or_default()
         } else {
@@ -4359,6 +4389,88 @@ mod tests {
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty());
+    }
+
+    /// 🚨 **A tagged node that sorts past the scan ceiling is still found** (ADR-265 Inc.2).
+    ///
+    /// The tag filter used to read the first `NODE_SCAN_MAX` nodes by name and judge only those,
+    /// so on a 6,841-node deployment a whole site whose devices sorted late vanished from the
+    /// filtered tree, with a "some matches are not shown" banner as the only trace. The tests
+    /// above ran it over one demo node, where no ceiling can bite. This one puts more untagged
+    /// nodes ahead of the tagged ones than the scan may read, and asks the REST edge.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_tag_filter_finds_tagged_nodes_past_the_scan_ceiling(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        use yagra_base::pgtest;
+        let filler = yagra_base::repo::NODE_SCAN_MAX + 100;
+        sqlx::query(
+            "INSERT INTO nodes (id, name, address, sort_order)              SELECT gen_random_uuid(), 'a-' || lpad(i::text, 6, '0'), '198.51.100.0'::inet + i, i              FROM generate_series(1, $1) AS i",
+        )
+        .bind(filler)
+        .execute(&pool)
+        .await
+        .expect("insert the filler nodes");
+        let site = pgtest::group(&pool, "site").await;
+        sqlx::query("UPDATE node_groups SET tags = ARRAY['8x5x5'] WHERE id = $1")
+            .bind(site)
+            .execute(&pool)
+            .await
+            .expect("tag the folder");
+        let own = pgtest::node(&pool, "zz-own", 1, None).await;
+        let inherits = pgtest::node(&pool, "zz-inherits", 2, Some(site)).await;
+        let refuses = pgtest::node(&pool, "zz-refuses", 3, Some(site)).await;
+        sqlx::query("UPDATE nodes SET tags = ARRAY['8x5x5'] WHERE id = $1")
+            .bind(own)
+            .execute(&pool)
+            .await
+            .expect("tag the node");
+        sqlx::query("UPDATE nodes SET tags_excluded = ARRAY['8x5x5'] WHERE id = $1")
+            .bind(refuses)
+            .execute(&pool)
+            .await
+            .expect("refuse the folder's tag");
+        let st = live_state(pool).await;
+        let viewer = token(&st, yagra_common::Role::Viewer);
+
+        let (status, page) = send(
+            &st,
+            "GET",
+            "/api/v1/nodes?tag=8x5x5&limit=500",
+            &viewer,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        let mut got: Vec<String> = page["nodes"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|n| n["id"].as_str().expect("an id").to_owned())
+            .collect();
+        got.sort_unstable();
+        let mut want = vec![own.to_string(), inherits.to_string()];
+        want.sort_unstable();
+        assert_eq!(
+            got, want,
+            "own tag and folder tag, not the node that refuses it"
+        );
+        assert_eq!(page["truncated"], false, "every candidate was examined");
+
+        // The ceiling still means what it says when that many nodes really carry the tag.
+        let (status, page) = send(
+            &st,
+            "GET",
+            "/api/v1/nodes?state=unknown&limit=500",
+            &viewer,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        assert_eq!(
+            page["truncated"], true,
+            "an untaggable filter still reports the bound"
+        );
     }
 
     #[test]
