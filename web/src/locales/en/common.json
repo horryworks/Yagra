@@ -205,5 +205,14 @@
       "site": "Site",
       "recent": "Recent"
     }
+  },
+  "tagMatch": {
+    "label": "How the tags combine",
+    "any": "Has any",
+    "all": "Has all",
+    "or": "or",
+    "and": "and",
+    "open": "(",
+    "close": ")"
   }
 }

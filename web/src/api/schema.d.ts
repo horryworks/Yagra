@@ -2659,9 +2659,9 @@ export interface paths {
         /**
          * The tags in use or registered, with how many nodes carry each, so a routing rule can name a
          *     tag that exists rather than one typed from memory (ADR-259 Inc.2, ADR-263 Inc.2). Counted over every node's effective
-         *     labels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),
-         *     joined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones
-         *     those nodes keep time in.
+         *     labels, the same set a rule is matched against. `reach` (tags, combined by `reach_tag_match`)
+         *     and `reach_groups` (folders), joined by `reach_join`, add how many nodes such a setting reaches,
+         *     split by part, and the zones those nodes keep time in.
          */
         get: operations["list_node_tags"];
         put?: never;
@@ -8134,10 +8134,11 @@ export interface components {
             join?: null | components["schemas"]["Join"];
             name: string;
             severity?: string | null;
+            tag_match?: null | components["schemas"]["TagMatch"];
             /**
-             * @description Only alerts on a node carrying at least one of these among its effective labels (its own
-             *     plus its folders', minus the ones it refuses) reach the rule's channels. Empty = every
-             *     node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —
+             * @description Only alerts on a node carrying at least one of these (or every one, by `tag_match`) among
+             *     its effective labels (its own plus its folders', minus the ones it refuses) reach the rule's
+             *     channels. Empty = every node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —
              *     a client that predates the field must not widen a rule by saving it.
              */
             tags?: string[] | null;
@@ -9263,6 +9264,7 @@ export interface components {
             /** @description `or` (the default: inside one of the folders or carrying one of the tags) or `and` (both). */
             join?: components["schemas"]["Join"];
             level: components["schemas"]["GroupingLevel"];
+            tag_match?: null | components["schemas"]["TagMatch"];
             tags?: string[];
         };
         /** @description What took an overlap out of the open list. */
@@ -10054,8 +10056,8 @@ export interface components {
         };
         /**
          * @description One exception to the deployment's level (ADR-262 decision 2): every node inside one of
-         *     `group_ids` (at any depth) and/or carrying one of `tags` (`join`) groups at `level`. When several
-         *     reach one node, the weakest level wins.
+         *     `group_ids` (at any depth) and/or carrying one or all of `tags` (`tag_match`, then `join`)
+         *     groups at `level`. When several reach one node, the weakest level wins.
          */
         GroupingException: {
             group_ids: string[];
@@ -10064,6 +10066,8 @@ export interface components {
             /** @description How `group_ids` and `tags` combine when both are named. */
             join: components["schemas"]["Join"];
             level: components["schemas"]["GroupingLevel"];
+            /** @description How the `tags` combine among themselves (ADR-267): `any` or `all`. */
+            tag_match: components["schemas"]["TagMatch"];
             tags: string[];
         };
         /**
@@ -10751,7 +10755,8 @@ export interface components {
         };
         /**
          * @description How a setting's folders and its tags combine when it names both (ADR-262 decision 10). Inside
-         *     each list one entry is always enough; this joins the two lists.
+         *     the folder list one entry is always enough, inside the tag list `tag_match` decides (ADR-267),
+         *     and this joins the two lists.
          * @enum {string}
          */
         Join: "or" | "and";
@@ -15170,8 +15175,8 @@ export interface components {
         };
         /**
          * @description A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
-         *     `group_ids` and/or carries one of `tags` (`join`; both empty = every node) fan out to
-         *     `channel_ids`.
+         *     `group_ids` and/or carries one or all of `tags` (`tag_match`, then `join`; both empty = every
+         *     node) fan out to `channel_ids`.
          */
         RoutingRule: {
             channel_ids: string[];
@@ -15198,8 +15203,14 @@ export interface components {
             name: string;
             severity?: null | components["schemas"]["Severity"];
             /**
-             * @description The node must carry at least one of these among its effective labels - its own plus the
-             *     ones its folders supply, minus the ones it refuses (ADR-259). Empty means every node, and a
+             * @description How the `tags` combine among themselves (ADR-267): `any` (a node carrying one of them) or
+             *     `all` (a node carrying every one). Absent = `any`.
+             */
+            tag_match?: components["schemas"]["TagMatch"];
+            /**
+             * @description The node must carry one of these (or every one, by `tag_match`) among its effective labels -
+             *     its own plus the ones its folders supply, minus the ones it refuses (ADR-259). Empty means
+             *     every node, and a
              *     subject that is not a node (a poller pool, a Meraki organization) matches only an empty
              *     list. Compared exactly, case included, the way a node's own labels are stored.
              */
@@ -16236,6 +16247,12 @@ export interface components {
             nodes: number;
             tag: string;
         };
+        /**
+         * @description How a setting's tags combine among themselves (ADR-267 decision 1): a node carrying any one of
+         *     them, or one carrying every one. Only a list of two or more tags can tell the two apart.
+         * @enum {string}
+         */
+        TagMatch: "any" | "all";
         /**
          * @description What a tag rename or delete changed, per place (ADR-263). All zero means the tag was named
          *     nowhere, which is not an error.
@@ -27548,7 +27565,8 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Tags whose reach to count: how many nodes carry at least one of them. Separated by a
+                 * @description Tags whose reach to count: how many nodes carry one of them (or every one, by
+                 *     `reach_tag_match`). Separated by a
                  *     newline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma
                  *     is legal inside one. Absent = no reach in the reply.
                  */
@@ -27563,6 +27581,11 @@ export interface operations {
                  *     (ADR-262 decision 10), the way a rule or an exception naming them would.
                  */
                 reach_join?: null | components["schemas"]["Join"];
+                /**
+                 * @description How the `reach` tags combine among themselves: `any` (the default) or `all` (ADR-267), the
+                 *     way a rule or an exception naming them would.
+                 */
+                reach_tag_match?: null | components["schemas"]["TagMatch"];
             };
             header?: never;
             path?: never;
@@ -27833,10 +27856,13 @@ export interface operations {
                 pool?: string;
                 /**
                  * @description Comma-separated tags; a node is returned when its **effective** tags (its own, plus every
-                 *     one its folder chain supplies, minus the ones it excludes) hold **any** of them. Compared
-                 *     exactly as stored, since tags are case-sensitive. An unknown tag simply matches nothing.
+                 *     one its folder chain supplies, minus the ones it excludes) hold **any** of them, or **every**
+                 *     one with `tag_match=all`. Compared exactly as stored, since tags are case-sensitive. An
+                 *     unknown tag simply matches nothing.
                  */
                 tag?: string;
+                /** @description How the `tag` names combine (ADR-267): `any` (the default) or `all`. Read only with `tag`. */
+                tag_match?: components["schemas"]["TagMatch"];
             };
             header?: never;
             path?: never;
@@ -36270,12 +36296,17 @@ export interface operations {
                 rule_id?: string | null;
                 /** @description `critical`, `warning` or `info`. Omitted = any severity, and the week is drawn for critical. */
                 severity?: string | null;
-                /** @description Tags the node must carry one of, one per line (the way `GET /node-tags` takes `reach`). */
+                /**
+                 * @description Tags the node must carry one of (or every one, by `tag_match`), one per line (the way
+                 *     `GET /node-tags` takes `reach`).
+                 */
                 tags?: string | null;
                 /** @description Folder ids the node must be inside one of, comma-separated. */
                 group_ids?: string | null;
                 /** @description How folders and tags combine when both are given: `or` (the default) or `and`. */
                 join?: null | components["schemas"]["Join"];
+                /** @description How the tags combine among themselves: `any` (the default) or `all` (ADR-267). */
+                tag_match?: null | components["schemas"]["TagMatch"];
                 /** @description `always` (the default), `during` or `outside`. */
                 mode?: null | components["schemas"]["WhenMode"];
                 /** @description ISO weekdays of the window, comma-separated (1 = Monday .. 7 = Sunday). */

@@ -118,16 +118,17 @@ pub struct OpenChannel {
 }
 
 /// A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of
-/// `group_ids` and/or carries one of `tags` (`join`; both empty = every node) fan out to
-/// `channel_ids`.
+/// `group_ids` and/or carries one or all of `tags` (`tag_match`, then `join`; both empty = every
+/// node) fan out to `channel_ids`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RoutingRule {
     pub id: Uuid,
     pub name: String,
     pub enabled: bool,
     pub severity: Option<Severity>,
-    /// The node must carry at least one of these among its effective labels - its own plus the
-    /// ones its folders supply, minus the ones it refuses (ADR-259). Empty means every node, and a
+    /// The node must carry one of these (or every one, by `tag_match`) among its effective labels -
+    /// its own plus the ones its folders supply, minus the ones it refuses (ADR-259). Empty means
+    /// every node, and a
     /// subject that is not a node (a poller pool, a Meraki organization) matches only an empty
     /// list. Compared exactly, case included, the way a node's own labels are stored.
     pub tags: Vec<String>,
@@ -140,6 +141,10 @@ pub struct RoutingRule {
     /// node inside one of the folders or carrying one of the tags) or `and` (both). Absent = `or`.
     #[serde(default)]
     pub join: crate::alerts::applies_to::Join,
+    /// How the `tags` combine among themselves (ADR-267): `any` (a node carrying one of them) or
+    /// `all` (a node carrying every one). Absent = `any`.
+    #[serde(default)]
+    pub tag_match: crate::alerts::applies_to::TagMatch,
     pub channel_ids: Vec<Uuid>,
     /// When the rule is open (ADR-262 decision 3). Absent = always.
     #[serde(default)]
@@ -203,18 +208,20 @@ pub struct RuleEdit<'a> {
     pub tags: Option<&'a [String]>,
     pub group_ids: Option<&'a [Uuid]>,
     pub join: Option<crate::alerts::applies_to::Join>,
+    pub tag_match: Option<crate::alerts::applies_to::TagMatch>,
     pub channel_ids: &'a [Uuid],
     pub when: Option<&'a RuleWhen>,
     pub hold: Option<bool>,
     pub when_closed: Option<WhenClosed>,
 }
 
-/// Which nodes a new routing rule names (ADR-262 decisions 1 and 10).
+/// Which nodes a new routing rule names (ADR-262 decisions 1 and 10, ADR-267).
 #[derive(Debug, Clone, Copy)]
 pub struct RuleTarget<'a> {
     pub tags: &'a [String],
     pub group_ids: &'a [Uuid],
     pub join: crate::alerts::applies_to::Join,
+    pub tag_match: crate::alerts::applies_to::TagMatch,
 }
 
 #[cfg(test)]
@@ -226,6 +233,7 @@ impl<'a> RuleTarget<'a> {
             tags,
             group_ids,
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
         }
     }
 }
@@ -528,8 +536,8 @@ impl NotificationRepo {
     /// alert decides where it goes, so this is the order the notifier walks.
     pub async fn list_rules(&self) -> anyhow::Result<Vec<RoutingRule>> {
         let rows = sqlx::query(
-            "SELECT id, name, enabled, severity, tags, group_ids, join_and, channel_ids, when_mode, \
-             days, start_minute, end_minute, hold, hold_when_closed FROM routing_rules \
+            "SELECT id, name, enabled, severity, tags, group_ids, join_and, tags_all, channel_ids, \
+             when_mode, days, start_minute, end_minute, hold, hold_when_closed FROM routing_rules \
              ORDER BY position, created_at, id",
         )
         .fetch_all(&self.pool)
@@ -544,6 +552,9 @@ impl NotificationRepo {
                     tags: row.try_get("tags")?,
                     group_ids: row.try_get("group_ids")?,
                     join: crate::alerts::applies_to::Join::from_and(row.try_get("join_and")?),
+                    tag_match: crate::alerts::applies_to::TagMatch::from_all(
+                        row.try_get("tags_all")?,
+                    ),
                     channel_ids: row.try_get("channel_ids")?,
                     when: RuleWhen {
                         mode: WhenMode::from_i16(row.try_get("when_mode")?),
@@ -580,8 +591,9 @@ impl NotificationRepo {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, join_and, \
-             channel_ids, when_mode, days, start_minute, end_minute, hold, hold_when_closed) \
-             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+             channel_ids, when_mode, days, start_minute, end_minute, hold, hold_when_closed, \
+             tags_all) \
+             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(id)
         .bind(name)
@@ -596,6 +608,7 @@ impl NotificationRepo {
         .bind(minute_column(when.end_minute))
         .bind(holding.while_open)
         .bind(holding.when_closed.is_hold())
+        .bind(target.tag_match.is_all())
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -622,6 +635,7 @@ impl NotificationRepo {
             tags,
             group_ids,
             join,
+            tag_match,
             channel_ids,
             when,
             hold,
@@ -629,14 +643,16 @@ impl NotificationRepo {
         } = *edit;
         // `None` keeps the stored tags and folders: a client that predates them must not widen a
         // rule to every node by saving it (ADR-259, ADR-262). The same for what a closed rule
-        // does (ADR-266): a client that predates it must not stop a rule holding by saving it.
+        // does (ADR-266): a client that predates it must not stop a rule holding by saving it. And
+        // for how its tags combine (ADR-267): an older client must not widen an "all" rule.
         let res = sqlx::query(
             "UPDATE routing_rules SET name = $2, severity = $3, tags = COALESCE($4, tags), \
              group_ids = COALESCE($5, group_ids), channel_ids = $6, \
              when_mode = COALESCE($7, when_mode), days = COALESCE($8, days), \
              start_minute = COALESCE($9, start_minute), end_minute = COALESCE($10, end_minute), \
              join_and = COALESCE($11, join_and), hold = COALESCE($12, hold), \
-             hold_when_closed = COALESCE($13, hold_when_closed) \
+             hold_when_closed = COALESCE($13, hold_when_closed), \
+             tags_all = COALESCE($14, tags_all) \
              WHERE id = $1",
         )
         .bind(id)
@@ -652,6 +668,7 @@ impl NotificationRepo {
         .bind(join.map(crate::alerts::applies_to::Join::is_and))
         .bind(hold)
         .bind(when_closed.map(WhenClosed::is_hold))
+        .bind(tag_match.map(crate::alerts::applies_to::TagMatch::is_all))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -1256,6 +1273,7 @@ mod tests {
             tags: None,
             group_ids: None,
             join: None,
+            tag_match: None,
             channel_ids: &[],
             when: Some(&office),
             hold: None,
@@ -1322,6 +1340,7 @@ mod tests {
                     tags: None,
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1357,6 +1376,7 @@ mod tests {
                     tags: None,
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1396,6 +1416,7 @@ mod tests {
                     tags: Some(&tags),
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1414,6 +1435,7 @@ mod tests {
                     tags: None,
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1432,6 +1454,7 @@ mod tests {
                     tags: Some(&[]),
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1462,6 +1485,7 @@ mod tests {
                     tags: None,
                     group_ids: Some(&folders),
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1483,6 +1507,7 @@ mod tests {
                     tags: None,
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1504,6 +1529,7 @@ mod tests {
                     tags: None,
                     group_ids: Some(&[]),
                     join: None,
+                    tag_match: None,
                     channel_ids: &[b],
                     when: None,
                     hold: None,
@@ -1524,6 +1550,7 @@ mod tests {
                     tags: None,
                     group_ids: None,
                     join: None,
+                    tag_match: None,
                     channel_ids: &[a],
                     when: None,
                     hold: None,

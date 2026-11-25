@@ -2257,7 +2257,8 @@ fn rule_matches_severity(rule_severity: Option<Severity>, alert_severity: Severi
 pub type RuleReach = HashMap<Uuid, HashSet<NodeId>>;
 
 /// Match a routing rule against the subject (ADR-262 decisions 1 and 10): the rule's folders and
-/// tags, joined by its `join`, through [`crate::alerts::applies_to::reaches`]. A subject that is
+/// tags (one or all of them, by `tag_match`, ADR-267), joined by its `join`, through
+/// [`crate::alerts::applies_to::reaches`]. A subject that is
 /// not a node matches only the rule that names nothing.
 #[must_use]
 fn rule_matches_target(
@@ -2270,6 +2271,7 @@ fn rule_matches_target(
         &rule.group_ids,
         &rule.tags,
         rule.join,
+        rule.tag_match,
         || node.is_some_and(|n| reach.get(&rule.id).is_some_and(|set| set.contains(&n))),
         node_tags,
     )
@@ -3297,6 +3299,7 @@ mod delivery_tests {
             tags: Vec::new(),
             group_ids: Vec::new(),
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
             channel_ids: vec![channel],
             when: crate::alerts::notifications::RuleWhen::default(),
             hold: false,
@@ -3336,6 +3339,7 @@ mod delivery_tests {
             &[],
             rule_tags,
             crate::alerts::applies_to::Join::Or,
+            crate::alerts::applies_to::TagMatch::Any,
             || false,
             node_tags,
         )
@@ -3361,6 +3365,32 @@ mod delivery_tests {
         );
     }
 
+    /// ADR-267: the rule's own `tag_match` is what the notifier asks with. A rule asking for every
+    /// tag passes over a node carrying only one of them; the same rule asking for any reaches it.
+    #[test]
+    fn a_rule_asking_for_every_tag_passes_over_a_node_carrying_one() {
+        let channel = Uuid::new_v4();
+        let all = RoutingRule {
+            tag_match: crate::alerts::applies_to::TagMatch::All,
+            ..tagged_rule(channel, &["core", "24x7"])
+        };
+        let any = RoutingRule {
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
+            ..all.clone()
+        };
+        let node = Some(NodeId::new());
+        let reach = RuleReach::new();
+        let one = ["core".to_owned(), "tokyo".to_owned()];
+        let both = ["24x7".to_owned(), "core".to_owned()];
+        assert!(!rule_matches_target(&all, &one, node, &reach));
+        assert!(rule_matches_target(&all, &both, node, &reach));
+        assert!(rule_matches_target(&any, &one, node, &reach));
+        assert!(
+            !rule_matches_target(&all, &[], None, &reach),
+            "a subject that is not a node matches only a rule naming nothing"
+        );
+    }
+
     /// ADR-262 decision 1: a rule names folders and tags together, and either reaches a node. A
     /// folder reaches every node filed beneath it, at any depth; a subject that is not a node, or
     /// a node nowhere in the reach, matches only a rule that names nothing.
@@ -3378,6 +3408,7 @@ mod delivery_tests {
         let mixed = RoutingRule {
             group_ids: vec![site],
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
             ..tagged_rule(channel, &["core"])
         };
         let every = rule(channel, None);

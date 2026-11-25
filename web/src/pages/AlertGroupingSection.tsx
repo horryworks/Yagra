@@ -105,6 +105,7 @@ export function AlertGroupingSection({
             groupIds={x.group_ids}
             tags={x.tags}
             join={x.join}
+            tagMatch={x.tag_match}
             groups={groups}
             nodeTags={nodeTags}
           />
@@ -292,7 +293,12 @@ function ExceptionModal({
   const { t } = useTranslation('alertsConfig');
   // An exception always names something, so the switch to "every node" is not offered.
   const [initial] = useState<AppliesTo>(() => ({
-    ...appliesToFrom(exception?.group_ids ?? [], exception?.tags ?? [], exception?.join),
+    ...appliesToFrom(
+      exception?.group_ids ?? [],
+      exception?.tags ?? [],
+      exception?.join,
+      exception?.tag_match,
+    ),
     only: true,
   }));
   const [target, setTarget] = useState<AppliesTo>(initial);
@@ -302,7 +308,13 @@ function ExceptionModal({
 
   const submit = () => {
     if (empty) return;
-    const body = { group_ids: target.groupIds, tags: target.tags, join: target.join, level };
+    const body = {
+      group_ids: target.groupIds,
+      tags: target.tags,
+      join: target.join,
+      tag_match: target.tagMatch,
+      level,
+    };
     form.submit(() =>
       (exception
         ? api.updateGroupingException(exception.id, body)

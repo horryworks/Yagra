@@ -38,7 +38,7 @@ import {
 // its order — healthy first, then problems, then the neutral two — is the one the control wants.
 import { DISPLAY_ORDER, PROBLEM_STATES } from '../lib/nodeState';
 import { NODE_KIND_SPEC } from '../lib/nodeKind';
-import { NODE_KINDS, type NodeState } from '../types/api';
+import { NODE_KINDS, type NodeState, type TagMatch } from '../types/api';
 import type { TFunction } from 'i18next';
 
 /** The URL key the tree's search box writes its term to (ADR-153).
@@ -96,7 +96,36 @@ export function inventoryFilterSpecs(
       options: [],
       allLabel: t('inventory.filter.allTags'),
     },
+    // ADR-267. Has any / has all for `tag`, drawn inside the Tag section rather than as a list of
+    // its own, and said in the Tag chip rather than in a chip of its own. A column for the reason
+    // `tag` is one: the URL key and "clear all filters" come with it. Empty is "any", what every
+    // link written before it meant.
+    [TAG_MATCH_COLUMN]: {
+      kind: 'enum',
+      options: [{ value: 'all', label: t('common:tagMatch.all') }],
+      allLabel: t('common:tagMatch.any'),
+    },
   };
+}
+
+/** The URL key (and filter column) that says whether a node must carry every chosen tag. */
+export const TAG_MATCH_COLUMN = 'tag_match';
+
+/** How the chosen tags combine, read from the filters: `all` only when the column says so. */
+export function tagMatchOf(f: FilterState): TagMatch {
+  return f[TAG_MATCH_COLUMN] === 'all' ? 'all' : 'any';
+}
+
+/** Set the chosen tags. Choosing none also forgets has any / has all, so a cleared Tag section
+ *  leaves nothing behind in the URL; choosing fewer than two keeps it, so ticking a second tag
+ *  again restores what the operator picked (ADR-267 decision 6). */
+export function withTags(f: FilterState, tag: string): FilterState {
+  return { ...f, tag, [TAG_MATCH_COLUMN]: tag === '' ? '' : (f[TAG_MATCH_COLUMN] ?? '') };
+}
+
+/** Set has any / has all. */
+export function withTagMatch(f: FilterState, m: TagMatch): FilterState {
+  return { ...f, [TAG_MATCH_COLUMN]: m === 'all' ? 'all' : '' };
 }
 
 export function inventoryColumns(
@@ -113,6 +142,7 @@ export function inventoryFilterLabels(t: TFunction): Record<string, string> {
     kind: t('inventory.cols.kind'),
     pool: t('inventory.cols.pool'),
     tag: t('inventory.cols.tag'),
+    [TAG_MATCH_COLUMN]: t('common:tagMatch.label'),
   };
 }
 
@@ -126,12 +156,15 @@ export function inventoryQuery(f: FilterState): {
   kind?: string;
   pool?: string;
   tag?: string;
+  tag_match?: TagMatch;
 } {
   return {
     state: f.state || undefined,
     kind: f.kind || undefined,
     pool: f.pool || undefined,
     tag: f.tag || undefined,
+    // Sent only beside a tag, and only when it changes the answer: `any` is the server's default.
+    tag_match: f.tag && tagMatchOf(f) === 'all' ? 'all' : undefined,
   };
 }
 
@@ -147,7 +180,7 @@ export function inventoryQuery(f: FilterState): {
 export function inventoryKey(f: FilterState): string {
   // A tag may hold a space, so the tag part is JSON-quoted: `a b` + `c` and `a` + `b c` must not
   // produce one key.
-  return `${f.state ?? ''} ${f.kind ?? ''} ${f.pool ?? ''} ${JSON.stringify(f.tag ?? '')}`;
+  return `${f.state ?? ''} ${f.kind ?? ''} ${f.pool ?? ''} ${JSON.stringify(f.tag ?? '')} ${tagMatchOf(f)}`;
 }
 
 /** Whether anything is narrowing the tree. */
@@ -294,6 +327,8 @@ export type InventoryChip =
   | { kind: 'pinned' }
   | { kind: 'attention' }
   | { kind: 'column'; key: string; values: string[] }
+  /** The tag column, which says between its tags whether any or every one is needed (ADR-267). */
+  | { kind: 'tags'; values: string[]; all: boolean }
   | { kind: 'hideEmpty' };
 
 /** What the chip row shows, and — its length — the number on the filter button.
@@ -316,8 +351,15 @@ export function inventoryChips(
   if (attention) out.push({ kind: 'attention' });
   for (const c of columns) {
     if (c.key === 'state' && attention) continue;
+    // Has any / has all is said inside the Tag chip; on its own it narrows nothing.
+    if (c.key === TAG_MATCH_COLUMN) continue;
     const values = decodeSet(filters[c.key] ?? '');
-    if (values.length > 0) out.push({ kind: 'column', key: c.key, values });
+    if (values.length === 0) continue;
+    out.push(
+      c.key === 'tag'
+        ? { kind: 'tags', values, all: tagMatchOf(filters) === 'all' }
+        : { kind: 'column', key: c.key, values },
+    );
   }
   if (opts.hideEmpty) out.push({ kind: 'hideEmpty' });
   return out;

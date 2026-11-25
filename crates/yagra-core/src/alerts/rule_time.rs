@@ -452,6 +452,7 @@ pub fn coverage_in_slots(
                     &r.group_ids,
                     &r.tags,
                     r.join,
+                    r.tag_match,
                     &chain,
                     &n.tags,
                 )
@@ -527,6 +528,7 @@ impl PlaceRoutes {
                         &r.group_ids,
                         &r.tags,
                         r.join,
+                        r.tag_match,
                         &chain,
                         tags,
                     )
@@ -610,6 +612,7 @@ mod tests {
             tags: Vec::new(),
             group_ids: Vec::new(),
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
             channel_ids: vec![channel],
             when: RuleWhen {
                 mode,
@@ -984,6 +987,7 @@ mod tests {
         let day = RoutingRule {
             group_ids: vec![site],
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
             ..rule(mail, WhenMode::During)
         };
         let core = RoutingRule {

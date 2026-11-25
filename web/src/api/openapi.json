@@ -12688,13 +12688,13 @@
         "tags": [
           "notifications"
         ],
-        "summary": "The tags in use or registered, with how many nodes carry each, so a routing rule can name a\ntag that exists rather than one typed from memory (ADR-259 Inc.2, ADR-263 Inc.2). Counted over every node's effective\nlabels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),\njoined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones\nthose nodes keep time in.",
+        "summary": "The tags in use or registered, with how many nodes carry each, so a routing rule can name a\ntag that exists rather than one typed from memory (ADR-259 Inc.2, ADR-263 Inc.2). Counted over every node's effective\nlabels, the same set a rule is matched against. `reach` (tags, combined by `reach_tag_match`)\nand `reach_groups` (folders), joined by `reach_join`, add how many nodes such a setting reaches,\nsplit by part, and the zones those nodes keep time in.",
         "operationId": "list_node_tags",
         "parameters": [
           {
             "name": "reach",
             "in": "query",
-            "description": "Tags whose reach to count: how many nodes carry at least one of them. Separated by a\nnewline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma\nis legal inside one. Absent = no reach in the reply.",
+            "description": "Tags whose reach to count: how many nodes carry one of them (or every one, by\n`reach_tag_match`). Separated by a\nnewline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma\nis legal inside one. Absent = no reach in the reply.",
             "required": false,
             "schema": {
               "type": [
@@ -12727,6 +12727,22 @@
                 },
                 {
                   "$ref": "#/components/schemas/Join"
+                }
+              ]
+            }
+          },
+          {
+            "name": "reach_tag_match",
+            "in": "query",
+            "description": "How the `reach` tags combine among themselves: `any` (the default) or `all` (ADR-267), the\nway a rule or an exception naming them would.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/TagMatch"
                 }
               ]
             }
@@ -13063,10 +13079,19 @@
           {
             "name": "tag",
             "in": "query",
-            "description": "Comma-separated tags; a node is returned when its **effective** tags (its own, plus every\none its folder chain supplies, minus the ones it excludes) hold **any** of them. Compared\nexactly as stored, since tags are case-sensitive. An unknown tag simply matches nothing.",
+            "description": "Comma-separated tags; a node is returned when its **effective** tags (its own, plus every\none its folder chain supplies, minus the ones it excludes) hold **any** of them, or **every**\none with `tag_match=all`. Compared exactly as stored, since tags are case-sensitive. An\nunknown tag simply matches nothing.",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "tag_match",
+            "in": "query",
+            "description": "How the `tag` names combine (ADR-267): `any` (the default) or `all`. Read only with `tag`.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TagMatch"
             }
           }
         ],
@@ -23699,7 +23724,7 @@
           {
             "name": "tags",
             "in": "query",
-            "description": "Tags the node must carry one of, one per line (the way `GET /node-tags` takes `reach`).",
+            "description": "Tags the node must carry one of (or every one, by `tag_match`), one per line (the way\n`GET /node-tags` takes `reach`).",
             "required": false,
             "schema": {
               "type": [
@@ -23732,6 +23757,22 @@
                 },
                 {
                   "$ref": "#/components/schemas/Join"
+                }
+              ]
+            }
+          },
+          {
+            "name": "tag_match",
+            "in": "query",
+            "description": "How the tags combine among themselves: `any` (the default) or `all` (ADR-267).",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/TagMatch"
                 }
               ]
             }
@@ -33500,6 +33541,17 @@
               "null"
             ]
           },
+          "tag_match": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TagMatch",
+                "description": "How the `tags` combine among themselves (ADR-267): `any` (a node carrying one of them) or\n`all` (a node carrying every one). Omitted on a create = `any`; omitted on an edit, the rule\nkeeps its own."
+              }
+            ]
+          },
           "tags": {
             "type": [
               "array",
@@ -33508,7 +33560,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Only alerts on a node carrying at least one of these among its effective labels (its own\nplus its folders', minus the ones it refuses) reach the rule's channels. Empty = every\nnode. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —\na client that predates the field must not widen a rule by saving it."
+            "description": "Only alerts on a node carrying at least one of these (or every one, by `tag_match`) among\nits effective labels (its own plus its folders', minus the ones it refuses) reach the rule's\nchannels. Empty = every node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —\na client that predates the field must not widen a rule by saving it."
           },
           "when": {
             "oneOf": [
@@ -36046,6 +36098,17 @@
           "level": {
             "$ref": "#/components/schemas/GroupingLevel"
           },
+          "tag_match": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TagMatch",
+                "description": "`any` (a node carrying one of the tags) or `all` (one carrying every one, ADR-267). Omitted\non a create = `any`; omitted on an edit, the exception keeps its own."
+              }
+            ]
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -37481,12 +37544,13 @@
       },
       "GroupingException": {
         "type": "object",
-        "description": "One exception to the deployment's level (ADR-262 decision 2): every node inside one of\n`group_ids` (at any depth) and/or carrying one of `tags` (`join`) groups at `level`. When several\nreach one node, the weakest level wins.",
+        "description": "One exception to the deployment's level (ADR-262 decision 2): every node inside one of\n`group_ids` (at any depth) and/or carrying one or all of `tags` (`tag_match`, then `join`)\ngroups at `level`. When several reach one node, the weakest level wins.",
         "required": [
           "id",
           "group_ids",
           "tags",
           "join",
+          "tag_match",
           "level"
         ],
         "properties": {
@@ -37507,6 +37571,10 @@
           },
           "level": {
             "$ref": "#/components/schemas/GroupingLevel"
+          },
+          "tag_match": {
+            "$ref": "#/components/schemas/TagMatch",
+            "description": "How the `tags` combine among themselves (ADR-267): `any` or `all`."
           },
           "tags": {
             "type": "array",
@@ -38895,7 +38963,7 @@
       },
       "Join": {
         "type": "string",
-        "description": "How a setting's folders and its tags combine when it names both (ADR-262 decision 10). Inside\neach list one entry is always enough; this joins the two lists.",
+        "description": "How a setting's folders and its tags combine when it names both (ADR-262 decision 10). Inside\nthe folder list one entry is always enough, inside the tag list `tag_match` decides (ADR-267),\nand this joins the two lists.",
         "enum": [
           "or",
           "and"
@@ -47884,7 +47952,7 @@
       },
       "RoutingRule": {
         "type": "object",
-        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of\n`group_ids` and/or carries one of `tags` (`join`; both empty = every node) fan out to\n`channel_ids`.",
+        "description": "A routing rule: enabled alerts of `severity` (None = any) whose node is inside one of\n`group_ids` and/or carries one or all of `tags` (`tag_match`, then `join`; both empty = every\nnode) fan out to `channel_ids`.",
         "required": [
           "id",
           "name",
@@ -47936,12 +48004,16 @@
               }
             ]
           },
+          "tag_match": {
+            "$ref": "#/components/schemas/TagMatch",
+            "description": "How the `tags` combine among themselves (ADR-267): `any` (a node carrying one of them) or\n`all` (a node carrying every one). Absent = `any`."
+          },
           "tags": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "The node must carry at least one of these among its effective labels - its own plus the\nones its folders supply, minus the ones it refuses (ADR-259). Empty means every node, and a\nsubject that is not a node (a poller pool, a Meraki organization) matches only an empty\nlist. Compared exactly, case included, the way a node's own labels are stored."
+            "description": "The node must carry one of these (or every one, by `tag_match`) among its effective labels -\nits own plus the ones its folders supply, minus the ones it refuses (ADR-259). Empty means\nevery node, and a\nsubject that is not a node (a poller pool, a Meraki organization) matches only an empty\nlist. Compared exactly, case included, the way a node's own labels are stored."
           },
           "when": {
             "$ref": "#/components/schemas/RuleWhen",
@@ -50082,6 +50154,14 @@
             "type": "string"
           }
         }
+      },
+      "TagMatch": {
+        "type": "string",
+        "description": "How a setting's tags combine among themselves (ADR-267 decision 1): a node carrying any one of\nthem, or one carrying every one. Only a list of two or more tags can tell the two apart.",
+        "enum": [
+          "any",
+          "all"
+        ]
       },
       "TagRewritten": {
         "type": "object",

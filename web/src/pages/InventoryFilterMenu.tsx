@@ -29,7 +29,15 @@ import {
   type FilterState,
   type FilterableColumn,
 } from '../lib/columnFilter';
-import { inventoryChips, type InventoryChip } from './inventoryFilters';
+import { TAG_WORD } from '../lib/tagMatch';
+import {
+  TAG_MATCH_COLUMN,
+  inventoryChips,
+  tagMatchOf,
+  withTagMatch,
+  withTags,
+  type InventoryChip,
+} from './inventoryFilters';
 import { TagFilterSection } from './TagFilterSection';
 import './InventoryFilterMenu.css';
 
@@ -158,10 +166,14 @@ export function InventoryFilterButton(p: InventoryFilterProps) {
                   key={c.key}
                   label={p.labels[c.key] ?? c.key}
                   value={p.filters[c.key] ?? ''}
-                  onChange={(next) => p.onChange({ ...p.filters, [c.key]: next })}
+                  onChange={(next) => p.onChange(withTags(p.filters, next))}
+                  match={tagMatchOf(p.filters)}
+                  onMatch={(m) => p.onChange(withTagMatch(p.filters, m))}
                 />
               );
             }
+            // Has any / has all is drawn inside the Tag section above (ADR-267).
+            if (c.key === TAG_MATCH_COLUMN) return null;
             if (c.filter.kind !== 'enum' || c.filter.options.length === 0) return null;
             const order = c.filter.options.map((o) => o.value);
             const chosen = new Set(decodeSet(p.filters[c.key] ?? ''));
@@ -225,6 +237,11 @@ export function InventoryFilterChips(p: InventoryFilterProps) {
         return t('inventory.needAttentionOnly');
       case 'hideEmpty':
         return t('inventory.chips.emptyHidden');
+      case 'tags': {
+        // Two or more tags always say how they combine (ADR-267 decision 6).
+        const word = t(c.all ? TAG_WORD.all : TAG_WORD.any);
+        return `${p.labels.tag ?? 'tag'}: ${c.values.join(` ${word} `)}`;
+      }
       case 'column': {
         const spec = p.columns.find((x) => x.key === c.key)?.filter;
         // A value the list does not offer (a pool named in a link opened before the pools arrived
@@ -247,6 +264,8 @@ export function InventoryFilterChips(p: InventoryFilterProps) {
         return p.onAttention();
       case 'hideEmpty':
         return p.onHideEmpty(false);
+      case 'tags':
+        return p.onChange(withTags(p.filters, ''));
       case 'column':
         return p.onChange({ ...p.filters, [c.key]: '' });
       default: {

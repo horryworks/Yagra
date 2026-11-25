@@ -21,8 +21,12 @@ import {
   isInventoryFiltered,
   NODE_STATE_FILTERS,
   readInventoryFilters,
+  TAG_MATCH_COLUMN,
+  tagMatchOf,
   toggleAttention,
   truncationNotice,
+  withTagMatch,
+  withTags,
   writeInventoryFilters,
 } from './inventoryFilters';
 
@@ -83,6 +87,7 @@ describe('inventoryQuery', () => {
       kind: undefined,
       pool: undefined,
       tag: undefined,
+      tag_match: undefined,
     });
   });
 
@@ -107,10 +112,13 @@ describe('isInventoryFiltered', () => {
   it('is false at the defaults and flips for every field', () => {
     expect(isInventoryFiltered(DEFAULTS)).toBe(false);
     for (const c of COLS) {
+      // Has any / has all says how the tags combine; with no tag it narrows nothing (ADR-267).
+      if (c.key === TAG_MATCH_COLUMN) continue;
       // Every field: a filter added without a case here would leave the tree showing "nothing
       // matches" while rows are hidden, which is the failure `ui-conventions` names.
       expect(isInventoryFiltered(f({ [c.key]: 'x' }))).toBe(true);
     }
+    expect(isInventoryFiltered(f({ [TAG_MATCH_COLUMN]: 'all' }))).toBe(false);
   });
 });
 
@@ -343,5 +351,54 @@ describe('the chips under the inventory head (ADR-177)', () => {
     expect(inventoryChips(COLS, f, none)).toEqual([
       { kind: 'column', key: 'state', values: ['ok', 'warning'] },
     ]);
+  });
+});
+
+describe('has any / has all on the tag filter (ADR-267)', () => {
+  const none = { pinnedOnly: false, hideEmpty: false };
+
+  it('reads any from a link that never named it, and all only when it says so', () => {
+    expect(tagMatchOf(readInventoryFilters(COLS, new URLSearchParams('tag=core,24x7')))).toBe('any');
+    const all = readInventoryFilters(COLS, new URLSearchParams('tag=core,24x7&tag_match=all'));
+    expect(tagMatchOf(all)).toBe('all');
+    expect(
+      tagMatchOf(readInventoryFilters(COLS, new URLSearchParams('tag=core&tag_match=most'))),
+    ).toBe('any');
+  });
+
+  it('sends tag_match only beside a tag, and only when it is all', () => {
+    expect(inventoryQuery(f({ tag: 'core,24x7', [TAG_MATCH_COLUMN]: 'all' })).tag_match).toBe('all');
+    expect(inventoryQuery(f({ tag: 'core,24x7' })).tag_match).toBeUndefined();
+    expect(inventoryQuery(f({ [TAG_MATCH_COLUMN]: 'all' })).tag_match).toBeUndefined();
+  });
+
+  it('writes all into the URL and leaves the key out for any', () => {
+    const p = new URLSearchParams();
+    writeInventoryFilters(COLS, p, withTagMatch(f({ tag: 'core,24x7' }), 'all'));
+    expect(p.get('tag_match')).toBe('all');
+    writeInventoryFilters(COLS, p, withTagMatch(f({ tag: 'core,24x7' }), 'any'));
+    expect(p.has('tag_match')).toBe(false);
+  });
+
+  it('keeps the chosen side down to one tag and forgets it when no tag is left', () => {
+    const all = withTagMatch(f({ tag: 'core,24x7' }), 'all');
+    expect(tagMatchOf(withTags(all, 'core'))).toBe('all');
+    expect(withTags(all, '')[TAG_MATCH_COLUMN]).toBe('');
+  });
+
+  it('tells the two apart in the key, so switching re-asks the server', () => {
+    expect(inventoryKey(f({ tag: 'core,24x7' }))).not.toBe(
+      inventoryKey(f({ tag: 'core,24x7', [TAG_MATCH_COLUMN]: 'all' })),
+    );
+  });
+
+  it('says it inside the Tag chip, never as a chip of its own', () => {
+    expect(inventoryChips(COLS, f({ tag: 'core,24x7', [TAG_MATCH_COLUMN]: 'all' }), none)).toEqual([
+      { kind: 'tags', values: ['core', '24x7'], all: true },
+    ]);
+    expect(inventoryChips(COLS, f({ tag: 'core' }), none)).toEqual([
+      { kind: 'tags', values: ['core'], all: false },
+    ]);
+    expect(inventoryChips(COLS, f({ [TAG_MATCH_COLUMN]: 'all' }), none)).toEqual([]);
   });
 });

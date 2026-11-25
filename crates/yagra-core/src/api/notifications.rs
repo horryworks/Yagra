@@ -1036,7 +1036,8 @@ async fn list_routing_rules(
 /// The tags nodes carry, for the routing rule's tag picker (ADR-259 Inc.2).
 #[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
 pub(super) struct NodeTagsQuery {
-    /// Tags whose reach to count: how many nodes carry at least one of them. Separated by a
+    /// Tags whose reach to count: how many nodes carry one of them (or every one, by
+    /// `reach_tag_match`). Separated by a
     /// newline (`%0A`), which no tag can contain — a tag refuses control characters, while a comma
     /// is legal inside one. Absent = no reach in the reply.
     reach: Option<String>,
@@ -1046,6 +1047,9 @@ pub(super) struct NodeTagsQuery {
     /// How `reach` and `reach_groups` combine when both are given: `or` (the default) or `and`
     /// (ADR-262 decision 10), the way a rule or an exception naming them would.
     reach_join: Option<crate::alerts::applies_to::Join>,
+    /// How the `reach` tags combine among themselves: `any` (the default) or `all` (ADR-267), the
+    /// way a rule or an exception naming them would.
+    reach_tag_match: Option<crate::alerts::applies_to::TagMatch>,
 }
 
 /// One tag some node carries, and on how many nodes.
@@ -1125,6 +1129,7 @@ struct Reach {
     /// `None` when the question named no folder.
     folders: Option<std::collections::HashSet<Uuid>>,
     join: crate::alerts::applies_to::Join,
+    tag_match: crate::alerts::applies_to::TagMatch,
     /// Each folder's zone: its own or its nearest ancestor's.
     zones: std::collections::HashMap<Uuid, String>,
     /// The zone a node with no zoned folder keeps time in.
@@ -1158,8 +1163,8 @@ fn count_node_tags(
                 .folders
                 .as_ref()
                 .map(|set| row.group_id.is_some_and(|g| set.contains(&g)));
-            let by_tag =
-                (!want.tags.is_empty()).then(|| want.tags.iter().any(|w| tags.contains(w)));
+            let by_tag = (!want.tags.is_empty())
+                .then(|| crate::alerts::applies_to::carries(&tags, &want.tags, want.tag_match));
             if crate::alerts::applies_to::joined(by_folder, by_tag, want.join) {
                 reached += 1;
                 *zones.entry(zone_of(want, row.group_id)).or_default() += 1;
@@ -1214,9 +1219,9 @@ fn reach_tags(raw: &str) -> Vec<String> {
 
 /// The tags in use or registered, with how many nodes carry each, so a routing rule can name a
 /// tag that exists rather than one typed from memory (ADR-259 Inc.2, ADR-263 Inc.2). Counted over every node's effective
-/// labels, the same set a rule is matched against. `reach` (tags) and `reach_groups` (folders),
-/// joined by `reach_join`, add how many nodes such a setting reaches, split by part, and the zones
-/// those nodes keep time in.
+/// labels, the same set a rule is matched against. `reach` (tags, combined by `reach_tag_match`)
+/// and `reach_groups` (folders), joined by `reach_join`, add how many nodes such a setting reaches,
+/// split by part, and the zones those nodes keep time in.
 #[utoipa::path(
     get, path = "/api/v1/node-tags", tag = "notifications",
     params(NodeTagsQuery),
@@ -1238,6 +1243,7 @@ async fn list_node_tags(
             q.reach.as_deref(),
             q.reach_groups.as_deref(),
             q.reach_join.unwrap_or_default(),
+            q.reach_tag_match.unwrap_or_default(),
         )
         .await?,
     ))
@@ -1249,6 +1255,7 @@ pub(crate) async fn node_tags_in(
     reach: Option<&str>,
     reach_groups: Option<&str>,
     join: crate::alerts::applies_to::Join,
+    tag_match: crate::alerts::applies_to::TagMatch,
 ) -> ApiResult<NodeTags> {
     let fail = |e: anyhow::Error| {
         ApiError::from_internal(e.as_ref(), "list node tags", "failed to list node tags")
@@ -1286,6 +1293,7 @@ pub(crate) async fn node_tags_in(
             })
             .filter(|set| !set.is_empty()),
         join,
+        tag_match,
         zones,
         default_zone,
     });
@@ -1493,12 +1501,15 @@ pub(super) struct RulePreviewQuery {
     rule_id: Option<Uuid>,
     /// `critical`, `warning` or `info`. Omitted = any severity, and the week is drawn for critical.
     severity: Option<String>,
-    /// Tags the node must carry one of, one per line (the way `GET /node-tags` takes `reach`).
+    /// Tags the node must carry one of (or every one, by `tag_match`), one per line (the way
+    /// `GET /node-tags` takes `reach`).
     tags: Option<String>,
     /// Folder ids the node must be inside one of, comma-separated.
     group_ids: Option<String>,
     /// How folders and tags combine when both are given: `or` (the default) or `and`.
     join: Option<crate::alerts::applies_to::Join>,
+    /// How the tags combine among themselves: `any` (the default) or `all` (ADR-267).
+    tag_match: Option<crate::alerts::applies_to::TagMatch>,
     /// `always` (the default), `during` or `outside`.
     mode: Option<crate::alerts::notifications::WhenMode>,
     /// ISO weekdays of the window, comma-separated (1 = Monday .. 7 = Sunday).
@@ -1615,6 +1626,7 @@ async fn preview_in(
         )?,
         group_ids: id_list(q.group_ids.as_deref(), "group_ids")?,
         join: q.join.unwrap_or_default(),
+        tag_match: q.tag_match.unwrap_or_default(),
         channel_ids: id_list(q.channel_ids.as_deref(), "channel_ids")?,
         when: checked_when(&RuleWhen {
             mode: q.mode.unwrap_or_default(),
@@ -1661,6 +1673,7 @@ async fn preview_in(
                 &draft.group_ids,
                 &draft.tags,
                 draft.join,
+                draft.tag_match,
                 &chain,
                 &n.tags,
             )
@@ -1851,9 +1864,9 @@ async fn get_notification_default_route(
 pub(super) struct CreateRule {
     name: String,
     severity: Option<String>,
-    /// Only alerts on a node carrying at least one of these among its effective labels (its own
-    /// plus its folders', minus the ones it refuses) reach the rule's channels. Empty = every
-    /// node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —
+    /// Only alerts on a node carrying at least one of these (or every one, by `tag_match`) among
+    /// its effective labels (its own plus its folders', minus the ones it refuses) reach the rule's
+    /// channels. Empty = every node. Compared exactly, case included. Omitted on an edit, the rule keeps the tags it has —
     /// a client that predates the field must not widen a rule by saving it.
     #[serde(default)]
     tags: Option<Vec<String>>,
@@ -1867,6 +1880,11 @@ pub(super) struct CreateRule {
     /// create = `or`; omitted on an edit, the rule keeps its own.
     #[serde(default)]
     join: Option<crate::alerts::applies_to::Join>,
+    /// How the `tags` combine among themselves (ADR-267): `any` (a node carrying one of them) or
+    /// `all` (a node carrying every one). Omitted on a create = `any`; omitted on an edit, the rule
+    /// keeps its own.
+    #[serde(default)]
+    tag_match: Option<crate::alerts::applies_to::TagMatch>,
     channel_ids: Vec<Uuid>,
     /// When the rule is open (ADR-262): `always`, or `during` / `outside` a weekly window read in
     /// the node's own zone. A window needs at least one ISO weekday (1 = Monday .. 7 = Sunday);
@@ -1978,6 +1996,7 @@ async fn create_routing_rule(
                 tags: &rule.tags.unwrap_or_default(),
                 group_ids: body.group_ids.as_deref().unwrap_or_default(),
                 join: body.join.unwrap_or_default(),
+                tag_match: body.tag_match.unwrap_or_default(),
             },
             &body.channel_ids,
             &rule.when.clone().unwrap_or_default(),
@@ -2061,6 +2080,7 @@ async fn update_routing_rule(
                 tags: rule.tags.as_deref(),
                 group_ids: body.group_ids.as_deref(),
                 join: body.join,
+                tag_match: body.tag_match,
                 channel_ids: &body.channel_ids,
                 when: rule.when.as_ref(),
                 hold: body.hold,
@@ -3572,6 +3592,103 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(body["error"]["code"], "invalid_tag", "{body}");
     }
 
+    /// ADR-267: a rule asks for any of its tags unless told `all`; an edit that omits `tag_match`
+    /// keeps the rule's own (an older client must not widen an "all" rule by saving it), and one
+    /// that names it changes it.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_asking_for_every_tag_keeps_it_through_an_edit_that_omits_it(
+        pool: sqlx::PgPool,
+    ) {
+        use crate::api::tests_support::{live_state, send, token};
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let create = |name: &str, tag_match: Option<&str>| {
+            let mut body = serde_json::json!({
+                "name": name, "severity": null, "tags": ["core", "24x7"], "channel_ids": [],
+            });
+            if let Some(m) = tag_match {
+                body["tag_match"] = serde_json::json!(m);
+            }
+            body
+        };
+        let (status, plain) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(create("plain", None)),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{plain}");
+        let (status, every) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(create("every", Some("all"))),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{every}");
+        let every_id = every["id"].as_str().unwrap().to_owned();
+        let list = || async {
+            let (status, list) = send(&st, "GET", "/api/v1/routing-rules", &tok, None).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "{list}");
+            list
+        };
+        let match_of = |list: &serde_json::Value, name: &str| {
+            list.as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["name"] == name)
+                .expect("rule")["tag_match"]
+                .clone()
+        };
+        let now = list().await;
+        assert_eq!(match_of(&now, "plain"), "any", "omitted on a create = any");
+        assert_eq!(match_of(&now, "every"), "all");
+
+        let path = format!("/api/v1/routing-rules/{every_id}/definition");
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({ "name": "every", "severity": null, "channel_ids": [] })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(
+            match_of(&list().await, "every"),
+            "all",
+            "an edit that did not name tag_match widened the rule"
+        );
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &path,
+            &tok,
+            Some(serde_json::json!({
+                "name": "every", "severity": null, "channel_ids": [], "tag_match": "any",
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NO_CONTENT, "{body}");
+        assert_eq!(match_of(&list().await, "every"), "any");
+        let (status, _) = send(
+            &st,
+            "POST",
+            "/api/v1/routing-rules",
+            &tok,
+            Some(create("bad", Some("most"))),
+        )
+        .await;
+        assert!(
+            status.is_client_error(),
+            "an unknown tag_match is refused, got {status}"
+        );
+    }
+
     /// ADR-259 Inc.2: a tag is counted once per node that carries it among its effective labels —
     /// inherited from a folder two levels up counts, a node that refuses it does not — and the
     /// reach of several tags counts each node once.
@@ -3642,6 +3759,7 @@ at 2026-08-04T09:41:07+00:00"
             tags: vec!["core".to_owned()],
             folders: Some([site].into_iter().collect()),
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
             ..Reach::default()
         };
         let got = count_node_tags(&rows, &resolver, Some(&mixed));
@@ -3665,6 +3783,16 @@ at 2026-08-04T09:41:07+00:00"
             count_node_tags(&rows, &resolver, Some(&reach)).reach_parts,
             None,
             "tags alone have nothing to overlap with"
+        );
+        // ADR-267: asking for every tag, only the node carrying both (core of its own, TeamA from
+        // two folders up) is reached; the ungrouped `core` node and the inheriting one are not.
+        let every = Reach {
+            tag_match: crate::alerts::applies_to::TagMatch::All,
+            ..reach
+        };
+        assert_eq!(
+            count_node_tags(&rows, &resolver, Some(&every)).reach,
+            Some(1)
         );
         assert_eq!(
             reach_tags(" TeamA \n\ncore\n"),

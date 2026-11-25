@@ -829,6 +829,11 @@ export type RoutingRuleBody = components['schemas']['CreateRule'];
 export type RuleWhen = components['schemas']['RuleWhen'];
 /** How a setting's folders and tags combine: `or` (either is enough) or `and` (both) (ADR-262). */
 export type Join = components['schemas']['Join'];
+
+/** How a setting's tags combine among themselves (ADR-267): a node carrying any one of them, or
+ *  every one. Only two or more tags can tell the two apart. */
+export type TagMatch = components['schemas']['TagMatch'];
+export const TAG_MATCHES = ['any', 'all'] as const satisfies readonly TagMatch[];
 export type WhenMode = components['schemas']['WhenMode'];
 /** What a rule with hours does while they are closed: pass the alert on, or hold it (ADR-266). */
 export type WhenClosed = components['schemas']['WhenClosed'];

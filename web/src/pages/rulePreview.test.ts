@@ -23,7 +23,7 @@ const DAY = 1440;
 
 const draft = (over: Partial<PreviewDraft> = {}): PreviewDraft => ({
   severity: 'critical',
-  target: { group_ids: [], tags: ['8x5x5'], join: 'or' },
+  target: { group_ids: [], tags: ['8x5x5'], join: 'or', tag_match: 'any' },
   when: { mode: 'during', days: [1, 2, 3, 4, 5], start: '08:30', end: '17:20' },
   whenClosed: 'next_rule',
   hold: false,
@@ -77,12 +77,19 @@ describe('the rule dialog\'s week', () => {
     const q = previewQuery(
       draft({
         severity: '',
-        target: { group_ids: ['g1', 'g2'], tags: ['a,b', 'c'], join: 'and' },
+        target: { group_ids: ['g1', 'g2'], tags: ['a,b', 'c'], join: 'and', tag_match: 'any' },
         when: { mode: 'always', days: [], start: '', end: '' },
         whenClosed: 'hold',
       }),
     );
     expect(q).toEqual({ tags: 'a,b\nc', group_ids: 'g1,g2', join: 'and', mode: 'always', channel_ids: JSM });
+  });
+
+  it('asks for every tag only when the draft says all and names a tag (ADR-267)', () => {
+    const target = { group_ids: [], tags: ['core', '24x7'], join: 'or' as const, tag_match: 'all' as const };
+    expect(previewQuery(draft({ target }))?.tag_match).toBe('all');
+    expect(previewQuery(draft({ target: { ...target, tag_match: 'any' } }))).not.toHaveProperty('tag_match');
+    expect(previewQuery(draft({ target: { ...target, tags: [] } }))).not.toHaveProperty('tag_match');
   });
 
   it('sends no channels for a holding rule, and asks nothing while the hours cannot be read', () => {

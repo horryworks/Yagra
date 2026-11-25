@@ -297,9 +297,12 @@ pub(crate) struct NodePageQuery {
     /// nothing.
     pub pool: Option<String>,
     /// Comma-separated tags; a node is returned when its **effective** tags (its own, plus every
-    /// one its folder chain supplies, minus the ones it excludes) hold **any** of them. Compared
-    /// exactly as stored, since tags are case-sensitive. An unknown tag simply matches nothing.
+    /// one its folder chain supplies, minus the ones it excludes) hold **any** of them, or **every**
+    /// one with `tag_match=all`. Compared exactly as stored, since tags are case-sensitive. An
+    /// unknown tag simply matches nothing.
     pub tag: Option<String>,
+    /// How the `tag` names combine (ADR-267): `any` (the default) or `all`. Read only with `tag`.
+    pub tag_match: Option<crate::alerts::applies_to::TagMatch>,
 }
 
 /// Why three of the four filters are applied in-process rather than as a `WHERE` clause — and it
@@ -334,6 +337,8 @@ pub(crate) struct NodeFilter {
     /// Effective tags (ADR-265): inherited from the folder chain like `pool`, so the answer is the
     /// [`crate::inventory::tagres::TagResolver`]'s, never the node row's own column.
     pub tag: Vec<String>,
+    /// Whether a node must carry one of `tag` or every one (ADR-267). Sets nothing on its own.
+    pub tag_match: crate::alerts::applies_to::TagMatch,
 }
 
 impl NodeFilter {
@@ -714,6 +719,7 @@ async fn list_nodes(
         q.kind.as_deref(),
         q.pool.as_deref(),
         q.tag.as_deref(),
+        q.tag_match,
     )?;
     // Filter mode: any of search / address / state / kind / pool returns a single capped page (no
     // keyset cursor) — the tree narrows the fleet without loading it.
@@ -930,6 +936,7 @@ pub(crate) fn parse_node_filter(
     kind: Option<&str>,
     pool: Option<&str>,
     tag: Option<&str>,
+    tag_match: Option<crate::alerts::applies_to::TagMatch>,
 ) -> Result<NodeFilter, ApiError> {
     Ok(NodeFilter {
         state: super::util::parse_set_with(
@@ -959,6 +966,7 @@ pub(crate) fn parse_node_filter(
         pool: super::util::split_set(pool),
         // Like `pool`, a tag is a name the operator invented, so an unknown one matches nothing.
         tag: super::util::split_set(tag),
+        tag_match: tag_match.unwrap_or_default(),
     })
 }
 
@@ -1045,20 +1053,20 @@ async fn apply_node_filter(
                     return false;
                 }
             }
+            // The store's narrowing kept every node that may carry ONE of the tags, a superset of
+            // the nodes that carry every one, so `all` is decided here alone (ADR-267).
             if let Some(resolver) = tags {
-                if !carries_any(&resolver.effective(n), &filter.tag) {
+                if !crate::alerts::applies_to::carries(
+                    &resolver.effective(n),
+                    &filter.tag,
+                    filter.tag_match,
+                ) {
                     return false;
                 }
             }
             true
         })
         .collect()
-}
-
-/// Whether a node whose effective tags are `have` matches a tag filter of `want`: **any** of them
-/// (ADR-265 decision 3), compared exactly as stored. An empty `want` is no filter.
-fn carries_any(have: &[String], want: &[String]) -> bool {
-    want.is_empty() || want.iter().any(|w| have.contains(w))
 }
 
 /// Query for the tag picker in the Nodes tree's filter (ADR-265).
@@ -4322,15 +4330,16 @@ mod tests {
         // The inversion that would be silent: an empty set read as "match nothing" makes the whole
         // tree go blank the moment any *other* filter is set. Every set filter in this codebase
         // spells "no filter" as empty, and this is where the node list agrees.
-        let none = parse_node_filter(None, None, None, None).expect("no filter parses");
+        let none = parse_node_filter(None, None, None, None, None).expect("no filter parses");
         assert!(!none.is_set());
-        let empty = parse_node_filter(Some(""), Some(""), Some(""), None).expect("empty parses");
+        let empty =
+            parse_node_filter(Some(""), Some(""), Some(""), None, None).expect("empty parses");
         assert!(
             !empty.is_set(),
             "an empty value is no filter, not an empty result"
         );
 
-        let f = parse_node_filter(Some("warning,critical,unreachable"), None, None, None)
+        let f = parse_node_filter(Some("warning,critical,unreachable"), None, None, None, None)
             .expect("a set parses");
         assert_eq!(
             f.state,
@@ -4349,30 +4358,54 @@ mod tests {
         // mistake worth a 400 — dropping it would widen the answer and read as "there are no Meraki
         // nodes". A pool is a name the operator invented, so there is nothing to check against and
         // an unrecognised one must simply match nothing.
-        assert!(parse_node_filter(Some("melted"), None, None, None).is_err());
-        assert!(parse_node_filter(None, Some("toaster"), None, None).is_err());
+        assert!(parse_node_filter(Some("melted"), None, None, None, None).is_err());
+        assert!(parse_node_filter(None, Some("toaster"), None, None, None).is_err());
         // …and the message names the real vocabulary rather than a copy of it.
-        let err = parse_node_filter(Some("melted"), None, None, None).unwrap_err();
+        let err = parse_node_filter(Some("melted"), None, None, None, None).unwrap_err();
         let body = format!("{err:?}");
         assert!(body.contains("unreachable"), "{body}");
 
-        let f =
-            parse_node_filter(None, None, Some(" tokyo , , osaka "), None).expect("pools parse");
+        let f = parse_node_filter(None, None, Some(" tokyo , , osaka "), None, None)
+            .expect("pools parse");
         assert_eq!(f.pool, vec!["tokyo".to_owned(), "osaka".to_owned()]);
     }
 
     #[test]
-    fn a_tag_filter_is_a_set_of_names_matched_by_any() {
+    fn a_tag_filter_is_a_set_of_names_matched_by_any_or_by_all() {
         // ADR-265 decisions 3 and 5: tags are operator names (no vocabulary to refuse), several
-        // are a union, and the comparison is exact because tags are stored case-sensitively.
-        let f = parse_node_filter(None, None, None, Some(" core , , wan ")).expect("tags parse");
+        // are a union unless `tag_match=all` asks for every one (ADR-267), and the comparison is
+        // exact because tags are stored case-sensitively.
+        use crate::alerts::applies_to::{carries, TagMatch};
+        let f =
+            parse_node_filter(None, None, None, Some(" core , , wan "), None).expect("tags parse");
         assert_eq!(f.tag, vec!["core".to_owned(), "wan".to_owned()]);
+        assert_eq!(
+            f.tag_match,
+            TagMatch::Any,
+            "omitted = any, what every link meant"
+        );
         assert!(f.is_set());
         let have = vec!["wan".to_owned(), "fw".to_owned()];
-        assert!(carries_any(&have, &f.tag), "one of the two is enough");
-        assert!(!carries_any(&have, &["core".to_owned()]));
-        assert!(!carries_any(&have, &["WAN".to_owned()]), "case-sensitive");
-        assert!(carries_any(&have, &[]), "an empty set is no filter");
+        assert!(
+            carries(&have, &f.tag, f.tag_match),
+            "one of the two is enough"
+        );
+        assert!(!carries(&have, &["core".to_owned()], TagMatch::Any));
+        assert!(
+            !carries(&have, &["WAN".to_owned()], TagMatch::Any),
+            "case-sensitive"
+        );
+        assert!(
+            carries(&have, &[], TagMatch::Any),
+            "an empty set is no filter"
+        );
+        let all = parse_node_filter(None, None, None, Some("core,wan"), Some(TagMatch::All))
+            .expect("all parses");
+        assert!(!carries(&have, &all.tag, all.tag_match), "all needs both");
+        let both = vec!["core".to_owned(), "wan".to_owned()];
+        assert!(carries(&both, &all.tag, all.tag_match));
+        let alone = parse_node_filter(None, None, None, None, Some(TagMatch::All)).expect("parses");
+        assert!(!alone.is_set(), "tag_match with no tag narrows nothing");
     }
 
     #[tokio::test]

@@ -134,9 +134,12 @@ pub(super) struct ListNodesParams {
     /// operator, so an unrecognised one matches nothing rather than being an error.
     pool: Option<String>,
     /// Tags to include, comma-separated: a node matches when its effective tags (its own plus
-    /// those its folders supply, minus the ones it excludes) hold any of them. Case-sensitive;
-    /// an unrecognised tag matches nothing. Omit for all.
+    /// those its folders supply, minus the ones it excludes) hold any of them, or every one with
+    /// `tag_match` = `all`. Case-sensitive; an unrecognised tag matches nothing. Omit for all.
     tag: Option<String>,
+    /// How `tag` combines: `any` (the default, a node carrying one of the tags) or `all` (a node
+    /// carrying every one).
+    tag_match: Option<crate::alerts::applies_to::TagMatch>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -505,6 +508,7 @@ impl YagraMcp {
             p.kind.as_deref(),
             p.pool.as_deref(),
             p.tag.as_deref(),
+            p.tag_match,
         ) {
             Ok(f) => f,
             Err(e) => return tool_api_error(TOOL, &e),

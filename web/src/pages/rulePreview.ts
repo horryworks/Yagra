@@ -12,6 +12,7 @@ import type {
   RulePreview,
   RulePreviewRow,
   Severity,
+  TagMatch,
   WhenClosed,
   WhenMode,
 } from '../types/api';
@@ -26,7 +27,12 @@ export interface PreviewDraft {
   ruleId?: string;
   severity: '' | Severity;
   /** The folders and tags it names, the way the rule body sends them (`appliesToBody`). */
-  target: { group_ids: readonly string[]; tags: readonly string[]; join: Join };
+  target: {
+    group_ids: readonly string[];
+    tags: readonly string[];
+    join: Join;
+    tag_match: TagMatch;
+  };
   when: WhenDraft;
   whenClosed: WhenClosed;
   hold: boolean;
@@ -40,6 +46,7 @@ export interface PreviewQuery {
   tags?: string;
   group_ids?: string;
   join?: Join;
+  tag_match?: TagMatch;
   mode: WhenMode;
   days?: string;
   start_minute?: number;
@@ -62,6 +69,7 @@ export function previewQuery(d: PreviewDraft): PreviewQuery | null {
   if (d.target.tags.length > 0) q.tags = d.target.tags.join('\n');
   if (d.target.group_ids.length > 0) q.group_ids = d.target.group_ids.join(',');
   if (d.target.join === 'and') q.join = 'and';
+  if (d.target.tag_match === 'all' && d.target.tags.length > 0) q.tag_match = 'all';
   if (q.mode !== 'always') {
     q.days = (w.days ?? []).join(',');
     q.start_minute = w.start_minute ?? 0;

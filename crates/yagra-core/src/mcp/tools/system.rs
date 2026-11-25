@@ -903,7 +903,8 @@ impl YagraMcp {
                        rules that reach that node: every-node rules, rules on its folders, and \
                        rules on the node itself), event_sources, \
                        notification_channels, routing_rules (each with the `group_ids` a node \
-                       must be inside and the `tags` it must carry one of, joined by `join` \
+                       must be inside and the `tags` it must carry one of (or every one when \
+                       `tag_match` is `all`), joined by `join` \
                        (`or`: either is enough, `and`: both); both empty = every node; and `when`: `always`, or `during` / `outside` a weekly window of ISO \
                        weekdays and minutes after midnight, read in the node's own zone; listed in \
                        order, and only the first open rule that matches an alert decides where it \
@@ -1138,6 +1139,7 @@ impl YagraMcp {
                     None,
                     None,
                     crate::alerts::applies_to::Join::Or,
+                    crate::alerts::applies_to::TagMatch::Any,
                 )
                 .await
                 {

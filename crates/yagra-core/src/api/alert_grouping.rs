@@ -88,8 +88,8 @@ impl From<Level> for GroupingLevel {
 }
 
 /// One exception to the deployment's level (ADR-262 decision 2): every node inside one of
-/// `group_ids` (at any depth) and/or carrying one of `tags` (`join`) groups at `level`. When several
-/// reach one node, the weakest level wins.
+/// `group_ids` (at any depth) and/or carrying one or all of `tags` (`tag_match`, then `join`)
+/// groups at `level`. When several reach one node, the weakest level wins.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct GroupingException {
     pub(crate) id: Uuid,
@@ -97,6 +97,8 @@ pub(crate) struct GroupingException {
     pub(crate) tags: Vec<String>,
     /// How `group_ids` and `tags` combine when both are named.
     pub(crate) join: crate::alerts::applies_to::Join,
+    /// How the `tags` combine among themselves (ADR-267): `any` or `all`.
+    pub(crate) tag_match: crate::alerts::applies_to::TagMatch,
     pub(crate) level: GroupingLevel,
 }
 
@@ -110,6 +112,10 @@ pub(crate) struct ExceptionBody {
     /// `or` (the default: inside one of the folders or carrying one of the tags) or `and` (both).
     #[serde(default)]
     pub(crate) join: crate::alerts::applies_to::Join,
+    /// `any` (a node carrying one of the tags) or `all` (one carrying every one, ADR-267). Omitted
+    /// on a create = `any`; omitted on an edit, the exception keeps its own.
+    #[serde(default)]
+    pub(crate) tag_match: Option<crate::alerts::applies_to::TagMatch>,
     pub(crate) level: GroupingLevel,
 }
 
@@ -218,6 +224,7 @@ pub(crate) async fn config(
             group_ids: e.group_ids,
             tags: e.tags,
             join: e.join,
+            tag_match: e.tag_match,
             level: e.level.into(),
         })
         .collect();
@@ -319,14 +326,7 @@ async fn set_alert_grouping_wait(
 
 /// Check an exception's body: at least one folder or tag, each tag a valid label (the rule a
 /// routing rule's tags pass, ADR-259 decision 3).
-fn checked(
-    body: ExceptionBody,
-) -> ApiResult<(
-    Vec<Uuid>,
-    Vec<String>,
-    crate::alerts::applies_to::Join,
-    Level,
-)> {
+fn checked(body: ExceptionBody) -> ApiResult<crate::alerts::grouping::ExceptionDraft> {
     let tags = super::nodes::validated_labels(body.tags)?;
     if body.group_ids.is_empty() && tags.is_empty() {
         return Err(ApiError::bad_request(
@@ -334,7 +334,13 @@ fn checked(
             "an exception names at least one folder or tag",
         ));
     }
-    Ok((body.group_ids, tags, body.join, body.level.into()))
+    Ok(crate::alerts::grouping::ExceptionDraft {
+        group_ids: body.group_ids,
+        tags,
+        join: body.join,
+        tag_match: body.tag_match,
+        level: body.level.into(),
+    })
 }
 
 #[utoipa::path(
@@ -354,9 +360,9 @@ async fn create_grouping_exception(
     admin: Admin,
     Json(body): Json<ExceptionBody>,
 ) -> ApiResult<(StatusCode, Json<CreatedException>)> {
-    let (group_ids, tags, join, level) = checked(body)?;
+    let draft = checked(body)?;
     let id = repo(&admin)
-        .create_exception(&group_ids, &tags, join, level)
+        .create_exception(&draft)
         .await
         .map_err(internal("create grouping exception"))?;
     Ok((StatusCode::CREATED, Json(CreatedException { id })))
@@ -382,9 +388,9 @@ async fn update_grouping_exception(
     Path(id): Path<Uuid>,
     Json(body): Json<ExceptionBody>,
 ) -> ApiResult<StatusCode> {
-    let (group_ids, tags, join, level) = checked(body)?;
+    let draft = checked(body)?;
     let found = repo(&admin)
-        .update_exception(id, &group_ids, &tags, join, level)
+        .update_exception(id, &draft)
         .await
         .map_err(internal("update grouping exception"))?;
     if !found {
@@ -502,7 +508,9 @@ mod tests {
             "POST",
             "/api/v1/alert-grouping/exceptions",
             &admin,
-            Some(serde_json::json!({ "group_ids": [site], "tags": ["no-lldp"], "level": "site" })),
+            Some(serde_json::json!({
+                "group_ids": [site], "tags": ["no-lldp", "edge"], "tag_match": "all", "level": "site",
+            })),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
@@ -511,7 +519,12 @@ mod tests {
         let (_, read) = send(&st, "GET", "/api/v1/alert-grouping", &admin, None).await;
         assert_eq!(read["level"], "certain");
         assert_eq!(read["exceptions"][0]["group_ids"][0], site.to_string());
-        assert_eq!(read["exceptions"][0]["tags"][0], "no-lldp");
+        // Stored sorted, the way a node's labels are.
+        assert_eq!(
+            read["exceptions"][0]["tags"],
+            serde_json::json!(["edge", "no-lldp"])
+        );
+        assert_eq!(read["exceptions"][0]["tag_match"], "all");
         assert_eq!(read["exceptions"][0]["level"], "site");
 
         let path = format!("/api/v1/alert-grouping/exceptions/{id}");
@@ -520,12 +533,16 @@ mod tests {
             "PUT",
             &path,
             &admin,
-            Some(serde_json::json!({ "tags": ["no-lldp"], "level": "off" })),
+            Some(serde_json::json!({ "tags": ["no-lldp", "edge"], "level": "off" })),
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (_, read) = send(&st, "GET", "/api/v1/alert-grouping", &admin, None).await;
         assert_eq!(read["exceptions"][0]["level"], "off");
+        assert_eq!(
+            read["exceptions"][0]["tag_match"], "all",
+            "an edit that did not name tag_match widened the exception (ADR-267)"
+        );
         assert_eq!(
             read["exceptions"][0]["group_ids"].as_array().map(Vec::len),
             Some(0)

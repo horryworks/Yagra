@@ -1087,6 +1087,7 @@ mod tests {
                     group_ids: vec![site],
                     tags: Vec::new(),
                     join: crate::alerts::applies_to::Join::Or,
+                    tag_match: crate::alerts::applies_to::TagMatch::Any,
                     level: Level::Site,
                 },
                 super::super::grouping::GroupingException {
@@ -1094,6 +1095,7 @@ mod tests {
                     group_ids: vec![floor],
                     tags: Vec::new(),
                     join: crate::alerts::applies_to::Join::Or,
+                    tag_match: crate::alerts::applies_to::TagMatch::Any,
                     level: Level::Certain,
                 },
             ],

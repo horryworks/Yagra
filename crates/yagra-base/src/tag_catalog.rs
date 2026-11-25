@@ -222,10 +222,12 @@ pub async fn rename(pool: &PgPool, from: &str, to: &str) -> anyhow::Result<TagRe
 /// Remove `tag` everywhere — unless that would change what a rule or an exception means, in which
 /// case nothing is written and the outcome names them.
 ///
-/// A row is in the way when this tag is its only tag and losing it would widen it: with no folder
-/// named, a rule would reach every node (and an exception would name nothing, which the table's
-/// CHECK refuses); joined with its folders by `and` (ADR-262 decision 10), it would reach the whole
-/// of those folders instead of the tagged nodes in them.
+/// A row is in the way when losing this tag would widen it. As its only tag: with no folder named, a
+/// rule would reach every node (and an exception would name nothing, which the table's CHECK
+/// refuses); joined with its folders by `and` (ADR-262 decision 10), it would reach the whole of
+/// those folders instead of the tagged nodes in them. As one of several tags a row asks for all of
+/// (`tags_all`, ADR-267): the row would then ask for fewer, which reaches more, whatever its
+/// folders and join.
 ///
 /// 🚨 **The two tables are locked before the check, not only the rows it finds.** A row lock
 /// covers the rows that match *now*; a rule edited to name only this tag between the check and the
@@ -239,7 +241,8 @@ pub async fn delete(pool: &PgPool, tag: &str) -> anyhow::Result<DeleteOutcome> {
         .await?;
     let rules: Vec<String> = sqlx::query_scalar(
         "SELECT name FROM routing_rules \
-          WHERE tags = ARRAY[$1]::text[] AND (cardinality(group_ids) = 0 OR join_and) \
+          WHERE (tags = ARRAY[$1]::text[] AND (cardinality(group_ids) = 0 OR join_and)) \
+             OR (tags_all AND $1 = ANY(tags) AND cardinality(tags) > 1) \
           ORDER BY position, name",
     )
     .bind(tag)
@@ -247,7 +250,8 @@ pub async fn delete(pool: &PgPool, tag: &str) -> anyhow::Result<DeleteOutcome> {
     .await?;
     let exceptions: Vec<sqlx::types::Uuid> = sqlx::query_scalar(
         "SELECT id FROM alert_grouping_exceptions \
-          WHERE tags = ARRAY[$1]::text[] AND (cardinality(group_ids) = 0 OR join_and)",
+          WHERE (tags = ARRAY[$1]::text[] AND (cardinality(group_ids) = 0 OR join_and)) \
+             OR (tags_all AND $1 = ANY(tags) AND cardinality(tags) > 1)",
     )
     .bind(tag)
     .fetch_all(&mut *tx)
@@ -437,6 +441,67 @@ mod tests {
             column(&pool, "SELECT tags FROM routing_rules").await,
             vec![Vec::<String>::new()]
         );
+    }
+
+    /// ADR-267: a row asking for every one of its tags is widened by losing any of them, so the
+    /// delete is refused for it whatever its folders; the same row asking for any one is narrowed,
+    /// and the delete goes ahead.
+    #[sqlx::test(migrator = "crate::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_delete_from_a_row_asking_for_every_tag_writes_nothing(pool: PgPool) {
+        let folder = crate::pgtest::group(&pool, "Japan").await;
+        rule(&pool, "core and 24x7", &["core", "24x7"], &[]).await;
+        rule(
+            &pool,
+            "japan or core and 24x7",
+            &["core", "24x7"],
+            &[folder],
+        )
+        .await;
+        rule(&pool, "core or 24x7", &["core", "24x7"], &[]).await;
+        sqlx::query("UPDATE routing_rules SET tags_all = true WHERE name <> 'core or 24x7'")
+            .execute(&pool)
+            .await
+            .expect("tags all");
+        exception(&pool, &["core", "24x7"], &[]).await;
+        sqlx::query("UPDATE alert_grouping_exceptions SET tags_all = true")
+            .execute(&pool)
+            .await
+            .expect("tags all");
+
+        match delete(&pool, "core").await.expect("delete") {
+            DeleteOutcome::Blocked(b) => {
+                let mut names = b.rules.clone();
+                names.sort();
+                assert_eq!(
+                    names,
+                    vec![
+                        "core and 24x7".to_owned(),
+                        "japan or core and 24x7".to_owned()
+                    ]
+                );
+                assert_eq!(b.exceptions, 1);
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert_eq!(
+            column(&pool, "SELECT tags FROM routing_rules ORDER BY name").await,
+            vec![vec!["core", "24x7"]; 3],
+            "nothing written"
+        );
+
+        sqlx::query("UPDATE routing_rules SET tags_all = false")
+            .execute(&pool)
+            .await
+            .expect("any");
+        sqlx::query("UPDATE alert_grouping_exceptions SET tags_all = false")
+            .execute(&pool)
+            .await
+            .expect("any");
+        match delete(&pool, "core").await.expect("delete") {
+            DeleteOutcome::Deleted(d) => assert_eq!(d.rules, 3),
+            other => panic!("expected a delete, got {other:?}"),
+        }
     }
 
     /// ADR-263 Inc.2: a registered tag is listed with nothing carrying it, registering it twice

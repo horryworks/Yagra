@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The Tag section of the inventory tree's filter menu (ADR-265): a search box over the tags the
-// caller's nodes carry, and the shared option list with a node count beside each.
+// caller's nodes carry, the shared option list with a node count beside each, and, once two or more
+// are chosen, whether a node must carry any of them or every one (ADR-267).
 //
 // Search first because a deployment may carry thousands of tags; what to offer is decided in
 // `tagPicker.ts`. The box is a filter editor's own text entry (ui-conventions: `SearchField`), and
@@ -11,9 +12,11 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { MultiSelectList } from '../components/ui/MultiSelectList';
 import { SearchField } from '../components/ui/SearchField';
+import { Segmented } from '../components/ui/Segmented';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '../lib/useDebouncedValue';
 import { api } from '../services/api';
-import type { TagSuggestions } from '../types/api';
+import { TAG_MATCHES, type TagMatch, type TagSuggestions } from '../types/api';
+import { TAG_MATCH_LABEL } from '../lib/tagMatch';
 import { decodeSet } from '../lib/columnFilter';
 import { tagPickerView, tagRequestLimit, toggleTag } from './tagPicker';
 
@@ -21,11 +24,16 @@ export function TagFilterSection({
   label,
   value,
   onChange,
+  match,
+  onMatch,
 }: {
   label: string;
   /** The URL's comma-joined set of chosen tags. */
   value: string;
   onChange: (next: string) => void;
+  /** Whether a node must carry any of the chosen tags or every one. */
+  match: TagMatch;
+  onMatch: (next: TagMatch) => void;
 }) {
   const { t } = useTranslation('nodes');
   const [typed, setTyped] = useState('');
@@ -87,6 +95,19 @@ export function TagFilterSection({
         <p className="form-status">
           {t('inventory.tagFilter.more', { count: view.more })}
         </p>
+      )}
+      {/* Under the list, so a row ticked under the pointer does not move (ADR-267 decision 6). */}
+      {chosen.length >= 2 && (
+        <Segmented
+          size="sm"
+          ariaLabel={t('common:tagMatch.label')}
+          options={TAG_MATCHES.map((m) => ({ value: m, label: t(TAG_MATCH_LABEL[m]) }))}
+          value={match}
+          onChange={(v) => {
+            const m = TAG_MATCHES.find((x) => x === v);
+            if (m) onMatch(m);
+          }}
+        />
       )}
     </fieldset>
   );

@@ -11,6 +11,7 @@
 import type {
   Alert,
   Join,
+  TagMatch,
   BusRemoteAccepted,
   BusStatus,
   AlertHistoryQuery,
@@ -2481,6 +2482,8 @@ export const api = {
     tags: readonly string[];
     groups: readonly string[];
     join?: Join;
+    /** How the tags combine among themselves (ADR-267). Omitted = any. */
+    tagMatch?: TagMatch;
     /** Ask about every node (an empty `reach`), for the zones a rule naming none reads time in. */
     everyNode?: boolean;
   }): Promise<NodeTags> =>
@@ -2492,6 +2495,7 @@ export const api = {
               ...(reach.tags.length > 0 ? { reach: reach.tags.join('\n') } : {}),
               ...(reach.groups.length > 0 ? { reach_groups: reach.groups.join(',') } : {}),
               ...(reach.join === 'and' ? { reach_join: 'and' as const } : {}),
+              ...(reach.tagMatch === 'all' ? { reach_tag_match: 'all' as const } : {}),
             }
           : undefined,
     }),

@@ -12,15 +12,18 @@ describe('ruleZones', () => {
   });
 
   it('asks for the rule own folders and tags, or every node when it names none', () => {
-    expect(zoneQuery({ only: true, groupIds: ['g'], tags: ['core'], join: 'and' })).toEqual({
+    expect(
+      zoneQuery({ only: true, groupIds: ['g'], tags: ['core'], join: 'and', tagMatch: 'all' }),
+    ).toEqual({
       tags: ['core'],
       groups: ['g'],
       join: 'and',
+      tagMatch: 'all',
       everyNode: false,
     });
     for (const v of [
-      { only: false, groupIds: ['g'], tags: [], join: 'or' as const },
-      { only: true, groupIds: [], tags: [], join: 'or' as const },
+      { only: false, groupIds: ['g'], tags: [], join: 'or' as const, tagMatch: 'any' as const },
+      { only: true, groupIds: [], tags: [], join: 'or' as const, tagMatch: 'any' as const },
     ]) {
       expect(zoneQuery(v).everyNode).toBe(true);
     }

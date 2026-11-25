@@ -753,6 +753,7 @@ function RulesSection({
             groupIds={r.group_ids ?? []}
             tags={r.tags}
             join={r.join ?? 'or'}
+            tagMatch={r.tag_match ?? 'any'}
             groups={groups}
             nodeTags={nodeTags}
           />
@@ -1000,7 +1001,7 @@ function RuleModal({
   const [severity, setSeverity] = useState<'' | Severity>(rule?.severity ?? '');
   // Built once from the rule as it was opened, so a row unticked under the pointer stays put.
   const [initial] = useState<AppliesTo>(() =>
-    appliesToFrom(rule?.group_ids ?? [], rule?.tags ?? [], rule?.join),
+    appliesToFrom(rule?.group_ids ?? [], rule?.tags ?? [], rule?.join, rule?.tag_match),
   );
   const [target, setTarget] = useState<AppliesTo>(initial);
   const [when, setWhen] = useState<WhenDraft>(() => whenDraftFrom(rule?.when));
@@ -1008,7 +1009,7 @@ function RuleModal({
   // The zones the rule's hours are read in, asked only while the rule has hours (ADR-262
   // decision 11). `null` while asking or after a failed read: the line is left out.
   const zq = zoneQuery(target);
-  const zoneKey = `${zq.groups.join(',')}|${zq.tags.join('\n')}|${zq.join}|${zq.everyNode}`;
+  const zoneKey = `${zq.groups.join(',')}|${zq.tags.join('\n')}|${zq.join}|${zq.tagMatch}|${zq.everyNode}`;
   const { data: zones } = useLoad<ReachZone[] | null>(
     () =>
       when.mode === 'always'

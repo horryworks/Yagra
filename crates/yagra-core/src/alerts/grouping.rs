@@ -8,14 +8,27 @@ use uuid::Uuid;
 use yagra_topology::grouping::Level;
 
 /// One exception to the deployment's level (ADR-262 decision 2, the former per-folder level): the
-/// nodes inside one of `group_ids` and/or carrying one of `tags` (`join`, decision 10) group at
-/// `level` instead. Never names neither.
+/// nodes inside one of `group_ids` and/or carrying one or all of `tags` (`tag_match`, ADR-267;
+/// `join`, decision 10) group at `level` instead. Never names neither.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GroupingException {
     pub id: Uuid,
     pub group_ids: Vec<Uuid>,
     pub tags: Vec<String>,
     pub join: crate::alerts::applies_to::Join,
+    pub tag_match: crate::alerts::applies_to::TagMatch,
+    pub level: Level,
+}
+
+/// What an exception is written with, by the create and the edit alike.
+#[derive(Debug, Clone)]
+pub(crate) struct ExceptionDraft {
+    pub group_ids: Vec<Uuid>,
+    pub tags: Vec<String>,
+    pub join: crate::alerts::applies_to::Join,
+    /// `None` keeps what an edited exception has (an older client must not widen an "all" one,
+    /// ADR-267); a new exception takes `any`.
+    pub tag_match: Option<crate::alerts::applies_to::TagMatch>,
     pub level: Level,
 }
 
@@ -89,7 +102,7 @@ impl GroupingRepo {
     /// Every exception to the deployment's level (ADR-262 decision 2), oldest first.
     pub(crate) async fn exceptions(&self) -> anyhow::Result<Vec<GroupingException>> {
         let rows = sqlx::query(
-            "SELECT id, group_ids, tags, join_and, level FROM alert_grouping_exceptions \
+            "SELECT id, group_ids, tags, join_and, tags_all, level FROM alert_grouping_exceptions \
              ORDER BY created_at, id",
         )
         .fetch_all(&self.pool)
@@ -101,6 +114,9 @@ impl GroupingRepo {
                     group_ids: r.try_get("group_ids")?,
                     tags: r.try_get("tags")?,
                     join: crate::alerts::applies_to::Join::from_and(r.try_get("join_and")?),
+                    tag_match: crate::alerts::applies_to::TagMatch::from_all(
+                        r.try_get("tags_all")?,
+                    ),
                     level: level_from(r.try_get("level")?),
                 })
             })
@@ -109,23 +125,18 @@ impl GroupingRepo {
 
     /// Add an exception. The caller has checked it names at least one folder or tag (the table's
     /// CHECK refuses one that names neither).
-    pub(crate) async fn create_exception(
-        &self,
-        group_ids: &[Uuid],
-        tags: &[String],
-        join: crate::alerts::applies_to::Join,
-        level: Level,
-    ) -> anyhow::Result<Uuid> {
+    pub(crate) async fn create_exception(&self, draft: &ExceptionDraft) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO alert_grouping_exceptions (id, group_ids, tags, join_and, level) \
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO alert_grouping_exceptions (id, group_ids, tags, join_and, level, tags_all) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(id)
-        .bind(group_ids)
-        .bind(tags)
-        .bind(join.is_and())
-        .bind(i16::from(level.as_u8()))
+        .bind(&draft.group_ids)
+        .bind(&draft.tags)
+        .bind(draft.join.is_and())
+        .bind(i16::from(draft.level.as_u8()))
+        .bind(draft.tag_match.unwrap_or_default().is_all())
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -135,20 +146,18 @@ impl GroupingRepo {
     pub(crate) async fn update_exception(
         &self,
         id: Uuid,
-        group_ids: &[Uuid],
-        tags: &[String],
-        join: crate::alerts::applies_to::Join,
-        level: Level,
+        draft: &ExceptionDraft,
     ) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE alert_grouping_exceptions SET group_ids = $2, tags = $3, level = $4, join_and = $5 \
-             WHERE id = $1",
+            "UPDATE alert_grouping_exceptions SET group_ids = $2, tags = $3, level = $4, join_and = $5, \
+             tags_all = COALESCE($6, tags_all) WHERE id = $1",
         )
         .bind(id)
-        .bind(group_ids)
-        .bind(tags)
-        .bind(i16::from(level.as_u8()))
-        .bind(join.is_and())
+        .bind(&draft.group_ids)
+        .bind(&draft.tags)
+        .bind(i16::from(draft.level.as_u8()))
+        .bind(draft.join.is_and())
+        .bind(draft.tag_match.map(crate::alerts::applies_to::TagMatch::is_all))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -166,8 +175,9 @@ impl GroupingRepo {
 
 /// The level that holds for one node (ADR-262 decision 2): the **weakest** of the exceptions that
 /// reach it, else `None` (the deployment's level holds). An exception reaches the node by its
-/// folders (`folder_chain` is the node's own folder and every folder above it) and/or its tags,
-/// joined by the exception's `join` ([`crate::alerts::applies_to::reaches_chain`]). Weakest, not nearest: a grouping too strong hides a real outage, and
+/// folders (`folder_chain` is the node's own folder and every folder above it) and/or its tags
+/// (one or all of them, by `tag_match`), joined by the exception's `join`
+/// ([`crate::alerts::applies_to::reaches_chain`]). Weakest, not nearest: a grouping too strong hides a real outage, and
 /// one too weak only sends more notifications.
 #[must_use]
 pub(crate) fn weakest_level(
@@ -182,6 +192,7 @@ pub(crate) fn weakest_level(
                 &e.group_ids,
                 &e.tags,
                 e.join,
+                e.tag_match,
                 folder_chain,
                 tags,
             )
@@ -200,6 +211,7 @@ mod tests {
             group_ids: group_ids.to_vec(),
             tags: tags.iter().map(|t| (*t).to_owned()).collect(),
             join: crate::alerts::applies_to::Join::Or,
+            tag_match: crate::alerts::applies_to::TagMatch::Any,
             level,
         }
     }
@@ -254,14 +266,17 @@ mod tests {
             "the switch leaves the level alone"
         );
 
+        use crate::alerts::applies_to::{Join, TagMatch};
+        let draft = |group_ids: Vec<Uuid>, tags: &[&str], tag_match, level| ExceptionDraft {
+            group_ids,
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            join: Join::Or,
+            tag_match,
+            level,
+        };
         let site = yagra_base::pgtest::group(&pool, "Site A").await;
         let id = repo
-            .create_exception(
-                &[site],
-                &["core".to_owned()],
-                crate::alerts::applies_to::Join::Or,
-                Level::Site,
-            )
+            .create_exception(&draft(vec![site], &["core"], None, Level::Site))
             .await
             .expect("create");
         assert_eq!(
@@ -270,33 +285,41 @@ mod tests {
                 id,
                 group_ids: vec![site],
                 tags: vec!["core".to_owned()],
-                join: crate::alerts::applies_to::Join::Or,
+                join: Join::Or,
+                tag_match: TagMatch::Any,
                 level: Level::Site
-            }]
+            }],
+            "a create that names no tag_match takes any"
         );
         assert!(repo
             .update_exception(
                 id,
-                &[],
-                &["edge".to_owned()],
-                crate::alerts::applies_to::Join::Or,
-                Level::Off
+                &draft(
+                    Vec::new(),
+                    &["edge", "24x7"],
+                    Some(TagMatch::All),
+                    Level::Off
+                )
             )
             .await
             .expect("update"));
-        assert_eq!(repo.exceptions().await.expect("list")[0].level, Level::Off);
+        let read = &repo.exceptions().await.expect("list")[0];
+        assert_eq!((read.level, read.tag_match), (Level::Off, TagMatch::All));
+        // ADR-267: an edit that omits tag_match keeps the exception's own.
+        assert!(repo
+            .update_exception(id, &draft(Vec::new(), &["edge", "24x7"], None, Level::Off))
+            .await
+            .expect("update"));
+        assert_eq!(
+            repo.exceptions().await.expect("list")[0].tag_match,
+            TagMatch::All
+        );
         assert!(!repo
-            .update_exception(
-                Uuid::new_v4(),
-                &[site],
-                &[],
-                crate::alerts::applies_to::Join::Or,
-                Level::Off
-            )
+            .update_exception(Uuid::new_v4(), &draft(vec![site], &[], None, Level::Off))
             .await
             .expect("update"));
         assert!(
-            repo.create_exception(&[], &[], crate::alerts::applies_to::Join::Or, Level::Off)
+            repo.create_exception(&draft(Vec::new(), &[], None, Level::Off))
                 .await
                 .is_err(),
             "an exception naming nothing is refused by the table"
