@@ -1077,8 +1077,9 @@ async fn apply_node_filter(
                     return false;
                 }
             }
-            // The store's narrowing kept every node that may carry ONE of the tags, a superset of
-            // the nodes that carry every one, so `all` is decided here alone (ADR-267).
+            // The store's narrowing (`tag_narrowing`) kept only a superset: every node that may
+            // carry one of the tags, or for `all` one that may carry each of the first few. The
+            // exact rule, every tag included, is decided here (ADR-267).
             if let Some(resolver) = tags {
                 if !crate::alerts::applies_to::carries(
                     &resolver.effective(n),

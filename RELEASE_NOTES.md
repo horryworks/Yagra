@@ -19,6 +19,7 @@
 ### Improvements
 
 - **Each stretch of the routing coverage week names the rule that decides it.** `GET /api/v1/routing-coverage` and MCP `get_config(kind=routing_coverage)` give every segment a `rule_id` (null for the catch-all, for held when no rule is open, and for reaches nobody), and a stretch now ends where the deciding rule changes, even when two rules send to the same channels (ADR-266).
+- **The maker behind a MAC address knows the newest registrations.** The IEEE registry compiled into Yagra was refreshed (9 more assignments).
 
 ### Bug Fixes
 

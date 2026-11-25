@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-24
-# counts: MA-L=40446 MA-L-repeats-dropped=3 MA-M=6621 MA-S=7268 withheld=3
+# fetched: 2026-11-25
+# counts: MA-L=40451 MA-L-repeats-dropped=3 MA-M=6623 MA-S=7270 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -14659,6 +14659,8 @@
 0C45C6	IEEE Registration Authority
 0C45C61	Tianjin Umore Technology Co.，Ltd.
 0C45C64	Nokia
+0C45C6B	Hefei BOE Vision-electronic Technology Co.,Ltd.
+0C45C6D	Shenzhen Jingheng Digital Technology Co., Ltd.
 0C469D	MS Sedco
 0C473D	Hitron Technologies. Inc
 0C47A9	IEEE Registration Authority
@@ -22909,6 +22911,7 @@
 4865EEE	CNU
 486834	Silicon Motion, Inc.
 48684A	Intel Corporate
+4868C6	NXP Semiconductors Germany GmbH
 486B2C	BBK EDUCATIONAL ELECTRONICS CORP.,LTD.
 486B91	Fleetwood Group Inc.
 486DBB	Vestel Elektronik San ve Tic. A.S.
@@ -28087,6 +28090,7 @@
 703ACB	Google, Inc.
 703AD8	Shenzhen Afoundry Electronic Co., Ltd
 703C03	RadiAnt Co.,Ltd
+703C07	Dongguan Huayin Electronic Technology Co., Ltd.
 703C39	SEAWING Kft
 703C69	Apple, Inc.
 703D15	Hangzhou H3C Technologies Co., Limited
@@ -36856,6 +36860,7 @@
 8C1F64442	Potter Electric Signal Co. LLC
 8C1F64444	Contrive Srl
 8C1F64445	Figment Design Laboratories
+8C1F64446	Hubbell Power Systems
 8C1F64447	MARVAUS TECHNOLOGIES PRIVATE LIMITED
 8C1F64448	Förster-Technik GmbH
 8C1F6444A	Onbitel
@@ -38651,6 +38656,7 @@
 8C1F64DD7	KST technology
 8C1F64DD9	Abbott Diagnostics Technologies AS
 8C1F64DDB	Efficient Residential Heating GmbH
+8C1F64DDC	MECT SRL
 8C1F64DDD	Irmos Technologies AG
 8C1F64DDE	Jemac Sweden AB
 8C1F64DE0	BorgWarner Engineering Services AG
@@ -42161,6 +42167,7 @@ A0C5F2B	Oray.com co., LTD.
 A0C5F2C	Glooko inc
 A0C5F2D	UnaliWear, Inc.
 A0C5F2E	Synapsys Solutions Ltd.
+A0C68F	Extreme Networks, Inc.
 A0C6A5	Lierda Science & Technology Group Co., Ltd
 A0C6EC	ShenZhen ANYK Technology Co.,LTD
 A0C773	Chipsea Technologies (Shenzhen) Corp.
@@ -46918,6 +46925,7 @@ C80258	ITW GSE ApS
 C8028F	Nova Electronics (Shanghai) Co., Ltd.
 C802A6	Beijing Newmine Technology
 C803F5	Ruckus Wireless
+C8040C	Extreme Networks, Inc.
 C8059E	Hefei Symboltek Co.,Ltd
 C805A4	Motorola(Wuhan) Mobility Technologies Communication Co.,Ltd
 C80718	TDSi
@@ -51579,6 +51587,7 @@ E8EECC	Fantasia Trading LLC
 E8EF05	MIND TECH INTERNATIONAL LIMITED
 E8EF22	Siemens Numerical Control Ltd., Nanjing
 E8EF89	OPMEX Tech.
+E8F043	COOSEA GROUP (HK) COMPANY LIMITED
 E8F085	HUAWEI TECHNOLOGIES CO.,LTD
 E8F094	GD Midea Air-Conditioning Equipment Co.,Ltd.
 E8F0A4	Antonios A. Chariton
