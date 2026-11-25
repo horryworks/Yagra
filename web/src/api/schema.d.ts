@@ -15251,7 +15251,7 @@ export interface components {
              * @description The minute of the week at which where an alert goes next changes, from Monday 00:00 local;
              *     `null` when it does not change within a week.
              */
-            next_change_minute?: number | null;
+            changes_at_minute?: number | null;
             node_count: number;
             /**
              * Format: int32

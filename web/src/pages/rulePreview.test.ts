@@ -49,7 +49,7 @@ const passedOn: RulePreviewRow = {
     seg(17 * 60 + 20, DAY + 8 * 60 + 30, 'rules', BELOW),
   ],
   now_minute: 2 * DAY + 17 * 60 + 41,
-  next_change_minute: 3 * DAY + 8 * 60 + 30,
+  changes_at_minute: 3 * DAY + 8 * 60 + 30,
 };
 
 /** Weekday keys answer their own short name with a capital, as the English locale does. */

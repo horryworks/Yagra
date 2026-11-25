@@ -106,9 +106,9 @@ export function RulePreviewWeek({
     if (!at) return '';
     const d = deciderOf(at, thisRule);
     if (d.kind === 'held') {
-      return row.next_change_minute === null || row.next_change_minute === undefined
+      return row.changes_at_minute === null || row.changes_at_minute === undefined
         ? t('routing.rules.hold')
-        : t('routing.preview.heldUntil', { when: weekMinuteText(t, row.next_change_minute) });
+        : t('routing.preview.heldUntil', { when: weekMinuteText(t, row.changes_at_minute) });
     }
     if (d.kind === 'nowhere') return ruleName(d);
     return `${shortName(d)} → ${channelNames(at.channel_ids)}`;

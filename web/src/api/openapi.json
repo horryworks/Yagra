@@ -48021,7 +48021,7 @@
           "now_minute"
         ],
         "properties": {
-          "next_change_minute": {
+          "changes_at_minute": {
             "type": [
               "integer",
               "null"

@@ -1547,7 +1547,7 @@ pub(crate) struct RulePreviewRow {
     now_minute: u16,
     /// The minute of the week at which where an alert goes next changes, from Monday 00:00 local;
     /// `null` when it does not change within a week.
-    next_change_minute: Option<u16>,
+    changes_at_minute: Option<u16>,
 }
 
 /// A comma-separated list of ids; a blank entry is skipped, a malformed one refused.
@@ -1699,7 +1699,7 @@ async fn preview_in(
             rule_ids: row.rule_ids.clone(),
             segments: row.segments,
             now_minute: week_minute(&tz, now),
-            next_change_minute: next.map(|at| week_minute(&tz, at)),
+            changes_at_minute: next.map(|at| week_minute(&tz, at)),
         }
     })
     .collect();
