@@ -480,7 +480,11 @@
       "err": {
         "days": "曜日を 1 つ以上選んでください。",
         "time": "時刻を HH:MM で 2 つとも入れてください。"
-      }
+      },
+      "closed": "それ以外の時間",
+      "closedNext": "次のルールへ",
+      "closedHold": "保留",
+      "closedHeld": "それ以外は保留"
     },
     "catchAll": {
       "title": "Catch-all",
@@ -513,6 +517,15 @@
         "held": "保留",
         "nowhere": "誰にも届かない"
       }
+    },
+    "preview": {
+      "title": "アラートの届く先",
+      "this": "{{name}}（このルール）",
+      "thisUnnamed": "このルール",
+      "rule": "{{name}}（{{n}} 番目のルール）",
+      "held": "送るルールの時間まで保留",
+      "heldUntil": "{{when}} まで保留",
+      "now": "いま（{{when}}、{{zone}}）"
     }
   },
   "appliesTo": {

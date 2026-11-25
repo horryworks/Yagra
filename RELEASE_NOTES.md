@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+### New Features
+
+- **A routing rule with hours can hold its alerts outside them.** Until now, while a During or Outside rule was closed it was passed over, and the next rule below it (or the catch-all) sent the alert, so a weekday-hours rule did not stop an evening alert when an always-open rule below also reached the node. The rule dialog has a new **Other times** choice: **Next rule** (the default, the behaviour so far) or **Hold**, which keeps the alert at this rule while it is closed and sends it when a rule that sends opens, if it is still open then (an alert that recovers overnight is never sent). The rules table shows "· other times held" after such a rule's hours. The rule body takes `when_closed` (`next_rule` | `hold`); an edit that omits it keeps the rule's own. Migration 0190 adds `routing_rules.hold_when_closed`; a core older than 0.3.90 does not start against this database (ADR-266).
+- **The rule dialog shows where the alerts of the nodes it reaches would go, across the week.** Under **Channels**, **Where their alerts go** draws a bar per weekday for the rule as it stands in the dialog, before it is saved: each stretch painted by the rule that decides it (this rule, each other rule, the catch-all, held, or reaches nobody), a legend naming each rule and its channels, a mark at the current time, and a line such as "Now (Wed 17:41, Asia/Tokyo): Critical → JSM Production". Edges fall on the minute. When the nodes split by rules or time zone, a list picks the group. New endpoint `GET /api/v1/routing-rules/preview` (Admin; the draft as query parameters, tags one per line) answers it; it has no MCP tool, since it describes an unsaved draft (ADR-266).
+
+### Improvements
+
+- **Each stretch of the routing coverage week names the rule that decides it.** `GET /api/v1/routing-coverage` and MCP `get_config(kind=routing_coverage)` give every segment a `rule_id` (null for the catch-all, for held when no rule is open, and for reaches nobody), and a stretch now ends where the deciding rule changes, even when two rules send to the same channels (ADR-266).
+
 ### Bug Fixes
 
 - **Filtering All nodes by tag finds every node that carries the tag.** On a deployment with more than 5,000 nodes the tag filter examined only the first 5,000 by name, so tagged nodes whose names sorted later were missing from the tree, and only the "some matches are not shown" notice hinted at it. The tag now narrows the search in the database first, so the limit applies only when more than 5,000 nodes actually carry the tag. `GET /api/v1/nodes?tag=` and MCP `list_nodes` change the same way (ADR-265).

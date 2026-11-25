@@ -149,6 +149,49 @@ pub struct RoutingRule {
     /// false.
     #[serde(default)]
     pub hold: bool,
+    /// What the rule does while its hours are closed (ADR-266): `next_rule` passes the alert on to
+    /// the rules below and the catch-all, `hold` keeps it back until a rule that sends opens. A
+    /// rule that is always open never reads it. Absent = `next_rule`.
+    #[serde(default)]
+    pub when_closed: WhenClosed,
+}
+
+/// What a routing rule with hours does while they are closed (ADR-266 decision 1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WhenClosed {
+    /// Passed over: the next open rule below it decides, or the catch-all (ADR-262 decision 14).
+    #[default]
+    NextRule,
+    /// The alert is held here, and sent when a rule that sends opens if it is still open then.
+    Hold,
+}
+
+impl WhenClosed {
+    /// The stored flag (`routing_rules.hold_when_closed`).
+    #[must_use]
+    pub const fn is_hold(self) -> bool {
+        matches!(self, Self::Hold)
+    }
+
+    /// Read the stored flag.
+    #[must_use]
+    pub const fn from_hold(hold: bool) -> Self {
+        if hold {
+            Self::Hold
+        } else {
+            Self::NextRule
+        }
+    }
+}
+
+/// When a new rule keeps an alert back instead of sending it (ADR-262 decision 14, ADR-266).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuleHolding {
+    /// While its hours are open, the rule sends nowhere and holds (a holding rule).
+    pub while_open: bool,
+    /// What it does while its hours are closed.
+    pub when_closed: WhenClosed,
 }
 
 /// What an edit of a routing rule writes (ADR-193). `None` keeps what the rule has: a client that
@@ -163,6 +206,7 @@ pub struct RuleEdit<'a> {
     pub channel_ids: &'a [Uuid],
     pub when: Option<&'a RuleWhen>,
     pub hold: Option<bool>,
+    pub when_closed: Option<WhenClosed>,
 }
 
 /// Which nodes a new routing rule names (ADR-262 decisions 1 and 10).
@@ -485,7 +529,7 @@ impl NotificationRepo {
     pub async fn list_rules(&self) -> anyhow::Result<Vec<RoutingRule>> {
         let rows = sqlx::query(
             "SELECT id, name, enabled, severity, tags, group_ids, join_and, channel_ids, when_mode, \
-             days, start_minute, end_minute, hold FROM routing_rules \
+             days, start_minute, end_minute, hold, hold_when_closed FROM routing_rules \
              ORDER BY position, created_at, id",
         )
         .fetch_all(&self.pool)
@@ -514,14 +558,16 @@ impl NotificationRepo {
                             .unwrap_or(0),
                     },
                     hold: row.try_get("hold")?,
+                    when_closed: WhenClosed::from_hold(row.try_get("hold_when_closed")?),
                 })
             })
             .collect()
     }
 
     /// Create a routing rule. `severity` None ⇒ matches all severities; a target naming no tag
-    /// and no folder ⇒ every node. `hold` makes it a rule that keeps alerts back rather than
-    /// sending them (ADR-262 decision 14). It lists last: its position comes from a sequence.
+    /// and no folder ⇒ every node. `holding` says whether it keeps alerts back rather than
+    /// sending them while open (ADR-262 decision 14) and while its hours are closed (ADR-266). It
+    /// lists last: its position comes from a sequence.
     pub async fn create_rule(
         &self,
         name: &str,
@@ -529,13 +575,13 @@ impl NotificationRepo {
         target: &RuleTarget<'_>,
         channel_ids: &[Uuid],
         when: &RuleWhen,
-        hold: bool,
+        holding: RuleHolding,
     ) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO routing_rules (id, name, enabled, severity, tags, group_ids, join_and, \
-             channel_ids, when_mode, days, start_minute, end_minute, hold) \
-             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+             channel_ids, when_mode, days, start_minute, end_minute, hold, hold_when_closed) \
+             VALUES ($1, $2, true, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(id)
         .bind(name)
@@ -548,7 +594,8 @@ impl NotificationRepo {
         .bind(days_column(&when.days))
         .bind(minute_column(when.start_minute))
         .bind(minute_column(when.end_minute))
-        .bind(hold)
+        .bind(holding.while_open)
+        .bind(holding.when_closed.is_hold())
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -578,15 +625,18 @@ impl NotificationRepo {
             channel_ids,
             when,
             hold,
+            when_closed,
         } = *edit;
         // `None` keeps the stored tags and folders: a client that predates them must not widen a
-        // rule to every node by saving it (ADR-259, ADR-262).
+        // rule to every node by saving it (ADR-259, ADR-262). The same for what a closed rule
+        // does (ADR-266): a client that predates it must not stop a rule holding by saving it.
         let res = sqlx::query(
             "UPDATE routing_rules SET name = $2, severity = $3, tags = COALESCE($4, tags), \
              group_ids = COALESCE($5, group_ids), channel_ids = $6, \
              when_mode = COALESCE($7, when_mode), days = COALESCE($8, days), \
              start_minute = COALESCE($9, start_minute), end_minute = COALESCE($10, end_minute), \
-             join_and = COALESCE($11, join_and), hold = COALESCE($12, hold) \
+             join_and = COALESCE($11, join_and), hold = COALESCE($12, hold), \
+             hold_when_closed = COALESCE($13, hold_when_closed) \
              WHERE id = $1",
         )
         .bind(id)
@@ -601,6 +651,7 @@ impl NotificationRepo {
         .bind(when.map(|w| minute_column(w.end_minute)))
         .bind(join.map(crate::alerts::applies_to::Join::is_and))
         .bind(hold)
+        .bind(when_closed.map(WhenClosed::is_hold))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -881,7 +932,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[doomed, kept],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -892,7 +943,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[doomed],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1022,7 +1073,7 @@ mod tests {
                 &crate::alerts::notifications::RuleTarget::or(&[], &[]),
                 &[a, b],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1033,7 +1084,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[b],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1068,7 +1119,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1098,7 +1149,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[channel],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1109,7 +1160,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[channel],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1148,6 +1199,84 @@ mod tests {
         assert_eq!(repo.list_channels().await.expect("channels").len(), 1);
     }
 
+    /// ADR-266 decision 2: what a rule does while closed is stored, read back, kept by an edit that
+    /// does not name it (a client that predates the field must not stop a rule holding by saving
+    /// it), and changed by one that does.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_rule_that_holds_while_closed_keeps_it_through_an_edit_that_omits_it(
+        pool: sqlx::PgPool,
+    ) {
+        let repo = NotificationRepo::new(pool.clone(), yagra_base::pgtest::kek());
+        let jsm = repo
+            .create_channel("JSM", &a_webhook("https://jsm.example.test/hook"))
+            .await
+            .expect("channel");
+        let office = RuleWhen {
+            mode: WhenMode::During,
+            days: vec![1, 2, 3, 4, 5],
+            start_minute: 8 * 60 + 30,
+            end_minute: 17 * 60 + 20,
+        };
+        let held = repo
+            .create_rule(
+                "Critical 8x5x5",
+                Some(Severity::Critical),
+                &RuleTarget::or(&["8x5x5".to_owned()], &[]),
+                &[jsm],
+                &office,
+                RuleHolding {
+                    while_open: false,
+                    when_closed: WhenClosed::Hold,
+                },
+            )
+            .await
+            .expect("rule");
+        let plain = repo
+            .create_rule(
+                "Critical",
+                Some(Severity::Critical),
+                &RuleTarget::or(&[], &[]),
+                &[jsm],
+                &RuleWhen::default(),
+                RuleHolding::default(),
+            )
+            .await
+            .expect("rule");
+        let closed_of = |rules: &[RoutingRule], id: Uuid| {
+            rules.iter().find(|r| r.id == id).expect("rule").when_closed
+        };
+        let rules = repo.list_rules().await.expect("rules");
+        assert_eq!(closed_of(&rules, held), WhenClosed::Hold);
+        assert_eq!(closed_of(&rules, plain), WhenClosed::NextRule);
+
+        let edit = |when_closed| RuleEdit {
+            name: "Critical 8x5x5",
+            severity: Some(Severity::Critical),
+            tags: None,
+            group_ids: None,
+            join: None,
+            channel_ids: &[],
+            when: Some(&office),
+            hold: None,
+            when_closed,
+        };
+        // A whole `when` sent without `when_closed` keeps the hold.
+        assert!(repo.update_rule(held, &edit(None)).await.expect("update"));
+        assert_eq!(
+            closed_of(&repo.list_rules().await.expect("rules"), held),
+            WhenClosed::Hold
+        );
+        assert!(repo
+            .update_rule(held, &edit(Some(WhenClosed::NextRule)))
+            .await
+            .expect("update"));
+        assert_eq!(
+            closed_of(&repo.list_rules().await.expect("rules"), held),
+            WhenClosed::NextRule
+        );
+    }
+
     #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
     #[ignore = "needs DATABASE_URL"]
     async fn editing_a_rule_replaces_what_it_matches_and_keeps_its_switch(pool: sqlx::PgPool) {
@@ -1167,7 +1296,7 @@ mod tests {
                 &crate::alerts::notifications::RuleTarget::or(&[], &[]),
                 &[a],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1178,7 +1307,7 @@ mod tests {
                 &RuleTarget::or(&[], &[]),
                 &[a],
                 &RuleWhen::default(),
-                false,
+                RuleHolding::default(),
             )
             .await
             .expect("rule");
@@ -1196,6 +1325,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1230,6 +1360,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1268,6 +1399,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1285,6 +1417,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1302,6 +1435,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1331,6 +1465,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1351,6 +1486,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1371,6 +1507,7 @@ mod tests {
                     channel_ids: &[b],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await
@@ -1390,6 +1527,7 @@ mod tests {
                     channel_ids: &[a],
                     when: None,
                     hold: None,
+                    when_closed: None,
                 }
             )
             .await

@@ -4916,6 +4916,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/routing-rules/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where the alerts of the nodes a draft rule reaches would go across the week, with the draft
+         *     saved as it stands (ADR-266 decision 5).
+         * @description The draft takes the edited rule's place in the order, or lists last when `rule_id` is omitted,
+         *     and is read as switched on. Only the nodes it reaches are drawn, grouped by the rules that decide
+         *     for them and the zone they keep time in, and each week is judged every minute so the edge of the
+         *     draft's hours is drawn where it is. Nothing is saved.
+         */
+        get: operations["preview_routing_rule"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/routing-rules/{id}": {
         parameters: {
             query?: never;
@@ -7931,6 +7955,13 @@ export interface components {
             /** Format: int32 */
             end: number;
             kind: components["schemas"]["CoverageKind"];
+            /**
+             * Format: uuid
+             * @description The rule that decides during the stretch (ADR-266 decision 4): the open rule that sends or
+             *     holds, or a closed rule that holds while closed. `null` when the catch-all takes the alert,
+             *     when it is held because no rule is open, and when it goes nowhere.
+             */
+            rule_id?: string | null;
             /** Format: int32 */
             start: number;
         };
@@ -8111,6 +8142,7 @@ export interface components {
              */
             tags?: string[] | null;
             when?: null | components["schemas"]["RuleWhen"];
+            when_closed?: null | components["schemas"]["WhenClosed"];
         };
         /** @description Create-template body. */
         CreateTemplate: {
@@ -15174,6 +15206,12 @@ export interface components {
             tags: string[];
             /** @description When the rule is open (ADR-262 decision 3). Absent = always. */
             when?: components["schemas"]["RuleWhen"];
+            /**
+             * @description What the rule does while its hours are closed (ADR-266): `next_rule` passes the alert on to
+             *     the rules below and the catch-all, `hold` keeps it back until a rule that sends opens. A
+             *     rule that is always open never reads it. Absent = `next_rule`.
+             */
+            when_closed?: components["schemas"]["WhenClosed"];
         };
         /** @description The rules' order, first to last (ADR-262 decision 14). */
         RuleOrder: {
@@ -15182,6 +15220,50 @@ export interface components {
              *     where it goes.
              */
             ids: string[];
+        };
+        /**
+         * @description Where the alerts of the nodes a draft rule reaches would go across the week (ADR-266 decision
+         *     5).
+         */
+        RulePreview: {
+            /** @description The catch-all's channels, so a stretch drawn as `catch_all` can be named. */
+            catch_all: string[];
+            /** @description The zone a node whose folders name none keeps time in (a row whose `zone` is null). */
+            default_zone: string;
+            /**
+             * @description One per set of deciding rules and zone among the nodes the draft reaches, the most nodes
+             *     first. Empty when it reaches no node.
+             */
+            rows: components["schemas"]["RulePreviewRow"][];
+            /**
+             * Format: uuid
+             * @description The id the draft's stretches carry in `rule_id`: the edited rule's, or the nil id for a new
+             *     rule.
+             */
+            rule_id: string;
+            /** @description The severity the week is drawn for: the draft's own, or critical when it names none. */
+            severity: components["schemas"]["Severity"];
+        };
+        /** @description One group of the nodes a draft reaches, and its week, judged every minute. */
+        RulePreviewRow: {
+            /**
+             * Format: int32
+             * @description The minute of the week at which where an alert goes next changes, from Monday 00:00 local;
+             *     `null` when it does not change within a week.
+             */
+            next_change_minute?: number | null;
+            node_count: number;
+            /**
+             * Format: int32
+             * @description The minute of the week it is now in this zone, from Monday 00:00 local.
+             */
+            now_minute: number;
+            /** @description The rules that decide for these nodes, in order, the draft among them. */
+            rule_ids: string[];
+            /** @description Stretches in minutes from Monday 00:00 local, each with the rule that decides. */
+            segments: components["schemas"]["CoverageSegment"][];
+            /** @description The zone these nodes keep time in; `null` for the deployment's default. */
+            zone?: string | null;
         };
         /**
          * @description The tester's answer. A compile failure is reported **in-band** rather than as a 400: the whole
@@ -17154,6 +17236,11 @@ export interface components {
              */
             url?: string | null;
         };
+        /**
+         * @description What a routing rule with hours does while they are closed (ADR-266 decision 1).
+         * @enum {string}
+         */
+        WhenClosed: "next_rule" | "hold";
         /**
          * @description Whether a routing rule is open always, only inside its window, or only outside it
          *     (ADR-262 decision 3).
@@ -36155,6 +36242,99 @@ export interface operations {
             };
             /** @description The ids are not exactly the stored rules - one was added or deleted since the list was read (`rule_order_stale`); nothing was changed */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    preview_routing_rule: {
+        parameters: {
+            query?: {
+                /**
+                 * @description The rule being edited: the draft takes its place in the order. Omitted for a new rule, which
+                 *     lists last.
+                 */
+                rule_id?: string | null;
+                /** @description `critical`, `warning` or `info`. Omitted = any severity, and the week is drawn for critical. */
+                severity?: string | null;
+                /** @description Tags the node must carry one of, one per line (the way `GET /node-tags` takes `reach`). */
+                tags?: string | null;
+                /** @description Folder ids the node must be inside one of, comma-separated. */
+                group_ids?: string | null;
+                /** @description How folders and tags combine when both are given: `or` (the default) or `and`. */
+                join?: null | components["schemas"]["Join"];
+                /** @description `always` (the default), `during` or `outside`. */
+                mode?: null | components["schemas"]["WhenMode"];
+                /** @description ISO weekdays of the window, comma-separated (1 = Monday .. 7 = Sunday). */
+                days?: string | null;
+                /** @description Minutes after local midnight, 0 to 1439. */
+                start_minute?: number | null;
+                /** @description Minutes after local midnight, 0 to 1439. */
+                end_minute?: number | null;
+                /** @description `next_rule` (the default) or `hold`. */
+                when_closed?: null | components["schemas"]["WhenClosed"];
+                /** @description The rule holds instead of sending while open. Omitted = false. */
+                hold?: boolean | null;
+                /** @description Channel ids, comma-separated. */
+                channel_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The nodes the draft reaches, grouped by the rules that decide for them, and where their alerts go across the week */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulePreview"];
+                };
+            };
+            /** @description A severity outside critical|warning|info, a tag that is empty, too long or holds a control character, a malformed id, or a window with no weekday in 1..7 or a minute outside 0..1439 (`invalid_rule`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description `rule_id` names no rule (`rule_not_found`) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

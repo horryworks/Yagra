@@ -483,7 +483,11 @@
       "err": {
         "days": "Pick at least one day.",
         "time": "Enter both times as HH:MM."
-      }
+      },
+      "closed": "Other times",
+      "closedNext": "Next rule",
+      "closedHold": "Hold",
+      "closedHeld": "other times held"
     },
     "catchAll": {
       "title": "Catch-all",
@@ -516,6 +520,15 @@
         "held": "Held",
         "nowhere": "Reaches nobody"
       }
+    },
+    "preview": {
+      "title": "Where their alerts go",
+      "this": "{{name}} (this rule)",
+      "thisUnnamed": "This rule",
+      "rule": "{{name}} (rule {{n}})",
+      "held": "Held until a rule sends it",
+      "heldUntil": "held until {{when}}",
+      "now": "Now ({{when}}, {{zone}})"
     }
   },
   "appliesTo": {

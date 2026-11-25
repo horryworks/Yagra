@@ -38,6 +38,11 @@ describe('a rule\'s hours', () => {
 
   it('says always, a window, or the outside of one', () => {
     expect(whenText(t, { mode: 'always' })).toBe('always');
+    // ADR-266: a rule that holds while closed says so after its hours; an always-open one cannot.
+    const office = { mode: 'during' as const, days: [1, 2, 3, 4, 5], start_minute: 510, end_minute: 1040 };
+    expect(whenText(t, office, 'hold')).toMatch(/08:30–17:20 · closedHeld$/);
+    expect(whenText(t, office, 'next_rule')).not.toContain('closedHeld');
+    expect(whenText(t, { mode: 'always' }, 'hold')).toBe('always');
     const w = { days: [1, 2, 3, 4, 5], start_minute: 510, end_minute: 1040 };
     expect(whenText(t, { mode: 'during', ...w })).toContain('08:30–17:20');
     expect(whenText(t, { mode: 'outside', ...w })).toMatch(/^outside /);

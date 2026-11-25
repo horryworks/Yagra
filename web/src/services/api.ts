@@ -159,6 +159,7 @@ import type {
   RoutingRuleBody,
   RoutingCatchAll,
   RoutingCoverage,
+  RulePreview,
   Severity,
   GroupingExceptionBody,
   NodeTags,
@@ -238,6 +239,7 @@ import type {
   WebuiUrl,
 } from '../types/api';
 import type { DiscoverySettingsBody } from '../pages/neighborSettings';
+import type { PreviewQuery } from '../pages/rulePreview';
 import { filenameFromDisposition } from '../lib/download';
 import { buildUrl, type Op, type Ok, type OptsArg, type PathsWith } from './typedPaths';
 
@@ -2541,6 +2543,11 @@ export const api = {
    *  the week (ADR-262). Reads every node, so it is asked for when the section is open. */
   getRoutingCoverage: (severity: Severity): Promise<RoutingCoverage> =>
     apiGet('/api/v1/routing-coverage', { query: { severity } }),
+
+  /** Where the alerts of the nodes a draft rule reaches would go across the week, judged every
+   *  minute, with the rule that decides each stretch (ADR-266). Nothing is saved. */
+  previewRoutingRule: (query: PreviewQuery): Promise<RulePreview> =>
+    apiGet('/api/v1/routing-rules/preview', { query }),
 
   /** Replace the catch-all's channels. */
   setRoutingCatchAll: (channel_ids: string[]): Promise<void> =>

@@ -29,6 +29,8 @@ import {
   type NodeTags,
   type RoutingRule,
   type Severity,
+  type WhenClosed,
+  WHEN_CLOSED,
 } from '../types/api';
 import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -90,6 +92,7 @@ import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 import { zoneLine, zoneQuery, type ReachZone } from './ruleZones';
 import { Segmented } from '../components/ui/Segmented';
 import { deliveryLogFor } from './deliveryLogQuery';
+import { RulePreviewWeek } from './RulePreviewWeek';
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {
@@ -759,8 +762,8 @@ function RulesSection({
         key: 'when',
         header: t('routing.rules.cols.when'),
         width: '1fr',
-        sortValue: (r) => whenText(t, r.when),
-        render: (r) => <ClippedText text={whenText(t, r.when)} />,
+        sortValue: (r) => whenText(t, r.when, r.when_closed),
+        render: (r) => <ClippedText text={whenText(t, r.when, r.when_closed)} />,
       },
       {
         key: 'channels',
@@ -923,6 +926,7 @@ function RulesSection({
 
       {adding && (
         <RuleModal
+          rules={rules}
           channels={channels}
           nodeTags={nodeTags}
           groups={groups}
@@ -936,6 +940,7 @@ function RulesSection({
       {editing && (
         <RuleModal
           rule={editing}
+          rules={rules}
           channels={channels}
           nodeTags={nodeTags}
           groups={groups}
@@ -974,6 +979,7 @@ function RulesSection({
  *  rule's on/off switch as it was. */
 function RuleModal({
   rule,
+  rules,
   channels,
   nodeTags,
   groups,
@@ -981,6 +987,8 @@ function RuleModal({
   onDone,
 }: {
   rule?: RoutingRule;
+  /** Every rule, in order: the week names the rules that decide beside this one. */
+  rules: RoutingRule[];
   channels: NotificationChannel[];
   nodeTags: NodeTags | null;
   groups: NodeGroup[];
@@ -1017,6 +1025,8 @@ function RuleModal({
   const [selected, setSelected] = useState<Set<string>>(() => new Set(rule?.channel_ids ?? []));
   // Send to the ticked channels, or hold the alert until another rule decides (ADR-262 decision 14).
   const [hold, setHold] = useState(rule?.hold ?? false);
+  // While the hours are closed: pass the alert to the rules below, or hold it here (ADR-266).
+  const [whenClosed, setWhenClosed] = useState<WhenClosed>(rule?.when_closed ?? 'next_rule');
   // A failure is said in the dialog. It used to go to the page, behind the overlay (F4).
   const form = useSubmit({
     errorFallback: rule ? t('routing.err.updateRule') : t('routing.err.addRule'),
@@ -1046,6 +1056,7 @@ function RuleModal({
       channel_ids: hold ? [] : [...selected],
       when: 'when' in whenBody ? whenBody.when : undefined,
       hold,
+      when_closed: whenClosed,
     };
     form.submit(() =>
       (rule ? api.updateRoutingRule(rule.id, body) : api.createRoutingRule(body)).then(() =>
@@ -1136,6 +1147,18 @@ function RuleModal({
             </>
           )}
         </FieldGroup>
+        {when.mode !== 'always' && (
+          <FieldGroup label={t('routing.when.closed')}>
+            <Segmented
+              options={WHEN_CLOSED.map((c) => ({ value: c, label: t(CLOSED_LABEL[c]) }))}
+              value={whenClosed}
+              onChange={(v) => {
+                const c = WHEN_CLOSED.find((x) => x === v);
+                if (c) setWhenClosed(c);
+              }}
+            />
+          </FieldGroup>
+        )}
         <FieldGroup label={t('routing.ruleModal.channels')}>
           <Segmented
             options={[
@@ -1158,11 +1181,32 @@ function RuleModal({
             </Inline>
           )}
         </FieldGroup>
+        <RulePreviewWeek
+          draft={{
+            ruleId: rule?.id,
+            severity,
+            target: appliesToBody(target),
+            when,
+            whenClosed,
+            hold,
+            channelIds: [...selected],
+          }}
+          name={name}
+          rules={rules}
+          channels={channels}
+        />
         <FormError form={form} />
       </Fields>
     </Modal>
   );
 }
+
+/** The label of each answer to "what happens while the hours are closed", spelled out so no key is
+ *  built at runtime. */
+const CLOSED_LABEL: Record<WhenClosed, 'routing.when.closedNext' | 'routing.when.closedHold'> = {
+  next_rule: 'routing.when.closedNext',
+  hold: 'routing.when.closedHold',
+};
 
 /** The zones the rule's hours are read in, with how many nodes each (ADR-262 decision 11): the
  *  most nodes first, three at most, a zone the nodes fall back to marked as the default. */

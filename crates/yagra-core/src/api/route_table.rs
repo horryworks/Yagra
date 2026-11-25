@@ -2136,6 +2136,18 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
+    // ADR-266 decision 6: the rule dialog's week for a draft nobody has saved. MCP has no tool that
+    // makes a draft, and the saved rules' week, with the rule deciding each stretch, is
+    // get_config(kind=routing_coverage).
+    (
+        "GET",
+        "/api/v1/routing-rules/preview",
+        ADMIN_CFG,
+        Exempt(
+            "answers about an unsaved draft of a rule, which no MCP tool can make; the saved \
+             rules' week is get_config(kind=routing_coverage)",
+        ),
+    ),
     (
         "PUT",
         "/api/v1/routing-rules/:id/definition",

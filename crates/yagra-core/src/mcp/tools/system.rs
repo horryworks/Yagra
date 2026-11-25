@@ -908,7 +908,10 @@ impl YagraMcp {
                        weekdays and minutes after midnight, read in the node's own zone; listed in \
                        order, and only the first open rule that matches an alert decides where it \
                        goes — rules below it do not hear it; `hold` true means that rule sends \
-                       nowhere and keeps the alert back until another rule decides), node_tags (every tag named anywhere — \
+                       nowhere and keeps the alert back until another rule decides; \
+                       `when_closed` `hold` means that while the rule's hours are closed it keeps \
+                       the alert back there too, instead of passing it to the rules below and \
+                       the catch-all (`next_rule`)), node_tags (every tag named anywhere — \
                        carried, refused, named by a rule or exception, or registered — with how \
                        many nodes carry it among their effective labels; the names a routing \
                        rule can usefully name), registered_tags (the tags an Admin \
@@ -919,7 +922,8 @@ impl YagraMcp {
                        opens if a rule matches, and reaches no channel if none does), routing_coverage (every node grouped by the rules of one `severity`, critical unless asked, \
                        that match it and the zone it keeps time in, with where its alerts go across \
                        the week in stretches of minutes from Monday 00:00 local: to the rules' \
-                       channels, the catch-all, held, or nowhere), notification_default_route (the \
+                       channels, the catch-all, held, or nowhere, each with the `rule_id` that \
+                       decides it, null when no rule does), notification_default_route (the \
                        route set by the core's environment, which every alert is sent to whatever \
                        the routing rules say: whether it is configured and which kinds of channel \
                        — webhook, email — it sends to, never where), delivery_hours (the \

@@ -3300,6 +3300,7 @@ mod delivery_tests {
             channel_ids: vec![channel],
             when: crate::alerts::notifications::RuleWhen::default(),
             hold: false,
+            when_closed: crate::alerts::notifications::WhenClosed::NextRule,
         }
     }
 
@@ -3520,12 +3521,13 @@ mod delivery_tests {
     // -- A rule's hours (ADR-262, the hold and release of ADR-226) ------------------------------
 
     use crate::alerts::delivery_hours::{testkit::MemHeld, HeldEvent};
-    use crate::alerts::notifications::{RuleWhen, WhenMode};
+    use crate::alerts::notifications::{RuleWhen, WhenClosed, WhenMode};
     use chrono::TimeZone;
 
     /// The office's channel id, and a second channel the night rule or the catch-all sends to.
     const OFFICE: Uuid = Uuid::from_u128(0x0ff1ce);
     const NIGHT: Uuid = Uuid::from_u128(0x4e1647);
+    const CATCH: Uuid = Uuid::from_u128(0xca7c4);
 
     /// A rule open on weekdays 08:30-17:20 (UTC: no node here has a zoned folder).
     fn office_rule(channel: Uuid) -> RoutingRule {
@@ -3724,6 +3726,70 @@ mod delivery_tests {
         )
         .await;
         assert_eq!(catch.lock().unwrap().count("fire"), 1);
+        assert_eq!(office.lock().unwrap().count("fire"), 0);
+        assert!(held.rows.lock().unwrap().is_empty());
+    }
+
+    /// ADR-266: an office-hours rule that holds while closed, above a rule that sends always. The
+    /// evening's fire reaches neither that rule's channel nor the one below nor the catch-all; it
+    /// is held and the morning sends it to the office rule. Saved as "next rule", the same evening
+    /// fire goes to the rule below at once - what a PoC saw at 17:41.
+    #[tokio::test]
+    async fn an_office_rule_that_holds_after_hours_keeps_the_evening_fire_for_the_morning() {
+        let node = NodeId::new();
+        let install = |when_closed| {
+            let (office, always, catch) = (log(), log(), log());
+            let n = Notifier::with_default(None);
+            let held = Arc::new(MemHeld::default());
+            n.set_held_store(held.clone());
+            n.install_routing(
+                vec![
+                    built(OFFICE, Recorder(office.clone())),
+                    built(NIGHT, Recorder(always.clone())),
+                    built(CATCH, Recorder(catch.clone())),
+                ],
+                vec![
+                    RoutingRule {
+                        when_closed,
+                        ..office_rule(OFFICE)
+                    },
+                    rule(NIGHT, None),
+                ],
+            );
+            n.set_catch_all(vec![CATCH]);
+            (n, held, office, always, catch)
+        };
+
+        let (n, held, office, always, catch) = install(WhenClosed::Hold);
+        let a = alert(node, Severity::Critical, None);
+        n.handle_at(NotifyAction::Fire(a.clone()), evening()).await;
+        for (log, who) in [
+            (&office, "the office rule"),
+            (&always, "the rule below"),
+            (&catch, "the catch-all"),
+        ] {
+            assert_eq!(
+                log.lock().unwrap().count("fire"),
+                0,
+                "{who} hears nothing at night"
+            );
+        }
+        assert_eq!(held.rows.lock().unwrap().len(), 1, "the fire is held");
+        release_now(&n, &held, std::slice::from_ref(&a)).await;
+        assert_eq!(
+            office.lock().unwrap().count("fire"),
+            1,
+            "the morning sends it to the office rule"
+        );
+        assert_eq!(always.lock().unwrap().count("fire"), 0);
+
+        let (n, held, office, always, _) = install(WhenClosed::NextRule);
+        n.handle_at(NotifyAction::Fire(a), evening()).await;
+        assert_eq!(
+            always.lock().unwrap().count("fire"),
+            1,
+            "passed over, the rule below sends it"
+        );
         assert_eq!(office.lock().unwrap().count("fire"), 0);
         assert!(held.rows.lock().unwrap().is_empty());
     }

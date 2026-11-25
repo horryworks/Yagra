@@ -15,7 +15,7 @@ use yagra_base::groups::DeliveryNow;
 use yagra_base::wall_clock::Tz;
 use yagra_common::NodeId;
 
-use crate::alerts::notifications::{RoutingRule, WhenMode};
+use crate::alerts::notifications::{RoutingRule, WhenClosed, WhenMode};
 
 /// How far ahead [`next_change`] looks: a week and a day finds every weekly window's edge.
 const LOOKAHEAD_MINUTES: i64 = 8 * 24 * 60;
@@ -126,9 +126,10 @@ pub type Hears<'a> = &'a dyn Fn(&Uuid) -> bool;
 /// `matched` is in rule order, and the first rule in it that is open decides alone (ADR-262
 /// decision 14): a holding rule holds, a sending rule sends to its channels, and no rule below it
 /// hears the alert. A sending rule no channel of which can hear is passed over, as if it were not
-/// there - otherwise switching a channel off would make a rule swallow alerts. Only when no rule
-/// decides does the catch-all take the alert; without one it is held if a rule could send it
-/// later, and goes nowhere if none could.
+/// there - otherwise switching a channel off would make a rule swallow alerts. A closed rule is
+/// passed over too, unless it holds while closed (ADR-266): then it holds the alert there. Only
+/// when no rule decides does the catch-all take the alert; without one it is held if a rule could
+/// send it later, and goes nowhere if none could.
 #[must_use]
 pub fn route_local(
     matched: &[&RoutingRule],
@@ -137,29 +138,67 @@ pub fn route_local(
     day: u8,
     minute: u16,
 ) -> RouteNow {
-    for rule in matched.iter().filter(|r| r.when.open_at(day, minute)) {
-        if rule.hold {
-            return RouteNow::Held;
-        }
-        let heard: BTreeSet<Uuid> = rule
-            .channel_ids
-            .iter()
-            .copied()
-            .filter(|c| hears(c))
-            .collect();
-        if !heard.is_empty() {
-            return RouteNow::Rules(heard);
+    decide_local(matched, catch_all, hears, day, minute).route
+}
+
+/// Where an alert goes at one local minute, and which rule decided (ADR-266 decision 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    pub route: RouteNow,
+    /// The rule that decided: an open rule that sends or holds, or a closed rule that holds while
+    /// closed. `None` when the catch-all takes the alert, when it is held because no rule is open,
+    /// and when it goes nowhere.
+    pub rule: Option<Uuid>,
+}
+
+/// [`route_local`] with the rule that decided. The first matching rule that is open decides alone
+/// (ADR-262 decision 14); a closed rule is passed over unless it holds while closed (ADR-266
+/// decision 1), in which case it holds the alert there and no rule below it, nor the catch-all,
+/// hears it.
+#[must_use]
+pub fn decide_local(
+    matched: &[&RoutingRule],
+    catch_all: &[Uuid],
+    hears: Hears<'_>,
+    day: u8,
+    minute: u16,
+) -> Decision {
+    for rule in matched {
+        if rule.when.open_at(day, minute) {
+            if rule.hold {
+                return Decision {
+                    route: RouteNow::Held,
+                    rule: Some(rule.id),
+                };
+            }
+            let heard: BTreeSet<Uuid> = rule
+                .channel_ids
+                .iter()
+                .copied()
+                .filter(|c| hears(c))
+                .collect();
+            if !heard.is_empty() {
+                return Decision {
+                    route: RouteNow::Rules(heard),
+                    rule: Some(rule.id),
+                };
+            }
+        } else if holds_when_closed(rule, hears) {
+            return Decision {
+                route: RouteNow::Held,
+                rule: Some(rule.id),
+            };
         }
     }
     let catch_all: BTreeSet<Uuid> = catch_all.iter().copied().filter(|c| hears(c)).collect();
-    if !catch_all.is_empty() {
-        return RouteNow::CatchAll(catch_all);
-    }
-    if matched.iter().any(|r| sends_to_someone(r, hears)) {
+    let route = if !catch_all.is_empty() {
+        RouteNow::CatchAll(catch_all)
+    } else if matched.iter().any(|r| sends_to_someone(r, hears)) {
         RouteNow::Held
     } else {
         RouteNow::Nowhere
-    }
+    };
+    Decision { route, rule: None }
 }
 
 /// Whether `rule` sends, and some channel of it can hear.
@@ -167,16 +206,33 @@ fn sends_to_someone(rule: &RoutingRule, hears: Hears<'_>) -> bool {
     !rule.hold && rule.channel_ids.iter().any(hears)
 }
 
+/// Whether `rule`, while its hours are closed, keeps an alert back (ADR-266 decision 1). A sending
+/// rule no channel of which can hear does not: it is passed over as if it were not there, open or
+/// closed, for the reason [`route_local`] gives.
+fn holds_when_closed(rule: &RoutingRule, hears: Hears<'_>) -> bool {
+    rule.when_closed == WhenClosed::Hold && (rule.hold || sends_to_someone(rule, hears))
+}
+
+/// Whether `rule` decides at every minute it matches: it is always open, or it holds while closed,
+/// and it holds or a channel of it hears.
+fn always_decides(rule: &RoutingRule, hears: Hears<'_>) -> bool {
+    match rule.when.mode {
+        WhenMode::Always => rule.hold || sends_to_someone(rule, hears),
+        WhenMode::During | WhenMode::Outside => holds_when_closed(rule, hears),
+    }
+}
+
 /// The matching rules that can ever decide, in order: everything down to and including the first
-/// rule that is always open and decides (it holds, or a channel of it hears). A rule below that one
-/// never decides, so two places whose rules differ only there go to the same places all week, and
-/// the coverage and the clock line share one judgement for them.
+/// rule that decides at every minute (always open, or holding while closed - see
+/// [`always_decides`]). A rule below that one never decides, so two places whose rules differ only
+/// there go to the same places all week, and the coverage and the clock line share one judgement
+/// for them.
 #[must_use]
 pub fn deciding<'a>(matched: &[&'a RoutingRule], hears: Hears<'_>) -> Vec<&'a RoutingRule> {
     let mut out = Vec::with_capacity(matched.len());
     for rule in matched {
         out.push(*rule);
-        if rule.when.mode == WhenMode::Always && (rule.hold || sends_to_someone(rule, hears)) {
+        if always_decides(rule, hears) {
             break;
         }
     }
@@ -246,6 +302,10 @@ pub struct CoverageSegment {
     pub kind: CoverageKind,
     /// The channels it goes to; empty when held or going nowhere.
     pub channel_ids: Vec<Uuid>,
+    /// The rule that decides during the stretch (ADR-266 decision 4): the open rule that sends or
+    /// holds, or a closed rule that holds while closed. `null` when the catch-all takes the alert,
+    /// when it is held because no rule is open, and when it goes nowhere.
+    pub rule_id: Option<Uuid>,
 }
 
 /// Where an alert goes during a [`CoverageSegment`].
@@ -280,19 +340,28 @@ pub struct CoverageNode {
     pub zone: Option<String>,
 }
 
-/// The week of one set of matching rules, slot by slot, merged into stretches.
+/// The week of one set of matching rules, judged every `slot` minutes and merged into stretches.
+/// `slot` divides a day (1 and 15 do); a slot that does not is read as one minute. The coverage
+/// card takes [`COVERAGE_SLOT_MINUTES`]; the rule dialog's week takes one, so the edge of a rule's
+/// hours is drawn where it is (ADR-266 decision 5).
 #[must_use]
-pub fn week_of(
+pub fn week_in_slots(
     matched: &[&RoutingRule],
     catch_all: &[Uuid],
     hears: Hears<'_>,
+    slot: u16,
 ) -> Vec<CoverageSegment> {
+    let slot = if slot > 0 && 1440 % slot == 0 {
+        slot
+    } else {
+        1
+    };
     let mut out: Vec<CoverageSegment> = Vec::new();
     for day in 1..=7u8 {
-        for slot in 0..(1440 / COVERAGE_SLOT_MINUTES) {
-            let minute = slot * COVERAGE_SLOT_MINUTES;
+        for step in 0..(1440 / slot) {
+            let minute = step * slot;
             let start = u16::from(day - 1) * 1440 + minute;
-            let route = route_local(matched, catch_all, hears, day, minute);
+            let Decision { route, rule } = decide_local(matched, catch_all, hears, day, minute);
             let kind = match route {
                 RouteNow::Rules(_) => CoverageKind::Rules,
                 RouteNow::CatchAll(_) => CoverageKind::CatchAll,
@@ -301,14 +370,19 @@ pub fn week_of(
             };
             let channel_ids: Vec<Uuid> = route.channels().into_iter().collect();
             match out.last_mut() {
-                Some(last) if last.kind == kind && last.channel_ids == channel_ids => {
-                    last.end = start + COVERAGE_SLOT_MINUTES;
+                Some(last)
+                    if last.kind == kind
+                        && last.channel_ids == channel_ids
+                        && last.rule_id == rule =>
+                {
+                    last.end = start + slot;
                 }
                 _ => out.push(CoverageSegment {
                     start,
-                    end: start + COVERAGE_SLOT_MINUTES,
+                    end: start + slot,
                     kind,
                     channel_ids,
+                    rule_id: rule,
                 }),
             }
         }
@@ -328,6 +402,29 @@ pub fn coverage(
     severity: yagra_common::Severity,
     nodes: &[CoverageNode],
     edges: &[(Uuid, Option<Uuid>)],
+) -> Vec<CoverageRow> {
+    coverage_in_slots(
+        rules,
+        catch_all,
+        hears,
+        severity,
+        nodes,
+        edges,
+        COVERAGE_SLOT_MINUTES,
+    )
+}
+
+/// [`coverage`] with each week judged every `slot` minutes ([`week_in_slots`]). The rule dialog's
+/// week asks for one-minute slots (ADR-266 decision 5).
+#[must_use]
+pub fn coverage_in_slots(
+    rules: &[RoutingRule],
+    catch_all: &[Uuid],
+    hears: Hears<'_>,
+    severity: yagra_common::Severity,
+    nodes: &[CoverageNode],
+    edges: &[(Uuid, Option<Uuid>)],
+    slot: u16,
 ) -> Vec<CoverageRow> {
     let live: Vec<&RoutingRule> = rules
         .iter()
@@ -372,7 +469,7 @@ pub fn coverage(
                 .filter(|r| rule_ids.contains(&r.id))
                 .collect();
             CoverageRow {
-                segments: week_of(&matched, catch_all, hears),
+                segments: week_in_slots(&matched, catch_all, hears, slot),
                 rule_ids,
                 zone,
                 node_count: members.len(),
@@ -521,6 +618,7 @@ mod tests {
                 end_minute: 17 * 60 + 20,
             },
             hold: false,
+            when_closed: crate::alerts::notifications::WhenClosed::NextRule,
         }
     }
 
@@ -631,6 +729,128 @@ mod tests {
         );
         let hold = holding(WhenMode::Always);
         assert_eq!(ids(deciding(&[&hold, &all], &hears)), vec![hold.id]);
+        // A rule that holds while closed decides at every minute, so it cuts the list too
+        // (ADR-266); one whose channels are all off does not, as it is passed over open or closed.
+        let held_nights = RoutingRule {
+            when_closed: WhenClosed::Hold,
+            ..rule(mail, WhenMode::During)
+        };
+        assert_eq!(
+            ids(deciding(&[&held_nights, &all], &hears)),
+            vec![held_nights.id]
+        );
+        let dead_nights = RoutingRule {
+            when_closed: WhenClosed::Hold,
+            ..rule(off, WhenMode::During)
+        };
+        assert_eq!(
+            ids(deciding(&[&dead_nights, &all], &hears)),
+            vec![dead_nights.id, all.id]
+        );
+    }
+
+    /// ADR-266, the case found on a PoC: a weekday-hours rule for the nodes tagged `8x5x5` sits
+    /// above an always-open rule that reaches the same nodes by another tag and sends to the same
+    /// channels. Passed over when closed (ADR-262 decision 14), the rule below sends the 17:41
+    /// alert. Holding while closed keeps it there - from the rule below and from the catch-all -
+    /// until the hours open on Thursday at 08:30.
+    #[test]
+    fn a_rule_that_holds_while_closed_keeps_the_alert_from_the_rules_below() {
+        let (jsm, chat) = (Uuid::new_v4(), Uuid::new_v4());
+        let office = rule(jsm, WhenMode::During);
+        let everything = rule(jsm, WhenMode::Always);
+        let clock = RuleClock::default();
+        let wed_1741 = at(25, 17, 41);
+        // Today: the rule below sends after hours. Same channel, different rule.
+        let passed = [&office, &everything];
+        assert_eq!(
+            decide_local(&passed, &[], &ALL, 3, 17 * 60 + 41),
+            Decision {
+                route: RouteNow::Rules([jsm].into_iter().collect()),
+                rule: Some(everything.id),
+            }
+        );
+        let held_nights = RoutingRule {
+            when_closed: WhenClosed::Hold,
+            ..office.clone()
+        };
+        let held = [&held_nights, &everything];
+        assert_eq!(
+            decide_local(&held, &[chat], &ALL, 3, 17 * 60 + 41),
+            Decision {
+                route: RouteNow::Held,
+                rule: Some(held_nights.id),
+            },
+            "held at the closed rule: neither the rule below nor the catch-all hears it"
+        );
+        assert_eq!(
+            next_change(&held, &[], &ALL, &clock, None, wed_1741),
+            Some(at(26, 8, 30)),
+            "held until the hours open, Thursday 08:30"
+        );
+        assert_eq!(
+            route_at(&held, &[], &ALL, &clock, None, at(26, 8, 30)),
+            RouteNow::Rules([jsm].into_iter().collect())
+        );
+        // A weekend is closed all day, so it is held all day.
+        assert_eq!(
+            route_at(&held, &[], &ALL, &clock, None, at(28, 12, 0)),
+            RouteNow::Held
+        );
+        // A rule nobody can hear is passed over when closed as well as when open.
+        let off = |id: &Uuid| *id != jsm;
+        assert_eq!(
+            decide_local(&held, &[chat], &off, 3, 17 * 60 + 41),
+            Decision {
+                route: RouteNow::CatchAll([chat].into_iter().collect()),
+                rule: None,
+            }
+        );
+        // A rule that is always open has no closed hours to hold in.
+        let always_held = RoutingRule {
+            when_closed: WhenClosed::Hold,
+            ..everything.clone()
+        };
+        assert_eq!(
+            route_at(&[&always_held], &[], &ALL, &clock, None, wed_1741),
+            RouteNow::Rules([jsm].into_iter().collect())
+        );
+    }
+
+    /// The dialog's week is judged every minute and split by the rule that decides, so the 17:20
+    /// edge between two rules sending to the same channel is drawn where it is (ADR-266 decisions 4
+    /// and 5). The coverage card's 15-minute week cannot draw it at 17:20.
+    #[test]
+    fn a_minute_week_splits_where_the_deciding_rule_changes() {
+        let jsm = Uuid::new_v4();
+        let office = rule(jsm, WhenMode::During);
+        let everything = rule(jsm, WhenMode::Always);
+        let matched = [&office, &everything];
+        let week = week_in_slots(&matched, &[], &ALL, 1);
+        let (from, to) = (2 * 1440, 3 * 1440);
+        let wednesday: Vec<(u16, u16, Option<Uuid>)> = week
+            .iter()
+            .filter(|s| s.start < to && s.end > from)
+            .map(|s| (s.start.max(from) - from, s.end.min(to) - from, s.rule_id))
+            .collect();
+        assert_eq!(
+            wednesday,
+            vec![
+                (0, 8 * 60 + 30, Some(everything.id)),
+                (8 * 60 + 30, 17 * 60 + 20, Some(office.id)),
+                (17 * 60 + 20, 24 * 60, Some(everything.id)),
+            ],
+            "the rule below until 08:30, this rule until 17:20, then the rule below again"
+        );
+        assert!(week
+            .iter()
+            .all(|s| s.kind == CoverageKind::Rules && s.channel_ids == vec![jsm]));
+        let coarse = week_in_slots(&matched, &[], &ALL, COVERAGE_SLOT_MINUTES);
+        assert!(
+            coarse.iter().all(|s| s.start % COVERAGE_SLOT_MINUTES == 0),
+            "the coverage card keeps its 15-minute slots"
+        );
+        assert!(!coarse.iter().any(|s| s.start == 2 * 1440 + 17 * 60 + 20));
     }
 
     /// 2026-11-23 is a Monday. UTC, so the times read as written.
@@ -746,12 +966,13 @@ mod tests {
             "a catch-all naming only an off channel does not take a closed rule's alert"
         );
         assert_eq!(
-            week_of(&[&open], &[off], &hears),
+            week_in_slots(&[&open], &[off], &hears, COVERAGE_SLOT_MINUTES),
             vec![CoverageSegment {
                 start: 0,
                 end: 7 * 1440,
                 kind: CoverageKind::Nowhere,
                 channel_ids: Vec::new(),
+                rule_id: None,
             }]
         );
     }
@@ -810,6 +1031,7 @@ mod tests {
                 end: 7 * 1440,
                 kind: CoverageKind::Nowhere,
                 channel_ids: Vec::new(),
+                rule_id: None,
             }]
         );
         // At warning, the critical-only rule no longer reaches the core node.

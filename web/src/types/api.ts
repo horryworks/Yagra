@@ -830,6 +830,13 @@ export type RuleWhen = components['schemas']['RuleWhen'];
 /** How a setting's folders and tags combine: `or` (either is enough) or `and` (both) (ADR-262). */
 export type Join = components['schemas']['Join'];
 export type WhenMode = components['schemas']['WhenMode'];
+/** What a rule with hours does while they are closed: pass the alert on, or hold it (ADR-266). */
+export type WhenClosed = components['schemas']['WhenClosed'];
+/** The two answers, in the order the dialog's switch shows them. */
+export const WHEN_CLOSED = ['next_rule', 'hold'] as const satisfies readonly WhenClosed[];
+/** Where the alerts of the nodes a draft rule reaches would go across the week (ADR-266). */
+export type RulePreview = components['schemas']['RulePreview'];
+export type RulePreviewRow = components['schemas']['RulePreviewRow'];
 /** The channels an alert goes to when no matching rule is open (ADR-262). */
 export type RoutingCatchAll = components['schemas']['RoutingCatchAll'];
 /** Where alerts go across the week, by the set of rules that reach each node (ADR-262). */

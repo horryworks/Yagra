@@ -49,6 +49,7 @@ use yagra_common::{is_ssrf_blocked, NotifyEvent, PreviewSample, Severity};
     create_routing_rule,
     set_routing_rule_enabled,
     set_routing_rule_order,
+    preview_routing_rule,
     update_routing_rule,
     delete_routing_rule,
     get_routing_catch_all,
@@ -114,6 +115,7 @@ pub(super) fn routes() -> Router<ApiState> {
         .route("/api/v1/node-tags/delete", post(delete_node_tag))
         // Registered beside `/:id`, which matchit lets a fixed segment win over.
         .route("/api/v1/routing-rules/order", put(set_routing_rule_order))
+        .route("/api/v1/routing-rules/preview", get(preview_routing_rule))
         .route(
             "/api/v1/routing-rules/:id",
             put(set_routing_rule_enabled).delete(delete_routing_rule),
@@ -1420,34 +1422,8 @@ pub(crate) async fn coverage_in(
         )
     };
     let rules = admin.notifications.list_rules().await.map_err(fail)?;
-    let catch_all = admin.notifications.catch_all().await.map_err(fail)?;
-    // A switched-off channel hears nothing, so a stretch sent only to one is not covered.
-    let enabled: std::collections::HashSet<Uuid> = admin
-        .notifications
-        .list_channels()
-        .await
-        .map_err(fail)?
-        .into_iter()
-        .filter(|c| c.enabled)
-        .map(|c| c.id)
-        .collect();
-    let nodes = admin.repo.list_nodes().await.map_err(fail)?;
-    let rows = admin.groups.time_zone_rows().await.map_err(fail)?;
-    let edges: Vec<(Uuid, Option<Uuid>)> = rows.iter().map(|(g, p, _)| (*g, *p)).collect();
-    let zones = yagra_base::groups::resolve_nearest_ancestor(rows);
-    let tags = super::util::tag_resolver(admin).await;
-    let nodes: Vec<crate::alerts::rule_time::CoverageNode> = nodes
-        .iter()
-        .map(|n| {
-            let group = n.group.map(|g| g.as_uuid());
-            crate::alerts::rule_time::CoverageNode {
-                id: n.id.as_uuid(),
-                group,
-                tags: tags.effective(n),
-                zone: group.and_then(|g| zones.get(&g)).map(|(z, _)| z.clone()),
-            }
-        })
-        .collect();
+    let (catch_all, enabled) = routing_listeners(admin).await.map_err(fail)?;
+    let (nodes, edges) = coverage_nodes(admin).await.map_err(fail)?;
     Ok(RoutingCoverage {
         severity,
         rows: crate::alerts::rule_time::coverage(
@@ -1460,6 +1436,307 @@ pub(crate) async fn coverage_in(
         ),
         catch_all,
     })
+}
+
+/// The catch-all's channels and the channels that are switched on. A switched-off channel hears
+/// nothing, so a stretch sent only to one is not covered.
+async fn routing_listeners(
+    admin: &super::AdminState,
+) -> anyhow::Result<(Vec<Uuid>, std::collections::HashSet<Uuid>)> {
+    let catch_all = admin.notifications.catch_all().await?;
+    let enabled = admin
+        .notifications
+        .list_channels()
+        .await?
+        .into_iter()
+        .filter(|c| c.enabled)
+        .map(|c| c.id)
+        .collect();
+    Ok((catch_all, enabled))
+}
+
+/// Every node as the week needs it - its folder, its effective tags and its zone's name - and the
+/// folder tree. One reading shared by the coverage and the rule dialog's week, so the two cannot
+/// place a node differently.
+async fn coverage_nodes(
+    admin: &super::AdminState,
+) -> anyhow::Result<(
+    Vec<crate::alerts::rule_time::CoverageNode>,
+    Vec<(Uuid, Option<Uuid>)>,
+)> {
+    let nodes = admin.repo.list_nodes().await?;
+    let rows = admin.groups.time_zone_rows().await?;
+    let edges: Vec<(Uuid, Option<Uuid>)> = rows.iter().map(|(g, p, _)| (*g, *p)).collect();
+    let zones = yagra_base::groups::resolve_nearest_ancestor(rows);
+    let tags = super::util::tag_resolver(admin).await;
+    let nodes = nodes
+        .iter()
+        .map(|n| {
+            let group = n.group.map(|g| g.as_uuid());
+            crate::alerts::rule_time::CoverageNode {
+                id: n.id.as_uuid(),
+                group,
+                tags: tags.effective(n),
+                zone: group.and_then(|g| zones.get(&g)).map(|(z, _)| z.clone()),
+            }
+        })
+        .collect();
+    Ok((nodes, edges))
+}
+
+/// A routing rule as the dialog has it before it is saved (ADR-266 decision 5). Every field is
+/// optional and reads as the dialog's own default: no severity, every node, always open, sending.
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+pub(super) struct RulePreviewQuery {
+    /// The rule being edited: the draft takes its place in the order. Omitted for a new rule, which
+    /// lists last.
+    rule_id: Option<Uuid>,
+    /// `critical`, `warning` or `info`. Omitted = any severity, and the week is drawn for critical.
+    severity: Option<String>,
+    /// Tags the node must carry one of, one per line (the way `GET /node-tags` takes `reach`).
+    tags: Option<String>,
+    /// Folder ids the node must be inside one of, comma-separated.
+    group_ids: Option<String>,
+    /// How folders and tags combine when both are given: `or` (the default) or `and`.
+    join: Option<crate::alerts::applies_to::Join>,
+    /// `always` (the default), `during` or `outside`.
+    mode: Option<crate::alerts::notifications::WhenMode>,
+    /// ISO weekdays of the window, comma-separated (1 = Monday .. 7 = Sunday).
+    days: Option<String>,
+    /// Minutes after local midnight, 0 to 1439.
+    start_minute: Option<u16>,
+    /// Minutes after local midnight, 0 to 1439.
+    end_minute: Option<u16>,
+    /// `next_rule` (the default) or `hold`.
+    when_closed: Option<crate::alerts::notifications::WhenClosed>,
+    /// The rule holds instead of sending while open. Omitted = false.
+    hold: Option<bool>,
+    /// Channel ids, comma-separated.
+    channel_ids: Option<String>,
+}
+
+/// Where the alerts of the nodes a draft rule reaches would go across the week (ADR-266 decision
+/// 5).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct RulePreview {
+    /// The severity the week is drawn for: the draft's own, or critical when it names none.
+    severity: Severity,
+    /// The id the draft's stretches carry in `rule_id`: the edited rule's, or the nil id for a new
+    /// rule.
+    rule_id: Uuid,
+    /// The catch-all's channels, so a stretch drawn as `catch_all` can be named.
+    catch_all: Vec<Uuid>,
+    /// The zone a node whose folders name none keeps time in (a row whose `zone` is null).
+    default_zone: String,
+    /// One per set of deciding rules and zone among the nodes the draft reaches, the most nodes
+    /// first. Empty when it reaches no node.
+    rows: Vec<RulePreviewRow>,
+}
+
+/// One group of the nodes a draft reaches, and its week, judged every minute.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct RulePreviewRow {
+    node_count: usize,
+    /// The zone these nodes keep time in; `null` for the deployment's default.
+    zone: Option<String>,
+    /// The rules that decide for these nodes, in order, the draft among them.
+    rule_ids: Vec<Uuid>,
+    /// Stretches in minutes from Monday 00:00 local, each with the rule that decides.
+    segments: Vec<crate::alerts::rule_time::CoverageSegment>,
+    /// The minute of the week it is now in this zone, from Monday 00:00 local.
+    now_minute: u16,
+    /// The minute of the week at which where an alert goes next changes, from Monday 00:00 local;
+    /// `null` when it does not change within a week.
+    next_change_minute: Option<u16>,
+}
+
+/// A comma-separated list of ids; a blank entry is skipped, a malformed one refused.
+fn id_list(raw: Option<&str>, field: &str) -> ApiResult<Vec<Uuid>> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            Uuid::parse_str(s).map_err(|_| {
+                ApiError::bad_request("invalid_rule", format!("{field} holds a malformed id"))
+            })
+        })
+        .collect()
+}
+
+/// The minute of the week `at` falls on in `tz`, counted from Monday 00:00.
+fn week_minute(tz: &yagra_base::wall_clock::Tz, at: chrono::DateTime<chrono::Utc>) -> u16 {
+    use chrono::{Datelike, Timelike};
+    let local = yagra_base::wall_clock::to_local(tz, at);
+    let minutes =
+        (local.weekday().number_from_monday() - 1) * 1440 + local.hour() * 60 + local.minute();
+    u16::try_from(minutes).unwrap_or(0)
+}
+
+/// What `GET /api/v1/routing-rules/preview` answers for `q` at `now`.
+async fn preview_in(
+    admin: &super::AdminState,
+    q: &RulePreviewQuery,
+    now: chrono::DateTime<chrono::Utc>,
+) -> ApiResult<RulePreview> {
+    use crate::alerts::notifications::{RoutingRule, RuleWhen};
+    let fail = |e: anyhow::Error| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "routing rule preview",
+            "failed to draw the week",
+        )
+    };
+    let draft_severity = parse_severity_opt(q.severity.as_deref()).map_err(|()| {
+        ApiError::bad_request(
+            "invalid_rule",
+            "severity must be critical|warning|info or omitted",
+        )
+    })?;
+    let days = q
+        .days
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.parse::<u8>()
+                .map_err(|_| ApiError::bad_request("invalid_rule", "days are ISO weekdays, 1 to 7"))
+        })
+        .collect::<ApiResult<Vec<u8>>>()?;
+    let draft = RoutingRule {
+        id: q.rule_id.unwrap_or_else(Uuid::nil),
+        name: String::new(),
+        enabled: true,
+        severity: draft_severity,
+        tags: super::nodes::validated_labels(
+            q.tags.as_deref().map(reach_tags).unwrap_or_default(),
+        )?,
+        group_ids: id_list(q.group_ids.as_deref(), "group_ids")?,
+        join: q.join.unwrap_or_default(),
+        channel_ids: id_list(q.channel_ids.as_deref(), "channel_ids")?,
+        when: checked_when(&RuleWhen {
+            mode: q.mode.unwrap_or_default(),
+            days,
+            start_minute: q.start_minute.unwrap_or(0),
+            end_minute: q.end_minute.unwrap_or(0),
+        })?,
+        hold: q.hold.unwrap_or(false),
+        when_closed: q.when_closed.unwrap_or_default(),
+    };
+    let mut rules = admin.notifications.list_rules().await.map_err(fail)?;
+    match q.rule_id {
+        Some(id) => {
+            let slot = rules
+                .iter_mut()
+                .find(|r| r.id == id)
+                .ok_or_else(|| ApiError::not_found("rule_not_found", format!("no rule {id}")))?;
+            *slot = RoutingRule {
+                name: slot.name.clone(),
+                ..draft.clone()
+            };
+        }
+        None => rules.push(draft.clone()),
+    }
+    let severity = draft_severity.unwrap_or(Severity::Critical);
+    let (catch_all, enabled) = routing_listeners(admin).await.map_err(fail)?;
+    let hears = |id: &Uuid| enabled.contains(id);
+    let (nodes, edges) = coverage_nodes(admin).await.map_err(fail)?;
+    let mut chains: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+    let reached: Vec<crate::alerts::rule_time::CoverageNode> = nodes
+        .into_iter()
+        .filter(|n| {
+            let chain = n.group.map_or_else(Vec::new, |g| {
+                chains
+                    .entry(g)
+                    .or_insert_with(|| {
+                        let mut c = vec![g];
+                        c.extend(yagra_base::groups::group_ancestors(&edges, g));
+                        c
+                    })
+                    .clone()
+            });
+            crate::alerts::applies_to::reaches_chain(
+                &draft.group_ids,
+                &draft.tags,
+                draft.join,
+                &chain,
+                &n.tags,
+            )
+        })
+        .collect();
+    let default = yagra_base::wall_clock::zone_or_utc(
+        admin
+            .delivery_hours
+            .default_zone()
+            .await
+            .map_err(fail)?
+            .as_deref(),
+    );
+    let rows = crate::alerts::rule_time::coverage_in_slots(
+        &rules, &catch_all, &hears, severity, &reached, &edges, 1,
+    )
+    .into_iter()
+    .map(|row| {
+        let tz = row
+            .zone
+            .as_deref()
+            .and_then(yagra_base::wall_clock::parse_zone)
+            .unwrap_or_else(|| default.clone());
+        let matched: Vec<&RoutingRule> = row
+            .rule_ids
+            .iter()
+            .filter_map(|id| rules.iter().find(|r| r.id == *id))
+            .collect();
+        let clock =
+            crate::alerts::rule_time::RuleClock::new(std::collections::HashMap::new(), tz.clone());
+        let next =
+            crate::alerts::rule_time::next_change(&matched, &catch_all, &hears, &clock, None, now);
+        RulePreviewRow {
+            node_count: row.node_count,
+            zone: row.zone,
+            rule_ids: row.rule_ids.clone(),
+            segments: row.segments,
+            now_minute: week_minute(&tz, now),
+            next_change_minute: next.map(|at| week_minute(&tz, at)),
+        }
+    })
+    .collect();
+    Ok(RulePreview {
+        severity,
+        rule_id: draft.id,
+        catch_all,
+        default_zone: yagra_base::wall_clock::zone_name(&default).to_owned(),
+        rows,
+    })
+}
+
+/// Where the alerts of the nodes a draft rule reaches would go across the week, with the draft
+/// saved as it stands (ADR-266 decision 5).
+///
+/// The draft takes the edited rule's place in the order, or lists last when `rule_id` is omitted,
+/// and is read as switched on. Only the nodes it reaches are drawn, grouped by the rules that decide
+/// for them and the zone they keep time in, and each week is judged every minute so the edge of the
+/// draft's hours is drawn where it is. Nothing is saved.
+#[utoipa::path(
+    get, path = "/api/v1/routing-rules/preview", tag = "notifications",
+    params(RulePreviewQuery),
+    responses(
+        (status = 200, description = "The nodes the draft reaches, grouped by the rules that decide for them, and where their alerts go across the week", body = RulePreview),
+        (status = 400, description = "A severity outside critical|warning|info, a tag that is empty, too long or holds a control character, a malformed id, or a window with no weekday in 1..7 or a minute outside 0..1439 (`invalid_rule`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 404, description = "`rule_id` names no rule (`rule_not_found`)", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn preview_routing_rule(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Query(q): Query<RulePreviewQuery>,
+) -> ApiResult<Json<RulePreview>> {
+    Ok(Json(preview_in(&admin, &q, chrono::Utc::now()).await?))
 }
 
 #[utoipa::path(
@@ -1601,6 +1878,12 @@ pub(super) struct CreateRule {
     /// create = false; omitted on an edit, the rule keeps its own.
     #[serde(default)]
     hold: Option<bool>,
+    /// What the rule does while its `when` hours are closed (ADR-266): `next_rule` passes the
+    /// alert on to the rules below and the catch-all, `hold` keeps it back until a rule that sends
+    /// opens. A rule that is always open never reads it. Omitted on a create = `next_rule`; omitted
+    /// on an edit, the rule keeps its own.
+    #[serde(default)]
+    when_closed: Option<crate::alerts::notifications::WhenClosed>,
 }
 
 /// A rule's definition after the edge's checks.
@@ -1698,7 +1981,10 @@ async fn create_routing_rule(
             },
             &body.channel_ids,
             &rule.when.clone().unwrap_or_default(),
-            body.hold.unwrap_or(false),
+            crate::alerts::notifications::RuleHolding {
+                while_open: body.hold.unwrap_or(false),
+                when_closed: body.when_closed.unwrap_or_default(),
+            },
         )
         .await
         .map_err(|e| {
@@ -1778,6 +2064,7 @@ async fn update_routing_rule(
                 channel_ids: &body.channel_ids,
                 when: rule.when.as_ref(),
                 hold: body.hold,
+                when_closed: body.when_closed,
             },
         )
         .await
@@ -3033,6 +3320,52 @@ at 2026-08-04T09:41:07+00:00"
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(
+            rules[0]["when_closed"], "next_rule",
+            "a rule created without it passes a closed alert on, as before ADR-266"
+        );
+
+        // ADR-266: what the rule does while closed is written, kept by an edit that sends the
+        // whole window without it, and changed by one that names it.
+        let definition = format!("/api/v1/routing-rules/{id}/definition");
+        let closed_now = || async {
+            let (_, rules) = send(&st, "GET", "/api/v1/routing-rules", &tok, None).await;
+            rules[0]["when_closed"].clone()
+        };
+        for (body, expected) in [
+            (
+                serde_json::json!({ "name": "day", "channel_ids": [ch], "when": window, "when_closed": "hold" }),
+                "hold",
+            ),
+            (
+                serde_json::json!({ "name": "day", "channel_ids": [ch], "when": window }),
+                "hold",
+            ),
+            (
+                serde_json::json!({ "name": "day", "channel_ids": [ch], "when_closed": "next_rule" }),
+                "next_rule",
+            ),
+        ] {
+            let (status, answer) = send(&st, "PUT", &definition, &tok, Some(body.clone())).await;
+            assert_eq!(
+                status,
+                axum::http::StatusCode::NO_CONTENT,
+                "{body} -> {answer}"
+            );
+            assert_eq!(closed_now().await, expected, "after {body}");
+        }
+        let (status, body) = send(
+            &st,
+            "PUT",
+            &definition,
+            &tok,
+            Some(serde_json::json!({ "name": "day", "channel_ids": [ch], "when_closed": "drop" })),
+        )
+        .await;
+        assert!(
+            status.is_client_error(),
+            "an unknown choice is refused: {body}"
+        );
 
         let (status, _) = send(
             &st,
@@ -3046,6 +3379,141 @@ at 2026-08-04T09:41:07+00:00"
         let (status, read) = send(&st, "GET", "/api/v1/routing-catch-all", &tok, None).await;
         assert_eq!(status, axum::http::StatusCode::OK);
         assert_eq!(read["channel_ids"], serde_json::json!([ch]));
+    }
+
+    /// ADR-266 decision 5: the dialog's week for a draft. Only the nodes the draft reaches are
+    /// drawn, the edge of its hours lands on the minute, and the stretch after it says which rule
+    /// decides: the rule below while the draft passes a closed alert on, the draft itself once it
+    /// holds while closed. A new draft lists last, so a rule above that is always open takes every
+    /// stretch from it - which the week shows rather than hides.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn a_draft_rule_week_draws_its_nodes_and_who_decides_each_stretch(pool: sqlx::PgPool) {
+        use crate::api::tests_support::{live_state, send, token};
+        let site = yagra_base::pgtest::group(&pool, "Site A").await;
+        yagra_base::pgtest::node(&pool, "ap1", 1, Some(site)).await;
+        yagra_base::pgtest::node(&pool, "ap2", 2, Some(site)).await;
+        yagra_base::pgtest::node(&pool, "core1", 3, None).await;
+        let st = live_state(pool).await;
+        let tok = token(&st, yagra_common::Role::Admin);
+        let (status, ch) = send(
+            &st,
+            "POST",
+            "/api/v1/notification-channels",
+            &tok,
+            Some(serde_json::json!({
+                "name": "JSM",
+                "config": { "kind": "webhook", "url": "http://10.0.0.9/hook" },
+            })),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "{ch}");
+        let ch = ch["id"].as_str().unwrap().to_owned();
+        let mut ids = Vec::new();
+        for name in ["Critical 8x5x5", "Critical"] {
+            let (status, made) = send(
+                &st,
+                "POST",
+                "/api/v1/routing-rules",
+                &tok,
+                Some(serde_json::json!({ "name": name, "channel_ids": [ch] })),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::CREATED, "{made}");
+            ids.push(made["id"].as_str().unwrap().to_owned());
+        }
+        let (office, below) = (ids[0].clone(), ids[1].clone());
+
+        let draft = |extra: &str| {
+            format!(
+                "/api/v1/routing-rules/preview?group_ids={site}&mode=during&days=1,2,3,4,5\
+                 &start_minute=510&end_minute=1040&channel_ids={ch}{extra}"
+            )
+        };
+        // Wednesday from 17:20, in minutes from Monday 00:00.
+        let wed_evening = 2 * 1440 + 17 * 60 + 20;
+        let decider_at = |body: &serde_json::Value, minute: u64| {
+            body["rows"][0]["segments"]
+                .as_array()
+                .expect("segments")
+                .iter()
+                .find(|s| s["start"].as_u64() == Some(minute))
+                .map(|s| (s["kind"].clone(), s["rule_id"].clone()))
+        };
+        let editing = format!("&rule_id={office}");
+        let (status, passed) = send(&st, "GET", &draft(&editing), &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{passed}");
+        assert_eq!(
+            passed["rule_id"], office,
+            "the edited rule's stretches carry its id"
+        );
+        assert_eq!(passed["rows"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            passed["rows"][0]["node_count"], 2,
+            "the two nodes inside the folder, not the one outside"
+        );
+        assert_eq!(passed["default_zone"], "UTC");
+        assert_eq!(
+            decider_at(&passed, wed_evening - (17 * 60 + 20) + 8 * 60 + 30),
+            Some((serde_json::json!("rules"), serde_json::json!(office))),
+            "the draft decides from Wednesday 08:30"
+        );
+        assert_eq!(
+            decider_at(&passed, wed_evening),
+            Some((serde_json::json!("rules"), serde_json::json!(below))),
+            "passed over at 17:20, the rule below decides"
+        );
+        assert!(passed["rows"][0]["now_minute"]
+            .as_u64()
+            .is_some_and(|m| m < 7 * 1440));
+
+        let (status, held) = send(
+            &st,
+            "GET",
+            &draft(&format!("{editing}&when_closed=hold")),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{held}");
+        assert_eq!(
+            decider_at(&held, wed_evening),
+            Some((serde_json::json!("held"), serde_json::json!(office))),
+            "holding while closed, the draft keeps it from 17:20"
+        );
+
+        // A new rule lists last: the always-open rule above decides every stretch.
+        let (status, new_rule) = send(&st, "GET", &draft(""), &tok, None).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{new_rule}");
+        assert_eq!(new_rule["rule_id"], Uuid::nil().to_string());
+        let stretches = new_rule["rows"][0]["segments"]
+            .as_array()
+            .expect("segments");
+        assert!(
+            stretches
+                .iter()
+                .all(|s| s["rule_id"] == serde_json::json!(office)),
+            "{new_rule}"
+        );
+
+        let (status, body) = send(
+            &st,
+            "GET",
+            &format!("{}&rule_id={}", draft(""), Uuid::new_v4()),
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{body}");
+        let (status, body) = send(
+            &st,
+            "GET",
+            "/api/v1/routing-rules/preview?mode=during&days=9",
+            &tok,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
     }
 
     /// ADR-259: a rule is created with tags (trimmed and de-duplicated the way a node's labels

@@ -106,3 +106,93 @@
   margin-right: var(--space-1);
   border-radius: var(--radius-sm);
 }
+
+/* The rule dialog's week (ADR-266 decision 5): a bar per weekday, painted by the rule that decides
+   each stretch, an axis of hours above, a mark at now, and a legend. Stretches are placed by
+   percentage of the day, so a 17:20 edge lands where it is. */
+.rule-week {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  font-size: var(--font-sm);
+  font-variant-numeric: tabular-nums;
+}
+.rule-week-row {
+  display: grid;
+  grid-template-columns: var(--space-6) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+}
+.rule-week-day {
+  color: var(--text-secondary);
+}
+.rule-week-day.is-today {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.rule-week-axis {
+  position: relative;
+  height: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+.rule-week-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.rule-week-axis span.is-first {
+  transform: none;
+}
+.rule-week-axis span.is-last {
+  transform: translateX(-100%);
+}
+.rule-week-bar {
+  position: relative;
+  height: var(--space-4);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+.rule-week-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.rule-week-seg.is-held,
+.rule-week-legend i.is-held {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--status-warning) 0 var(--space-1),
+    var(--bg-tertiary) var(--space-1) var(--space-2)
+  );
+}
+.rule-week-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--space-0-5);
+  margin-left: calc(-1 * var(--space-0-5) / 2);
+  background: var(--text-primary);
+}
+.rule-week-legend {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+.rule-week-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.rule-week-legend i {
+  flex: none;
+  width: var(--space-3);
+  height: var(--space-2);
+  border-radius: var(--radius-sm);
+}

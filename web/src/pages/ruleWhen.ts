@@ -3,7 +3,7 @@
 // the rule list's "When" cell. Kept out of the `.tsx` so Vitest can reach it.
 
 import type { TFunction } from 'i18next';
-import type { RuleWhen, WhenMode } from '../types/api';
+import type { RuleWhen, WhenClosed, WhenMode } from '../types/api';
 import { daysText, hoursText, minutesToTime, timeToMinutes, WEEKDAYS, WORKDAYS } from './deliveryHours';
 
 /** The three answers to "when is this rule open", in the order the switch shows them. */
@@ -51,8 +51,13 @@ export function whenBodyFrom(d: WhenDraft): { when: RuleWhen } | { error: WhenEr
   };
 }
 
-/** The list's "When" cell: "Always", "Mon–Fri 08:30–17:20", or the same after "Outside". */
-export function whenText(t: TFunction, when: RuleWhen | null | undefined): string {
+/** The list's "When" cell: "Always", "Mon–Fri 08:30–17:20", or the same after "Outside" - and,
+ *  for a rule that holds while closed, "· other times held" after it (ADR-266). */
+export function whenText(
+  t: TFunction,
+  when: RuleWhen | null | undefined,
+  whenClosed?: WhenClosed | null,
+): string {
   if (!when || when.mode === 'always' || (when.days ?? []).length === 0) {
     return t('alertsConfig:routing.when.always');
   }
@@ -60,7 +65,6 @@ export function whenText(t: TFunction, when: RuleWhen | null | undefined): strin
     start_minute: when.start_minute ?? 0,
     end_minute: when.end_minute ?? 0,
   })}`;
-  return when.mode === 'during'
-    ? span
-    : t('alertsConfig:routing.when.outsideSpan', { span });
+  const open = when.mode === 'during' ? span : t('alertsConfig:routing.when.outsideSpan', { span });
+  return whenClosed === 'hold' ? `${open} · ${t('alertsConfig:routing.when.closedHeld')}` : open;
 }
