@@ -22,7 +22,9 @@ import {
   nowOnDay,
   nowStretch,
   otherDeciders,
+  pickedRow,
   previewQuery,
+  rowKey,
   rowZone,
   weekMinuteText,
   type Decider,
@@ -65,9 +67,9 @@ export function RulePreviewWeek({
     [settled],
     { initial: null },
   );
-  const [pick, setPick] = useState(0);
-  if (!preview || preview.rows.length === 0) return null;
-  const row = preview.rows[Math.min(pick, preview.rows.length - 1)];
+  const [pick, setPick] = useState<string | null>(null);
+  const row = preview ? pickedRow(preview.rows, pick) : null;
+  if (!preview || !row) return null;
   const thisRule = preview.rule_id;
   const others = otherDeciders(row, thisRule);
   const channelNames = (ids: readonly string[]) =>
@@ -119,11 +121,11 @@ export function RulePreviewWeek({
       {preview.rows.length > 1 && (
         <Select
           aria-label={t('routing.preview.title')}
-          value={String(Math.min(pick, preview.rows.length - 1))}
-          onChange={(e) => setPick(Number(e.target.value))}
+          value={rowKey(row)}
+          onChange={(e) => setPick(e.target.value)}
         >
-          {preview.rows.map((r, i) => (
-            <option key={`${r.rule_ids.join(',')}|${r.zone ?? ''}`} value={String(i)}>
+          {preview.rows.map((r) => (
+            <option key={rowKey(r)} value={rowKey(r)}>
               {`${t('routing.coverage.nodes', { count: r.node_count })} · ${rowZone(preview, r).zone}`}
             </option>
           ))}

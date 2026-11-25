@@ -10,7 +10,9 @@ import {
   nowOnDay,
   nowStretch,
   otherDeciders,
+  pickedRow,
   previewQuery,
+  rowKey,
   rowZone,
   weekMinuteText,
   type PreviewDraft,
@@ -139,6 +141,17 @@ describe('the rule dialog\'s week', () => {
   it('writes a minute of the week as the weekday and the time', () => {
     expect(weekMinuteText(t, 3 * DAY + 8 * 60 + 30)).toBe('Thu 08:30');
     expect(weekMinuteText(t, 0)).toBe('Mon 00:00');
+  });
+
+  it('keeps the picked row when an edit reorders the rows, and falls back to the first', () => {
+    const tokyo = passedOn;
+    const utc: RulePreviewRow = { ...passedOn, zone: null, node_count: 900 };
+    const key = rowKey(tokyo);
+    expect(pickedRow([tokyo, utc], key)).toBe(tokyo);
+    expect(pickedRow([utc, tokyo], key)).toBe(tokyo);
+    expect(pickedRow([utc], key)).toBe(utc);
+    expect(pickedRow([], key)).toBeNull();
+    expect(rowKey(tokyo)).not.toBe(rowKey(utc));
   });
 
   it('names a row\'s zone, or the deployment\'s default for a row with none', () => {

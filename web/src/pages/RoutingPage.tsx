@@ -87,7 +87,15 @@ import {
 } from './RoutingRulesFooter';
 import { RoutingCoverage } from './RoutingCoverage';
 import { WEEKDAYS, weekdayName } from './deliveryHours';
-import { WHEN_MODES, whenBodyFrom, whenDraftFrom, whenText, type WhenDraft } from './ruleWhen';
+import {
+  WHEN_MODES,
+  closedChoiceMatters,
+  whenBodyFrom,
+  whenClosedToSend,
+  whenDraftFrom,
+  whenText,
+  type WhenDraft,
+} from './ruleWhen';
 import { TimeOfDayInput } from '../components/ui/WallTimeInput';
 import { zoneLine, zoneQuery, type ReachZone } from './ruleZones';
 import { Segmented } from '../components/ui/Segmented';
@@ -1057,7 +1065,7 @@ function RuleModal({
       channel_ids: hold ? [] : [...selected],
       when: 'when' in whenBody ? whenBody.when : undefined,
       hold,
-      when_closed: whenClosed,
+      when_closed: whenClosedToSend(when.mode, hold, whenClosed),
     };
     form.submit(() =>
       (rule ? api.updateRoutingRule(rule.id, body) : api.createRoutingRule(body)).then(() =>
@@ -1148,7 +1156,7 @@ function RuleModal({
             </>
           )}
         </FieldGroup>
-        {when.mode !== 'always' && (
+        {closedChoiceMatters(when.mode, hold) && (
           <FieldGroup label={t('routing.when.closed')}>
             <Segmented
               options={WHEN_CLOSED.map((c) => ({ value: c, label: t(CLOSED_LABEL[c]) }))}
@@ -1188,7 +1196,7 @@ function RuleModal({
             severity,
             target: appliesToBody(target),
             when,
-            whenClosed,
+            whenClosed: whenClosedToSend(when.mode, hold, whenClosed),
             hold,
             channelIds: [...selected],
           }}

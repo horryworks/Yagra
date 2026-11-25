@@ -51,6 +51,20 @@ export function whenBodyFrom(d: WhenDraft): { when: RuleWhen } | { error: WhenEr
   };
 }
 
+/** Whether the dialog offers "what happens while the hours are closed" (ADR-266): only for a rule
+ *  with hours that sends. An always-open rule has no closed hours, and a rule that holds while
+ *  open and also while closed would hold at every minute - an always-open holding rule by another
+ *  name, which keeps its nodes' alerts from every rule below it for good. */
+export function closedChoiceMatters(mode: WhenMode, hold: boolean): boolean {
+  return mode !== 'always' && !hold;
+}
+
+/** What the dialog saves as `when_closed`: the operator's choice while it is offered, otherwise
+ *  `next_rule`, so a choice the dialog no longer shows is not left behind in the rule. */
+export function whenClosedToSend(mode: WhenMode, hold: boolean, chosen: WhenClosed): WhenClosed {
+  return closedChoiceMatters(mode, hold) ? chosen : 'next_rule';
+}
+
 /** The list's "When" cell: "Always", "Mon–Fri 08:30–17:20", or the same after "Outside" - and,
  *  for a rule that holds while closed, "· other times held" after it (ADR-266). */
 export function whenText(

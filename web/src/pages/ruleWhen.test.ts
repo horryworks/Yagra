@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { TFunction } from 'i18next';
-import { whenBodyFrom, whenDraftFrom, whenText } from './ruleWhen';
+import { closedChoiceMatters, whenBodyFrom, whenClosedToSend, whenDraftFrom, whenText } from './ruleWhen';
 
 const t = ((k: string, o?: Record<string, string>) =>
   o?.span ? `outside ${o.span}` : (k.split('.').pop() ?? k)) as unknown as TFunction;
@@ -34,6 +34,17 @@ describe('a rule\'s hours', () => {
       when: { mode: 'during', days: [1, 5], start_minute: 510, end_minute: 1040 },
     });
     if ('when' in body) expect(whenDraftFrom(body.when).days).toEqual([1, 5]);
+  });
+
+  it('offers and saves "while closed" only for a timed rule that sends (ADR-266)', () => {
+    expect(closedChoiceMatters('during', false)).toBe(true);
+    expect(closedChoiceMatters('outside', false)).toBe(true);
+    expect(closedChoiceMatters('always', false)).toBe(false);
+    expect(closedChoiceMatters('during', true)).toBe(false);
+    expect(whenClosedToSend('during', false, 'hold')).toBe('hold');
+    // A choice the dialog stopped showing is not saved behind the operator's back.
+    expect(whenClosedToSend('always', false, 'hold')).toBe('next_rule');
+    expect(whenClosedToSend('during', true, 'hold')).toBe('next_rule');
   });
 
   it('says always, a window, or the outside of one', () => {

@@ -182,6 +182,18 @@ export function nowOnDay(row: RulePreviewRow): { day: number; left: string } {
   return { day: Math.floor(row.now_minute / DAY), left: dayPercent(row.now_minute % DAY) };
 }
 
+/** A row's identity across answers: the rules that decide for it and its zone. The server sorts
+ *  rows by node count, so an index would point at another group once an edit reorders them. */
+export function rowKey(row: RulePreviewRow): string {
+  return `${row.rule_ids.join(',')}|${row.zone ?? ''}`;
+}
+
+/** The row the select shows: the one picked, while it is still in the answer, otherwise the
+ *  first. */
+export function pickedRow(rows: readonly RulePreviewRow[], key: string | null): RulePreviewRow | null {
+  return rows.find((r) => rowKey(r) === key) ?? rows[0] ?? null;
+}
+
 /** The zone a row keeps time in, named: its own, or the deployment's default. */
 export function rowZone(preview: RulePreview, row: RulePreviewRow): { zone: string; isDefault: boolean } {
   return row.zone

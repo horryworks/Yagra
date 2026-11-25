@@ -379,19 +379,13 @@ pub(crate) async fn filtered_node_page(
     // the scan was the first NODE_SCAN_MAX nodes by name, so a tagged node sorting past them was
     // never examined at all.
     let tags = tag_resolver_for(st, filter).await;
-    let narrowing = tags.as_ref().map(|r| yagra_base::repo::TagNarrowing {
-        tags: filter.tag.clone(),
-        folders: r.folders_carrying(&filter.tag),
-    });
+    let narrowing = tags
+        .as_ref()
+        .map(|r| tag_narrowing(r, &filter.tag, filter.tag_match))
+        .unwrap_or_default();
     let candidates = st
         .nodes
-        .search(
-            scope.group_filter(),
-            words,
-            address,
-            narrowing.as_ref(),
-            scan,
-        )
+        .search(scope.group_filter(), words, address, &narrowing, scan)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
@@ -989,6 +983,36 @@ async fn tag_resolver_for(
     }
 }
 
+/// The store narrowings for a tag filter (ADR-265 Inc.2, ADR-267): one naming every wanted tag
+/// when any one is enough, one per tag when every one is needed. A node carrying all the tags
+/// passes each per-tag narrowing, so the second is still a superset — and it is far smaller when
+/// one tag is common and another rare, which is the case the scan ceiling would otherwise cut.
+fn tag_narrowing(
+    resolver: &crate::inventory::tagres::TagResolver,
+    want: &[String],
+    tag_match: crate::alerts::applies_to::TagMatch,
+) -> Vec<yagra_base::repo::TagNarrowing> {
+    let one = |tags: &[String]| yagra_base::repo::TagNarrowing {
+        tags: tags.to_vec(),
+        folders: resolver.folders_carrying(tags),
+    };
+    match tag_match {
+        crate::alerts::applies_to::TagMatch::Any => vec![one(want)],
+        // Capped: any subset of the per-tag narrowings is still a superset of the nodes carrying
+        // every tag, so a long list costs the query no more than `TAG_NARROWINGS_MAX` predicates
+        // and the exact rule still weighs every tag.
+        crate::alerts::applies_to::TagMatch::All => want
+            .iter()
+            .take(TAG_NARROWINGS_MAX)
+            .map(|t| one(std::slice::from_ref(t)))
+            .collect(),
+    }
+}
+
+/// The most per-tag narrowings an every-tag filter hands the store. Each is a predicate and two
+/// bound values; past a handful, another one hardly shortens the scan.
+const TAG_NARROWINGS_MAX: usize = 8;
+
 async fn apply_node_filter(
     st: &ApiState,
     nodes: Vec<Node>,
@@ -1241,7 +1265,7 @@ async fn search_nodes(
     let limit = q.limit.unwrap_or(50);
     let nodes = st
         .nodes
-        .search(scope.group_filter(), &words, None, None, limit)
+        .search(scope.group_filter(), &words, None, &[], limit)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "node search", "failed to search nodes")
@@ -1345,7 +1369,7 @@ async fn list_group_nodes(
         // an ungrouped node is outside every group scope, which `search` enforces for us.
         let nodes = if q.group.is_none() && batch.is_none() {
             st.nodes
-                .search(scope.group_filter(), &[], None, None, GROUP_NODES_CAP)
+                .search(scope.group_filter(), &[], None, &[], GROUP_NODES_CAP)
                 .await
                 .unwrap_or_default()
         } else {
@@ -4371,6 +4395,27 @@ mod tests {
     }
 
     #[test]
+    fn an_every_tag_filter_narrows_the_store_once_per_tag_up_to_the_cap() {
+        // ADR-267: one narrowing naming them all for `any`; one per tag for `all`, so the scan is
+        // the nodes that may carry each, and never more than the cap however long the list.
+        use crate::alerts::applies_to::TagMatch;
+        let r = crate::inventory::tagres::TagResolver::empty();
+        let want: Vec<String> = (0..20).map(|i| format!("t{i}")).collect();
+        let any = tag_narrowing(&r, &want[..2], TagMatch::Any);
+        assert_eq!(any.len(), 1);
+        assert_eq!(any[0].tags, want[..2].to_vec());
+        let all = tag_narrowing(&r, &want[..2], TagMatch::All);
+        assert_eq!(
+            all.iter().map(|n| n.tags.clone()).collect::<Vec<_>>(),
+            vec![vec!["t0".to_owned()], vec!["t1".to_owned()]]
+        );
+        assert_eq!(
+            tag_narrowing(&r, &want, TagMatch::All).len(),
+            TAG_NARROWINGS_MAX
+        );
+    }
+
+    #[test]
     fn a_tag_filter_is_a_set_of_names_matched_by_any_or_by_all() {
         // ADR-265 decisions 3 and 5: tags are operator names (no vocabulary to refuse), several
         // are a union unless `tag_match=all` asks for every one (ADR-267), and the comparison is
@@ -4438,7 +4483,7 @@ mod tests {
         use yagra_base::pgtest;
         let filler = yagra_base::repo::NODE_SCAN_MAX + 100;
         sqlx::query(
-            "INSERT INTO nodes (id, name, address, sort_order)              SELECT gen_random_uuid(), 'a-' || lpad(i::text, 6, '0'), '198.51.100.0'::inet + i, i              FROM generate_series(1, $1) AS i",
+            "INSERT INTO nodes (id, name, address, sort_order, tags)              SELECT gen_random_uuid(), 'a-' || lpad(i::text, 6, '0'), '198.51.100.0'::inet + i, i,                     ARRAY['common']              FROM generate_series(1, $1) AS i",
         )
         .bind(filler)
         .execute(&pool)
@@ -4453,7 +4498,7 @@ mod tests {
         let own = pgtest::node(&pool, "zz-own", 1, None).await;
         let inherits = pgtest::node(&pool, "zz-inherits", 2, Some(site)).await;
         let refuses = pgtest::node(&pool, "zz-refuses", 3, Some(site)).await;
-        sqlx::query("UPDATE nodes SET tags = ARRAY['8x5x5'] WHERE id = $1")
+        sqlx::query("UPDATE nodes SET tags = ARRAY['8x5x5', 'common'] WHERE id = $1")
             .bind(own)
             .execute(&pool)
             .await
@@ -4489,6 +4534,30 @@ mod tests {
             "own tag and folder tag, not the node that refuses it"
         );
         assert_eq!(page["truncated"], false, "every candidate was examined");
+
+        // ADR-267: every one of a common tag and a rare one. Every filler may carry `common`, so a
+        // scan narrowed by "any of the tags" holds more than the ceiling and never reaches the one
+        // node that carries both; narrowed per tag, it holds only the nodes that may carry each.
+        let (status, page) = send(
+            &st,
+            "GET",
+            "/api/v1/nodes?tag=common,8x5x5&tag_match=all&limit=500",
+            &viewer,
+            None,
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{page}");
+        let got: Vec<&str> = page["nodes"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|n| n["id"].as_str().expect("an id"))
+            .collect();
+        assert_eq!(got, vec![own.to_string().as_str()], "{page}");
+        assert_eq!(
+            page["truncated"], false,
+            "the scan was cut to the nodes that may carry both"
+        );
 
         // The ceiling still means what it says when that many nodes really carry the tag.
         let (status, page) = send(

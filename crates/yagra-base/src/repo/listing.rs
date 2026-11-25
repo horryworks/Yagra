@@ -98,15 +98,18 @@ pub trait NodeListing: Send + Sync {
     /// matches `10.0.0.10`, and a name-ordered page capped at `limit` can hold every one of those
     /// and not the node that is actually at the address.
     ///
-    /// `tags`, when given, keeps only nodes that **may** carry one of its tags (see
-    /// [`TagNarrowing`]). It is a superset: the caller still decides, per node, with the full
-    /// effective-tag rule.
+    /// `tags` keeps only nodes that **every** narrowing in it admits, each one a node that may
+    /// carry one of its tags (see [`TagNarrowing`]); empty narrows nothing. A filter asking for any
+    /// of its tags passes one narrowing naming them all; one asking for every tag (ADR-267) passes
+    /// one per tag, so the scan is cut to the nodes that may carry all of them rather than to the
+    /// far larger set that may carry the most common one. Either way it is a superset: the caller
+    /// still decides, per node, with the full effective-tag rule.
     async fn search(
         &self,
         groups: GroupFilter<'_>,
         words: &[SearchWord],
         address: Option<IpAddr>,
-        tags: Option<&TagNarrowing>,
+        tags: &[TagNarrowing],
         limit: i64,
     ) -> anyhow::Result<Vec<Node>>;
 }
@@ -225,7 +228,7 @@ impl NodeListing for NodeRepo {
         groups: GroupFilter<'_>,
         words: &[SearchWord],
         address: Option<IpAddr>,
-        tags: Option<&TagNarrowing>,
+        tags: &[TagNarrowing],
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let limit = limit.clamp(1, NODE_SCAN_MAX);
@@ -247,10 +250,10 @@ impl NodeListing for NodeRepo {
             sql.push_str(" AND ");
             sql.push_str(&word_predicate(4 + 2 * i, ports));
         }
-        if tags.is_some() {
+        for i in 0..tags.len() {
             // `btrim` because a stored tag counts by its meaningful form (`tagres::meaningful`);
             // a row written before validation trimmed must not fall out of the superset.
-            let t = 4 + 2 * words.len();
+            let t = 4 + 2 * words.len() + 2 * i;
             let f = t + 1;
             sql.push_str(&format!(
                 " AND (EXISTS (SELECT 1 FROM unnest(tags) AS own(tag)                    WHERE btrim(own.tag) = ANY(${t}::text[]))                    OR group_id = ANY(${f}::uuid[]))"
@@ -266,7 +269,7 @@ impl NodeListing for NodeRepo {
                 .bind(yagra_common::node_search::like_escape(&word.text))
                 .bind(&word.folders);
         }
-        if let Some(n) = tags {
+        for n in tags {
             query = query.bind(&n.tags).bind(&n.folders);
         }
         let rows = query.fetch_all(&self.pool).await?;
@@ -345,7 +348,7 @@ impl NodeListing for StaticNodeList {
         groups: GroupFilter<'_>,
         words: &[SearchWord],
         address: Option<IpAddr>,
-        tags: Option<&TagNarrowing>,
+        tags: &[TagNarrowing],
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
         let mut nodes: Vec<Node> = self
@@ -354,8 +357,8 @@ impl NodeListing for StaticNodeList {
             .filter(|n| Self::in_scope(groups, n))
             // Mirrors `address = $n::inet`: an address compared as an address, never as text.
             .filter(|n| address.is_none_or(|a| n.address == a))
-            // Mirrors the tag predicate.
-            .filter(|n| tags.is_none_or(|t| t.admits(n)))
+            // Mirrors the tag predicates, one per narrowing, ANDed.
+            .filter(|n| tags.iter().all(|t| t.admits(n)))
             // Mirrors the per-word predicate. The skeleton has no port addresses, so that arm has
             // nothing to read here.
             .filter(|n| {
@@ -437,7 +440,7 @@ mod tests {
         // The inversion that would be a privilege escalation: an empty set matches nothing.
         assert_eq!(list.count(Some(&[])).await.unwrap(), 0);
         assert!(list
-            .search(Some(&[]), &w(""), None, None, 50)
+            .search(Some(&[]), &w(""), None, &[], 50)
             .await
             .unwrap()
             .is_empty());
@@ -445,7 +448,7 @@ mod tests {
 
         // Scope is applied before the search term, not instead of it.
         let hits = list
-            .search(Some(&[tokyo]), &w("in-"), None, None, 50)
+            .search(Some(&[tokyo]), &w("in-"), None, &[], 50)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
@@ -461,7 +464,7 @@ mod tests {
         ]);
         // Name substring, case-insensitive.
         assert_eq!(
-            list.search(None, &w("EDGE"), None, None, 50)
+            list.search(None, &w("EDGE"), None, &[], 50)
                 .await
                 .unwrap()
                 .len(),
@@ -469,13 +472,13 @@ mod tests {
         );
         // Address substring.
         let by_addr = list
-            .search(None, &w("192.168"), None, None, 50)
+            .search(None, &w("192.168"), None, &[], 50)
             .await
             .unwrap();
         assert_eq!(by_addr.len(), 1);
         assert_eq!(by_addr[0].name, "nagoya-edge");
         // Empty term returns all, ordered by name and capped.
-        let capped = list.search(None, &w(""), None, None, 2).await.unwrap();
+        let capped = list.search(None, &w(""), None, &[], 2).await.unwrap();
         assert_eq!(capped.len(), 2);
         assert_eq!(capped[0].name, "nagoya-edge"); // nagoya < osaka < tokyo
         assert_eq!(capped[1].name, "osaka-core");
@@ -490,14 +493,14 @@ mod tests {
         // A caller asking for one page gets one page — the repo does not quietly cut it shorter,
         // which was the original defect.
         let page = list
-            .search(None, &w("sw-"), None, None, NODE_SEARCH_MAX)
+            .search(None, &w("sw-"), None, &[], NODE_SEARCH_MAX)
             .await
             .unwrap();
         assert_eq!(page.len() as i64, NODE_SEARCH_MAX);
         // Asking for more than the scan ceiling yields exactly the ceiling, not some smaller
         // inner limit.
         let hits = list
-            .search(None, &w("sw-"), None, None, NODE_SCAN_MAX * 2)
+            .search(None, &w("sw-"), None, &[], NODE_SCAN_MAX * 2)
             .await
             .unwrap();
         assert_eq!(hits.len(), 600, "fewer nodes exist than the ceiling allows");
@@ -555,14 +558,14 @@ mod tests {
             assert_eq!(a, b, "node_group_map disagrees with {label}");
             for term in ["", "in-", "10.0.0."] {
                 let mut a: Vec<Uuid> = sql
-                    .search(scope, &w(term), None, None, 50)
+                    .search(scope, &w(term), None, &[], 50)
                     .await
                     .unwrap()
                     .iter()
                     .map(|n| n.id.as_uuid())
                     .collect();
                 let mut b: Vec<Uuid> = memory
-                    .search(scope, &w(term), None, None, 50)
+                    .search(scope, &w(term), None, &[], 50)
                     .await
                     .unwrap()
                     .iter()
@@ -602,19 +605,16 @@ mod tests {
         }
         let sql = crate::pgtest::repo(pool.clone());
         assert_eq!(
-            sql.search(None, &w(""), None, None, 50)
-                .await
-                .unwrap()
-                .len(),
+            sql.search(None, &w(""), None, &[], 50).await.unwrap().len(),
             5
         );
         assert_eq!(
-            sql.search(None, &w(""), None, None, 2).await.unwrap().len(),
+            sql.search(None, &w(""), None, &[], 2).await.unwrap().len(),
             2
         );
         // A caller asking for more than the shared cap gets the cap, not its own number.
         assert_eq!(
-            sql.search(None, &w(""), None, None, NODE_SEARCH_MAX * 10)
+            sql.search(None, &w(""), None, &[], NODE_SEARCH_MAX * 10)
                 .await
                 .unwrap()
                 .len(),
@@ -642,7 +642,7 @@ mod tests {
             let addr: IpAddr = addr.parse().expect("addr");
             for (label, store) in [("sql", &sql as &dyn NodeListing), ("memory", &memory)] {
                 let ids: Vec<Uuid> = store
-                    .search(None, &w(""), Some(addr), None, 50)
+                    .search(None, &w(""), Some(addr), &[], 50)
                     .await
                     .unwrap()
                     .iter()
@@ -654,14 +654,14 @@ mod tests {
         // Nobody there is an empty answer, not every node.
         let nobody: IpAddr = "192.0.2.1".parse().expect("addr");
         assert!(sql
-            .search(None, &w(""), Some(nobody), None, 50)
+            .search(None, &w(""), Some(nobody), &[], 50)
             .await
             .unwrap()
             .is_empty());
         // And it narrows alongside the substring rather than replacing it.
         let one_addr: IpAddr = "10.0.0.1".parse().expect("addr");
         assert!(sql
-            .search(None, &w("ten"), Some(one_addr), None, 50)
+            .search(None, &w("ten"), Some(one_addr), &[], 50)
             .await
             .unwrap()
             .is_empty());
@@ -706,7 +706,7 @@ mod tests {
         want.sort_unstable();
         for (label, store) in [("sql", &sql as &dyn NodeListing), ("memory", &memory)] {
             let mut got: Vec<Uuid> = store
-                .search(None, &[], None, Some(&narrowing), 50)
+                .search(None, &[], None, std::slice::from_ref(&narrowing), 50)
                 .await
                 .unwrap()
                 .iter()
@@ -716,7 +716,7 @@ mod tests {
             assert_eq!(got, want, "{label}");
             // It narrows alongside the words rather than replacing them.
             let with_word: Vec<Uuid> = store
-                .search(None, &w("site"), None, Some(&narrowing), 50)
+                .search(None, &w("site"), None, std::slice::from_ref(&narrowing), 50)
                 .await
                 .unwrap()
                 .iter()
@@ -726,19 +726,36 @@ mod tests {
             // Nothing wanted is nothing, not everything.
             assert!(
                 store
-                    .search(None, &[], None, Some(&TagNarrowing::default()), 50)
+                    .search(None, &[], None, &[TagNarrowing::default()], 50)
                     .await
                     .unwrap()
                     .is_empty(),
                 "{label} with an empty narrowing"
             );
+            // Several narrowings are ANDed (ADR-267's "every tag"): only `own` may carry both
+            // `core` and `wan`; `padded` and `in-site` may carry `core` alone.
+            let both = [
+                narrowing.clone(),
+                TagNarrowing {
+                    tags: vec!["wan".to_owned()],
+                    folders: Vec::new(),
+                },
+            ];
+            let anded: Vec<Uuid> = store
+                .search(None, &[], None, &both, 50)
+                .await
+                .unwrap()
+                .iter()
+                .map(|n| n.id.as_uuid())
+                .collect();
+            assert_eq!(anded, vec![own], "{label} with two narrowings");
         }
     }
 
     /// Ids a store answered, sorted.
     async fn ids(store: &dyn NodeListing, words: &[SearchWord]) -> Vec<Uuid> {
         let mut v: Vec<Uuid> = store
-            .search(None, words, None, None, 50)
+            .search(None, words, None, &[], 50)
             .await
             .unwrap()
             .iter()
