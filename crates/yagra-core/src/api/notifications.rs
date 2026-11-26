@@ -555,7 +555,7 @@ async fn test_notification_channel(
     );
     // Written here rather than through the notifier's queue: a test is one operator action, and
     // the row should be on the delivery log by the time the dialog shows the result (ADR-195).
-    let records = test_records(id, kind, &outcome, started_at, started);
+    let records = test_records(&open, &outcome, started_at, started);
     if let Err(e) = admin.deliveries.insert(&records).await {
         tracing::warn!(error = %e, channel = %id, "recording the test send in the delivery log failed");
     }
@@ -569,17 +569,21 @@ async fn test_notification_channel(
 /// The delivery-log rows for one test send: the send, and the close that followed it on a
 /// PagerDuty or JSM channel. The subject is `test` - the sample alert names no real node.
 fn test_records(
-    channel: Uuid,
-    kind: ChannelKind,
+    open: &crate::alerts::notifications::OpenChannel,
     outcome: &crate::alerts::notify::TestDelivery,
     at: chrono::DateTime<chrono::Utc>,
     started: std::time::Instant,
 ) -> Vec<crate::alerts::notification_log::DeliveryRecord> {
-    use crate::alerts::notification_log::{DeliveryEvent, DeliveryRecord};
+    use crate::alerts::notification_log::{DeliveryEvent, DeliveryRecord, DeliveryRoute};
+    let destination = crate::alerts::notify::destination_of(&open.config);
     let row = |event, attempt: &yagra_alert::Attempt, at| DeliveryRecord {
         at,
-        channel_id: Some(channel),
-        channel_kind: Some(kind),
+        channel_id: Some(open.id),
+        channel_kind: Some(open.config.kind()),
+        channel_name: Some(open.name.clone()),
+        destination: destination.clone(),
+        route: DeliveryRoute::Test,
+        route_rules: Vec::new(),
         event,
         subject: "test".to_owned(),
         node_id: None,
@@ -3061,9 +3065,24 @@ at 2026-08-04T09:41:07+00:00"
         assert_eq!(row["channel_name"], "unreachable", "{row}");
         assert_eq!(row["channel_kind"], "webhook", "{row}");
         assert_eq!(row["attempts"], 1, "{row}");
-        for secret in ["s3cr3t-path", "nonexistent.invalid"] {
-            assert!(!log.to_string().contains(secret), "the log leaked {secret}");
-        }
+        // ADR-269: the row says where it went - the scheme and host, never the path - and why.
+        assert_eq!(
+            row["destination"], "http://hooks.nonexistent.invalid",
+            "{row}"
+        );
+        assert_eq!(row["route"], "test", "{row}");
+        assert_eq!(row["route_rules"], serde_json::json!([]), "{row}");
+        assert!(
+            !log.to_string().contains("s3cr3t-path"),
+            "the log leaked the path"
+        );
+        // The host is in `destination` and nowhere else: the error and the answer stay redacted.
+        let mut rest = row.clone();
+        rest.as_object_mut().unwrap().remove("destination");
+        assert!(
+            !rest.to_string().contains("nonexistent.invalid"),
+            "the host leaked outside destination: {rest}"
+        );
         // A filter naming no such side is refused, not answered with nothing.
         let (status, _) = send(
             &st,

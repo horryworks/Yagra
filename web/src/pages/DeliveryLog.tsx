@@ -36,6 +36,7 @@ import {
   durationText,
   nextCursor,
   queryFor,
+  routeText,
   sideExplanationKey,
   subjectText,
   type DeliveryCursor,
@@ -59,6 +60,15 @@ function columnsFor(
       width: '1fr',
       render: (r) => {
         return <ClippedText text={channelLabel(t, r)} />;
+      },
+    },
+    {
+      key: 'route',
+      header: t('routing.log.cols.route'),
+      width: '1fr',
+      render: (r) => {
+        const text = routeText(t, r);
+        return text ? <ClippedText text={text} /> : <span className="muted">—</span>;
       },
     },
     {
@@ -130,6 +140,17 @@ function DeliveryDetail({ row }: { row: DeliveryRow }) {
   return (
     <div className="routing-log-detail">
       {row.side && <p className="routing-log-verdict">{t(sideExplanationKey(row.side))}</p>}
+      {row.destination && (
+        <p className="routing-log-line">
+          {t('routing.log.detail.destination')} <span className="mono">{row.destination}</span>
+        </p>
+      )}
+      {row.route && (
+        <p className="routing-log-line">
+          {t('routing.log.detail.route')} {t(`routing.log.route.${row.route}`)}
+          {row.route_rules.length > 0 && ` — ${row.route_rules.map((r) => r.name).join(', ')}`}
+        </p>
+      )}
       {row.severity && (
         <p className="routing-log-line">
           {t('routing.log.detail.severity')}{' '}

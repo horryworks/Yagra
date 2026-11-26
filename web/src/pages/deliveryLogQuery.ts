@@ -147,6 +147,14 @@ export function channelLabel(t: TFunction, r: DeliveryRow): string {
     : t('routing.log.deletedChannel');
 }
 
+/** What the rule column says (ADR-269): the routing rules the row went out through, or - when no
+ *  rule sent it (the catch-all, the default route, a test, a close for an incident no rule reaches)
+ *  - why it went there. `null` for a row written before this was kept. */
+export function routeText(t: TFunction, r: DeliveryRow): string | null {
+  if (r.route_rules.length > 0) return r.route_rules.map((rule) => rule.name).join(', ');
+  return r.route ? t(`routing.log.route.${r.route}`) : null;
+}
+
 /** Milliseconds as a person reads them: `85 ms`, `1.6 s`, `31.5 s`. */
 export function durationText(ms: number): string {
   if (ms < 1000) return `${ms} ms`;

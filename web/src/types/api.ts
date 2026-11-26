@@ -135,6 +135,7 @@ const schemaEnumPins: {
   DeliveryEvent: AssertEqual<DeliveryEvent, components['schemas']['DeliveryEvent']>;
   DeliveryResult: AssertEqual<DeliveryResult, components['schemas']['DeliveryResult']>;
   DeliverySide: AssertEqual<DeliverySide, components['schemas']['DeliverySide']>;
+  DeliveryRoute: AssertEqual<DeliveryRoute, components['schemas']['DeliveryRoute']>;
 } = {
   Severity: true,
   Role: true,
@@ -202,6 +203,7 @@ const schemaEnumPins: {
   DeliveryEvent: true,
   DeliveryResult: true,
   DeliverySide: true,
+  DeliveryRoute: true,
 };
 void schemaEnumPins;
 
@@ -916,6 +918,19 @@ export type DeliveryResult = (typeof DELIVERY_RESULTS)[number];
  *  the schema by `schemaEnumPins`. */
 export const DELIVERY_SIDES = ['yagra', 'network', 'remote', 'unknown'] as const;
 export type DeliverySide = (typeof DELIVERY_SIDES)[number];
+
+/** Why a delivery went to its channel (ADR-269). Pinned to the schema by `schemaEnumPins`. */
+export const DELIVERY_ROUTES = [
+  'rule',
+  'catch_all',
+  'hold_failed',
+  'closing_rule',
+  'open_incident',
+  'default_route',
+  'test',
+  'unknown',
+] as const;
+export type DeliveryRoute = (typeof DELIVERY_ROUTES)[number];
 
 /** Query params for the delivery log — keyset-paged on `before` + `before_id`, filtered by the
  *  rest. */

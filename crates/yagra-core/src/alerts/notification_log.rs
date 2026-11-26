@@ -121,6 +121,51 @@ impl From<FailureSide> for DeliverySide {
     }
 }
 
+/// Why a delivery went to the channel it went to (ADR-269 decision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryRoute {
+    /// The routing rule that decided sent it here: the first matching rule open at the time. A
+    /// fire held until a rule opened and sent then is this too.
+    Rule,
+    /// No rule decided, so the catch-all's channels took it.
+    CatchAll,
+    /// A rule wanted it held, the held store could not take it, and it went to every matching
+    /// rule's channels at once rather than being lost.
+    HoldFailed,
+    /// A resolve or roll-up, sent to the channels of every rule that matches the alert now.
+    ClosingRule,
+    /// A resolve or roll-up, sent because this channel holds the alert's incident although no
+    /// rule matches any more.
+    OpenIncident,
+    /// The environment default route (`YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*`), which hears every
+    /// alert whatever the rules say.
+    DefaultRoute,
+    /// A test notification sent from the channel list.
+    Test,
+    /// Written by a newer core with a reason this one does not know.
+    Unknown,
+}
+
+yagra_base::stored_enum::token_enum!(DeliveryRoute, Unknown, "notification_deliveries.route", [
+    Rule => "rule",
+    CatchAll => "catch_all",
+    HoldFailed => "hold_failed",
+    ClosingRule => "closing_rule",
+    OpenIncident => "open_incident",
+    DefaultRoute => "default_route",
+    Test => "test",
+    Unknown => "unknown",
+]);
+
+/// A routing rule behind a delivery, with its name when the delivery was made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeliveryRule {
+    pub id: Uuid,
+    /// The rule's name at delivery time; it may since have been renamed or deleted.
+    pub name: String,
+}
+
 /// One delivery, as the notifier hands it over. Not the API shape: see [`DeliveryRow`].
 #[derive(Debug, Clone)]
 pub(crate) struct DeliveryRecord {
@@ -129,6 +174,14 @@ pub(crate) struct DeliveryRecord {
     pub channel_id: Option<Uuid>,
     /// The channel's kind when the delivery was made, kept because the channel may be deleted.
     pub channel_kind: Option<ChannelKind>,
+    /// The channel's name when the delivery was made; `None` for the default route.
+    pub channel_name: Option<String>,
+    /// Where it was sent, secrets left out (`notifications::ChannelConfig::destination`).
+    pub destination: Option<String>,
+    /// Why it was sent to this channel.
+    pub route: DeliveryRoute,
+    /// The routing rules behind `route`; empty for the catch-all, the default route and a test.
+    pub route_rules: Vec<DeliveryRule>,
     pub event: DeliveryEvent,
     /// The alert's subject as its stable text (a node UUID, `pool:<name>`, ...).
     pub subject: String,
@@ -166,10 +219,18 @@ pub struct DeliveryRow {
     pub at: String,
     /// The channel, or absent for the environment default route.
     pub channel_id: Option<Uuid>,
-    /// The channel's current name; absent for the default route and for a deleted channel.
+    /// The channel's current name, or its name at delivery time once the channel is deleted;
+    /// absent for the default route.
     pub channel_name: Option<String>,
     /// The channel's kind when the delivery was made.
     pub channel_kind: Option<ChannelKind>,
+    /// Where it was sent: scheme and host (for PagerDuty and JSM also the path, token-like parts
+    /// replaced), or an email's recipients. Never a key. Absent on rows written before it was kept.
+    pub destination: Option<String>,
+    /// Why it was sent to this channel. Absent on rows written before it was kept.
+    pub route: Option<DeliveryRoute>,
+    /// The routing rules behind `route`, with their names at delivery time.
+    pub route_rules: Vec<DeliveryRule>,
     pub event: DeliveryEvent,
     pub result: DeliveryResult,
     /// Where it failed; absent for a delivered row.
@@ -235,7 +296,8 @@ const DELIVERY_FILTER_WHERE: &str = "($1::timestamptz IS NULL OR (d.at, d.id) < 
 
 fn list_sql() -> String {
     format!(
-        "SELECT d.id, d.at, d.channel_id, c.name AS channel_name, d.channel_kind, d.event, \
+        "SELECT d.id, d.at, d.channel_id, COALESCE(c.name, d.channel_name) AS channel_name, \
+                d.channel_kind, d.destination, d.route, d.route_rules, d.event, \
                 d.result, d.side, d.status, d.attempts, d.duration_ms, d.subject, d.node_id, \
                 d.subject_name, d.severity, d.error, d.response, d.attempt_log \
          FROM notification_deliveries d \
@@ -317,7 +379,7 @@ impl DeliveryLogRepo {
         Self { pool }
     }
 
-    /// Insert a batch. 16 columns ×[`WRITE_BATCH_MAX`] stays far under PostgreSQL's
+    /// Insert a batch. 20 columns ×[`WRITE_BATCH_MAX`] stays far under PostgreSQL's
     /// 65,535-parameter ceiling.
     pub(crate) async fn insert(&self, records: &[DeliveryRecord]) -> anyhow::Result<u64> {
         if records.is_empty() {
@@ -325,7 +387,8 @@ impl DeliveryLogRepo {
         }
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO notification_deliveries \
-             (at, channel_id, channel_kind, event, result, side, status, attempts, duration_ms, \
+             (at, channel_id, channel_kind, channel_name, destination, route, route_rules, \
+              event, result, side, status, attempts, duration_ms, \
               subject, node_id, subject_name, severity, error, response, attempt_log) ",
         );
         qb.push_values(records, |mut b, r| {
@@ -337,9 +400,15 @@ impl DeliveryLogRepo {
             };
             let log = serde_json::to_value(attempt_log(&r.attempts))
                 .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
+            let rules = serde_json::to_value(&r.route_rules)
+                .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
             b.push_bind(r.at)
                 .push_bind(r.channel_id)
                 .push_bind(r.channel_kind.map(ChannelKind::as_str))
+                .push_bind(r.channel_name.clone())
+                .push_bind(r.destination.clone())
+                .push_bind(r.route.as_str())
+                .push_bind(rules)
                 .push_bind(r.event.as_str())
                 .push_bind(result.as_str())
                 .push_bind(side)
@@ -388,12 +457,18 @@ fn read_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DeliveryRow> {
     let side: Option<String> = row.try_get("side")?;
     let severity: Option<String> = row.try_get("severity")?;
     let log: serde_json::Value = row.try_get("attempt_log")?;
+    let route: Option<String> = row.try_get("route")?;
+    let rules: serde_json::Value = row.try_get("route_rules")?;
     Ok(DeliveryRow {
         id: row.try_get("id")?,
         at: at.to_rfc3339(),
         channel_id: row.try_get("channel_id")?,
         channel_name: row.try_get("channel_name")?,
         channel_kind: kind.as_deref().and_then(ChannelKind::from_token),
+        destination: row.try_get("destination")?,
+        route: route.as_deref().map(DeliveryRoute::from_stored),
+        // A list this core cannot read shows as empty rather than failing the page.
+        route_rules: serde_json::from_value(rules).unwrap_or_default(),
         event: DeliveryEvent::from_stored(&row.try_get::<String, _>("event")?),
         result: DeliveryResult::from_stored(&row.try_get::<String, _>("result")?),
         side: side.as_deref().map(DeliverySide::from_stored),
@@ -491,6 +566,13 @@ mod tests {
             at: Utc::now(),
             channel_id: Some(Uuid::from_u128(7)),
             channel_kind: Some(ChannelKind::Jsm),
+            channel_name: Some("JSM night".to_owned()),
+            destination: Some("https://api.atlassian.com/jsm/ops/integration/v2".to_owned()),
+            route: DeliveryRoute::Rule,
+            route_rules: vec![DeliveryRule {
+                id: Uuid::from_u128(3),
+                name: "Night".to_owned(),
+            }],
             event: DeliveryEvent::Fire,
             subject: Uuid::from_u128(9).to_string(),
             node_id: Some(Uuid::from_u128(9)),
@@ -511,6 +593,9 @@ mod tests {
             assert_eq!(serde_json::to_value(v).unwrap(), v.as_str(), "{v:?}");
         }
         for v in DeliverySide::ALL {
+            assert_eq!(serde_json::to_value(v).unwrap(), v.as_str(), "{v:?}");
+        }
+        for v in DeliveryRoute::ALL {
             assert_eq!(serde_json::to_value(v).unwrap(), v.as_str(), "{v:?}");
         }
     }
@@ -589,7 +674,10 @@ mod tests {
     #[ignore = "needs DATABASE_URL"]
     async fn rows_round_trip_and_page_newest_first(pool: PgPool) {
         let repo = DeliveryLogRepo::new(pool.clone());
-        let base = Utc::now();
+        // A minute back: the rows are stamped with this process's clock and pruned against the
+        // database's `now()`, and the two can disagree by seconds, which left the newest row
+        // "not yet older than now" and the prune below one short.
+        let base = Utc::now() - chrono::Duration::seconds(60);
         let mut records = Vec::new();
         for i in 0..5_i64 {
             let mut r = record(
@@ -607,6 +695,9 @@ mod tests {
         let mut dflt = record(true, vec![attempt(5, None)]);
         dflt.channel_id = None;
         dflt.channel_kind = None;
+        dflt.channel_name = None;
+        dflt.route = DeliveryRoute::DefaultRoute;
+        dflt.route_rules = Vec::new();
         dflt.at = base - chrono::Duration::seconds(10);
         records.push(dflt);
         assert_eq!(repo.insert(&records).await.unwrap(), 6);
@@ -621,9 +712,17 @@ mod tests {
             .unwrap();
         assert_eq!(all.len(), 6);
         assert!(all.windows(2).all(|w| w[0].at >= w[1].at), "newest first");
-        // No such channel row exists, so the join finds no name - the deleted-channel case.
-        assert_eq!(all[0].channel_name, None);
+        // No such channel row exists - the deleted-channel case - so the name is the one kept
+        // when the delivery was made, and where it went and why are read back as written.
+        assert_eq!(all[0].channel_name.as_deref(), Some("JSM night"));
         assert_eq!(all[0].channel_kind, Some(ChannelKind::Jsm));
+        assert_eq!(
+            all[0].destination.as_deref(),
+            Some("https://api.atlassian.com/jsm/ops/integration/v2")
+        );
+        assert_eq!(all[0].route, Some(DeliveryRoute::Rule));
+        assert_eq!(all[0].route_rules.len(), 1);
+        assert_eq!(all[0].route_rules[0].name, "Night");
 
         let failed = repo
             .list(&DeliveryFilter {
@@ -647,6 +746,9 @@ mod tests {
             .unwrap();
         assert_eq!(only_default.len(), 1);
         assert_eq!(only_default[0].channel_id, None);
+        assert_eq!(only_default[0].channel_name, None);
+        assert_eq!(only_default[0].route, Some(DeliveryRoute::DefaultRoute));
+        assert!(only_default[0].route_rules.is_empty());
 
         // The cursor resumes strictly after the last row of a page.
         let page1 = repo

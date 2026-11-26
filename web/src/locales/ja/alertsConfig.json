@@ -413,6 +413,7 @@
       "cols": {
         "time": "時刻",
         "channel": "チャネル",
+        "route": "ルール",
         "subject": "対象",
         "event": "種類",
         "result": "結果",
@@ -446,6 +447,16 @@
         "remote": "相手のサービスが返事をして、受け取りを断りました。状態コードと返ってきた内容に理由があります。多くはキーや URL の誤り、または相手側の上限です。",
         "unknown": "新しい版の Yagra が書いた行です。"
       },
+      "route": {
+        "rule": "ルール",
+        "catch_all": "Catch-all",
+        "hold_failed": "保留できず、すぐに送信",
+        "closing_rule": "解消（一致するルール）",
+        "open_incident": "開いたインシデントを閉じる",
+        "default_route": "既定のルート",
+        "test": "テスト",
+        "unknown": "不明"
+      },
       "filter": {
         "allChannels": "すべてのチャネル",
         "allEvents": "すべての種類",
@@ -456,7 +467,9 @@
         "severity": "重大度:",
         "error": "最後のエラー:",
         "response": "相手が返した内容:",
-        "attemptOk": "受け付け"
+        "attemptOk": "受け付け",
+        "destination": "送り先:",
+        "route": "理由:"
       },
       "err": {
         "load": "配信ログを読み込めませんでした"

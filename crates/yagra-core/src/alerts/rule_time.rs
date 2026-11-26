@@ -117,6 +117,20 @@ pub fn route_at(
     route_local(matched, catch_all, hears, day, minute)
 }
 
+/// [`route_at`] with the rule that decided (ADR-269): the delivery log names it.
+#[must_use]
+pub fn decide_at(
+    matched: &[&RoutingRule],
+    catch_all: &[Uuid],
+    hears: Hears<'_>,
+    clock: &RuleClock,
+    node: Option<NodeId>,
+    now: DateTime<Utc>,
+) -> Decision {
+    let (day, minute) = clock.local(node, now);
+    decide_local(matched, catch_all, hears, day, minute)
+}
+
 /// Which channel ids can hear an alert: the ones the notifier would dispatch to.
 pub type Hears<'a> = &'a dyn Fn(&Uuid) -> bool;
 

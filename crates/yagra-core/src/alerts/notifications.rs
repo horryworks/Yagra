@@ -112,6 +112,8 @@ pub struct ChannelSummary {
 #[derive(Debug, Clone)]
 pub struct OpenChannel {
     pub id: Uuid,
+    /// The channel's name, kept on each delivery-log row (ADR-269 decision 4).
+    pub name: String,
     pub config: ChannelConfig,
     /// The operator's subject/body override (ADR-039). Empty = the built-in format.
     pub template: ChannelTemplate,
@@ -464,7 +466,7 @@ impl NotificationRepo {
     /// delivery snapshot. Channels whose config fails to decrypt are skipped (logged).
     pub async fn list_open_channels(&self) -> anyhow::Result<Vec<OpenChannel>> {
         let rows = sqlx::query(
-            "SELECT id, enabled, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
+            "SELECT id, name, enabled, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
                     subject_template, body_template, template_free_layout \
              FROM notification_channels WHERE enabled = true",
         )
@@ -490,7 +492,7 @@ impl NotificationRepo {
     /// row exists, and answering 404 for it would send the operator looking for the wrong fault.
     pub async fn open_channel(&self, id: Uuid) -> anyhow::Result<Option<OpenChannel>> {
         let Some(row) = sqlx::query(
-            "SELECT id, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
+            "SELECT id, name, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
                     subject_template, body_template, template_free_layout \
              FROM notification_channels WHERE id = $1",
         )
@@ -512,6 +514,7 @@ impl NotificationRepo {
     /// does not parse; the two callers disagree about what that means, so neither is decided here.
     fn open_row(&self, row: &sqlx::postgres::PgRow) -> anyhow::Result<Option<OpenChannel>> {
         let id: Uuid = row.try_get("id")?;
+        let name: String = row.try_get("name")?;
         let template = ChannelTemplate {
             free_layout: row.try_get("template_free_layout")?,
             subject: row.try_get("subject_template")?,
@@ -525,6 +528,7 @@ impl NotificationRepo {
             .and_then(|pt| serde_json::from_slice::<ChannelConfig>(&pt).ok())
             .map(|config| OpenChannel {
                 id,
+                name,
                 config,
                 template,
             }))

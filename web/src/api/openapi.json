@@ -34114,12 +34114,27 @@
           "unknown"
         ]
       },
+      "DeliveryRoute": {
+        "type": "string",
+        "description": "Why a delivery went to the channel it went to (ADR-269 decision 3).",
+        "enum": [
+          "rule",
+          "catch_all",
+          "hold_failed",
+          "closing_rule",
+          "open_incident",
+          "default_route",
+          "test",
+          "unknown"
+        ]
+      },
       "DeliveryRow": {
         "type": "object",
         "description": "One row of the delivery log (API shape).",
         "required": [
           "id",
           "at",
+          "route_rules",
           "event",
           "result",
           "attempts",
@@ -34168,7 +34183,14 @@
               "string",
               "null"
             ],
-            "description": "The channel's current name; absent for the default route and for a deleted channel."
+            "description": "The channel's current name, or its name at delivery time once the channel is deleted;\nabsent for the default route."
+          },
+          "destination": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it was sent: scheme and host (for PagerDuty and JSM also the path, token-like parts\nreplaced), or an email's recipients. Never a key. Absent on rows written before it was kept."
           },
           "duration_ms": {
             "type": "integer",
@@ -34207,6 +34229,24 @@
           },
           "result": {
             "$ref": "#/components/schemas/DeliveryResult"
+          },
+          "route": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeliveryRoute",
+                "description": "Why it was sent to this channel. Absent on rows written before it was kept."
+              }
+            ]
+          },
+          "route_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryRule"
+            },
+            "description": "The routing rules behind `route`, with their names at delivery time."
           },
           "severity": {
             "oneOf": [
@@ -34247,6 +34287,24 @@
               "null"
             ],
             "description": "The subject's display name, when it was known at delivery time."
+          }
+        }
+      },
+      "DeliveryRule": {
+        "type": "object",
+        "description": "A routing rule behind a delivery, with its name when the delivery was made.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "The rule's name at delivery time; it may since have been renamed or deleted."
           }
         }
       },

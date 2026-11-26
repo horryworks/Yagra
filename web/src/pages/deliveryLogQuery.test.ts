@@ -12,6 +12,7 @@ import {
   nextCursor,
   PAGE_SIZE,
   queryFor,
+  routeText,
   subjectText,
 } from './deliveryLogQuery';
 
@@ -38,6 +39,9 @@ function row(over: Partial<DeliveryRow> = {}): DeliveryRow {
     error: 'unexpected status 401',
     response: '{"message":"Key format is not valid"}',
     attempt_log: [],
+    destination: 'https://api.atlassian.com/jsm/ops/integration/v2',
+    route: 'rule',
+    route_rules: [{ id: 'r1', name: 'Night' }],
     ...over,
   };
 }
@@ -106,6 +110,26 @@ describe('delivery log row text', () => {
     expect(channelLabel(t, row({ channel_name: null }))).toBe(
       'routing.log.deletedChannelOfKind:Jira Service Management',
     );
+  });
+
+  it('names the rules a row went out through, or why it went there without one', () => {
+    expect(routeText(t, row())).toBe('Night');
+    expect(
+      routeText(
+        t,
+        row({
+          route: 'closing_rule',
+          route_rules: [
+            { id: 'r1', name: 'Night' },
+            { id: 'r2', name: 'Office' },
+          ],
+        }),
+      ),
+    ).toBe('Night, Office');
+    expect(routeText(t, row({ route: 'catch_all', route_rules: [] }))).toBe(
+      'routing.log.route.catch_all',
+    );
+    expect(routeText(t, row({ route: null, route_rules: [] }))).toBe(null);
   });
 
   it('a test send names no node', () => {

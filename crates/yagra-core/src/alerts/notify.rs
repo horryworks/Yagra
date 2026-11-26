@@ -25,11 +25,11 @@ use yagra_common::{
 };
 
 use crate::alerts::delivery_hours::{HeldEvent, HeldRow, HeldStore};
-use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord};
+use crate::alerts::notification_log::{DeliveryLog, DeliveryRecord, DeliveryRoute, DeliveryRule};
 use crate::alerts::notifications::{ChannelConfig, ChannelKind, OpenChannel, RoutingRule};
 use crate::alerts::notify_facts::{context_for, node_ids_for, with_links, AlertFactsSource};
 use crate::alerts::notify_render::{body_must_be_json, render_with_fallback, ChannelTemplate};
-use crate::alerts::rule_time::{next_change, route_at, RouteNow, RuleClock};
+use crate::alerts::rule_time::{decide_at, next_change, RouteNow, RuleClock};
 
 use super::NotifyAction;
 
@@ -182,6 +182,57 @@ fn delivery_error(e: reqwest::Error) -> NotifyError {
         DeliveryFailure::network(text)
     };
     failure.into()
+}
+
+/// The longest `destination` the delivery log keeps; an email's recipient list is the one that can
+/// run long.
+const DESTINATION_MAX: usize = 256;
+
+/// Where a channel sends, with every secret left out (ADR-269 decision 2): a webhook's scheme and
+/// host (its path and query are often the key), a vendor API's scheme, host and path with every
+/// token-like segment replaced, an email's recipients. Never a key, a password, a query string or
+/// a login in the URL. `None` for an address that does not parse.
+pub(crate) fn destination_of(config: &ChannelConfig) -> Option<String> {
+    let text = match config {
+        ChannelConfig::Webhook { url } => url_origin(url)?,
+        ChannelConfig::PagerDuty { api_url, .. } => {
+            url_without_tokens(api_url.as_deref().unwrap_or(PAGERDUTY_DEFAULT_URL))?
+        }
+        ChannelConfig::Jsm { api_url, .. } => url_without_tokens(api_url)?,
+        ChannelConfig::Email { to, .. } => to.trim().to_owned(),
+    };
+    (!text.is_empty()).then(|| text.chars().take(DESTINATION_MAX).collect())
+}
+
+/// A URL's scheme, host and port - nothing of its login, path or query.
+fn url_origin(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    let host = parsed.host_str()?;
+    Some(match parsed.port() {
+        Some(port) => format!("{}://{host}:{port}", parsed.scheme()),
+        None => format!("{}://{host}", parsed.scheme()),
+    })
+}
+
+/// [`url_origin`] and the path, each token-like segment replaced by `...` (the rule
+/// [`Secrets::of_url`] redacts by). Used only for the vendor APIs, whose path is the API's own.
+fn url_without_tokens(url: &str) -> Option<String> {
+    let origin = url_origin(url)?;
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    let path: Vec<&str> = parsed
+        .path_segments()
+        .map(|segments| {
+            segments
+                .filter(|seg| !seg.is_empty())
+                .map(|seg| if looks_like_a_token(seg) { "..." } else { seg })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(if path.is_empty() {
+        origin
+    } else {
+        format!("{origin}/{}", path.join("/"))
+    })
 }
 
 /// The strings a channel must never let out through a delivery log: its URL, the host it points
@@ -981,6 +1032,10 @@ struct BuiltChannel {
     text_builtin: bool,
     /// The stored kind, for the delivery log (ADR-195). `None` only for a test's fake channel.
     kind: Option<ChannelKind>,
+    /// The channel's name and where it sends, for the delivery log (ADR-269). `None` only for a
+    /// test's fake channel.
+    name: Option<String>,
+    destination: Option<String>,
 }
 
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
@@ -1008,6 +1063,11 @@ struct Routing {
     text: HashSet<Uuid>,
     /// Each channel's kind, for the delivery log (ADR-195).
     kinds: HashMap<Uuid, ChannelKind>,
+    /// Each channel's name and where it sends, for the delivery log (ADR-269).
+    names: HashMap<Uuid, String>,
+    destinations: HashMap<Uuid, String>,
+    /// Where the env default route sends, for the delivery log (ADR-269).
+    default_destination: Option<String>,
 }
 
 impl Routing {
@@ -1204,13 +1264,21 @@ impl Notifier {
     pub fn from_env() -> Self {
         let mut channels: Vec<Box<dyn NotifyChannel>> = Vec::new();
         let mut kinds = Vec::new();
+        let mut destinations = Vec::new();
         if let Ok(url) = std::env::var("YAGRA_WEBHOOK_URL") {
             if !url.is_empty() {
+                destinations.extend(url_origin(&url));
                 channels.push(Box::new(WebhookChannel::new(url)));
                 kinds.push(DefaultRouteKind::Webhook);
             }
         }
         if let Some(email) = EmailChannel::from_env() {
+            destinations.extend(
+                std::env::var("YAGRA_SMTP_TO")
+                    .ok()
+                    .map(|to| to.trim().to_owned())
+                    .filter(|to| !to.is_empty()),
+            );
             channels.push(Box::new(email));
             kinds.push(DefaultRouteKind::Email);
         }
@@ -1221,7 +1289,14 @@ impl Notifier {
             );
             Arc::new(MultiChannel { channels }) as Arc<dyn NotifyChannel>
         });
-        Self::with_default_kinds(default, kinds)
+        let destination = (!destinations.is_empty()).then(|| {
+            destinations
+                .join(", ")
+                .chars()
+                .take(DESTINATION_MAX)
+                .collect()
+        });
+        Self::with_default_route(default, kinds, destination)
     }
 
     /// A notifier over a given default route, with no DB channels or rules yet.
@@ -1243,9 +1318,19 @@ impl Notifier {
     }
 
     /// [`Self::with_default`], naming the kinds of channel the default route is made of.
+    #[cfg(test)]
     pub(crate) fn with_default_kinds(
         default: Option<Arc<dyn NotifyChannel>>,
         default_kinds: Vec<DefaultRouteKind>,
+    ) -> Self {
+        Self::with_default_route(default, default_kinds, None)
+    }
+
+    /// [`Self::with_default_kinds`], also naming where the default route sends (ADR-269).
+    fn with_default_route(
+        default: Option<Arc<dyn NotifyChannel>>,
+        default_kinds: Vec<DefaultRouteKind>,
+        default_destination: Option<String>,
     ) -> Self {
         Self {
             routing: RwLock::new(Arc::new(Routing {
@@ -1255,6 +1340,9 @@ impl Notifier {
                 rules: Vec::new(),
                 text: HashSet::new(),
                 kinds: HashMap::new(),
+                names: HashMap::new(),
+                destinations: HashMap::new(),
+                default_destination,
             })),
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
@@ -1338,6 +1426,8 @@ impl Notifier {
                 };
                 BuiltChannel {
                     id: ch.id,
+                    name: Some(ch.name),
+                    destination: destination_of(&ch.config),
                     channel: build_channel(&ch.config),
                     over,
                     reads_facts: reads_facts(ch.config.kind()),
@@ -1366,9 +1456,17 @@ impl Notifier {
         let mut fact_channels = HashSet::new();
         let mut text = HashSet::new();
         let mut kinds = HashMap::new();
+        let mut names = HashMap::new();
+        let mut destinations = HashMap::new();
         for built in channels {
             if let Some(kind) = built.kind {
                 kinds.insert(built.id, kind);
+            }
+            if let Some(name) = built.name {
+                names.insert(built.id, name);
+            }
+            if let Some(destination) = built.destination {
+                destinations.insert(built.id, destination);
             }
             if let Some(over) = built.over {
                 overrides.insert(built.id, over);
@@ -1394,6 +1492,8 @@ impl Notifier {
         fact_channels.retain(|id| next.contains_key(id));
         text.retain(|id| next.contains_key(id));
         kinds.retain(|id, _| next.contains_key(id));
+        names.retain(|id, _| next.contains_key(id));
+        destinations.retain(|id, _| next.contains_key(id));
         self.any_templates
             .store(!overrides.is_empty(), Ordering::Relaxed);
         self.any_facts_channel
@@ -1404,11 +1504,14 @@ impl Notifier {
         );
         *slot = Arc::new(Routing {
             default: slot.default.clone(),
+            default_destination: slot.default_destination.clone(),
             channels: next,
             overrides,
             rules,
             text,
             kinds,
+            names,
+            destinations,
         });
     }
 
@@ -1705,12 +1808,19 @@ impl Notifier {
                 // one is not in `routing.channels`, and counting it would keep the alert from the
                 // catch-all and from being held.
                 let hears = |id: &Uuid| routing.channels.contains_key(id);
-                let matched: BTreeSet<Uuid> = match route_at(
-                    &rules, &catch_all, &hears, &clock, node, now,
-                ) {
+                let decision = decide_at(&rules, &catch_all, &hears, &clock, node, now);
+                // The channels it goes to now, and why it goes to each (ADR-269).
+                let (matched, why): (BTreeSet<Uuid>, FireRoute) = match decision.route {
                     RouteNow::Held if releasing => return false,
                     RouteNow::Held => {
                         let until = next_change(&rules, &catch_all, &hears, &clock, node, now);
+                        let sending = || -> BTreeSet<Uuid> {
+                            rules
+                                .iter()
+                                .filter(|r| !r.hold)
+                                .flat_map(|r| r.channel_ids.iter().copied())
+                                .collect()
+                        };
                         match self.held_store() {
                             Some(store) => match store.hold(HeldEvent::Fire, &alert, until).await {
                                 Ok(()) => {
@@ -1718,26 +1828,21 @@ impl Notifier {
                                         .increment(1);
                                     tracing::info!(subject = %alert.subject, "notification held until a routing rule opens");
                                     // The environment's default route still hears it now: it
-                                    // is sent every alert, whatever the rules say.
-                                    BTreeSet::new()
+                                    // is sent every alert, whatever the rules say. No channel is
+                                    // sent to, so the reason beside the empty set is never read.
+                                    (BTreeSet::new(), FireRoute::CatchAll)
                                 }
                                 Err(e) => {
                                     tracing::warn!(error = %e, "could not hold a notification; delivering it now");
-                                    rules
-                                        .iter()
-                                        .filter(|r| !r.hold)
-                                        .flat_map(|r| r.channel_ids.iter().copied())
-                                        .collect()
+                                    (sending(), FireRoute::HoldFailed)
                                 }
                             },
-                            None => rules
-                                .iter()
-                                .filter(|r| !r.hold)
-                                .flat_map(|r| r.channel_ids.iter().copied())
-                                .collect(),
+                            None => (sending(), FireRoute::HoldFailed),
                         }
                     }
-                    other => other.channels(),
+                    RouteNow::Rules(channels) => (channels, FireRoute::Rule(decision.rule)),
+                    RouteNow::CatchAll(channels) => (channels, FireRoute::CatchAll),
+                    RouteNow::Nowhere => (BTreeSet::new(), FireRoute::CatchAll),
                 };
                 if self.side_changed(&alert) {
                     // Only the channels this fire goes to forget it, so each is paged again. A
@@ -1771,7 +1876,7 @@ impl Notifier {
                     let started = std::time::Instant::now();
                     let at = chrono::Utc::now();
                     let report = d.dispatch(notification.clone()).await;
-                    self.after_dispatch(&done, None, None, &report, at, started);
+                    self.after_dispatch(&done, routing.default_target(), &report, at, started);
                 }
                 for id in matched.iter().copied() {
                     if let Some(d) = routing.channels.get(&id) {
@@ -1780,8 +1885,22 @@ impl Notifier {
                         let started = std::time::Instant::now();
                         let at = chrono::Utc::now();
                         let report = d.dispatch(n).await;
-                        let kind = routing.kinds.get(&id).copied();
-                        self.after_dispatch(&done, Some(id), kind, &report, at, started);
+                        let (route, behind) = match why {
+                            FireRoute::Rule(rule) => (
+                                DeliveryRoute::Rule,
+                                rules
+                                    .iter()
+                                    .filter(|r| Some(r.id) == rule)
+                                    .map(|r| delivery_rule(r))
+                                    .collect(),
+                            ),
+                            FireRoute::CatchAll => (DeliveryRoute::CatchAll, Vec::new()),
+                            FireRoute::HoldFailed => {
+                                (DeliveryRoute::HoldFailed, rules_naming(&rules, id))
+                            }
+                        };
+                        let target = routing.channel_target(id, route, behind);
+                        self.after_dispatch(&done, target, &report, at, started);
                     }
                 }
             }
@@ -1894,7 +2013,7 @@ impl Notifier {
             let started = std::time::Instant::now();
             let at = chrono::Utc::now();
             let report = d.dispatch_resolve(notification.clone()).await;
-            self.after_dispatch(&done, None, None, &report, at, started);
+            self.after_dispatch(&done, routing.default_target(), &report, at, started);
         }
         for (id, d) in &routing.channels {
             // A channel the fire reached still gets the close when no rule matches any more — the
@@ -1906,8 +2025,16 @@ impl Notifier {
                 let started = std::time::Instant::now();
                 let at = chrono::Utc::now();
                 let report = d.dispatch_resolve(n).await;
-                let kind = routing.kinds.get(id).copied();
-                self.after_dispatch(&done, Some(*id), kind, &report, at, started);
+                let target = if matched.contains(id) {
+                    routing.channel_target(
+                        *id,
+                        DeliveryRoute::ClosingRule,
+                        rules_naming(&rules, *id),
+                    )
+                } else {
+                    routing.channel_target(*id, DeliveryRoute::OpenIncident, Vec::new())
+                };
+                self.after_dispatch(&done, target, &report, at, started);
             } else {
                 d.mark_resolved(&key).await;
             }
@@ -1915,7 +2042,8 @@ impl Notifier {
     }
 
     /// Everything that follows one dispatch: the two metrics, the log line, and the delivery-log
-    /// row (ADR-195). `channel` is `None` for the environment default route.
+    /// row (ADR-195). `to` says which channel it was - none for the environment default route -
+    /// and why it went there (ADR-269).
     ///
     /// One function rather than four copies, because the four used to be one `info!` each and
     /// now carry the failure's side and status too - the copies that drift are the ones nobody
@@ -1923,12 +2051,12 @@ impl Notifier {
     fn after_dispatch(
         &self,
         done: &Delivered<'_>,
-        channel: Option<Uuid>,
-        kind: Option<ChannelKind>,
+        to: Target,
         report: &DispatchReport,
         at: chrono::DateTime<chrono::Utc>,
         started: std::time::Instant,
     ) {
+        let channel = to.channel;
         let route = channel.map_or_else(|| "default".to_owned(), |id| id.to_string());
         let outcome = report.outcome;
         record_dispatch(&route, done.event, outcome, started);
@@ -1964,7 +2092,11 @@ impl Notifier {
             log.record(DeliveryRecord {
                 at,
                 channel_id: channel,
-                channel_kind: kind,
+                channel_kind: to.kind,
+                channel_name: to.name,
+                destination: to.destination,
+                route: to.route,
+                route_rules: to.rules,
                 event: done.event.into(),
                 subject: done.alert.subject.to_string(),
                 node_id: done.alert.node().map(|n| n.as_uuid()),
@@ -1988,6 +2120,72 @@ struct Delivered<'a> {
     facts: Option<&'a AlertFacts>,
     /// The log wording, which an operator greps for and so is kept verbatim (ADR-104 decision 5).
     message: &'static str,
+}
+
+/// Why a fire goes to the channels it goes to, decided once per fire (ADR-269).
+#[derive(Debug, Clone, Copy)]
+enum FireRoute {
+    /// The rule that decided (`rule_time::Decision::rule`).
+    Rule(Option<Uuid>),
+    /// The catch-all's channels.
+    CatchAll,
+    /// A hold that could not be stored: every matching sending rule's channels.
+    HoldFailed,
+}
+
+/// Which channel a delivery went to and why, for its delivery-log row (ADR-269).
+struct Target {
+    /// `None` for the environment default route.
+    channel: Option<Uuid>,
+    kind: Option<ChannelKind>,
+    name: Option<String>,
+    destination: Option<String>,
+    route: DeliveryRoute,
+    rules: Vec<DeliveryRule>,
+}
+
+impl Routing {
+    /// The environment default route, which hears every alert whatever the rules say.
+    fn default_target(&self) -> Target {
+        Target {
+            channel: None,
+            kind: None,
+            name: None,
+            destination: self.default_destination.clone(),
+            route: DeliveryRoute::DefaultRoute,
+            rules: Vec::new(),
+        }
+    }
+
+    /// Channel `id`, reached for `route` through `rules`.
+    fn channel_target(&self, id: Uuid, route: DeliveryRoute, rules: Vec<DeliveryRule>) -> Target {
+        Target {
+            channel: Some(id),
+            kind: self.kinds.get(&id).copied(),
+            name: self.names.get(&id).cloned(),
+            destination: self.destinations.get(&id).cloned(),
+            route,
+            rules,
+        }
+    }
+}
+
+/// A rule as the delivery log names it: its id and its name now.
+fn delivery_rule(rule: &RoutingRule) -> DeliveryRule {
+    DeliveryRule {
+        id: rule.id,
+        name: rule.name.clone(),
+    }
+}
+
+/// The sending rules among `rules` that name `channel` - the ones a close or a failed hold
+/// reached it through.
+fn rules_naming(rules: &[&RoutingRule], channel: Uuid) -> Vec<DeliveryRule> {
+    rules
+        .iter()
+        .filter(|r| !r.hold && r.channel_ids.contains(&channel))
+        .map(|r| delivery_rule(r))
+        .collect()
 }
 
 /// The subject node's effective labels, for [`Routing::matched`] — empty when nothing was
@@ -2641,6 +2839,7 @@ mod template_tests {
             n.set_routing(
                 vec![OpenChannel {
                     id: Uuid::new_v4(),
+                    name: "test".to_owned(),
                     // No template: this is the whole point — the gate must open on the channel
                     // KIND, not on anyone having customized it.
                     template: ChannelTemplate::default(),
@@ -3287,6 +3486,8 @@ mod delivery_tests {
             reads_facts: false,
             text_builtin: false,
             kind: None,
+            name: None,
+            destination: None,
         }
     }
 
@@ -3986,6 +4187,203 @@ mod delivery_tests {
         }
         assert_eq!(again.len(), 1);
         assert_eq!(again[0].channel_id, Some(bad));
+    }
+
+    /// ADR-269 decision 2: the delivery log keeps where a channel sends and never a secret - a
+    /// webhook's path and query, a vendor key, a login in the URL, a token-like path segment.
+    #[test]
+    fn a_destination_names_where_it_went_and_no_secret() {
+        let webhook = ChannelConfig::Webhook {
+            url: "https://user:hunter2@hooks.example.com:8443/services/T0AAAA1/B0BBBB2/abcdefghijklmnopqrstuvwx?token=s3cret".to_owned(),
+        };
+        assert_eq!(
+            destination_of(&webhook).as_deref(),
+            Some("https://hooks.example.com:8443")
+        );
+        let pagerduty = ChannelConfig::PagerDuty {
+            routing_key: "R0UTINGKEY0123456789abcdef".to_owned(),
+            api_url: None,
+        };
+        assert_eq!(
+            destination_of(&pagerduty).as_deref(),
+            Some("https://events.pagerduty.com/v2/enqueue")
+        );
+        let jsm = ChannelConfig::Jsm {
+            api_url: "https://api.atlassian.com/jsm/ops/integration/v2/".to_owned(),
+            api_key: "0123abcd-key".to_owned(),
+        };
+        assert_eq!(
+            destination_of(&jsm).as_deref(),
+            Some("https://api.atlassian.com/jsm/ops/integration/v2")
+        );
+        let tokened = ChannelConfig::Jsm {
+            api_url: "https://jsm.example.com/hook/a1b2c3d4e5/v2".to_owned(),
+            api_key: "k".to_owned(),
+        };
+        assert_eq!(
+            destination_of(&tokened).as_deref(),
+            Some("https://jsm.example.com/hook/.../v2")
+        );
+        let email = ChannelConfig::Email {
+            host: "smtp.example.com".to_owned(),
+            port: None,
+            from: "yagra@example.com".to_owned(),
+            to: " noc@example.com ".to_owned(),
+            user: Some("mailer".to_owned()),
+            pass: Some("hunter2".to_owned()),
+        };
+        assert_eq!(destination_of(&email).as_deref(), Some("noc@example.com"));
+        for config in [&webhook, &pagerduty, &jsm, &tokened, &email] {
+            let text = destination_of(config).unwrap();
+            for secret in [
+                "hunter2",
+                "s3cret",
+                "R0UTINGKEY",
+                "0123abcd",
+                "a1b2c3d4e5",
+                "mailer",
+                "abcdefghij",
+            ] {
+                assert!(!text.contains(secret), "{text} carries {secret}");
+            }
+        }
+        let broken = ChannelConfig::Webhook {
+            url: "not a url".to_owned(),
+        };
+        assert_eq!(destination_of(&broken), None);
+    }
+
+    /// Every row a notifier records, drained.
+    fn drain(rx: &mut tokio::sync::mpsc::Receiver<DeliveryRecord>) -> Vec<DeliveryRecord> {
+        let mut rows = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            rows.push(r);
+        }
+        rows
+    }
+
+    /// ADR-269 decision 3: each row says why its channel was chosen - the deciding rule for a
+    /// fire, the catch-all when no rule decided, every matching rule for a close, the incident it
+    /// holds once no rule matches, and the default route for the environment's channel - and
+    /// carries the channel's name and where it sends.
+    #[tokio::test]
+    async fn each_delivery_says_why_it_went_to_its_channel() {
+        let (a_log, c_log, dflt) = (log(), log(), log());
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let (dlog, mut rx) = crate::alerts::notification_log::DeliveryLog::for_test();
+        n.set_delivery_log(dlog);
+        let (a, catch) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let named = |id, name: &str, l: &Log| BuiltChannel {
+            name: Some(name.to_owned()),
+            destination: Some(format!("https://{name}.example.com")),
+            kind: Some(ChannelKind::Jsm),
+            ..built(id, Recorder(l.clone()))
+        };
+        let critical = RoutingRule {
+            name: "Critical to A".to_owned(),
+            ..rule(a, Some(Severity::Critical))
+        };
+        n.install_routing(
+            vec![named(a, "a", &a_log), named(catch, "catch", &c_log)],
+            vec![critical.clone()],
+        );
+        n.set_catch_all(vec![catch]);
+
+        // A critical fire: the rule decides and sends to A; the default route hears it too.
+        let node = NodeId::new();
+        let fire = alert(node, Severity::Critical, None);
+        n.handle(NotifyAction::Fire(fire.clone())).await;
+        let rows = drain(&mut rx);
+        assert_eq!(rows.len(), 2);
+        let to_a = rows.iter().find(|r| r.channel_id == Some(a)).unwrap();
+        assert_eq!(to_a.route, DeliveryRoute::Rule);
+        assert_eq!(
+            to_a.route_rules,
+            vec![DeliveryRule {
+                id: critical.id,
+                name: "Critical to A".to_owned()
+            }]
+        );
+        assert_eq!(to_a.channel_name.as_deref(), Some("a"));
+        assert_eq!(to_a.destination.as_deref(), Some("https://a.example.com"));
+        let dflt_row = rows.iter().find(|r| r.channel_id.is_none()).unwrap();
+        assert_eq!(dflt_row.route, DeliveryRoute::DefaultRoute);
+        assert!(dflt_row.route_rules.is_empty());
+        assert_eq!(dflt_row.channel_name, None);
+
+        // A warning no rule matches: the catch-all takes it.
+        let other = alert(NodeId::new(), Severity::Warning, None);
+        n.handle(NotifyAction::Fire(other)).await;
+        let rows = drain(&mut rx);
+        let to_catch = rows.iter().find(|r| r.channel_id == Some(catch)).unwrap();
+        assert_eq!(to_catch.route, DeliveryRoute::CatchAll);
+        assert!(to_catch.route_rules.is_empty());
+
+        // The critical alert resolves while its rule still matches: a close through that rule.
+        n.handle(NotifyAction::Resolve(fire.clone())).await;
+        let rows = drain(&mut rx);
+        let closed = rows.iter().find(|r| r.channel_id == Some(a)).unwrap();
+        assert_eq!(closed.route, DeliveryRoute::ClosingRule);
+        assert_eq!(closed.route_rules.len(), 1);
+        assert_eq!(closed.route_rules[0].id, critical.id);
+
+        // Fired again, then the rule stops matching before it resolves: A still holds the
+        // incident, so the close goes there for that reason and names no rule.
+        n.handle(NotifyAction::Fire(fire.clone())).await;
+        drain(&mut rx);
+        n.install_routing(
+            vec![named(a, "a", &a_log), named(catch, "catch", &c_log)],
+            vec![RoutingRule {
+                severity: Some(Severity::Warning),
+                ..critical.clone()
+            }],
+        );
+        n.handle(NotifyAction::Resolve(fire)).await;
+        let rows = drain(&mut rx);
+        let closed = rows.iter().find(|r| r.channel_id == Some(a)).unwrap();
+        assert_eq!(closed.route, DeliveryRoute::OpenIncident);
+        assert!(closed.route_rules.is_empty());
+    }
+
+    /// ADR-269 decision 3: a fire a rule wanted held, with nowhere to hold it, goes to every
+    /// matching sending rule's channels at once, and its row names those rules.
+    #[tokio::test]
+    async fn a_hold_with_nowhere_to_keep_it_says_so() {
+        let a_log = log();
+        let n = Notifier::with_default(None);
+        let (dlog, mut rx) = crate::alerts::notification_log::DeliveryLog::for_test();
+        n.set_delivery_log(dlog);
+        let a = Uuid::from_u128(1);
+        let holding = RoutingRule {
+            name: "Hold".to_owned(),
+            hold: true,
+            channel_ids: Vec::new(),
+            ..rule(a, None)
+        };
+        let sending = RoutingRule {
+            name: "Send to A".to_owned(),
+            ..rule(a, None)
+        };
+        n.install_routing(
+            vec![built(a, Recorder(a_log.clone()))],
+            vec![holding, sending.clone()],
+        );
+        n.handle(NotifyAction::Fire(alert(
+            NodeId::new(),
+            Severity::Critical,
+            None,
+        )))
+        .await;
+        let rows = drain(&mut rx);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].route, DeliveryRoute::HoldFailed);
+        assert_eq!(
+            rows[0].route_rules,
+            vec![DeliveryRule {
+                id: sending.id,
+                name: "Send to A".to_owned()
+            }]
+        );
     }
 
     /// A webhook-shaped channel: it delivers a fire and keeps the trait's resolve, which sends

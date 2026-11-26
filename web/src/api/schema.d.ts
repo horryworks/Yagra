@@ -8422,6 +8422,11 @@ export interface components {
          * @enum {string}
          */
         DeliveryResult: "delivered" | "failed" | "unknown";
+        /**
+         * @description Why a delivery went to the channel it went to (ADR-269 decision 3).
+         * @enum {string}
+         */
+        DeliveryRoute: "rule" | "catch_all" | "hold_failed" | "closing_rule" | "open_incident" | "default_route" | "test" | "unknown";
         /** @description One row of the delivery log (API shape). */
         DeliveryRow: {
             /** @description When the delivery started (RFC 3339). The first half of the paging cursor. */
@@ -8439,8 +8444,16 @@ export interface components {
              */
             channel_id?: string | null;
             channel_kind?: null | components["schemas"]["ChannelKind"];
-            /** @description The channel's current name; absent for the default route and for a deleted channel. */
+            /**
+             * @description The channel's current name, or its name at delivery time once the channel is deleted;
+             *     absent for the default route.
+             */
             channel_name?: string | null;
+            /**
+             * @description Where it was sent: scheme and host (for PagerDuty and JSM also the path, token-like parts
+             *     replaced), or an email's recipients. Never a key. Absent on rows written before it was kept.
+             */
+            destination?: string | null;
             /**
              * Format: int64
              * @description Wall time for the whole delivery, retries and backoff included, in milliseconds.
@@ -8465,6 +8478,9 @@ export interface components {
              */
             response?: string | null;
             result: components["schemas"]["DeliveryResult"];
+            route?: null | components["schemas"]["DeliveryRoute"];
+            /** @description The routing rules behind `route`, with their names at delivery time. */
+            route_rules: components["schemas"]["DeliveryRule"][];
             severity?: null | components["schemas"]["Severity"];
             side?: null | components["schemas"]["DeliverySide"];
             /**
@@ -8476,6 +8492,13 @@ export interface components {
             subject: string;
             /** @description The subject's display name, when it was known at delivery time. */
             subject_name?: string | null;
+        };
+        /** @description A routing rule behind a delivery, with its name when the delivery was made. */
+        DeliveryRule: {
+            /** Format: uuid */
+            id: string;
+            /** @description The rule's name at delivery time; it may since have been renamed or deleted. */
+            name: string;
         };
         /** @description One named schedule, as stored and as the API returns it (ADR-226 decision 3). */
         DeliverySchedule: {

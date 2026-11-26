@@ -416,6 +416,7 @@
       "cols": {
         "time": "Time",
         "channel": "Channel",
+        "route": "Rule",
         "subject": "About",
         "event": "Kind",
         "result": "Result",
@@ -449,6 +450,16 @@
         "remote": "The receiving service answered and refused. The status and its answer say why — usually a wrong key or URL, or a limit on the service side.",
         "unknown": "Written by a newer version of Yagra."
       },
+      "route": {
+        "rule": "Rule",
+        "catch_all": "Catch-all",
+        "hold_failed": "Could not hold, sent at once",
+        "closing_rule": "Closing, through matching rules",
+        "open_incident": "Closing its open incident",
+        "default_route": "Default route",
+        "test": "Test",
+        "unknown": "Unknown"
+      },
       "filter": {
         "allChannels": "All channels",
         "allEvents": "All kinds",
@@ -459,7 +470,9 @@
         "severity": "Severity:",
         "error": "Last error:",
         "response": "The service answered:",
-        "attemptOk": "accepted"
+        "attemptOk": "accepted",
+        "destination": "Sent to:",
+        "route": "Why:"
       },
       "err": {
         "load": "failed to load the delivery log"

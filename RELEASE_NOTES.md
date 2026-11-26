@@ -14,6 +14,10 @@ s where a shipped behaviour change waits for a version.
 
 ## Unreleased
 
+### Improvements
+
+- **The delivery log says where each notification went and why it went there.** Opening a row shows the address it was sent to (a webhook's or vendor API's host, an email's recipients; never a key) and the reason the channel was chosen: the routing rule that decided, the catch-all, a hold that could not be stored, a close through the rules that match now or for the incident the channel still holds, the default route, or a test. A new Rule column names the rules, and a deleted channel keeps the name it had. `GET /api/v1/notification-deliveries` and MCP `get_notification_deliveries` carry `destination`, `route` and `route_rules`; rows written before this have none (ADR-269).
+
 ## v0.3.90 — Routing rules that hold their alerts outside their hours, the rule's week in its dialog, and narrowing by every chosen tag
 
 ### New Features

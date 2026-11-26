@@ -25,6 +25,7 @@ import {
   AUDIT_STATUS_CLASSES,
   DELIVERY_EVENTS,
   DELIVERY_RESULTS,
+  DELIVERY_ROUTES,
   DELIVERY_SIDES,
   DIRECTIONS,
   FORWARD_DEST_KINDS,
@@ -1523,5 +1524,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('delivery result', locales, 'routing.log.result.', DELIVERY_RESULTS);
     expectKeys('delivery side', locales, 'routing.log.side.', DELIVERY_SIDES);
     expectKeys('delivery side explanation', locales, 'routing.log.sideExplain.', DELIVERY_SIDES);
+    // ADR-269: the rule column and the opened row name why a delivery went to its channel.
+    expectKeys('delivery route', locales, 'routing.log.route.', DELIVERY_ROUTES);
   });
 });
