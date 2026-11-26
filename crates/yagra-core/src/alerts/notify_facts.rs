@@ -346,6 +346,7 @@ pub fn preview_sample(sample: PreviewSample) -> (Alert, HashMap<Uuid, NodeFacts>
         row: None,
         row_name: None,
         notify_held_until: None,
+        snmp_failure: None,
     };
     let mut resolved = HashMap::new();
     resolved.insert(
@@ -473,6 +474,7 @@ pub(crate) mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 

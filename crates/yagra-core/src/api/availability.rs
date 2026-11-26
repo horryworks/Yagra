@@ -259,6 +259,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         crate::alerts::history::AlertHistoryStore::new(pool.clone())
             .record_batch(&[(liveness.clone(), false), (liveness, true)])

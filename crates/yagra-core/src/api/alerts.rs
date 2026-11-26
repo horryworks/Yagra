@@ -1054,6 +1054,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         let out = decorate_alerts(vec![alert]);
         let json = serde_json::to_value(&out[0]).unwrap();
@@ -1309,6 +1310,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         let out = with_port_names(&st, vec![alert(Some(7)), alert(Some(8)), alert(None)]).await;
         let json: Vec<serde_json::Value> = out
@@ -1378,6 +1380,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         crate::alerts::history::AlertHistoryStore::new(pool.clone())
             .record_batch(&[
@@ -1484,6 +1487,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         crate::alerts::history::AlertHistoryStore::new(pool.clone())
             .record_batch(&[(fire(on_mine), false), (fire(on_theirs), false)])

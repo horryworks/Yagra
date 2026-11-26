@@ -6224,6 +6224,7 @@ export interface components {
             row_name?: string | null;
             /** @description Severity (derived from the committed state). */
             severity: components["schemas"]["Severity"];
+            snmp_failure?: null | components["schemas"]["SnmpFailure"];
             /** @description The committed state that triggered the alert. */
             state: components["schemas"]["NodeState"];
         };
@@ -15883,6 +15884,11 @@ export interface components {
              */
             subnets_checked: number;
         };
+        /**
+         * @description One stage at which an SNMP scalar GET came back empty.
+         * @enum {string}
+         */
+        SnmpFailure: "handshake_timeout" | "handshake_refused" | "no_answer" | "refused" | "no_values" | "send_failed";
         /** @description Which way to order this folder's children (ADR-130). */
         SortChildren: {
             /**

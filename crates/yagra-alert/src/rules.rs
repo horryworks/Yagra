@@ -974,6 +974,9 @@ pub(super) struct CheckSpec<'a> {
     /// The node's effective poll interval in seconds, or `None` before the scheduler has published
     /// one — in which case the dwell and the flap window are exactly what they were before ADR-144.
     pub(super) interval: Option<u32>,
+    /// Why the SNMP GET behind an `snmp_up` sample produced no value (ADR-268); `None` for every
+    /// other check. Descriptive only, copied onto the alert the check fires.
+    pub(super) snmp_failure: Option<yagra_common::SnmpFailure>,
 }
 
 /// How often a check is observed.

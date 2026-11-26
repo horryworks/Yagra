@@ -2893,6 +2893,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         Notification::for_alert(&alert, "node down", r#"{"metric":"event:test"}"#)
     }
@@ -3546,6 +3547,7 @@ mod delivery_tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 
@@ -4855,6 +4857,7 @@ mod webui_link_tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 

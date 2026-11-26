@@ -888,6 +888,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 
@@ -1372,6 +1373,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 

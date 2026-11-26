@@ -2242,6 +2242,7 @@ mod tests {
                 row: Some(*row),
                 row_name: None,
                 notify_held_until: None,
+                snmp_failure: None,
             })
             .collect();
         assert_eq!(alerts.restore(restored), 12);

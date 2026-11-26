@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The notes beside an active alert — its cause, flapping, and the two holds (ADR-243 decision 5).
+// The notes beside an active alert — its cause, why an SNMP GET came back empty, flapping, and the
+// two holds (ADR-243 decision 5, ADR-268).
 // Which notes a row carries is `lib/alertNotes.ts`; this file only draws them. The Active alerts
 // table stacks them one per line; the dashboard widget's compact row lays them side by side.
 
@@ -42,6 +43,15 @@ export function AlertNotes({
             {t('row.partOfOutage')}
           </span>
         );
+      case 'snmpFailure': {
+        // The stage the SNMP GET that fired this `snmp_up` alert failed at (ADR-268).
+        const text = t(`snmpFailure.${n.reason}`);
+        return (
+          <span className="alertrow-muted" title={text}>
+            {text}
+          </span>
+        );
+      }
       case 'flapping':
         return (
           <span className="alertrow-flap" title={t('row.flapping')}>

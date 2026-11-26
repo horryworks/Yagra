@@ -468,6 +468,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         Notification::for_alert(&alert, "node down", "{}")
     }

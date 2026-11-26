@@ -2625,6 +2625,15 @@ pub struct PollResult {
     /// releases the collect lane that job holds, as any result of that job does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meraki_collect: Option<MerakiCollectReport>,
+    /// Why this scalar SNMP GET produced no value, when it produced none — a
+    /// [`yagra_common::SnmpFailure`] token (ADR-268). Set only on the result that carries
+    /// `snmp_up = 0`; `None` everywhere else, including a GET that read a value.
+    ///
+    /// A token rather than the enum, as [`MerakiCollectReport::failure`] is: a core that does not
+    /// know a newer token loses the reason and keeps the result. Defaulted and omitted when absent,
+    /// so an N-1 poller never sends it and an N-1 core drops it (ADR-017).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp_failure: Option<String>,
 }
 
 impl PollResult {
@@ -2667,6 +2676,7 @@ impl PollResult {
             poller_id: None,
             trace_context: TraceContext::default(),
             meraki_collect: None,
+            snmp_failure: None,
         }
     }
 }
@@ -5871,6 +5881,43 @@ mod tests {
         let back: PollResult =
             serde_json::from_str(&serde_json::to_string(&built).unwrap()).unwrap();
         assert_eq!(built, back);
+    }
+
+    /// ADR-268: the SNMP failure reason crosses the wire in both directions — an N-1 core drops it,
+    /// and an N-1 poller's result (no field) reads as no reason.
+    #[test]
+    fn poll_result_snmp_failure_tolerates_missing_and_unknown_fields() {
+        let job = Uuid::from_u128(7);
+        let node = NodeId::from(Uuid::from_u128(9));
+        let mut built = PollResult::new(job, node, 42, CheckOutcome::Unreachable);
+        built.snmp_failure = Some(
+            yagra_common::SnmpFailure::HandshakeTimeout
+                .as_str()
+                .to_owned(),
+        );
+        let wire = serde_json::to_value(&built).unwrap();
+        assert_eq!(wire["snmp_failure"], "handshake_timeout");
+        let back: PollResult = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, built);
+        // An N-1 poller sends no field at all.
+        let old = serde_json::json!({
+            "job_id": job, "node_id": node, "at_unix_ms": 42, "outcome": "unreachable",
+        });
+        let read: PollResult = serde_json::from_value(old).unwrap();
+        assert_eq!(read.snmp_failure, None);
+        // A token this build does not know still reads — it is a string on the wire.
+        let newer = serde_json::json!({
+            "job_id": job, "node_id": node, "at_unix_ms": 42, "outcome": "unreachable",
+            "snmp_failure": "a_newer_reason", "a_newer_field": 1,
+        });
+        let read: PollResult = serde_json::from_value(newer).unwrap();
+        assert_eq!(read.snmp_failure.as_deref(), Some("a_newer_reason"));
+        // And a result that read a value omits it.
+        let ok = PollResult::new(job, node, 42, CheckOutcome::Reachable);
+        assert!(serde_json::to_value(&ok)
+            .unwrap()
+            .get("snmp_failure")
+            .is_none());
     }
 
     /// ADR-184: nobody spells a result's optional fields out by hand any more. The two needles are

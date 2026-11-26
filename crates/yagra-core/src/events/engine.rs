@@ -411,6 +411,7 @@ impl EventEngine {
                 row: None,
                 row_name: None,
                 notify_held_until: None,
+                snmp_failure: None,
             };
             // Raise in the manager while holding the runtime lock, then mirror into
             // `runtime.active`. Because both sets are mutated together, the sweeper can
@@ -813,6 +814,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
 
         // First raise fires; a same-severity duplicate is deduped at the manager.

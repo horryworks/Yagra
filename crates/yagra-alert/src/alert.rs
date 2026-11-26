@@ -378,6 +378,14 @@ pub struct Alert {
     // Same N-1 attributes as `ifindex`: an older reader ignores it, an older writer leaves it None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_held_until: Option<i64>,
+    /// Why the SNMP GET that fired this `snmp_up` alert produced no value (ADR-268): the stage the
+    /// poller named on that poll's result. `None` on every other alert, on one whose poller is too
+    /// old to say, and on one restored from history after a restart — the reason is not stored.
+    //
+    // The reason of the poll that fired it, not the latest: an open alert is not rewritten while it
+    // stays open. Same N-1 attributes as `ifindex`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snmp_failure: Option<yagra_common::SnmpFailure>,
 }
 
 impl Alert {
@@ -417,6 +425,7 @@ mod tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 

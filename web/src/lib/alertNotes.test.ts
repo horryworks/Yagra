@@ -27,6 +27,18 @@ describe('alertNotes', () => {
     expect(alertNotes(alert({ root_cause: NODE }), null)).toEqual([{ kind: 'self' }]);
   });
 
+  it('says what the SNMP GET ran into, right after the cause (ADR-268)', () => {
+    expect(alertNotes(alert({ snmp_failure: 'handshake_timeout' }), null)).toEqual([
+      { kind: 'snmpFailure', reason: 'handshake_timeout' },
+    ]);
+    expect(
+      alertNotes(alert({ root_cause: NODE, snmp_failure: 'no_answer', flapping: true }), null).map(
+        (n) => n.kind,
+      ),
+    ).toEqual(['self', 'snmpFailure', 'flapping']);
+    expect(alertNotes(alert({ snmp_failure: null }), null)).toEqual([]);
+  });
+
   it('carries the delivery-hours hold with its release time, or none', () => {
     expect(alertNotes(alert(), { release_at: '2026-11-07T10:00:00Z' })).toEqual([
       { kind: 'held', releaseAt: '2026-11-07T10:00:00Z' },

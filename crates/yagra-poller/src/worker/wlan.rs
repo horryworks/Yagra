@@ -128,7 +128,13 @@ pub(super) async fn execute_wlan(
             tracing::debug!(job_id = %job.job_id, "wireless controller answered nothing");
             (CheckOutcome::Unreachable, None)
         }
-        Err(err @ (TransportError::Io(_) | TransportError::Unimplemented(_))) => {
+        Err(
+            err @ (TransportError::Io(_)
+            | TransportError::Unimplemented(_)
+            | TransportError::HandshakeTimeout(_)
+            | TransportError::HandshakeRefused { .. }
+            | TransportError::Refused(_)),
+        ) => {
             tracing::warn!(job_id = %job.job_id, error = %err, "wireless controller AP walk failed");
             (CheckOutcome::Error, None)
         }

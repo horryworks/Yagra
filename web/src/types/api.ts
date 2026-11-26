@@ -74,6 +74,7 @@ const schemaEnumPins: {
   EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
   EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
   DnsFailureKind: AssertEqual<DnsFailureKind, components['schemas']['DnsFailureKind']>;
+  SnmpFailure: AssertEqual<SnmpFailure, components['schemas']['SnmpFailure']>;
   AuditAction: AssertEqual<AuditAction, components['schemas']['AuditAction']>;
   AuditStatusClass: AssertEqual<AuditStatusClass, components['schemas']['AuditStatusClass']>;
   ChannelKind: AssertEqual<ChannelKind, components['schemas']['ChannelKind']>;
@@ -154,6 +155,7 @@ const schemaEnumPins: {
   EventAction: true,
   EventMatchKind: true,
   DnsFailureKind: true,
+  SnmpFailure: true,
   AuditAction: true,
   AuditStatusClass: true,
   ChannelKind: true,
@@ -2073,6 +2075,17 @@ export const DNS_FAILURE_KINDS = [
   'malformed',
 ] as const;
 export type DnsFailureKind = (typeof DNS_FAILURE_KINDS)[number];
+
+/** Why an SNMP GET produced no value — the stage an `snmp_up` alert's poll failed at (ADR-268). */
+export const SNMP_FAILURES = [
+  'handshake_timeout',
+  'handshake_refused',
+  'no_answer',
+  'refused',
+  'no_values',
+  'send_failed',
+] as const;
+export type SnmpFailure = (typeof SNMP_FAILURES)[number];
 
 /** A stored collection item with its id/scope/enabled flag.
  *

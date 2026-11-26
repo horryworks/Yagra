@@ -10,6 +10,7 @@
     "noteKind": {
       "upstream": "Caused upstream",
       "self": "This node’s outage",
+      "snmpFailure": "SNMP failure",
       "flapping": "Flapping",
       "waitingNeighbour": "Waiting for a neighbour",
       "held": "Held"
@@ -17,6 +18,14 @@
     "filter": {
       "allNotes": "All notes"
     }
+  },
+  "snmpFailure": {
+    "handshake_timeout": "SNMPv3 handshake timed out",
+    "handshake_refused": "SNMPv3 handshake refused",
+    "no_answer": "No answer to the request",
+    "refused": "Answered with an error",
+    "no_values": "None of the assigned values exist",
+    "send_failed": "Could not send the request"
   },
   "row": {
     "flapping": "flapping",

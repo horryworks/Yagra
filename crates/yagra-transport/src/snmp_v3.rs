@@ -64,10 +64,15 @@ async fn open_session(
     let mut session = AsyncSession::new_v3(addr, 0, security)
         .await
         .map_err(|e| TransportError::Io(format!("snmp v3 connect {addr}: {e}")))?;
+    // Two variants rather than `Io` text, so the poller can say which stage failed (ADR-268):
+    // on a WAN-attached SNMPv3 device this exchange is the one that goes missing.
     tokio::time::timeout(timeout, session.init())
         .await
-        .map_err(|_| TransportError::Io(format!("snmp v3 engine discovery {addr}: timeout")))?
-        .map_err(|e| TransportError::Io(format!("snmp v3 engine discovery {addr}: {e}")))?;
+        .map_err(|_| TransportError::HandshakeTimeout(addr))?
+        .map_err(|e| TransportError::HandshakeRefused {
+            addr,
+            detail: e.to_string(),
+        })?;
     Ok(session)
 }
 
@@ -122,6 +127,25 @@ impl ScalarSession for AsyncSession {
     }
 }
 
+/// What [`read_scalars`] read, and what the session's answers were like.
+struct ScalarRead<T> {
+    read: Vec<(String, T)>,
+    budget: WalkBudget,
+    /// How many exchanges came back as a value-bearing answer (possibly with no usable value).
+    answered: usize,
+    /// How many came back as an error rather than an answer — see [`Exchange::Complained`].
+    complained: usize,
+}
+
+impl<T> ScalarRead<T> {
+    /// Whether every exchange that got a reply was an error, and at least one did (ADR-268): the
+    /// device refused this credential or this request, which an empty `Ok` would report as "the
+    /// agent implements none of these objects".
+    fn only_complaints(&self) -> bool {
+        self.answered == 0 && self.complained > 0
+    }
+}
+
 /// Read scalar `oids` one at a time off an open session, mapping each answer with `map`.
 ///
 /// Shared by the numeric and string reads, which differ only in the mapper and in what they make
@@ -143,9 +167,10 @@ async fn read_scalars<S: ScalarSession + ?Sized, T: Send + 'static>(
     oids: &[String],
     timeout: Duration,
     map: for<'a, 'b> fn(&'a Value<'b>) -> Option<T>,
-) -> (Vec<(String, T)>, WalkBudget) {
+) -> ScalarRead<T> {
     let mut read = Vec::with_capacity(oids.len());
     let mut budget = WalkBudget::new(timeout);
+    let (mut answered, mut complained) = (0usize, 0usize);
     for (asked, oid_str) in oids.iter().enumerate() {
         if let Some(reason) = budget.spent() {
             note_truncation(reason, target, oids.len() - asked);
@@ -160,8 +185,12 @@ async fn read_scalars<S: ScalarSession + ?Sized, T: Send + 'static>(
             Exchange::Answered(values) => {
                 read.extend(values.into_iter().map(|v| (oid_str.clone(), v)));
                 budget.record(AGENT_ANSWERED);
+                answered += 1;
             }
-            Exchange::Complained => budget.record(AGENT_ANSWERED),
+            Exchange::Complained => {
+                budget.record(AGENT_ANSWERED);
+                complained += 1;
+            }
             Exchange::Silent => {
                 tracing::debug!(%oid_str, "snmp v3 scalar get timed out");
                 budget.record(AGENT_SAID_NOTHING);
@@ -175,7 +204,12 @@ async fn read_scalars<S: ScalarSession + ?Sized, T: Send + 'static>(
             }
         }
     }
-    (read, budget)
+    ScalarRead {
+        read,
+        budget,
+        answered,
+        complained,
+    }
 }
 
 /// Fetch `oids` from `target` via SNMP v3 (USM). Per-OID failures are logged and skipped
@@ -191,8 +225,15 @@ pub async fn snmp_get_v3(
     timeout: Duration,
 ) -> Result<Vec<SnmpSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
-    let (read, budget) = read_scalars(&mut session, target, oids, timeout, numeric).await;
-    let samples: Vec<SnmpSample> = read
+    let outcome = read_scalars(&mut session, target, oids, timeout, numeric).await;
+    // Every reply an error: the device refused the request rather than lacking the objects
+    // (ADR-268). Asked before `heard_nothing`, which counts a complaint as an answer.
+    if outcome.only_complaints() {
+        return Err(TransportError::Refused(target));
+    }
+    let budget = outcome.budget;
+    let samples: Vec<SnmpSample> = outcome
+        .read
         .into_iter()
         .map(|(oid, value)| SnmpSample { oid, value })
         .collect();
@@ -219,8 +260,9 @@ pub async fn snmp_get_v3_strings(
     timeout: Duration,
 ) -> Result<Vec<SnmpStringSample>, TransportError> {
     let mut session = open_session(target, params, timeout).await?;
-    let (read, _budget) = read_scalars(&mut session, target, oids, timeout, string_value).await;
-    Ok(read
+    let outcome = read_scalars(&mut session, target, oids, timeout, string_value).await;
+    Ok(outcome
+        .read
         .into_iter()
         .map(|(oid, value)| SnmpStringSample { oid, value })
         .collect())
@@ -718,7 +760,7 @@ mod tests {
             Exchange::Complained,
             answered(b"never reached"),
         ]);
-        let (read, budget) = read_scalars(
+        let ScalarRead { read, budget, .. } = read_scalars(
             &mut session,
             here(),
             &three_oids(),
@@ -747,7 +789,7 @@ mod tests {
             answered(b"VRP (R) software"),
             answered(b"core-sw-01"),
         ]);
-        let (read, budget) = read_scalars(
+        let outcome = read_scalars(
             &mut session,
             here(),
             &three_oids(),
@@ -755,6 +797,11 @@ mod tests {
             string_value,
         )
         .await;
+        assert!(
+            !outcome.only_complaints(),
+            "one complaint among answers is not a refusal"
+        );
+        let ScalarRead { read, budget, .. } = outcome;
         assert_eq!(session.asked, 3);
         assert_eq!(read.len(), 2);
         assert_eq!(read[0].1, "VRP (R) software");
@@ -768,7 +815,7 @@ mod tests {
         let mut session =
             ScriptedSession::new(vec![answered(b"a"), answered(b"b"), answered(b"c")]);
         let oids = three_oids();
-        let (read, _) = read_scalars(
+        let ScalarRead { read, .. } = read_scalars(
             &mut session,
             here(),
             &oids,
@@ -782,6 +829,44 @@ mod tests {
             oids,
             "each value is tagged with the OID it was read for"
         );
+    }
+
+    /// ADR-268: a session whose every reply is an error — an authentication failure, a report PDU —
+    /// is a refusal, not "the agent implements none of these objects". The read itself still asks
+    /// every OID (a complaint is an answer); the distinction is made from what it counted.
+    #[tokio::test]
+    async fn a_read_that_only_got_errors_is_a_refusal() {
+        let mut session = ScriptedSession::new(vec![
+            Exchange::Complained,
+            Exchange::Complained,
+            Exchange::Complained,
+        ]);
+        let outcome = read_scalars(
+            &mut session,
+            here(),
+            &three_oids(),
+            Duration::from_millis(10),
+            string_value,
+        )
+        .await;
+        assert_eq!(session.asked, 3);
+        assert!(outcome.only_complaints());
+        assert!(!outcome.budget.heard_nothing());
+        // An answer without a usable value (`noSuchObject`) is not a complaint.
+        let mut session = ScriptedSession::new(vec![
+            Exchange::Answered(vec![]),
+            Exchange::Complained,
+            Exchange::Complained,
+        ]);
+        let outcome = read_scalars(
+            &mut session,
+            here(),
+            &three_oids(),
+            Duration::from_millis(10),
+            string_value,
+        )
+        .await;
+        assert!(!outcome.only_complaints());
     }
 
     fn params(level: &str) -> SnmpV3Params {

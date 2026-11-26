@@ -29364,6 +29364,17 @@
             "$ref": "#/components/schemas/Severity",
             "description": "Severity (derived from the committed state)."
           },
+          "snmp_failure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SnmpFailure",
+                "description": "Why the SNMP GET that fired this `snmp_up` alert produced no value (ADR-268): the stage the\npoller named on that poll's result. `None` on every other alert, on one whose poller is too\nold to say, and on one restored from history after a restart — the reason is not stored."
+              }
+            ]
+          },
           "state": {
             "$ref": "#/components/schemas/NodeState",
             "description": "The committed state that triggered the alert."
@@ -49338,6 +49349,18 @@
             "minimum": 0
           }
         }
+      },
+      "SnmpFailure": {
+        "type": "string",
+        "description": "One stage at which an SNMP scalar GET came back empty.",
+        "enum": [
+          "handshake_timeout",
+          "handshake_refused",
+          "no_answer",
+          "refused",
+          "no_values",
+          "send_failed"
+        ]
       },
       "SortChildren": {
         "type": "object",

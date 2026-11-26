@@ -212,6 +212,9 @@ struct Moment {
     cadence: Cadence,
     /// The node's poll interval, read once for the whole batch.
     interval: Option<u32>,
+    /// Why this batch's scalar SNMP GET produced no value, when the poller said (ADR-268). Read
+    /// only by the `snmp_up` check, which copies it onto the alert it fires.
+    snmp_failure: Option<yagra_common::SnmpFailure>,
 }
 
 /// In-memory alert engine: per-check state, active alerts, an SSE broadcast, the committed
@@ -1014,6 +1017,11 @@ impl AlertManager {
             in_maintenance,
             cadence: Cadence::EveryPoll,
             interval: self.intervals.for_node(node.as_uuid()),
+            // A token this build does not know costs the reason, never the result (ADR-268).
+            snmp_failure: result
+                .snmp_failure
+                .as_deref()
+                .and_then(yagra_common::SnmpFailure::from_token),
         };
         // Liveness from the reachability outcome — unless the result makes no claim about it.
         if !result.observational {
@@ -1044,6 +1052,7 @@ impl AlertManager {
                     row_name: None,
                     cadence: moment.cadence,
                     interval: moment.interval,
+                    snmp_failure: None,
                 },
             ));
         }
@@ -1243,6 +1252,10 @@ impl AlertManager {
                 row_name,
                 cadence: moment.cadence,
                 interval: moment.interval,
+                // Only the `snmp_up` check carries the GET's reason (ADR-268).
+                snmp_failure: (sample.metric == yagra_common::METRIC_SNMP_UP)
+                    .then_some(moment.snmp_failure)
+                    .flatten(),
             },
         )
     }
@@ -1389,6 +1402,7 @@ impl AlertManager {
             row_name,
             cadence,
             interval,
+            snmp_failure,
         } = spec;
         // The rule's dwell counts polls. A check read once a tick counts enough ticks to span that
         // many polls, and the flap window spans twenty of them (ADR-144). This is the one place
@@ -1575,6 +1589,8 @@ impl AlertManager {
                 // the port: the check id already names the row.
                 alert.row = row;
                 alert.row_name = row_name.map(str::to_owned);
+                // Why the SNMP GET that fired it came back empty (ADR-268).
+                alert.snmp_failure = snmp_failure;
                 if let Some(ev) = eval {
                     alert.breach = Some(breach_for(alert.severity, ev));
                 }
@@ -2340,6 +2356,7 @@ impl AlertManager {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         })
     }
 
@@ -2426,6 +2443,7 @@ impl AlertManager {
                 // Read once a tick by the utilisation evaluator, not once a poll (ADR-144).
                 cadence: Cadence::EveryTick(INTERFACE_WATCH_TICK),
                 interval: self.intervals.for_node(node.as_uuid()),
+                snmp_failure: None,
             },
         ))
     }
@@ -2521,6 +2539,7 @@ impl AlertManager {
                 // Read once a tick by the derived-metric evaluator, not once a poll (ADR-144).
                 cadence: Cadence::EveryTick(DERIVED_WATCH_TICK),
                 interval: self.intervals.for_node(node.as_uuid()),
+                snmp_failure: None,
             },
         ))
     }
@@ -2592,6 +2611,7 @@ impl AlertManager {
             // Read once a tick by the derived-metric evaluator, not once a poll (ADR-144).
             cadence: Cadence::EveryTick(DERIVED_WATCH_TICK),
             interval: self.intervals.for_node(node.as_uuid()),
+            snmp_failure: None,
         };
         Some(self.observe_rows(node, moment, observed))
     }
@@ -3207,6 +3227,7 @@ impl AlertManager {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         })
     }
 
@@ -3246,6 +3267,7 @@ impl AlertManager {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         })
     }
 
@@ -3282,6 +3304,7 @@ impl AlertManager {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         })
     }
 
@@ -3326,6 +3349,7 @@ impl AlertManager {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         })
     }
 
@@ -5840,6 +5864,55 @@ mod tests {
         let mut r = result(node, outcome, at);
         r.samples = vec![yagra_bus::Sample::gauge(yagra_common::METRIC_SNMP_UP, 0.0)];
         r
+    }
+
+    /// ADR-268: the `snmp_up` alert carries the reason the poll that fired it named — and only that
+    /// alert does. A token this build does not know costs the reason and nothing else.
+    #[test]
+    fn the_snmp_up_alert_carries_the_reason_of_the_poll_that_fired_it() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new(untitled);
+        mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(2)], meta_for(node)));
+        let mut first = snmp_down(node, CheckOutcome::Error, 1);
+        first.snmp_failure = Some("no_answer".to_owned());
+        assert!(
+            mgr.observe(&first).is_empty(),
+            "one poll is under the dwell"
+        );
+        let mut second = snmp_down(node, CheckOutcome::Error, 2);
+        second.snmp_failure = Some("handshake_timeout".to_owned());
+        let actions = mgr.observe(&second);
+        let fired = actions
+            .iter()
+            .find_map(|a| match a {
+                NotifyAction::Fire(al) if al.metric == yagra_common::METRIC_SNMP_UP => Some(al),
+                _ => None,
+            })
+            .expect("the second poll fires");
+        assert_eq!(
+            fired.snmp_failure,
+            Some(yagra_common::SnmpFailure::HandshakeTimeout),
+            "the poll that fired it, not the first"
+        );
+        assert_eq!(
+            mgr.active_alerts()[0].snmp_failure,
+            Some(yagra_common::SnmpFailure::HandshakeTimeout)
+        );
+
+        // A newer poller's token this core does not know: the alert fires, without a reason.
+        let other = NodeId::new();
+        mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(other)));
+        let mut newer = snmp_down(other, CheckOutcome::Error, 3);
+        newer.snmp_failure = Some("a_newer_reason".to_owned());
+        let actions = mgr.observe(&newer);
+        let fired = actions
+            .iter()
+            .find_map(|a| match a {
+                NotifyAction::Fire(al) if al.metric == yagra_common::METRIC_SNMP_UP => Some(al),
+                _ => None,
+            })
+            .expect("it still fires");
+        assert_eq!(fired.snmp_failure, None);
     }
 
     /// **The receiving side first**: a node already down rolls its other alerts into its own
@@ -8793,6 +8866,7 @@ mod row_tests {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         };
         assert_eq!(mgr.restore(vec![legacy]), 1);
         let actions = mgr.observe(&rows(node, &[(7, 50.0)], 1));
@@ -8823,6 +8897,7 @@ mod row_tests {
             row: Some(7),
             row_name: Some("MPU Board 0".to_owned()),
             notify_held_until: None,
+            snmp_failure: None,
         };
         assert_eq!(mgr.restore(vec![restored]), 1);
         let actions = mgr.observe(&rows(node, &[(7, 10.0)], 1));
@@ -9008,6 +9083,7 @@ mod no_reading_tests {
             row: Some(row),
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         }
     }
 

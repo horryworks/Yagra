@@ -10,6 +10,7 @@
 //! rule must not depend on *how* the agent failed.
 
 use super::*;
+use yagra_common::SnmpFailure;
 use yagra_discovery::{os_version, serial};
 
 /// Identity probes run, by what they found: `version`, `no_version` (the device answered but the
@@ -25,6 +26,36 @@ pub(super) const IDENTITY_PROBES_METRIC: &str = "yagra_poll_identity_probes_tota
 /// (ADR-138 Increments 6 and 7) — by `result`: `answered` (a `sysDescr` came back) or `silent`.
 /// Separate from [`IDENTITY_PROBES_METRIC`], which counts full reads only.
 pub(super) const IDENTITY_CLASSIFY_METRIC: &str = "yagra_poll_identity_classify_total";
+/// Scalar SNMP GETs that produced no value, by `kind` — the [`SnmpFailure`] token the result
+/// carries (ADR-268). The fleet-wide view of what the `snmp_up` alerts say one node at a time:
+/// a deployment whose count is all `handshake_timeout` has an SNMPv3 problem, not an SNMP one.
+pub(super) const SNMP_FAILURES_METRIC: &str = "yagra_snmp_failures_total";
+
+/// Which stage an empty scalar GET failed at (ADR-268), or `None` when it read a value — or failed
+/// in a way that says nothing about the device (`Unimplemented`).
+fn snmp_failure_of(
+    outcome: &Result<Vec<yagra_transport::SnmpSample>, TransportError>,
+) -> Option<SnmpFailure> {
+    match outcome {
+        Ok(samples) if samples.is_empty() => Some(SnmpFailure::NoValues),
+        Ok(_) => None,
+        Err(TransportError::Silent(_)) => Some(SnmpFailure::NoAnswer),
+        Err(TransportError::HandshakeTimeout(_)) => Some(SnmpFailure::HandshakeTimeout),
+        Err(TransportError::HandshakeRefused { .. }) => Some(SnmpFailure::HandshakeRefused),
+        Err(TransportError::Refused(_)) => Some(SnmpFailure::Refused),
+        // In the scalar path `Io` is the socket: the GET could not be sent.
+        Err(TransportError::Io(_)) => Some(SnmpFailure::SendFailed),
+        Err(TransportError::Unimplemented(_)) => None,
+    }
+}
+
+/// Put `failure` on `r` and count it. One place, so the result and the counter cannot disagree.
+fn note_snmp_failure(r: &mut PollResult, failure: Option<SnmpFailure>) {
+    if let Some(f) = failure {
+        metrics::counter!(SNMP_FAILURES_METRIC, "kind" => f.as_str()).increment(1);
+        r.snmp_failure = Some(f.as_str().to_owned());
+    }
+}
 
 /// The most rows the identity probe takes from the table columns it walks whole. A patch table
 /// holds a handful per slot; the cap is what stops a device that answers with thousands of rows
@@ -793,7 +824,9 @@ pub(super) async fn execute_scalar_get(
         columns.iter().map(|c| (c.oid.as_str(), c)).collect();
     let mut all_oids = oids.to_vec();
     all_oids.extend(columns.iter().map(|c| c.oid.clone()));
-    match walker.get(transport, job.target, &all_oids, timeout).await {
+    let got = walker.get(transport, job.target, &all_oids, timeout).await;
+    let failure = snmp_failure_of(&got);
+    match got {
         Ok(samples) => {
             // The agent answered. No values back — every OID it was asked is one it does not
             // implement — is still `Unreachable` and `snmp_up = 0` (ADR-075 decision 3): the
@@ -821,6 +854,7 @@ pub(super) async fn execute_scalar_get(
                 .collect();
             mapped.push(Sample::gauge(METRIC_SNMP_UP, answered));
             let mut r = result(job, at_unix_ms, outcome, mapped);
+            note_snmp_failure(&mut r, failure);
             // Whenever the agent answered, not only when it answered with a value (ADR-138
             // Increment 5). A device that implements none of its profile's scalars still says what
             // it is — `sysDescr`, its OS version, its serial — and that is the device an operator
@@ -869,24 +903,35 @@ pub(super) async fn execute_scalar_get(
             // liveness has not changed — but no identity probe, which would only wait on the same
             // silence again. Debug rather than warn: an outage is every device in this state.
             tracing::debug!(job_id = %job.job_id, "snmp agent answered nothing");
-            result(
+            let mut r = result(
                 job,
                 at_unix_ms,
                 CheckOutcome::Unreachable,
                 vec![Sample::gauge(METRIC_SNMP_UP, 0.0)],
-            )
+            );
+            note_snmp_failure(&mut r, failure);
+            r
         }
-        Err(err @ (TransportError::Io(_) | TransportError::Unimplemented(_))) => {
+        Err(
+            err @ (TransportError::Io(_)
+            | TransportError::Unimplemented(_)
+            | TransportError::HandshakeTimeout(_)
+            | TransportError::HandshakeRefused { .. }
+            | TransportError::Refused(_)),
+        ) => {
             tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
             // `snmp_up = 0` on the error path too: a GET that could not be issued is an agent the
             // operator cannot reach, and emitting nothing here would leave the rule with no
-            // sample to evaluate — the alert would depend on *how* the agent failed.
-            result(
+            // sample to evaluate — the alert would depend on *how* the agent failed. Which stage
+            // it failed at rides the result (ADR-268).
+            let mut r = result(
                 job,
                 at_unix_ms,
                 CheckOutcome::Error,
                 vec![Sample::gauge(METRIC_SNMP_UP, 0.0)],
-            )
+            );
+            note_snmp_failure(&mut r, failure);
+            r
         }
     }
 }
@@ -940,6 +985,56 @@ mod tests {
         // The only sample is the agent-health gauge (ADR-075); nothing was read off the device.
         assert_eq!(r.samples.len(), 1);
         assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+    }
+
+    /// ADR-268: every way a scalar GET comes back empty names its stage on the result, and a GET
+    /// that read a value names none. The token is what core puts on the `snmp_up` alert.
+    #[tokio::test]
+    async fn an_empty_scalar_get_names_the_stage_it_failed_at() {
+        use yagra_transport::FakeSnmpFailure;
+        let job = snmp_job();
+        let cases: Vec<(FakeTransport, Option<SnmpFailure>)> = vec![
+            (
+                FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+                    oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+                    value: 1.0,
+                }]),
+                None,
+            ),
+            (FakeTransport::reachable(0.0), Some(SnmpFailure::NoValues)),
+            (
+                FakeTransport::reachable(0.0).with_silent_snmp_gets(),
+                Some(SnmpFailure::NoAnswer),
+            ),
+            (
+                FakeTransport::reachable(0.0)
+                    .with_snmp_get_failure(FakeSnmpFailure::HandshakeTimeout),
+                Some(SnmpFailure::HandshakeTimeout),
+            ),
+            (
+                FakeTransport::reachable(0.0)
+                    .with_snmp_get_failure(FakeSnmpFailure::HandshakeRefused),
+                Some(SnmpFailure::HandshakeRefused),
+            ),
+            (
+                FakeTransport::reachable(0.0).with_snmp_get_failure(FakeSnmpFailure::Refused),
+                Some(SnmpFailure::Refused),
+            ),
+            (
+                FakeTransport::reachable(0.0).with_snmp_get_error("snmp connect: refused"),
+                Some(SnmpFailure::SendFailed),
+            ),
+        ];
+        for (t, want) in cases {
+            let r = execute(&job, &t, 1_000).await;
+            assert_eq!(
+                r.snmp_failure.as_deref(),
+                want.map(SnmpFailure::as_str),
+                "{want:?}"
+            );
+            let up = sample(&r, METRIC_SNMP_UP);
+            assert_eq!(up, Some(if want.is_some() { 0.0 } else { 1.0 }), "{want:?}");
+        }
     }
 
     /// ADR-075. This gauge is the *only* thing that distinguishes "the SNMP agent stopped" from

@@ -157,6 +157,7 @@ pub fn open_alert(node: NodeId, metric: &str, state: yagra_common::NodeState) ->
         row: None,
         row_name: None,
         notify_held_until: None,
+        snmp_failure: None,
     }
 }
 

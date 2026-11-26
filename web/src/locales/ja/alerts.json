@@ -10,6 +10,7 @@
     "noteKind": {
       "upstream": "上流が原因",
       "self": "このノードの停止",
+      "snmpFailure": "SNMP の失敗",
       "flapping": "フラッピング",
       "waitingNeighbour": "隣の確定待ち",
       "held": "保留中"
@@ -17,6 +18,14 @@
     "filter": {
       "allNotes": "すべての補足"
     }
+  },
+  "snmpFailure": {
+    "handshake_timeout": "SNMPv3 の接続確認が時間切れ",
+    "handshake_refused": "SNMPv3 の接続確認を断られた",
+    "no_answer": "要求に応答がない",
+    "refused": "エラーで応答した",
+    "no_values": "割り当てた値が 1 つも無い",
+    "send_failed": "要求を送れなかった"
   },
   "row": {
     "flapping": "フラッピング",

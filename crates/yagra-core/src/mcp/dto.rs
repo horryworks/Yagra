@@ -195,6 +195,16 @@ pub struct AlertDto {
     /// Whether the underlying check is currently flapping.
     pub flapping: bool,
     pub breach: Option<BreachDto>,
+    /// For an `snmp_up` alert, the stage the SNMP GET that fired it failed at (ADR-268):
+    /// `handshake_timeout` (the SNMPv3 engine-discovery exchange got no answer — on a WAN-attached
+    /// device, usually a lost packet rather than a dead agent), `handshake_refused` (that exchange
+    /// was answered with an error), `no_answer` (nothing came back; on SNMPv2c a wrong community
+    /// looks the same), `refused` (every request was answered with an error, e.g. authentication),
+    /// `no_values` (the agent answered and none of the objects asked for exist on it) or
+    /// `send_failed`. `null` on every other alert, and on one whose poller or restart left no
+    /// reason. It is the reason at the poll that fired the alert, not updated while it stays open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snmp_failure: Option<String>,
 }
 
 impl AlertDto {
@@ -229,6 +239,7 @@ impl AlertDto {
                 threshold: b.threshold,
                 direction: b.direction.as_str().to_owned(),
             }),
+            snmp_failure: alert.snmp_failure.map(|f| f.as_str().to_owned()),
         }
     }
 }
@@ -1450,6 +1461,7 @@ mod tests {
                 threshold: Some(500.0),
                 direction: "above".to_owned(),
             }),
+            snmp_failure: Some("handshake_timeout".to_owned()),
         };
         assert_no_forbidden_keys(&serde_json::to_value(&alert).unwrap(), "Alert");
 

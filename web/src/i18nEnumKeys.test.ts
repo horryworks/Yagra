@@ -40,6 +40,7 @@ import {
   EVENT_ACTIONS,
   EVENT_MATCH_KINDS,
   DNS_FAILURE_KINDS,
+  SNMP_FAILURES,
   ANALYSIS_SCHEDULE_STATUSES,
   FINDING_SEVERITIES,
   RCA_CONFIDENCES,
@@ -372,6 +373,11 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   it('every kind of active-alert note has a filter label (alerts:active.noteKind.*)', () => {
     // The Notes column's funnel offers one option per kind (ADR-243).
     expectKeys('note kind', { en: enAlerts, ja: jaAlerts }, 'active.noteKind.', NOTE_KINDS);
+  });
+
+  it('every SNMP failure reason has words (alerts:snmpFailure.*)', () => {
+    // The Notes column and the node page's alert rows build `snmpFailure.${reason}` (ADR-268).
+    expectKeys('snmp failure', { en: enAlerts, ja: jaAlerts }, 'snmpFailure.', SNMP_FAILURES);
   });
 
   it('every audit action and status class has a label (access:audit.*)', () => {

@@ -54,13 +54,15 @@ function alerts(): Json {
     root_cause: null,
     flapping: false,
     notify_held_until: null,
+    snmp_failure: null,
     at_unix_ms: Date.now() - (i + 1) * 60_000,
     ...over,
   });
   return [
     a(0, 'critical', { root_cause: node(1), flapping: true, notify_held_until: Date.now() + 60_000 }),
     a(1, 'critical'),
-    a(2, 'warning'),
+    // An `snmp_up` alert whose poll named the stage it failed at (ADR-268).
+    a(2, 'warning', { metric: 'snmp_up', snmp_failure: 'handshake_timeout' }),
     a(3, 'warning'),
   ] as unknown as Json;
 }
@@ -131,6 +133,14 @@ test('the Notes column stacks its notes and the row grows to hold them', async (
   const tallCell = (await row.locator('.dt-cell').nth(1).boundingBox())!;
   const tallOff = tallCell.y + tallCell.height / 2 - (box.y + box.height / 2);
   expect(Math.abs(tallOff)).toBeLessThanOrEqual(1);
+});
+
+test('an SNMP alert says in Notes what its GET ran into (ADR-268)', async ({ page }) => {
+  await page.goto('/alerts');
+  const row = page.locator('.dt-row', { hasText: `${MOCK_PREFIX}sw-2` }).first();
+  await expect(row.locator('.alert-notes')).toHaveText('SNMPv3 handshake timed out');
+  // And only there: no other row carries such a note.
+  await expect(page.locator('.dt-row', { hasText: 'SNMPv3 handshake timed out' })).toHaveCount(1);
 });
 
 test('a folder scope keeps the alerts filed in it or beneath it', async ({ page }) => {

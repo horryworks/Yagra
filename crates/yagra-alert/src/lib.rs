@@ -80,6 +80,7 @@ impl Transition {
             row: None,
             row_name: None,
             notify_held_until: None,
+            snmp_failure: None,
         })
     }
 }

@@ -1,6 +1,10 @@
 # Release Notes
 
-<!-- ## Unreleased is where a shipped behaviour change waits for a version.
+<!-- ## Unreleased i### Improvements
+
+- **An SNMP not responding alert says what the SNMP request ran into.** Alerts ▸ Active alerts shows it in the Notes column, and the node's page shows it beside the alert: SNMPv3 handshake timed out, SNMPv3 handshake refused, No answer to the request, Answered with an error, None of the assigned values exist, or Could not send the request. Before, every one of these read only as `snmp_up` 0. The REST alert and MCP `get_active_alerts` / `get_node_status` carry it as `snmp_failure` (`handshake_timeout`, `handshake_refused`, `no_answer`, `refused`, `no_values`, `send_failed`), and the poller counts each in `yagra_snmp_failures_total{kind}`. It is the reason of the poll that fired the alert; it is not kept in History, and an alert restored after a restart has none until it fires again. An SNMPv3 GET whose every reply was an error is now told apart from an agent that implements none of the objects asked for (ADR-268).
+
+s where a shipped behaviour change waits for a version.
      Yagra deploys to the two verification boxes on every push to main, so changes go live long before a
      release is tagged. Add a bullet here in the SAME commit that ships the change — anything an
      operator or an API client could notice: response shapes, status codes, defaults, the meaning of

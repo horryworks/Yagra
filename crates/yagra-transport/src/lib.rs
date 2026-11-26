@@ -12,7 +12,7 @@
 //! skeleton be exercised without privileges or a device.
 
 use async_trait::async_trait;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 // Only `FakeTransport`'s call log needs these, and it is gated the same way.
 #[cfg(any(test, feature = "test-util"))]
 use std::sync::{Arc, Mutex};
@@ -469,6 +469,50 @@ pub enum TransportError {
     /// is — and is not sent after this.
     #[error("no answer from {0}")]
     Silent(IpAddr),
+    /// SNMPv3: the engine-discovery exchange every v3 session opens with got no answer in time
+    /// (ADR-268). A variant of its own, rather than `Io` text, so the poller can name it on the
+    /// result without matching a string. The message is the one `Io` used to carry, so the
+    /// existing log lines read as before.
+    #[error("transport io error: snmp v3 engine discovery {0}: timeout")]
+    HandshakeTimeout(SocketAddr),
+    /// SNMPv3: the engine-discovery exchange was answered with an error — an authentication
+    /// complaint, a report PDU, an engine the device would not agree to (ADR-268).
+    #[error("transport io error: snmp v3 engine discovery {addr}: {detail}")]
+    HandshakeRefused { addr: SocketAddr, detail: String },
+    /// SNMPv3: the session opened and every request was answered with an error rather than a
+    /// value (ADR-268). Before this an all-error read came back as an empty `Ok`, which reads as
+    /// "the agent implements none of these objects" — a healthy agent — when the device was in
+    /// fact refusing the credential.
+    #[error("{0} answered every request with an error")]
+    Refused(IpAddr),
+}
+
+/// The failure stages a [`FakeTransport`] scalar GET can be told to report (ADR-268) — the ones a
+/// real v3 GET reports as variants of their own.
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FakeSnmpFailure {
+    /// The v3 engine-discovery exchange timed out.
+    HandshakeTimeout,
+    /// The v3 engine-discovery exchange was answered with an error.
+    HandshakeRefused,
+    /// Every request was answered with an error.
+    Refused,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl FakeSnmpFailure {
+    fn error(self, target: IpAddr) -> TransportError {
+        let addr = SocketAddr::new(target, 161);
+        match self {
+            Self::HandshakeTimeout => TransportError::HandshakeTimeout(addr),
+            Self::HandshakeRefused => TransportError::HandshakeRefused {
+                addr,
+                detail: "authentication failure".to_owned(),
+            },
+            Self::Refused => TransportError::Refused(target),
+        }
+    }
 }
 
 /// Abstraction over device access. Implementations: a real ICMP/SNMP/HTTP transport
@@ -702,6 +746,10 @@ pub struct FakeTransport {
     /// "The agent refused" and "the agent answered with nothing" are different device states
     /// that a caller can easily conflate, and the empty-vec default can only express the second.
     pub snmp_get_error: Option<String>,
+    /// When set, every scalar SNMP GET (v2c and v3) fails at the stage named, ahead of
+    /// [`Self::snmp_get_error`] (ADR-268) — the failures a real v3 GET reports as variants of their
+    /// own rather than as `Io` text.
+    pub snmp_get_failure: Option<FakeSnmpFailure>,
     /// When set, every scalar SNMP GET (v2c and v3) reports the device as silent —
     /// `TransportError::Silent` — instead of returning [`Self::snmp`].
     ///
@@ -992,6 +1040,7 @@ impl FakeTransport {
             meraki_failed_listing: None,
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
+            snmp_get_failure: None,
             snmp_gets_silent: false,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
@@ -1034,6 +1083,7 @@ impl FakeTransport {
             meraki_failed_listing: None,
             asked: Arc::new(Mutex::new(Vec::new())),
             snmp_get_error: None,
+            snmp_get_failure: None,
             snmp_gets_silent: false,
             snmp_instances_silent: false,
             snmp_instances_unanswered: false,
@@ -1058,6 +1108,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp_get_error(mut self, message: &str) -> Self {
         self.snmp_get_error = Some(message.to_owned());
+        self
+    }
+
+    /// Make every scalar SNMP GET (v2c and v3) fail at `stage`, as a real v3 GET does (ADR-268).
+    #[must_use]
+    pub fn with_snmp_get_failure(mut self, stage: FakeSnmpFailure) -> Self {
+        self.snmp_get_failure = Some(stage);
         self
     }
 
@@ -1205,6 +1262,9 @@ impl Transport for FakeTransport {
     ) -> Result<Vec<SnmpSample>, TransportError> {
         // Recorded before the verdict, as the real GET is sent before the device is silent.
         self.record_asked(oids);
+        if let Some(stage) = self.snmp_get_failure {
+            return Err(stage.error(target));
+        }
         if self.snmp_gets_silent {
             return Err(TransportError::Silent(target));
         }
@@ -1222,6 +1282,9 @@ impl Transport for FakeTransport {
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
         self.record_asked(oids);
+        if let Some(stage) = self.snmp_get_failure {
+            return Err(stage.error(target));
+        }
         if self.snmp_gets_silent {
             return Err(TransportError::Silent(target));
         }

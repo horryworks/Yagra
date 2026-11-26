@@ -202,6 +202,7 @@ fn alert_from_row(row: AlertHistoryRow) -> Option<Alert> {
         row: row.row,
         row_name: row.row_name,
         notify_held_until: None,
+        snmp_failure: None,
     })
 }
 

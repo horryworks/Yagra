@@ -46,6 +46,7 @@ pub mod severity;
 #[cfg(test)]
 mod shared_guards;
 pub mod snmp_auth;
+pub mod snmp_failure;
 /// Reading a module's own source text — see the module doc (ADR-091/099).
 ///
 /// Gated behind this crate's own `cfg(test)` and the `test-util` feature, the same shape
@@ -145,6 +146,7 @@ pub use routing::{
 };
 pub use severity::Severity;
 pub use snmp_auth::SnmpV3Auth;
+pub use snmp_failure::SnmpFailure;
 pub use state::NodeState;
 pub use thresholds::{
     interface_scope_id, parse_interface_scope_id, resolve_effective, Direction, EffectiveThreshold,

@@ -40,6 +40,10 @@ export function ActiveAlertList({
               and which ADR-087 made worse: on this very node's page the cause is often the node
               itself, so it read "caused by <this node's own uuid>". */}
           <AlertCause alert={a} />
+          {/* What the SNMP GET ran into, for an `snmp_up` alert (ADR-268). */}
+          {a.snmp_failure && (
+            <span className="nd-muted">{t(`alerts:snmpFailure.${a.snmp_failure}`)}</span>
+          )}
           {a.flapping && <span className="nd-alert-flap">{t('alerts:row.flapping')}</span>}
           {action?.(a)}
           <span className="nd-muted nd-alert-time">{formatTimestamp(a.at_unix_ms)}</span>
