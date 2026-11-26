@@ -1,10 +1,6 @@
 # リリースノート
 
-<!-- ## Unreleased は### 改善
-
-- **SNMP not responding のアラートに、SNMP の要求がどこで失敗したかが出るようになった。** Alerts ▸ Active alerts では補足の列に、ノードの画面ではアラートの横に出る。出る文は「SNMPv3 の接続確認が時間切れ」「SNMPv3 の接続確認を断られた」「要求に応答がない」「エラーで応答した」「割り当てた値が 1 つも無い」「要求を送れなかった」のどれか。これまではどれも `snmp_up` が 0 としか分からなかった。REST のアラートと MCP の `get_active_alerts`・`get_node_status` には `snmp_failure`（`handshake_timeout`・`handshake_refused`・`no_answer`・`refused`・`no_values`・`send_failed`）として載り、ポーラーは種類ごとに `yagra_snmp_failures_total{kind}` で数える。載るのはアラートを鳴らした回の理由で、履歴には残らない。再起動で戻したアラートは、次に鳴るまで理由が空になる。SNMPv3 の GET の応答がすべてエラーだったときは、「値が 1 つも無い」と区別するようになった（ADR-268）。
-
-、出荷済みだがまだバージョンの付いていない挙動変更の置き場です。
+<!-- ## Unreleased は、出荷済みだがまだバージョンの付いていない挙動変更の置き場です。
      Yagra は main への push ごとに検証用の 2 台へデプロイされるため、変更はリリースのタグ付けより
      ずっと前に稼働に入ります。**変更を出荷するのと同じコミットで**ここに項目を足してください —
      レスポンスの形、ステータスコード、既定値、クエリの意味、削除した挙動など、運用者や API
@@ -14,8 +10,16 @@
 
 ## Unreleased
 
+### 互換性のない変更
+
+- **通知を送った後で、まとめるノードが増えたら、同じインシデントに追記を送るようになりました。** 通知の種類に `update` が増えます。JSM には開いているアラートへのメモ、Webhook には `"event": "update"` の本体を POST します。メールと PagerDuty には送りません（PagerDuty は `trigger` をもう一度送るしか足す方法がなく、人が解決したインシデントを開き直して呼び出してしまうためです）。追記は最初に増えたノードから 1 分まとめてから、その障害の発報を受けたチャネルにだけ送ります。⚠️ POST をすべて新しいアラートとして扱う Webhook は、これもアラートとして数えます。`event` で分岐して最後を `{% else %}` にしたテンプレートは、`update` の分岐を足さないと、追記でも発報の文を送ります（ADR-270）。
+- **配信ログの画面がなくなり、Alerts ▸ History の「通知」に移りました。** これまでどおり管理者にだけ出ます。`/alerts/deliveries` はそこへ移り、絞り込みは `sent.` の付いたキーで引き継ぎます。チャネルの「配信ログを見る」もそこを開きます（ADR-270）。
+
 ### 改善
 
+- **障害の境目のノードの通知に、まとめたノードが全部載るようになりました。** アラートのまとめをオンにしているとき、送られる側のノードの通知に、まとめられた落ちたノードが載ります。件名の末尾に「(+2 nodes grouped)」、本文（JSM・メール）に「Grouped:」の一覧、JSM の details に `grouped`、JSON の本体（Webhook、PagerDuty の `custom_details`）に `grouped`（ID）・`grouped_count`・`grouped_nodes` が付きます。テンプレートでは変数 `grouped_count`・`grouped_nodes` が使え、テンプレートの編集画面に「まとめるノードが増えたとき」のタブが増えます。境目が落ちたのと同じ瞬間にまとめられたノードも載ります。名前と ID を出すのは 200 台までで、全部で何台かは `grouped_count` が言います（ADR-270）。
+- **History に、まとめ先と、通知済みのアラートがまとめられた瞬間が残るようになりました。** History の行を開くと、まとめ先のノード、その障害がまとめたノード、（管理者には）その出来事で送った通知と届いたかが出ます。単独で通知したあとで別のノードの障害にまとめられたアラートは、「まとめ」の行が 1 つ増えます。発生の件数と可用性のグラフはこの行を数えません。Active alerts では、障害の境目の行に「まとめたノード N 台」が出ます。`GET /api/v1/alerts/history` と MCP の `get_alert_history` に `root_cause`／`grouped_under` と `rolled_up` が付き、`outage_row`（行の ID。その障害がまとめたノード）で絞れます。`GET /api/v1/notification-deliveries` と MCP の `get_notification_deliveries` に `check_id` が付き、`subject` と `check_id` で絞れます。列は migration 0193 で足します。それより前の行には付きません（ADR-270）。
+- **SNMP not responding のアラートに、SNMP の要求がどこで失敗したかが出るようになりました。** Alerts ▸ Active alerts では補足の列に、ノードの画面ではアラートの横に出ます。出る文は「SNMPv3 の接続確認が時間切れ」「SNMPv3 の接続確認を断られた」「要求に応答がない」「エラーで応答した」「割り当てた値が 1 つも無い」「要求を送れなかった」のどれかです。これまではどれも `snmp_up` が 0 としか分かりませんでした。REST のアラートと MCP の `get_active_alerts`・`get_node_status` には `snmp_failure`（`handshake_timeout`・`handshake_refused`・`no_answer`・`refused`・`no_values`・`send_failed`）として載り、ポーラーは種類ごとに `yagra_snmp_failures_total{kind}` で数えます。載るのはアラートを鳴らした回の理由で、履歴には残りません。再起動で戻したアラートは、次に鳴るまで理由が空になります。SNMPv3 の GET の応答がすべてエラーだったときは、「値が 1 つも無い」と区別するようになりました（ADR-268）。
 - **配信ログが、どこへ送ったかと、なぜそこへ送ったかを残すようになりました。** 行を開くと、送り先（Webhook とベンダー API はホスト、メールは宛先。キーは出しません）と、そのチャネルを選んだ理由が出ます。理由は、決めたルール・Catch-all・保留できずすぐに送った・今一致するルールで解消を送った・インシデントを持つチャネルへ解消を送った・既定のルート・テストのどれかです。新しい「ルール」の列にルール名が出ます。削除したチャネルも、そのときの名前で出ます。`GET /api/v1/notification-deliveries` と MCP の `get_notification_deliveries` に `destination`・`route`・`route_rules` が付きます。これより前の行には付きません（ADR-269）。
 
 ## v0.3.90 — 時間外のアラートを保留する通知ルール。ルールのダイアログに 1 週間の届く先。選んだタグをすべて持つノードで絞る

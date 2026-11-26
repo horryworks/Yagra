@@ -65,19 +65,6 @@ impl SnmpFailure {
     pub fn from_token(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|v| v.as_str() == s)
     }
-
-    /// The reason in plain English, for a notification's details.
-    #[must_use]
-    pub const fn english(self) -> &'static str {
-        match self {
-            Self::HandshakeTimeout => "SNMPv3 handshake timed out",
-            Self::HandshakeRefused => "SNMPv3 handshake refused",
-            Self::NoAnswer => "No answer to the request",
-            Self::Refused => "Answered with an error (authentication or access)",
-            Self::NoValues => "Answered, but none of the assigned values exist",
-            Self::SendFailed => "Could not send the request",
-        }
-    }
 }
 
 #[cfg(test)]

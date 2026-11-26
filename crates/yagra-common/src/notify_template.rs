@@ -40,12 +40,16 @@ pub enum NotifyEvent {
     /// A still-active alert was rolled up under an upstream root cause, so its incident is closed
     /// even though the node has not recovered.
     Suppress,
+    /// More down nodes were rolled up into an outage whose border already paged (ADR-270): the
+    /// same incident, told who is in it now.
+    Update,
 }
 
 impl NotifyEvent {
     /// Every event, in lifecycle order.
-    pub const ALL: [NotifyEvent; 3] = [
+    pub const ALL: [NotifyEvent; 4] = [
         NotifyEvent::Fire,
+        NotifyEvent::Update,
         NotifyEvent::Resolve,
         NotifyEvent::Suppress,
     ];
@@ -57,6 +61,7 @@ impl NotifyEvent {
             NotifyEvent::Fire => "fire",
             NotifyEvent::Resolve => "resolve",
             NotifyEvent::Suppress => "suppress",
+            NotifyEvent::Update => "update",
         }
     }
 
@@ -93,7 +98,8 @@ pub struct TemplateVariable {
 pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
     TemplateVariable {
         name: "event",
-        description: "Which point in the alert's life this is: fire, resolve, or suppress.",
+        description: "Which point in the alert's life this is: fire, update (more nodes were \
+                      grouped into an outage that already paged), resolve, or suppress.",
         always_present: true,
     },
     TemplateVariable {
@@ -259,6 +265,19 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         always_present: false,
     },
     TemplateVariable {
+        name: "grouped_count",
+        description: "How many other down nodes are grouped into this outage, so they were not \
+                      paged on their own. 0 on every alert that is not an outage's border.",
+        always_present: true,
+    },
+    TemplateVariable {
+        name: "grouped_nodes",
+        description: "Those nodes, as a list written the way node_label writes one node — write \
+                      `{{ grouped_nodes | join(', ') }}` to print them. At most 200; \
+                      grouped_count says how many there are in all. Empty when there are none.",
+        always_present: true,
+    },
+    TemplateVariable {
         name: "node_url",
         description: "A link to the node's page in Yagra's WebUI. Absent until an administrator \
                       sets the WebUI address (Settings > Monitoring defaults), and for an alert \
@@ -387,6 +406,30 @@ pub struct AlertFacts {
     /// rather than only a type change.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// How many down nodes are rolled up into this outage (ADR-270): 0 unless this is a border's
+    /// fire or update. Counts every member, also past [`GROUPED_NODES_MAX`].
+    #[serde(default)]
+    pub grouped_count: usize,
+    /// Those nodes, each written as [`Self::node_label`] writes one (`ap-01 (192.0.2.21)`), in the
+    /// order the engine gives them, at most [`GROUPED_NODES_MAX`]. Strings rather than objects, by
+    /// the "flat by design" rule above; and always present, for the reason `tags` is.
+    #[serde(default)]
+    pub grouped_nodes: Vec<String>,
+}
+
+/// How many grouped nodes a notification names (ADR-270 decision 1). An outage behind one border
+/// can be a whole site, and a page that lists thousands is unreadable and past what JSM keeps;
+/// `grouped_count` still says how many there are.
+pub const GROUPED_NODES_MAX: usize = 200;
+
+/// `name (address)` when the address says something the name does not, else the name: how the
+/// built-in text writes a node (ADR-199).
+#[must_use]
+pub fn node_label_of(name: &str, address: Option<&str>) -> String {
+    match address {
+        Some(addr) if !addr.is_empty() && addr != name => format!("{name} ({addr})"),
+        _ => name.to_owned(),
+    }
 }
 
 /// The values Yagra computes from [`AlertFacts`] rather than reads (ADR-199): the phrases the
@@ -410,12 +453,7 @@ impl AlertFacts {
     /// something the name does not.
     #[must_use]
     pub fn node_label(&self) -> String {
-        match self.node_address.as_deref() {
-            Some(addr) if !addr.is_empty() && addr != self.node_name => {
-                format!("{} ({addr})", self.node_name)
-            }
-            _ => self.node_name.clone(),
-        }
+        node_label_of(&self.node_name, self.node_address.as_deref())
     }
 
     /// `Inbound utilization on Gi0/7`, `Memory pool usage [I/O]`: the alert's title (ADR-196) and
@@ -505,6 +543,10 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
         // renders differently for a one-element list than for a real one (the separator), and the
         // preview exists so the operator sees what will actually be sent.
         tags: vec!["JAPAN".to_owned(), "core".to_owned()],
+        // A port's threshold alert groups nothing: only a node that is down is an outage's
+        // border (ADR-270). The node-down sample carries them.
+        grouped_count: 0,
+        grouped_nodes: Vec::new(),
     }
 }
 
@@ -557,8 +599,26 @@ pub fn liveness_sample_facts(event: NotifyEvent) -> AlertFacts {
         ifindex: None,
         if_name: None,
         row_name: None,
+        // Two, for the reason `tags` has two: a `join` renders differently for one. Only on a
+        // fire and an update, the two notifications a border's members ride on (ADR-270).
+        grouped_count: if grouped_event(event) { 2 } else { 0 },
+        grouped_nodes: if grouped_event(event) {
+            vec![
+                "ap-01 (192.0.2.21)".to_owned(),
+                "ap-02 (192.0.2.22)".to_owned(),
+            ]
+        } else {
+            Vec::new()
+        },
         ..sample_facts(event)
     }
+}
+
+/// Whether a notification at `event` names the nodes grouped into its outage (ADR-270): a fire
+/// and an update do; a resolve and a roll-up close something and name none.
+#[must_use]
+pub const fn grouped_event(event: NotifyEvent) -> bool {
+    matches!(event, NotifyEvent::Fire | NotifyEvent::Update)
 }
 
 /// The declared facts of one preview sample.
@@ -595,6 +655,9 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         // node that inherits no labels either, and this fixture is what proves
         // `{% for t in tags %}` renders nothing instead of erroring on one (see the field's doc).
         tags: Vec::new(),
+        // Empty for the reason `tags` is: a node that is no outage's border, the common case.
+        grouped_count: 0,
+        grouped_nodes: Vec::new(),
         ..sample_facts(event)
     }
 }

@@ -335,6 +335,10 @@ pub(crate) struct HistoryQuery {
     /// Site folder at or above their folder, as the Site column shows it — is one of them. A Site
     /// nested inside another is its own site. Combines with `group_id` (both must hold).
     pub site: Option<String>,
+    /// The id of a History row that opened an outage: only the other nodes' up/down rows grouped
+    /// under that row's node while the outage lasted — the nodes the outage held. Narrows the
+    /// other filters rather than replacing them.
+    pub outage_row: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -345,7 +349,7 @@ pub(crate) struct HistoryQuery {
         (status = 400, description = "A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
-        (status = 404, description = "The requested `node_id`, `group_id` or `site` is outside the caller's scope", body = super::error::ErrorBody),
+        (status = 404, description = "The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row about a node the caller can see", body = super::error::ErrorBody),
     ),
 )]
 async fn list_alert_history(
@@ -371,6 +375,7 @@ async fn list_alert_history(
             node_q: q.node_q.as_deref(),
             group_id: q.group_id,
             site: q.site.as_deref(),
+            outage_row: q.outage_row,
         },
     )
     .await?;
@@ -427,6 +432,7 @@ pub(crate) struct HistoryFilterInput<'a> {
     pub node_q: Option<&'a str>,
     pub group_id: Option<Uuid>,
     pub site: Option<&'a str>,
+    pub outage_row: Option<Uuid>,
 }
 
 /// A page of alert history, newest first — shared by `GET /api/v1/alerts/history` and the MCP
@@ -504,6 +510,35 @@ pub(crate) async fn history_page(
     let Some(history) = st.history.as_ref() else {
         return Ok(Vec::new());
     };
+    // ADR-270: the nodes an outage held are the rows grouped under its border while it lasted. The
+    // row named is checked like a `node_id` - naming it is naming its node.
+    let (root_cause, since, until) = match input.outage_row {
+        None => (None, since, until),
+        Some(row) => {
+            let window = history.outage_window(row).await.map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "read an outage window",
+                    "failed to list alert history",
+                )
+            })?;
+            let Some(w) = window else {
+                return Err(ApiError::not_found(
+                    "history_row_not_found",
+                    "no History row about a node has that id",
+                ));
+            };
+            super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(w.node))?;
+            (
+                Some(w.node),
+                Some(since.map_or(w.from, |s| s.max(w.from))),
+                match (until, w.until) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                },
+            )
+        }
+    };
     let filter = crate::alerts::history::HistoryFilter {
         before,
         before_id: input.before_id,
@@ -516,6 +551,7 @@ pub(crate) async fn history_page(
         in_group: in_group.as_deref(),
         metric: metric.as_deref(),
         node_q: node_q.as_deref(),
+        root_cause,
         limit: input.limit.unwrap_or(100),
     };
     let rows = history.search(&filter).await.map_err(|e| {
@@ -1055,6 +1091,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         let out = decorate_alerts(vec![alert]);
         let json = serde_json::to_value(&out[0]).unwrap();
@@ -1311,6 +1348,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         let out = with_port_names(&st, vec![alert(Some(7)), alert(Some(8)), alert(None)]).await;
         let json: Vec<serde_json::Value> = out
@@ -1381,6 +1419,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         crate::alerts::history::AlertHistoryStore::new(pool.clone())
             .record_batch(&[
@@ -1488,6 +1527,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         crate::alerts::history::AlertHistoryStore::new(pool.clone())
             .record_batch(&[(fire(on_mine), false), (fire(on_theirs), false)])

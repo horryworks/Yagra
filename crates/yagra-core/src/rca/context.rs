@@ -498,6 +498,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 

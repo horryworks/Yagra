@@ -164,15 +164,15 @@ pub async fn run_persist_writer(
     .await;
 }
 
-/// Map a drained action batch to the `alert_history` rows to insert: a fire records `resolved=false`,
-/// a resolve `resolved=true`, and a suppress records nothing (event alerts are never
-/// dependency-suppressed, but the variant is handled for exhaustiveness). Pure — unit-tested.
-fn history_rows(actions: &[QueuedAction]) -> Vec<(Alert, bool)> {
+/// Map a drained action batch to the `alert_history` rows to insert, by `alerts::history_row`: a
+/// fire, a resolve, and (never produced here, since event alerts are never dependency-suppressed) a
+/// roll-up. Pure — unit-tested.
+fn history_rows(actions: &[QueuedAction]) -> Vec<(Alert, crate::alerts::HistoryEvent)> {
     actions
         .iter()
         // The rule is `alerts::history_row`; only the batching is this path's own (ADR-092).
         .filter_map(|ea| crate::alerts::history_row(&ea.action))
-        .map(|(alert, resolved)| (alert.clone(), resolved))
+        .map(|(alert, event)| (alert.clone(), event))
         .collect()
 }
 
@@ -203,7 +203,7 @@ async fn flush_actions(
                 metrics::counter!("yagra_event_alerts_resolved_total", "reason" => ea.reason)
                     .increment(1);
             }
-            NotifyAction::Suppress(_) => {}
+            NotifyAction::Suppress(_) | NotifyAction::Update(_) => {}
         }
         notifier.handle(ea.action).await;
     }
@@ -346,6 +346,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 
@@ -357,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn history_rows_map_fire_and_resolve_and_skip_suppress() {
+    fn history_rows_map_each_action_to_its_kind_and_skip_an_update() {
         let node = Uuid::new_v4();
         let batch = vec![
             QueuedAction {
@@ -372,12 +373,22 @@ mod tests {
                 action: NotifyAction::Suppress(test_alert(node, Severity::Warning)),
                 reason: "fire",
             },
+            QueuedAction {
+                action: NotifyAction::Update(test_alert(node, Severity::Warning)),
+                reason: "fire",
+            },
         ];
         let rows = history_rows(&batch);
-        // Fire → resolved=false, Resolve → resolved=true, Suppress → no row. Order preserved.
-        assert_eq!(rows.len(), 2);
-        assert!(!rows[0].1, "fire should record resolved=false");
-        assert!(rows[1].1, "resolve should record resolved=true");
+        // Order preserved; an update records nothing (ADR-270).
+        use crate::alerts::HistoryEvent;
+        assert_eq!(
+            rows.iter().map(|r| r.1).collect::<Vec<_>>(),
+            vec![
+                HistoryEvent::Fire,
+                HistoryEvent::Resolve,
+                HistoryEvent::RolledUp
+            ]
+        );
     }
 
     #[tokio::test]

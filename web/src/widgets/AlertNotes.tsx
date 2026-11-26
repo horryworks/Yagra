@@ -43,6 +43,15 @@ export function AlertNotes({
             {t('row.partOfOutage')}
           </span>
         );
+      case 'grouping': {
+        // The down nodes this outage holds, whose own pages were rolled into this one (ADR-270).
+        const text = t('row.grouped', { count: n.count });
+        return (
+          <span className="alertrow-muted" title={text}>
+            {text}
+          </span>
+        );
+      }
       case 'snmpFailure': {
         // The stage the SNMP GET that fired this `snmp_up` alert failed at (ADR-268).
         const text = t(`snmpFailure.${n.reason}`);

@@ -538,8 +538,13 @@ pub(super) struct DeliveryParams {
     result: Option<String>,
     /// Where a failure happened: `yagra` | `network` | `remote`, comma-separated. Omit for all.
     side: Option<String>,
-    /// `fire` | `resolve` | `suppress` | `test` | `test_close`, comma-separated. Omit for all.
+    /// `fire` | `update` | `resolve` | `suppress` | `test` | `test_close`, comma-separated. Omit
+    /// for all.
     event: Option<String>,
+    /// Only deliveries about this subject as stored: a node's UUID, `pool:<name>`, `test`.
+    subject: Option<String>,
+    /// Only deliveries about this check (an alert's `check_id`); with `subject`, one alert's.
+    check_id: Option<Uuid>,
 }
 
 #[tool_router(router = system_router, vis = "pub(super)")]
@@ -888,6 +893,8 @@ impl YagraMcp {
             result: p.result.as_deref(),
             side: p.side.as_deref(),
             event: p.event.as_deref(),
+            subject: p.subject.as_deref(),
+            check_id: p.check_id,
         };
         match crate::api::notifications::delivery_page(&self.state, input).await {
             Ok(rows) => ok_json(TOOL, &rows),

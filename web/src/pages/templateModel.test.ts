@@ -95,6 +95,7 @@ describe('writing and reading one row', () => {
     }
     const model: VisualTemplate = {
       fire: { subject: [text('fire {')], body: [] },
+      update: { subject: null, body: null },
       resolve: { subject: [text('resolve {')], body: null },
       suppress: { subject: null, body: null },
     };
@@ -210,6 +211,7 @@ describe('what cannot be shown as tags opens as code, with the reason', () => {
 describe('points in the alert life', () => {
   const model: VisualTemplate = {
     fire: { subject: [v('subject_name'), text(' down')], body: [text('fire body')] },
+    update: { subject: null, body: null },
     resolve: { subject: [v('subject_name'), text(' up')], body: [text('fire body')] },
     suppress: { subject: null, body: null },
   };
@@ -289,9 +291,11 @@ describe("the built-in draft", () => {
     expect(saveRequest(model, DRAFT)).toEqual({ subject: null, body: null });
     // Editing one tab makes the whole subject a template, every point in the alert's life included.
     const edited = withField(model, 'fire', 'subject', [text('Down: '), v('subject_name')]);
+    // An update keeps the built-in text it had (this draft's server predates it, so the fire's).
     expect(saveRequest(edited, DRAFT)).toEqual({
       subject:
-        '{% if event == "resolve" %}resolved: node {{ node_id }} recovered' +
+        '{% if event == "update" %}node {{ node_id }} is {{ state }}' +
+        '{% elif event == "resolve" %}resolved: node {{ node_id }} recovered' +
         '{% elif event == "suppress" %}rolled up: node {{ node_id }} suppressed under upstream' +
         '{% else %}Down: {{ subject_name }}{% endif %}',
       body: null,

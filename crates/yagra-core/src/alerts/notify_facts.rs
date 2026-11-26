@@ -271,6 +271,26 @@ pub fn context_for(
         // Pure, so it cannot read the WebUI address: the caller fills both (`with_links`).
         node_url: None,
         yagra_url: None,
+        // ADR-270: each member named as the built-in text names a node, by id when unresolved.
+        // Only on a fire and an update - a resolve or a roll-up closes, and names nobody.
+        grouped_count: if yagra_common::grouped_event(event) {
+            alert.grouped.len()
+        } else {
+            0
+        },
+        grouped_nodes: alert
+            .grouped
+            .iter()
+            .filter(|_| yagra_common::grouped_event(event))
+            .take(yagra_common::GROUPED_NODES_MAX)
+            .map(|n| {
+                let id = n.as_uuid();
+                resolved.get(&id).map_or_else(
+                    || id.to_string(),
+                    |f| yagra_common::node_label_of(&f.name, Some(&f.address)),
+                )
+            })
+            .collect(),
     }
 }
 
@@ -347,8 +367,32 @@ pub fn preview_sample(sample: PreviewSample) -> (Alert, HashMap<Uuid, NodeFacts>
         row_name: None,
         notify_held_until: None,
         snmp_failure: None,
+        grouped: Vec::new(),
     };
+    let mut alert = alert;
     let mut resolved = HashMap::new();
+    // The grouped nodes (ADR-270), each read back out of the label the declared sample writes,
+    // `name (address)`, under an id of its own.
+    for (i, label) in declared.grouped_nodes.iter().enumerate() {
+        let (name, address) = label
+            .strip_suffix(')')
+            .and_then(|l| l.split_once(" ("))
+            .unwrap_or((label.as_str(), ""));
+        let id = Uuid::from_u128(0x7a1e_0000_0000_4000_8000_0000_0000_0000 + i as u128);
+        alert.grouped.push(yagra_common::NodeId::from(id));
+        resolved.insert(
+            id,
+            NodeFacts {
+                name: name.to_owned(),
+                address: address.to_owned(),
+                group: None,
+                profile: None,
+                tags: Vec::new(),
+                tags_excluded: Vec::new(),
+                group_id: None,
+            },
+        );
+    }
     resolved.insert(
         node,
         NodeFacts {
@@ -388,7 +432,9 @@ pub fn preview_port_name(sample: PreviewSample) -> Option<String> {
     yagra_common::preview_facts(NotifyEvent::Fire, sample).if_name
 }
 
-/// Every node id one alert's context needs resolved — itself, plus its root cause when rolled up.
+/// Every node id one alert's context needs resolved — itself, its root cause when rolled up, and
+/// the nodes rolled up into it that a notification names (ADR-270, at most
+/// [`yagra_common::GROUPED_NODES_MAX`]).
 ///
 /// An alert with a non-node subject contributes no id of its own, so a fleet-wide fact lookup is
 /// not made for something no node row can answer.
@@ -398,6 +444,13 @@ pub fn node_ids_for(alert: &Alert) -> Vec<Uuid> {
     if let Some(root) = alert.root_cause {
         ids.push(root.as_uuid());
     }
+    ids.extend(
+        alert
+            .grouped
+            .iter()
+            .take(yagra_common::GROUPED_NODES_MAX)
+            .map(|n| n.as_uuid()),
+    );
     ids
 }
 
@@ -475,6 +528,7 @@ pub(crate) mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 

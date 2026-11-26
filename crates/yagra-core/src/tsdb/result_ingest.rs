@@ -556,7 +556,7 @@ pub(crate) struct MetaRecord {
 /// falls back to an inline write when this channel is full (the audit trail must not be lost).
 pub(crate) struct HistoryRecord {
     alert: Alert,
-    resolved: bool,
+    event: crate::alerts::HistoryEvent,
 }
 
 /// Drain poll results off the bus, match them in-memory (single logical consumer), and hand all
@@ -963,10 +963,9 @@ async fn ingest_result(
     // (ADR-156 decision 3).
     for action in alerts.observe_with_no_reading(result, admitted.no_reading()) {
         // Which row an action produces is one rule for the whole crate (ADR-092); what is this
-        // path's own is the channel — a roll-up persists nothing, and the eventual real recovery
-        // is what records.
-        if let Some((alert, resolved)) = crate::alerts::history_row(&action) {
-            enqueue_history(history_tx, history, alert, resolved).await;
+        // path's own is the channel. A roll-up records a row of its own since ADR-270.
+        if let Some((alert, event)) = crate::alerts::history_row(&action) {
+            enqueue_history(history_tx, history, alert, event).await;
         }
         if notify_tx.send(action).await.is_err() {
             tracing::debug!("notification channel closed (shutdown); dropping delivery");
@@ -981,23 +980,23 @@ async fn enqueue_history(
     history_tx: &tokio::sync::mpsc::Sender<HistoryRecord>,
     history: &Arc<AlertHistoryStore>,
     alert: &Alert,
-    resolved: bool,
+    event: crate::alerts::HistoryEvent,
 ) {
     let rec = HistoryRecord {
         alert: alert.clone(),
-        resolved,
+        event,
     };
     match history_tx.try_send(rec) {
         Ok(()) => {}
         Err(TrySendError::Full(rec)) => {
             metrics::counter!("yagra_result_history_persist_fallback_total").increment(1);
-            if let Err(e) = history.record(&rec.alert, rec.resolved).await {
+            if let Err(e) = history.record(&rec.alert, rec.event).await {
                 tracing::warn!(error = %e, "inline alert-history fallback write failed");
             }
         }
         Err(TrySendError::Closed(rec)) => {
             // Shutdown (writer gone): still write inline so the transition isn't lost.
-            if let Err(e) = history.record(&rec.alert, rec.resolved).await {
+            if let Err(e) = history.record(&rec.alert, rec.event).await {
                 tracing::debug!(error = %e, "alert-history write on closed channel failed");
             }
         }
@@ -1649,7 +1648,8 @@ async fn flush_history(history: &Arc<AlertHistoryStore>, buf: &mut Vec<HistoryRe
     if buf.is_empty() {
         return;
     }
-    let rows: Vec<(Alert, bool)> = buf.drain(..).map(|r| (r.alert, r.resolved)).collect();
+    let rows: Vec<(Alert, crate::alerts::HistoryEvent)> =
+        buf.drain(..).map(|r| (r.alert, r.event)).collect();
     match history.record_batch(&rows).await {
         Ok(n) => metrics::counter!("yagra_result_history_persisted_total").increment(n),
         Err(e) => tracing::warn!(error = %e, "batch alert-history insert failed"),
@@ -2243,6 +2243,7 @@ mod tests {
                 row_name: None,
                 notify_held_until: None,
                 snmp_failure: None,
+                grouped: Vec::new(),
             })
             .collect();
         assert_eq!(alerts.restore(restored), 12);
@@ -2258,7 +2259,8 @@ mod tests {
             .collect();
         assert_eq!(resolved.len(), 12, "{:?}", out.actions);
         assert!(alerts.active_alerts().is_empty());
-        let recorded: Vec<&HistoryRecord> = out.history.iter().filter(|h| h.resolved).collect();
+        let recorded: Vec<&HistoryRecord> =
+            out.history.iter().filter(|h| h.event.resolved()).collect();
         assert_eq!(
             recorded.len(),
             12,

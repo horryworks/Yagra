@@ -383,9 +383,34 @@ pub struct Alert {
     /// old to say, and on one restored from history after a restart — the reason is not stored.
     //
     // The reason of the poll that fired it, not the latest: an open alert is not rewritten while it
-    // stays open. Same N-1 attributes as `ifindex`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // stays open. Same N-1 attributes as `ifindex`, and one more: a token this build does not know
+    // (a newer core wrote it) reads as `None`, so it costs the reason and never the alert - a held
+    // notification row that failed to decode would be dropped unsent.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_snmp_failure"
+    )]
     pub snmp_failure: Option<yagra_common::SnmpFailure>,
+    /// The down nodes whose liveness alerts are rolled up into this one (ADR-270): set on a
+    /// border's liveness fire and on the update sent when more join, empty everywhere else.
+    //
+    // Filled by the engine on the action it hands out, never kept on the alert held in `active` -
+    // the members change while the border stays open, and the screen counts them for itself from
+    // the other alerts' `root_cause`. Same N-1 attributes as `ifindex`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grouped: Vec<NodeId>,
+}
+
+/// [`Alert::snmp_failure`] read leniently (ADR-268): a token this build does not know is `None`.
+fn lenient_snmp_failure<'de, D>(d: D) -> Result<Option<yagra_common::SnmpFailure>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let token: Option<String> = Option::deserialize(d)?;
+    Ok(token
+        .as_deref()
+        .and_then(yagra_common::SnmpFailure::from_token))
 }
 
 impl Alert {
@@ -426,6 +451,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 
@@ -458,6 +484,32 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(v["node"], serde_json::Value::String(n.to_string()));
         assert!(v.get("subject").is_none(), "the wire field is still `node`");
+    }
+
+    /// ADR-268: an SNMP failure this build has no name for (a newer core wrote the row) costs the
+    /// reason and not the alert. A held notification is stored as this JSON, and one that fails to
+    /// decode is dropped unsent.
+    #[test]
+    fn an_snmp_failure_this_build_does_not_know_reads_as_none() {
+        let mut a = alert(NodeId::new(), None);
+        a.snmp_failure = Some(yagra_common::SnmpFailure::Refused);
+        let mut v = serde_json::to_value(&a).unwrap();
+        assert_eq!(v["snmp_failure"], "refused");
+        assert_eq!(
+            serde_json::from_value::<Alert>(v.clone())
+                .unwrap()
+                .snmp_failure,
+            Some(yagra_common::SnmpFailure::Refused)
+        );
+        v["snmp_failure"] = serde_json::Value::from("a_newer_reason");
+        let back = serde_json::from_value::<Alert>(v.clone()).expect("the alert still loads");
+        assert_eq!(back.snmp_failure, None);
+        assert_eq!(back.subject, a.subject);
+        v["snmp_failure"] = serde_json::Value::Null;
+        assert_eq!(
+            serde_json::from_value::<Alert>(v).unwrap().snmp_failure,
+            None
+        );
     }
 
     #[test]

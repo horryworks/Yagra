@@ -52,7 +52,7 @@ import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { RoutingPage } from './pages/RoutingPage';
-import { DeliveryLogPage } from './pages/DeliveryLog';
+import { DELIVERY_FILTER_PREFIX, DELIVERY_LOG_PATH, DELIVERY_LOG_VIEW } from './pages/deliveryLogQuery';
 import { EventsPage } from './pages/EventsPage';
 import { EventRulesPage } from './pages/EventRulesPage';
 import { EventSourcesPage } from './pages/EventSourcesPage';
@@ -150,7 +150,13 @@ export function AppRoutes() {
         {/* Alerts */}
         <Route path="alerts" element={<ActiveAlertsPage />} />
         <Route path="alerts/history" element={<HistoryPage />} />
-        <Route path="alerts/deliveries" element={<DeliveryLogPage />} />
+        {/* The delivery log became History's Notifications view (ADR-270). */}
+        <Route
+          path="alerts/deliveries"
+          element={
+            <MovedTo to={DELIVERY_LOG_PATH} params={DELIVERY_LOG_VIEW} keyPrefix={DELIVERY_FILTER_PREFIX} />
+          }
+        />
         {/* Alert rules: thresholds and event rules as path tabs of one page (ADR-232). */}
         <Route path="alerts/rules" element={<AlertRulesPage />}>
           <Route index element={<ThresholdsPage />} />

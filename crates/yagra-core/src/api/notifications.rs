@@ -586,6 +586,7 @@ fn test_records(
         route_rules: Vec::new(),
         event,
         subject: "test".to_owned(),
+        check_id: None,
         node_id: None,
         subject_name: None,
         severity: None,
@@ -628,9 +629,13 @@ pub(crate) struct DeliveryQuery {
     /// Comma-separated sides a failure happened on (`yagra`, `network`, `remote`); empty or absent
     /// means every side. A delivered row has no side, so naming any side excludes it.
     side: Option<String>,
-    /// Comma-separated kinds (`fire`, `resolve`, `suppress`, `test`, `test_close`); empty or
-    /// absent means every kind.
+    /// Comma-separated kinds (`fire`, `update`, `resolve`, `suppress`, `test`, `test_close`);
+    /// empty or absent means every kind.
     event: Option<String>,
+    /// Only deliveries about this subject, as rows store it (a node's UUID).
+    subject: Option<String>,
+    /// Only deliveries about this check: with `subject`, one alert's deliveries.
+    check_id: Option<Uuid>,
 }
 
 /// The raw, unvalidated filter fields, as either surface receives them.
@@ -645,6 +650,8 @@ pub(crate) struct DeliveryFilterInput<'a> {
     pub result: Option<&'a str>,
     pub side: Option<&'a str>,
     pub event: Option<&'a str>,
+    pub subject: Option<&'a str>,
+    pub check_id: Option<Uuid>,
 }
 
 /// The notification delivery log (ADR-195): one row per delivery, newest first, saying whether it
@@ -684,6 +691,8 @@ async fn list_notification_deliveries(
                 result: q.result.as_deref(),
                 side: q.side.as_deref(),
                 event: q.event.as_deref(),
+                subject: q.subject.as_deref(),
+                check_id: q.check_id,
             },
         )
         .await?,
@@ -783,6 +792,13 @@ pub(crate) async fn delivery_page(
                 )
             },
         )?,
+        // An empty `subject` is no filter, as every other set here is.
+        subject: input
+            .subject
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+        check_id: input.check_id,
         limit: input.limit.unwrap_or(DEFAULT_LIMIT),
     };
     // Availability after the parse - see `list_notification_deliveries`.
@@ -2703,6 +2719,7 @@ at 2026-08-04T09:41:07+00:00"
             row_name: Some("r".to_owned()),
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         let written = serde_json::to_string(&alert).unwrap();
         let mut order: Vec<(usize, &str)> = listed
@@ -2744,7 +2761,7 @@ at 2026-08-04T09:41:07+00:00"
             .iter()
             .map(|e| e["event"].as_str().expect("event"))
             .collect();
-        assert_eq!(events, ["fire", "resolve", "suppress"]);
+        assert_eq!(events, ["fire", "update", "resolve", "suppress"]);
         // Since ADR-196 the webhook and PagerDuty summary is the same sentence JSM and email use.
         let fire = out[0]["subject"].as_str().expect("subject");
         assert!(fire.starts_with("{{ node_label }}"), "{fire}");

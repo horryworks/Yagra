@@ -104,6 +104,16 @@ impl NotifyChannel for WebhookChannel {
         }
         Err(refusal(resp, &self.secrets).await.into())
     }
+
+    /// A webhook hears an update as one more POST: its body says `"event": "update"` and carries
+    /// every node now rolled up into the outage (ADR-270 decision 3).
+    async fn deliver_update(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        self.deliver(notification).await?;
+        Ok(ResolveSent::Sent)
+    }
 }
 
 /// The dedup identity string sent to lifecycle-aware vendors: PagerDuty `dedup_key` and
@@ -235,8 +245,10 @@ fn url_without_tokens(url: &str) -> Option<String> {
     })
 }
 
-/// The strings a channel must never let out through a delivery log: its URL, the host it points
-/// at, a webhook's path tokens, a vendor key, an SMTP login (ADR-195 decision 2).
+/// The strings a channel must never let out through a delivery log's response text: its URL, the
+/// host it points at, a webhook's path tokens, a vendor key, an SMTP login (ADR-195 decision 2).
+/// The host does reach the log, in a column of its own (`destination`, which ADR-269 decision 2
+/// shows to Admins); it is still blanked here, inside text a remote wrote.
 ///
 /// A remote's error body is the reason this exists. Some services echo the request back when they
 /// refuse it, and the request carried the key in a header or the routing key in the body.
@@ -491,6 +503,11 @@ impl NotifyChannel for PagerDutyChannel {
         self.send_event("resolve", notification, false).await?;
         Ok(ResolveSent::Sent)
     }
+
+    // No `deliver_update` (ADR-270 decision 3): the Events API adds to an alert only through
+    // another `trigger` on its `dedup_key`, and when a person has resolved the incident by hand
+    // that trigger opens it again and pages. The trait's default sends nothing, so the members
+    // PagerDuty hears about are the ones the border's own fire carried.
 }
 
 /// JSM Alerts (Opsgenie-compatible) [`NotifyChannel`]: create alert on fire (dedup via
@@ -563,6 +580,38 @@ impl NotifyChannel for JsmChannel {
         vendor_response(resp, Some(reqwest::StatusCode::NOT_FOUND), &self.secrets).await?;
         Ok(ResolveSent::Sent)
     }
+
+    /// A note on the open alert, by alias (ADR-270 decision 3): the summary line, then the body
+    /// with every node now rolled up into the outage.
+    async fn deliver_update(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        let url = jsm_alias_url(&self.api_url, notification, "notes");
+        self.guard(&url).await?;
+        let resp = self
+            .http
+            .post(&url)
+            .header("authorization", format!("GenieKey {}", self.api_key))
+            .json(&jsm_note_body(notification))
+            .send()
+            .await
+            .map_err(delivery_error)?;
+        vendor_response(resp, None, &self.secrets).await?;
+        Ok(ResolveSent::Sent)
+    }
+}
+
+/// JSM holds at most this many characters in one note.
+pub(crate) const JSM_NOTE_MAX_CHARS: usize = 25_000;
+
+/// The JSM/Opsgenie add-note body (pure — unit-tested against the wire contract).
+fn jsm_note_body(notification: &Notification) -> serde_json::Value {
+    let text = format!("{}\n\n{}", notification.summary, notification.payload);
+    serde_json::json!({
+        "note": truncate_chars(&text, JSM_NOTE_MAX_CHARS),
+        "source": "yagra",
+    })
 }
 
 /// JSM cuts an alert's title (`message`) at this many characters. The template editor shows the cut
@@ -663,6 +712,12 @@ const M_JSM_TAGS_DROPPED: &str = "yagra_notification_jsm_tags_dropped_total";
 // incident `Dispatcher::dispatch_resolve` exists to prevent. `Url::path_segments_mut` is the url
 // crate reqwest already carries; no new dependency.
 fn jsm_close_url(api_url: &str, notification: &Notification) -> String {
+    jsm_alias_url(api_url, notification, "close")
+}
+
+/// `{api}/alerts/{alias}/{action}?identifierType=alias`, the alias encoded as [`jsm_close_url`]
+/// says.
+fn jsm_alias_url(api_url: &str, notification: &Notification, action: &str) -> String {
     let alias = dedup_string(&notification.dedup_key);
     let encoded = reqwest::Url::parse(api_url)
         .ok()
@@ -678,7 +733,7 @@ fn jsm_close_url(api_url: &str, notification: &Notification) -> String {
         // A non-base or unparseable `api_url` is a misconfiguration the delivery guard already
         // rejects; fall back to the raw alias rather than dropping the close.
         .unwrap_or(alias);
-    format!("{api_url}/alerts/{encoded}/close?identifierType=alias")
+    format!("{api_url}/alerts/{encoded}/{action}?identifierType=alias")
 }
 
 /// Clip to at most `max` characters on a char boundary (vendor field limits).
@@ -992,6 +1047,20 @@ impl NotifyChannel for MultiChannel {
         let mut sent = ResolveSent::NothingToSend;
         for channel in &self.channels {
             if channel.deliver_resolve(notification).await? == ResolveSent::Sent {
+                sent = ResolveSent::Sent;
+            }
+        }
+        Ok(sent)
+    }
+
+    // Forwarded for the same reason: the webhook in the pair has an update to send.
+    async fn deliver_update(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        let mut sent = ResolveSent::NothingToSend;
+        for channel in &self.channels {
+            if channel.deliver_update(notification).await? == ResolveSent::Sent {
                 sent = ResolveSent::Sent;
             }
         }
@@ -1674,7 +1743,9 @@ impl Notifier {
     /// and say so. Anything else passes through.
     async fn drop_with_held_fire(&self, action: &NotifyAction) -> bool {
         let alert = match action {
-            NotifyAction::Fire(_) => return false,
+            // An update reaches only a channel that heard the fire, so a held fire leaves it
+            // nowhere to go by itself (`Dispatcher::dispatch_update`).
+            NotifyAction::Fire(_) | NotifyAction::Update(_) => return false,
             NotifyAction::Resolve(a) | NotifyAction::Suppress(a) => a,
         };
         let Some(store) = self.held_store() else {
@@ -1719,6 +1790,7 @@ impl Notifier {
             return;
         };
         let mut sent: HashSet<(String, yagra_common::CheckId)> = HashSet::new();
+        let mut members: Option<HashMap<NodeId, Vec<NodeId>>> = None;
         for row in rows {
             match row.event {
                 HeldEvent::Fire => {
@@ -1729,10 +1801,12 @@ impl Notifier {
                         if a.root_cause.is_none()
                             && !sent.contains(&(a.subject.to_string(), a.check))
                         {
-                            if !self
-                                .deliver_at(NotifyAction::Fire(a.clone()), now, true)
-                                .await
-                            {
+                            // As the outage is now (ADR-270): the open alert does not keep its
+                            // members, the other alerts' `root_cause` does.
+                            let mut fire = a.clone();
+                            let members = members.get_or_insert_with(|| members_by_border(active));
+                            fire.grouped = grouped_in(members, a);
+                            if !self.deliver_at(NotifyAction::Fire(fire), now, true).await {
                                 continue;
                             }
                             sent.insert((a.subject.to_string(), a.check));
@@ -1782,9 +1856,13 @@ impl Notifier {
             NotifyAction::Fire(a) => self.context(a, NotifyEvent::Fire).await,
             NotifyAction::Resolve(a) => self.context(a, NotifyEvent::Resolve).await,
             NotifyAction::Suppress(a) => self.context(a, NotifyEvent::Suppress).await,
+            NotifyAction::Update(a) => self.context(a, NotifyEvent::Update).await,
         };
         let routing = self.routing();
         match action {
+            NotifyAction::Update(alert) => {
+                self.update(&routing, &alert, facts.as_ref()).await;
+            }
             NotifyAction::Fire(alert) => {
                 // Suppressed downstream alert: it's attributed to an upstream root cause and
                 // rolled into that incident, so we don't page for it separately (the root
@@ -2041,6 +2119,41 @@ impl Notifier {
         }
     }
 
+    /// Tell every channel holding the outage's incident who is in it now (ADR-270 decision 3).
+    ///
+    /// A channel is asked only if it was delivered the border's fire and has not been told it
+    /// closed ([`Dispatcher::dispatch_update`]): there is no rule matching here, because the
+    /// update adds to an incident that already exists wherever it was sent. A channel with
+    /// nothing to send for it (email) answers `Skipped`, which records no row.
+    async fn update(&self, routing: &Routing, alert: &Alert, facts: Option<&AlertFacts>) {
+        let event = NotifyEvent::Update;
+        let notification = with_subject_facts(json_notification(alert, event, facts), facts);
+        let text = (!routing.text.is_empty()).then(|| text_notification(alert, event, facts));
+        let done = Delivered {
+            alert,
+            event,
+            facts,
+            message: "outage update dispatched",
+        };
+        if let Some(d) = routing.default.as_ref() {
+            let started = std::time::Instant::now();
+            let at = chrono::Utc::now();
+            if let Some(report) = d.dispatch_update(notification.clone()).await {
+                self.after_dispatch(&done, routing.default_target(), &report, at, started);
+            }
+        }
+        for (id, d) in &routing.channels {
+            let base = routing.builtin_for(*id, &notification, text.as_ref());
+            let n = for_channel(*id, &routing.overrides, facts, base);
+            let started = std::time::Instant::now();
+            let at = chrono::Utc::now();
+            if let Some(report) = d.dispatch_update(n).await {
+                let target = routing.channel_target(*id, DeliveryRoute::OpenIncident, Vec::new());
+                self.after_dispatch(&done, target, &report, at, started);
+            }
+        }
+    }
+
     /// Everything that follows one dispatch: the two metrics, the log line, and the delivery-log
     /// row (ADR-195). `to` says which channel it was - none for the environment default route -
     /// and why it went there (ADR-269).
@@ -2099,6 +2212,7 @@ impl Notifier {
                 route_rules: to.rules,
                 event: done.event.into(),
                 subject: done.alert.subject.to_string(),
+                check_id: Some(done.alert.check.as_uuid()),
                 node_id: done.alert.node().map(|n| n.as_uuid()),
                 subject_name: done
                     .facts
@@ -2111,6 +2225,41 @@ impl Notifier {
             });
         }
     }
+}
+
+/// Every border's rolled-up down nodes among `active`, each list in id order (ADR-270): what the
+/// engine puts on a border's fire, for a fire sent later from what is open. Built once per
+/// release pass, so a morning that releases many held fires reads `active` once, not once each.
+fn members_by_border(active: &[Alert]) -> HashMap<NodeId, Vec<NodeId>> {
+    let mut out: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    for a in active
+        .iter()
+        .filter(|a| a.metric == crate::alerts::LIVENESS)
+    {
+        if let (Some(border), Some(node)) = (a.root_cause, a.node()) {
+            if node != border {
+                out.entry(border).or_default().push(node);
+            }
+        }
+    }
+    for members in out.values_mut() {
+        members.sort_by_key(|n| n.as_uuid());
+        members.dedup();
+    }
+    out
+}
+
+/// What `border`'s fire carries, read from [`members_by_border`]: its members when it is a
+/// liveness alert, nothing otherwise.
+fn grouped_in(members: &HashMap<NodeId, Vec<NodeId>>, border: &Alert) -> Vec<NodeId> {
+    if border.metric != crate::alerts::LIVENESS {
+        return Vec::new();
+    }
+    border
+        .node()
+        .and_then(|n| members.get(&n))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// What every dispatch of one notify action shares, for [`Notifier::after_dispatch`].
@@ -2341,6 +2490,10 @@ fn json_notification(
         (Subject::Pool(pool), NotifyEvent::Suppress) => {
             format!("rolled up: poller pool \"{pool}\" suppressed")
         }
+        // Unreachable: only a node's liveness alert has members (ADR-270).
+        (Subject::Pool(pool), NotifyEvent::Update) => {
+            format!("update: poller pool \"{pool}\" has no live poller")
+        }
         // Like a node, an organization is named by id here: the built-in text has only the alert
         // to go on, and a templated channel gets the name through `notify_facts` (`subject_name`).
         (Subject::MerakiOrg(org), NotifyEvent::Fire) => format!(
@@ -2354,13 +2507,68 @@ fn json_notification(
         (Subject::MerakiOrg(org), NotifyEvent::Suppress) => {
             format!("rolled up: Meraki organization {org} suppressed")
         }
+        // Unreachable, as the pool's update is.
+        (Subject::MerakiOrg(org), NotifyEvent::Update) => {
+            format!("update: Meraki organization {org}: the Dashboard API is not answering")
+        }
         (Subject::ConfigRemote, event) => crate::alerts::notify_text::config_remote_title(event),
     };
-    let payload = with_node_url(
-        serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned()),
-        facts.and_then(|f| f.node_url.as_deref()),
+    let payload = with_grouped_names(
+        with_node_url(
+            serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned()),
+            facts.and_then(|f| f.node_url.as_deref()),
+        ),
+        alert,
+        event,
+        facts,
     );
     Notification::for_alert(alert, summary, payload)
+}
+
+/// The built-in alert JSON with `event` and the grouped nodes' names added (ADR-270), when the
+/// alert has members on a fire or an update. `grouped` is ids; a program reading the page wants
+/// names too, and an update is told apart from the fire it adds to by `"event": "update"`.
+/// Untouched otherwise, so every other alert's body is byte-identical to before.
+///
+/// Both lists stop at [`yagra_common::GROUPED_NODES_MAX`] and `grouped_count` says how many there
+/// are: an outage of thousands of nodes would otherwise grow the body past what a channel takes
+/// (PagerDuty refuses an event over 512 KB). Facts that could not be read name each member by id,
+/// as the built-in text does, rather than dropping the fields.
+fn with_grouped_names(
+    payload: String,
+    alert: &Alert,
+    event: NotifyEvent,
+    facts: Option<&AlertFacts>,
+) -> String {
+    if alert.grouped.is_empty() || !yagra_common::grouped_event(event) {
+        return payload;
+    }
+    let fallback;
+    let facts = match facts {
+        Some(f) => f,
+        None => {
+            fallback = context_for(alert, event, &HashMap::new());
+            &fallback
+        }
+    };
+    match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(serde_json::Value::Object(mut obj)) => {
+            if let Some(serde_json::Value::Array(ids)) = obj.get_mut("grouped") {
+                ids.truncate(yagra_common::GROUPED_NODES_MAX);
+            }
+            obj.insert("event".to_owned(), serde_json::Value::from(event.as_str()));
+            obj.insert(
+                "grouped_count".to_owned(),
+                serde_json::Value::from(facts.grouped_count),
+            );
+            obj.insert(
+                "grouped_nodes".to_owned(),
+                serde_json::json!(facts.grouped_nodes),
+            );
+            serde_json::Value::Object(obj).to_string()
+        }
+        _ => payload,
+    }
 }
 
 /// The built-in alert JSON with the node's page added at the top as `node_url` (ADR-260), when
@@ -2560,8 +2768,8 @@ mod template_tests {
             }
         }
         assert_eq!(
-            compared, 48,
-            "4 kinds x 2 samples x resolved or not x 3 points"
+            compared, 64,
+            "4 kinds x 2 samples x resolved or not x 4 points"
         );
     }
 
@@ -2623,8 +2831,8 @@ mod template_tests {
             }
         }
         assert_eq!(
-            compared, 72,
-            "2 kinds x 2 samples x resolved or not x 3 points x 3 shapes"
+            compared, 96,
+            "2 kinds x 2 samples x resolved or not x 4 points x 3 shapes"
         );
     }
 
@@ -2711,7 +2919,7 @@ mod template_tests {
                 }
             }
         }
-        assert_eq!(compared, 12, "2 kinds x 2 samples x 3 points");
+        assert_eq!(compared, 16, "2 kinds x 2 samples x 4 points");
     }
 
     /// Webhook and PagerDuty are read by programs: the built-in payload is still the whole alert as
@@ -3093,6 +3301,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         Notification::for_alert(&alert, "node down", r#"{"metric":"event:test"}"#)
     }
@@ -3343,6 +3552,98 @@ mod tests {
         );
     }
 
+    /// ADR-270: an outage's update is a note on the JSM alert the fire opened, by the same alias,
+    /// carrying the title line and the body with every grouped node.
+    #[test]
+    fn a_jsm_update_is_a_note_on_the_alert_by_alias() {
+        let n = Notification {
+            dedup_key: yagra_alert::DedupKey {
+                subject: Subject::Node(NodeId::from(Uuid::from_u128(1))),
+                check: yagra_common::CheckId::from(Uuid::from_u128(2)),
+                severity: Severity::Critical,
+            },
+            severity: Severity::Critical,
+            summary: "update: sw-01 is unreachable, now with 2 nodes grouped".to_owned(),
+            payload: "Grouped:   2 nodes\n- ap-01\n- ap-02\n".to_owned(),
+            tags: Vec::new(),
+            details: Vec::new(),
+            link: None,
+        };
+        let url = jsm_alias_url("https://api.example/v2", &n, "notes");
+        assert_eq!(
+            url,
+            format!(
+                "https://api.example/v2/alerts/{}/notes?identifierType=alias",
+                dedup_string(&n.dedup_key)
+            )
+        );
+        let body = jsm_note_body(&n);
+        let note = body["note"].as_str().expect("a note");
+        assert!(
+            note.starts_with(&n.summary) && note.contains("- ap-02"),
+            "{note}"
+        );
+        assert_eq!(body["source"], "yagra");
+        // The close is the same URL with its own action, byte-identical to before.
+        assert_eq!(
+            jsm_close_url("https://api.example/v2", &n),
+            url.replace("/notes?", "/close?")
+        );
+    }
+
+    /// The webhook and PagerDuty body names the grouped nodes and says it is an update; an alert
+    /// with no members sends the body it always sent.
+    #[test]
+    fn the_json_body_names_the_grouped_nodes_only_when_there_are_some() {
+        let (alert, resolved) =
+            crate::alerts::notify_facts::preview_sample(yagra_common::PreviewSample::Liveness);
+        let facts = context_for(&alert, NotifyEvent::Update, &resolved);
+        let n = json_notification(&alert, NotifyEvent::Update, Some(&facts));
+        let body: serde_json::Value = serde_json::from_str(&n.payload).expect("json");
+        assert_eq!(body["event"], "update");
+        assert_eq!(body["grouped_count"], 2);
+        assert_eq!(body["grouped_nodes"][1], "ap-02 (192.0.2.22)");
+        assert_eq!(body["grouped"].as_array().map(Vec::len), Some(2));
+
+        // Facts that could not be read still say it is an update, and name members by id.
+        let n = json_notification(&alert, NotifyEvent::Update, None);
+        let body: serde_json::Value = serde_json::from_str(&n.payload).expect("json");
+        assert_eq!(body["event"], "update");
+        assert_eq!(body["grouped_count"], 2);
+        assert_eq!(
+            body["grouped_nodes"][0],
+            alert.grouped[0].as_uuid().to_string()
+        );
+
+        // A huge outage sends at most the cap of either list; the count says how many there are.
+        let mut huge = alert.clone();
+        huge.grouped = (0..yagra_common::GROUPED_NODES_MAX as u128 + 50)
+            .map(|i| NodeId(Uuid::from_u128(10_000 + i)))
+            .collect();
+        let facts = context_for(&huge, NotifyEvent::Fire, &resolved);
+        let n = json_notification(&huge, NotifyEvent::Fire, Some(&facts));
+        let body: serde_json::Value = serde_json::from_str(&n.payload).expect("json");
+        assert_eq!(body["grouped_count"], yagra_common::GROUPED_NODES_MAX + 50);
+        assert_eq!(
+            body["grouped"].as_array().map(Vec::len),
+            Some(yagra_common::GROUPED_NODES_MAX)
+        );
+        assert_eq!(
+            body["grouped_nodes"].as_array().map(Vec::len),
+            Some(yagra_common::GROUPED_NODES_MAX)
+        );
+
+        let mut lone = alert.clone();
+        lone.grouped.clear();
+        let facts = context_for(&lone, NotifyEvent::Fire, &resolved);
+        let n = json_notification(&lone, NotifyEvent::Fire, Some(&facts));
+        assert_eq!(
+            n.payload,
+            serde_json::to_string(&lone).unwrap(),
+            "no member, no change"
+        );
+    }
+
     /// The delivery metrics say what their docs say (ADR-104 decision 4).
     ///
     /// Same shape as `the_failure_reasons_are_the_metric_labels` above: the names are what an
@@ -3365,7 +3666,7 @@ mod tests {
         // The `event` label comes from the shared vocabulary rather than a fourth spelling of it.
         assert_eq!(
             NotifyEvent::ALL.map(|e| e.as_str()),
-            ["fire", "resolve", "suppress"]
+            ["fire", "update", "resolve", "suppress"]
         );
     }
 
@@ -3749,7 +4050,39 @@ mod delivery_tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
+    }
+
+    /// ADR-270: a fire released from a hold carries its outage's members, read from what is open
+    /// in one pass for the whole release - each border's own down nodes, in id order, and nothing
+    /// for an alert that is not an up/down one.
+    #[test]
+    fn a_released_fire_carries_the_members_read_once_from_what_is_open() {
+        let liveness = |node: NodeId, root: Option<NodeId>| {
+            let mut a = alert(node, Severity::Critical, root);
+            a.metric = crate::alerts::LIVENESS.to_owned();
+            a.check = check_id(node, crate::alerts::LIVENESS);
+            a
+        };
+        let id = |n: u128| NodeId(Uuid::from_u128(n));
+        let (border, other) = (id(1), id(2));
+        let active = vec![
+            liveness(border, None),
+            liveness(id(12), Some(border)),
+            liveness(id(11), Some(border)),
+            liveness(id(21), Some(other)),
+            // A down node's other alerts carry its own node (ADR-087): not a member of anything.
+            liveness(id(30), Some(id(30))),
+            // Only up/down alerts are members.
+            alert(id(13), Severity::Critical, Some(border)),
+        ];
+        let members = members_by_border(&active);
+        assert_eq!(grouped_in(&members, &active[0]), vec![id(11), id(12)]);
+        assert_eq!(grouped_in(&members, &liveness(other, None)), vec![id(21)]);
+        assert!(grouped_in(&members, &liveness(id(30), None)).is_empty());
+        // A threshold alert on the border holds nobody.
+        assert!(grouped_in(&members, &alert(border, Severity::Critical, None)).is_empty());
     }
 
     // -- A rule's hours (ADR-262, the hold and release of ADR-226) ------------------------------
@@ -5256,6 +5589,7 @@ mod webui_link_tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 

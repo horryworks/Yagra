@@ -225,14 +225,7 @@ export const NAV: NavSection[] = [
             path: '/alerts/history',
             implemented: true,
           },
-          // What each notification did (ADR-195). A record to read, not a setting, so it sits under
-          // Monitor rather than at the foot of Notification delivery (ADR-262 decision 7).
-          {
-            labelKey: 'alerts.deliveries',
-            descKey: 'descriptions.alertsDeliveries',
-            path: '/alerts/deliveries',
-            implemented: true,
-          },
+          // The delivery log (ADR-195) is History's Notifications view since ADR-270.
         ],
       },
       {

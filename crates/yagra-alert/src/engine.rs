@@ -284,6 +284,21 @@ pub struct AlertManager {
     /// it. ⚠️ Memory only, deliberately: after a restart the alert is not restored (it has no
     /// history row), and a node still down commits again and is judged again.
     held: Mutex<HashMap<CheckId, i64>>,
+    /// For each border whose liveness fire was handed out, the nodes it was sent as carrying
+    /// (ADR-270): what an [`NotifyAction::Update`] is measured against. ⚠️ Memory only: after a
+    /// restart a border is unknown here, so the next node to join it produces an update carrying
+    /// the whole list - which no channel sends, because which channel holds the incident is memory
+    /// only too (`Dispatcher::dispatch_update`). An outage open across a restart gets no update;
+    /// Active alerts and History still name its members.
+    sent_groups: Mutex<HashMap<CheckId, BTreeSet<NodeId>>>,
+    /// Borders whose members may have grown without any action naming them: [`Self::reattribute`]
+    /// moving an alert from one border to another emits nothing, so it leaves the new border here
+    /// for [`Self::finish_grouping`].
+    regrouped: Mutex<HashSet<NodeId>>,
+    /// Borders that gained members since their fire, with the instant their update is due
+    /// ([`UPDATE_WAIT_MS`] after the first new member): an outage spreading over a poll cycle sends
+    /// one update, not one per node. Sent by [`Self::release_held`]'s tick. Memory only.
+    pending_updates: Mutex<HashMap<CheckId, i64>>,
     /// What an alert is called in its stream frame ([`AlertTitles`]).
     titles: AlertTitles,
 }
@@ -294,6 +309,9 @@ const HELD_FALLBACK_INTERVAL_MS: i64 = 5 * 60 * 1_000;
 /// Added to a held notification's wait, so a neighbour whose last sample arrives a little late
 /// still lands inside it.
 const HELD_SLACK_MS: i64 = 30_000;
+/// How long a border's update waits after its first new member, gathering the ones that follow
+/// (ADR-270 decision 3).
+pub const UPDATE_WAIT_MS: i64 = 60_000;
 
 /// One open alert a store can still be asked about, and the series that would answer.
 ///
@@ -344,6 +362,9 @@ impl AlertManager {
             side_pending: Mutex::new(HashMap::new()),
             releasing: Mutex::new(HashMap::new()),
             held: Mutex::new(HashMap::new()),
+            sent_groups: Mutex::new(HashMap::new()),
+            regrouped: Mutex::new(HashSet::new()),
+            pending_updates: Mutex::new(HashMap::new()),
             titles,
         }
     }
@@ -1157,7 +1178,197 @@ impl AlertManager {
                 self.broadcast_node_state(node, state, result.at_unix_ms);
             }
         }
+        self.finish_grouping(actions, result.at_unix_ms)
+    }
+
+    /// The down nodes whose liveness alerts are rolled up into `border` now (ADR-270), in id order.
+    ///
+    /// With grouping off everywhere nothing can be rolled up, so it answers without reading the
+    /// active set: a mass outage on a deployment that does not group would otherwise read every
+    /// open alert once per node that went down.
+    fn grouped_under(&self, border: NodeId) -> Vec<NodeId> {
+        let groups = self
+            .config
+            .read()
+            .expect("config rwlock poisoned")
+            .grouping
+            .groups_anywhere();
+        if !groups {
+            return Vec::new();
+        }
+        let mut members: Vec<NodeId> = self
+            .active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .values()
+            .filter(|a| a.metric == LIVENESS && a.root_cause == Some(border))
+            .filter_map(Alert::node)
+            .filter(|n| *n != border)
+            .collect();
+        members.sort_by_key(|n| n.as_uuid());
+        members.dedup();
+        members
+    }
+
+    /// Put the outage's members on what is about to leave the engine (ADR-270 decisions 1-3).
+    ///
+    /// - A border's liveness `Fire` carries every node rolled up into it **after** this call's
+    ///   roll-ups. That ordering is the point: `process_check` pushes the fire before
+    ///   `resweep_suppression` attributes the nodes behind it, so filling it there would miss the
+    ///   very nodes the same observation put inside the outage.
+    /// - A border that already fired and gains members is scheduled for one
+    ///   [`NotifyAction::Update`] [`UPDATE_WAIT_MS`] later ([`Self::due_updates`] sends it). A
+    ///   member leaving sends nothing.
+    ///
+    /// Every public entry that can move a roll-up returns through this: the poll path, `regroup`
+    /// and `release_held`. Only the borders an action in this batch names (or that
+    /// [`Self::reattribute`] moved an alert to) are looked at. A border's fire reads the active set
+    /// once for its members, except with grouping off everywhere, where [`Self::grouped_under`]
+    /// answers without reading it - so then this costs a scan of `actions` and nothing else.
+    fn finish_grouping(
+        &self,
+        mut actions: Vec<NotifyAction>,
+        now_unix_ms: i64,
+    ) -> Vec<NotifyAction> {
+        let mut touched: BTreeSet<NodeId> =
+            std::mem::take(&mut *self.regrouped.lock().expect("regrouped mutex poisoned"))
+                .into_iter()
+                .collect();
+        let mut fired: HashSet<CheckId> = HashSet::new();
+        for action in &mut actions {
+            match action {
+                NotifyAction::Fire(a) if a.metric == LIVENESS => match (a.root_cause, a.node()) {
+                    (None, Some(border)) => {
+                        a.grouped = self.grouped_under(border);
+                        self.sent_groups
+                            .lock()
+                            .expect("sent groups mutex poisoned")
+                            .insert(a.check, a.grouped.iter().copied().collect());
+                        self.forget_update(a.check);
+                        fired.insert(a.check);
+                    }
+                    (Some(border), _) => {
+                        touched.insert(border);
+                    }
+                    (None, None) => {}
+                },
+                NotifyAction::Suppress(a) if a.metric == LIVENESS => {
+                    // It is a member now, and it stops being a border.
+                    self.sent_groups
+                        .lock()
+                        .expect("sent groups mutex poisoned")
+                        .remove(&a.check);
+                    self.forget_update(a.check);
+                    if let Some(border) = a.root_cause {
+                        touched.insert(border);
+                    }
+                }
+                NotifyAction::Resolve(a) if a.metric == LIVENESS => {
+                    self.sent_groups
+                        .lock()
+                        .expect("sent groups mutex poisoned")
+                        .remove(&a.check);
+                    self.forget_update(a.check);
+                }
+                NotifyAction::Fire(_)
+                | NotifyAction::Suppress(_)
+                | NotifyAction::Resolve(_)
+                | NotifyAction::Update(_) => {}
+            }
+        }
+        for border in touched {
+            let check = check_id(border, LIVENESS);
+            if fired.contains(&check) {
+                continue; // its fire in this batch already carries every member
+            }
+            if self.update_for(border).is_some() {
+                // The first new member starts the wait; the ones that follow ride on it.
+                self.pending_updates
+                    .lock()
+                    .expect("pending updates mutex poisoned")
+                    .entry(check)
+                    .or_insert(now_unix_ms.saturating_add(UPDATE_WAIT_MS));
+            }
+        }
         actions
+    }
+
+    /// The update `border`'s incident is owed now, or `None`: its open liveness alert carrying
+    /// every member, when it paged and has members it was not sent as carrying.
+    fn update_for(&self, border: NodeId) -> Option<Alert> {
+        let check = check_id(border, LIVENESS);
+        let open = self
+            .active
+            .lock()
+            .expect("alerts mutex poisoned")
+            .get(&check)
+            .cloned()?;
+        // Only a border that paged: one rolled up itself, or one whose page is held, has no
+        // incident to add to - a held one carries its members when it is released.
+        if open.root_cause.is_some() || open.notify_held_until.is_some() {
+            return None;
+        }
+        let members = self.grouped_under(border);
+        let sent = self.sent_groups.lock().expect("sent groups mutex poisoned");
+        // After a restart a paged border is unknown here: everything is new to it then.
+        let known = sent.get(&check);
+        if members.iter().all(|m| known.is_some_and(|k| k.contains(m))) {
+            return None;
+        }
+        let mut update = open;
+        update.grouped = members;
+        Some(update)
+    }
+
+    /// The updates whose wait is over at `now_unix_ms`, each carrying every member the border
+    /// holds then (ADR-270 decision 3). One whose border recovered, was rolled up or has nothing
+    /// new any more is dropped without a word.
+    fn due_updates(&self, now_unix_ms: i64) -> Vec<NotifyAction> {
+        let due: Vec<CheckId> = {
+            let mut pending = self
+                .pending_updates
+                .lock()
+                .expect("pending updates mutex poisoned");
+            let due: Vec<CheckId> = pending
+                .iter()
+                .filter(|(_, at)| **at <= now_unix_ms)
+                .map(|(c, _)| *c)
+                .collect();
+            for c in &due {
+                pending.remove(c);
+            }
+            due
+        };
+        let mut out = Vec::new();
+        for check in due {
+            let Some(border) = self
+                .active
+                .lock()
+                .expect("alerts mutex poisoned")
+                .get(&check)
+                .and_then(Alert::node)
+            else {
+                continue;
+            };
+            if let Some(update) = self.update_for(border) {
+                self.sent_groups
+                    .lock()
+                    .expect("sent groups mutex poisoned")
+                    .entry(check)
+                    .or_default()
+                    .extend(update.grouped.iter().copied());
+                out.push(NotifyAction::Update(update));
+            }
+        }
+        out
+    }
+
+    /// Drop a scheduled update: its border fired, was rolled up or recovered.
+    fn forget_update(&self, check: CheckId) {
+        self.pending_updates
+            .lock()
+            .expect("pending updates mutex poisoned")
+            .remove(&check);
     }
 
     /// Run one raw state through a check's hysteresis and emit a fire/resolve action on a
@@ -1788,7 +1999,8 @@ impl AlertManager {
     /// for an outage that is already open. The caller delivers the returned actions — a `Suppress`
     /// for an alert now rolled up, a `Fire` for one that pages on its own again.
     pub fn regroup(&self) -> Vec<NotifyAction> {
-        self.reattribute(None)
+        let actions = self.reattribute(None);
+        self.finish_grouping(actions, yagra_common::clock::now_unix_ms())
     }
 
     /// The neighbours `node` is judged by that are failing liveness and have not committed yet,
@@ -1864,6 +2076,7 @@ impl AlertManager {
     /// over: the neighbour came back or stopped failing, or the time ran out. Each pages now as an
     /// ordinary fire. One that was rolled up meanwhile left the held set when it was
     /// ([`Self::reattribute`]). Called by core's leader every few seconds; returns what to deliver.
+    /// The same tick sends every update whose wait is over (ADR-270).
     pub fn release_held(&self, now_unix_ms: i64) -> Vec<NotifyAction> {
         let held: Vec<(CheckId, i64)> = self
             .held
@@ -1926,6 +2139,9 @@ impl AlertManager {
             self.broadcast(&released, false);
             actions.push(NotifyAction::Fire(released));
         }
+        let mut actions = self.finish_grouping(actions, now_unix_ms);
+        // The same tick sends the updates whose wait is over (ADR-270 decision 3).
+        actions.extend(self.due_updates(now_unix_ms));
         actions
     }
 
@@ -2117,6 +2333,14 @@ impl AlertManager {
             match (alert.root_cause, new_rc) {
                 (None, Some(_)) => actions.push(NotifyAction::Suppress(updated)),
                 (Some(_), None) => actions.push(NotifyAction::Fire(updated)),
+                // Moved from one border to another: nothing to page or close, but the new border
+                // has one more member to tell its incident about (ADR-270).
+                (Some(_), Some(to)) if updated.metric == LIVENESS => {
+                    self.regrouped
+                        .lock()
+                        .expect("regrouped mutex poisoned")
+                        .insert(to);
+                }
                 _ => {}
             }
         }
@@ -2357,6 +2581,7 @@ impl AlertManager {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         })
     }
 
@@ -3228,6 +3453,7 @@ impl AlertManager {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         })
     }
 
@@ -3268,6 +3494,7 @@ impl AlertManager {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         })
     }
 
@@ -3305,6 +3532,7 @@ impl AlertManager {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         })
     }
 
@@ -3350,6 +3578,7 @@ impl AlertManager {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         })
     }
 
@@ -6428,6 +6657,14 @@ mod tests {
             "{actions:?}"
         );
         assert!(mgr.regroup().is_empty(), "a second regroup changes nothing");
+        // The parent paged on its own before, so its incident is told it now holds the child once
+        // the update's wait is over (ADR-270 decision 3).
+        let later = mgr.release_held(yagra_common::clock::now_unix_ms() + UPDATE_WAIT_MS + 1);
+        assert!(
+            matches!(later.as_slice(), [NotifyAction::Update(u)]
+                if u.node() == Some(parent) && u.grouped == vec![child]),
+            "{later:?}"
+        );
 
         mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(off));
         let actions = mgr.regroup();
@@ -6540,6 +6777,164 @@ mod tests {
             .find(|a| a.subject.is_node(child))
             .expect("child still active");
         assert_eq!(child_active.root_cause, None);
+    }
+
+    /// Every action that leaves the engine while driving `node` to `outcome` across its dwell.
+    fn drive_all(
+        mgr: &AlertManager,
+        node: NodeId,
+        outcome: CheckOutcome,
+        base: i64,
+    ) -> Vec<NotifyAction> {
+        (0..DEFAULT_LIVENESS_DWELL)
+            .flat_map(|i| mgr.observe(&result(node, outcome, base + i64::from(i))))
+            .collect()
+    }
+
+    fn fire_of(actions: &[NotifyAction], node: NodeId) -> Option<Alert> {
+        actions.iter().find_map(|a| match a {
+            NotifyAction::Fire(al) if al.subject.is_node(node) && al.metric == LIVENESS => {
+                Some(al.clone())
+            }
+            _ => None,
+        })
+    }
+
+    fn updates(actions: &[NotifyAction]) -> Vec<Alert> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                NotifyAction::Update(al) => Some(al.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// ADR-270 decision 2: the nodes the border's own fall puts inside the outage are rolled up by
+    /// the re-sweep that runs *after* its fire is built. They still have to be on that fire.
+    #[test]
+    fn a_borders_fire_carries_the_nodes_its_own_fall_rolled_up() {
+        let border = NodeId::new();
+        let (a, b) = (NodeId::new(), NodeId::new());
+        let mgr = manager();
+        mgr.set_config(
+            cfg(Vec::new(), HashMap::new()).with_grouping(linked(&[(a, border), (b, border)])),
+        );
+        // Both fall first and page on their own: their only link out is the border, still up.
+        drive_all(&mgr, a, CheckOutcome::Unreachable, 0);
+        drive_all(&mgr, b, CheckOutcome::Unreachable, 0);
+
+        let actions = drive_all(&mgr, border, CheckOutcome::Unreachable, 100);
+        let fire = fire_of(&actions, border).expect("the border pages");
+        let mut want = vec![a, b];
+        want.sort_by_key(|n| n.as_uuid());
+        assert_eq!(fire.grouped, want, "{actions:?}");
+        assert!(updates(&actions).is_empty(), "its fire already says it all");
+        // The open alert itself does not keep the list: the screen counts the members.
+        assert!(mgr.active_alerts().iter().all(|al| al.grouped.is_empty()));
+    }
+
+    /// ADR-270 decision 3: nodes that join an outage whose border already paged are told to that
+    /// incident once, [`UPDATE_WAIT_MS`] after the first of them, with every member; one that
+    /// leaves sends nothing.
+    #[test]
+    fn nodes_joining_after_the_border_paged_send_one_update_after_the_wait() {
+        let border = NodeId::new();
+        let (a, b, c) = (NodeId::new(), NodeId::new(), NodeId::new());
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(linked(&[
+            (a, border),
+            (b, border),
+            (c, border),
+        ])));
+        let first = drive_all(&mgr, border, CheckOutcome::Unreachable, 0);
+        assert_eq!(
+            fire_of(&first, border).expect("border pages").grouped,
+            Vec::<NodeId>::new()
+        );
+
+        // a joins at 100 and b at 200: nothing is sent while the wait runs.
+        let joined = drive_all(&mgr, a, CheckOutcome::Unreachable, 100);
+        assert_eq!(
+            fire_of(&joined, a).expect("a fires").root_cause,
+            Some(border)
+        );
+        assert!(updates(&joined).is_empty(), "{joined:?}");
+        assert!(updates(&drive_all(&mgr, b, CheckOutcome::Unreachable, 200)).is_empty());
+        // a commits on its last sample of the dwell.
+        let a_joined = 100 + i64::from(DEFAULT_LIVENESS_DWELL) - 1;
+        assert!(
+            mgr.release_held(a_joined + UPDATE_WAIT_MS - 1).is_empty(),
+            "the wait runs from the first new member"
+        );
+
+        let sent = updates(&mgr.release_held(a_joined + UPDATE_WAIT_MS));
+        assert_eq!(sent.len(), 1, "one update for both");
+        assert!(sent[0].subject.is_node(border));
+        let mut want = vec![a, b];
+        want.sort_by_key(|n| n.as_uuid());
+        assert_eq!(sent[0].grouped, want, "the update carries every member");
+        assert!(
+            mgr.release_held(i64::MAX / 2).is_empty(),
+            "nothing is sent twice"
+        );
+
+        // A member leaving schedules nothing; the next one joining does.
+        assert!(updates(&drive_all(&mgr, a, CheckOutcome::Reachable, 300)).is_empty());
+        assert!(mgr.release_held(i64::MAX / 2).is_empty());
+        drive_all(&mgr, c, CheckOutcome::Unreachable, 400);
+        let sent = updates(&mgr.release_held(i64::MAX / 2));
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].grouped.contains(&c) && !sent[0].grouped.contains(&a));
+    }
+
+    /// A border that recovers during the wait owes its incident nothing more.
+    #[test]
+    fn an_update_whose_border_recovered_during_the_wait_is_dropped() {
+        let border = NodeId::new();
+        let a = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(linked(&[(a, border)])));
+        drive_all(&mgr, border, CheckOutcome::Unreachable, 0);
+        drive_all(&mgr, a, CheckOutcome::Unreachable, 100);
+        drive_all(&mgr, border, CheckOutcome::Reachable, 200);
+        assert!(updates(&mgr.release_held(i64::MAX / 2)).is_empty());
+    }
+
+    /// A border whose own page is held (ADR-236 decision 10) has no incident to add to yet: it
+    /// carries its members when it is released, not as an update before.
+    #[test]
+    fn a_held_border_sends_no_update_and_carries_its_members_when_released() {
+        let border = NodeId::new();
+        let neighbour = NodeId::new();
+        let inner = NodeId::new();
+        let mgr = manager();
+        // `neighbour` is a second link out of the border, failing slowly; `inner` sits behind it.
+        let mut g = LinkGraph::new(Level::Certain);
+        g.add_link(inner, border, true);
+        g.add_link(border, neighbour, true);
+        g.add_link(neighbour, NodeId::new(), true);
+        mgr.set_config(
+            cfg(Vec::new(), HashMap::new())
+                .with_grouping(Arc::new(g))
+                .with_grouping_wait(true),
+        );
+
+        // The neighbour starts failing and has not committed.
+        mgr.observe(&result(neighbour, CheckOutcome::Unreachable, 0));
+        let held = drive_all(&mgr, border, CheckOutcome::Unreachable, 0);
+        assert!(
+            fire_of(&held, border).is_none(),
+            "the border's page is held"
+        );
+        let joined = drive_all(&mgr, inner, CheckOutcome::Unreachable, 10);
+        assert!(updates(&joined).is_empty(), "{joined:?}");
+
+        // The neighbour comes back, so the wait is over and the border pages with its member.
+        drive_all(&mgr, neighbour, CheckOutcome::Reachable, 20);
+        let released = mgr.release_held(i64::MAX / 2);
+        let fire = fire_of(&released, border).expect("released as a fire");
+        assert_eq!(fire.grouped, vec![inner]);
     }
 
     #[test]
@@ -8867,6 +9262,7 @@ mod row_tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         assert_eq!(mgr.restore(vec![legacy]), 1);
         let actions = mgr.observe(&rows(node, &[(7, 50.0)], 1));
@@ -8898,6 +9294,7 @@ mod row_tests {
             row_name: Some("MPU Board 0".to_owned()),
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         assert_eq!(mgr.restore(vec![restored]), 1);
         let actions = mgr.observe(&rows(node, &[(7, 10.0)], 1));
@@ -9084,6 +9481,7 @@ mod no_reading_tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 

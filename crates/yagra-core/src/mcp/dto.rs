@@ -300,6 +300,16 @@ pub struct AlertHistoryDto {
     /// flush of alerts is written in one transaction and shares one `cursor_at`, so a
     /// timestamp-only cursor lands inside that group and skips its remaining rows.
     pub cursor_id: Uuid,
+    /// The node whose outage this alert was grouped into when the row was written (ADR-236,
+    /// ADR-270): its notification went out as part of that node's. `null` when it was not
+    /// grouped, and on rows recorded before this was kept. Equal to `node_id` on a down node's
+    /// other alerts, which belong to its own outage.
+    pub grouped_under: Option<Uuid>,
+    /// That node's name now; `null` when it cannot be named.
+    pub grouped_under_name: Option<String>,
+    /// `true` on the row written when an alert that had already paged was grouped into an
+    /// outage: it is still open, so the row is neither a fire nor a resolve.
+    pub rolled_up: bool,
 }
 
 impl AlertHistoryDto {
@@ -333,6 +343,10 @@ impl AlertHistoryDto {
             // build it from — and its description pointed at `at`, which is a different clock.
             cursor_at: row.recorded_at.clone(),
             cursor_id: row.id,
+            grouped_under: row.root_cause,
+            // Filled by the caller, which resolves names.
+            grouped_under_name: None,
+            rolled_up: row.rolled_up,
         }
     }
 }
@@ -1704,6 +1718,8 @@ mod tests {
                 threshold_value: Some(2.0),
                 direction: None,
                 recorded_at: "1970-01-01T00:00:00Z".to_owned(),
+                root_cause: None,
+                rolled_up: false,
                 ifindex: None,
                 row: None,
                 row_name: None,

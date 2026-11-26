@@ -203,6 +203,7 @@ fn alert_from_row(row: AlertHistoryRow) -> Option<Alert> {
         row_name: row.row_name,
         notify_held_until: None,
         snmp_failure: None,
+        grouped: Vec::new(),
     })
 }
 
@@ -233,6 +234,8 @@ mod tests {
             row: None,
             row_name: None,
             recorded_at: "2026-08-24T00:00:00Z".to_owned(),
+            root_cause: None,
+            rolled_up: false,
         }
     }
 

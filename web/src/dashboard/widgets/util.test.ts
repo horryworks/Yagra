@@ -81,11 +81,11 @@ describe('state roll-ups', () => {
 });
 
 describe('bucketAlertsByHour', () => {
-  it('bins fires into trailing hour buckets and ignores resolves/out-of-range', () => {
+  it('bins fires into trailing hour buckets and ignores resolves, roll-ups and out-of-range', () => {
     const HOUR = 3_600_000;
     // Pin "now" to a hour boundary so bins are deterministic.
     const now = 100 * HOUR + 123;
-    const row = (offsetHours: number, resolved = false): AlertHistoryRow => ({
+    const row = (offsetHours: number, resolved = false, rolled_up = false): AlertHistoryRow => ({
       id: `h${offsetHours}${resolved ? 'r' : 'f'}`, // unused by bucketing; required by the type
       node: 'n',
       subject_kind: 'node',
@@ -94,10 +94,12 @@ describe('bucketAlertsByHour', () => {
       state: 'critical',
       at_unix_ms: 100 * HOUR - offsetHours * HOUR + 60_000, // one minute into that hour
       resolved,
+      rolled_up,
       recorded_at: '1970-01-01T00:00:00Z', // unused by bucketing; required by the type
     });
     const buckets = bucketAlertsByHour(
-      [row(0), row(0), row(1), row(2, true), row(30) /* out of 24h range */],
+      // The roll-up repeats its fire's time (ADR-270): counting it would count that fire twice.
+      [row(0), row(0), row(1), row(1, false, true), row(2, true), row(30) /* out of 24h range */],
       24,
       now,
     );

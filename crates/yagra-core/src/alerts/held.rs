@@ -6,6 +6,10 @@
 //! commits, no poll result of the held node says so, so this asks the engine every
 //! [`TICK`]. The judgement is [`AlertManager::release_held`]; this file is the tick and the
 //! delivery, in the shape `deleted` uses.
+//!
+//! The same tick sends the update an outage owes once more nodes have been grouped into it and its
+//! minute of gathering is over (ADR-270 decision 3): no poll result says that minute has passed
+//! either, and `release_held` hands both out.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,11 +17,13 @@ use std::time::Duration;
 use super::AlertManager;
 use yagra_alert::action::AlertSink;
 
-/// How often a held notification is looked at. It adds at most this much to a wait that is
-/// minutes long, and with nothing held a tick takes one lock and returns.
+/// How often a held notification and a pending update are looked at. It adds at most this much to
+/// a wait that is a minute or more long, and with nothing held or pending a tick takes a few locks
+/// and returns.
 const TICK: Duration = Duration::from_secs(15);
 
-/// Leader-only: page every held notification whose wait is over.
+/// Leader-only: page every held notification whose wait is over, and send every update that is
+/// due.
 ///
 /// Leader-only for the reason every alert loop is: poll-result ingest runs on the leader, so only
 /// its engine holds anything, and two instances delivering the same release would page twice.

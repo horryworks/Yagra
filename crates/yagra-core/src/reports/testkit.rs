@@ -70,6 +70,7 @@ pub(super) fn alert(sev: Severity) -> Alert {
         row_name: None,
         notify_held_until: None,
         snmp_failure: None,
+        grouped: Vec::new(),
     }
 }
 

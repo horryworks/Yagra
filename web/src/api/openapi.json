@@ -624,6 +624,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "outage_row",
+            "in": "query",
+            "description": "The id of a History row that opened an outage: only the other nodes' up/down rows grouped\nunder that row's node while the outage lasted — the nodes the outage held. Narrows the\nother filters rather than replacing them.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
@@ -671,7 +681,7 @@
             }
           },
           "404": {
-            "description": "The requested `node_id`, `group_id` or `site` is outside the caller's scope",
+            "description": "The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row about a node the caller can see",
             "content": {
               "application/json": {
                 "schema": {
@@ -19788,10 +19798,29 @@
           {
             "name": "event",
             "in": "query",
-            "description": "Comma-separated kinds (`fire`, `resolve`, `suppress`, `test`, `test_close`); empty or\nabsent means every kind.",
+            "description": "Comma-separated kinds (`fire`, `update`, `resolve`, `suppress`, `test`, `test_close`);\nempty or absent means every kind.",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "description": "Only deliveries about this subject, as rows store it (a node's UUID).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "check_id",
+            "in": "query",
+            "description": "Only deliveries about this check: with `subject`, one alert's deliveries.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
             }
           }
         ],
@@ -29306,6 +29335,13 @@
             "type": "boolean",
             "description": "Whether the underlying check is currently flapping."
           },
+          "grouped": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeId"
+            },
+            "description": "The down nodes whose liveness alerts are rolled up into this one (ADR-270): set on a\nborder's liveness fire and on the update sent when more join, empty everywhere else."
+          },
           "ifindex": {
             "oneOf": [
               {
@@ -29481,7 +29517,8 @@
           "state",
           "at_unix_ms",
           "resolved",
-          "recorded_at"
+          "recorded_at",
+          "rolled_up"
         ],
         "properties": {
           "at_unix_ms": {
@@ -29546,6 +29583,18 @@
           },
           "resolved": {
             "type": "boolean"
+          },
+          "rolled_up": {
+            "type": "boolean",
+            "description": "This row records an alert that had paged on its own being grouped into an outage (ADR-270).\nIt is still open: the row is neither a fire nor a resolve, and `resolved` is `false`."
+          },
+          "root_cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node this alert was grouped under when the row was written (ADR-270): the border of the\noutage it sat in, or its own node for a down node's other alerts (ADR-087). `None` when it\nwas not grouped, and on every row recorded before this was kept."
           },
           "row": {
             "type": [
@@ -34036,6 +34085,7 @@
           "fire",
           "resolve",
           "suppress",
+          "update",
           "test",
           "test_close",
           "unknown"
@@ -34184,6 +34234,14 @@
               "null"
             ],
             "description": "The channel's current name, or its name at delivery time once the channel is deleted;\nabsent for the default route."
+          },
+          "check_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The check the alert was about (ADR-270); absent for a test and on rows written before it\nwas kept."
           },
           "destination": {
             "type": [
@@ -43708,7 +43766,8 @@
         "enum": [
           "fire",
           "resolve",
-          "suppress"
+          "suppress",
+          "update"
         ]
       },
       "OfferBlock": {

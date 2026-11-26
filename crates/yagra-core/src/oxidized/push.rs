@@ -92,6 +92,7 @@ mod tests {
                     NotifyAction::Fire(_) => "fire",
                     NotifyAction::Resolve(_) => "resolve",
                     NotifyAction::Suppress(_) => "suppress",
+                    NotifyAction::Update(_) => "update",
                 })
                 .collect()
         }

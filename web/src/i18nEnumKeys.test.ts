@@ -248,6 +248,7 @@ import enSuppression from './locales/en/suppression.json';
 import jaSuppression from './locales/ja/suppression.json';
 import { SCOPE_TABS } from './pages/thresholdQuery';
 import { NOTE_KINDS } from './lib/alertNotes';
+import { HISTORY_ROW_PHASES, HISTORY_VIEWS } from './pages/historyRow';
 
 type Json = Record<string, unknown>;
 
@@ -367,8 +368,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // staring at `history.phase.x` in a filter. (The ranges are `common:filter.range.*` since
     // ADR-184 — `filterPresets.test.ts` holds every window to a label.)
     const locales = { en: enAlerts, ja: jaAlerts };
-    // The phase filter's two options and the row badge read the same keys, so one miss shows twice.
-    expectKeys('history phase', locales, 'history.phase.', ['fired', 'cleared'] as const);
+    // The phase filter's options and the row badge read the same keys, so one miss shows twice.
+    expectKeys('history phase', locales, 'history.phase.', HISTORY_ROW_PHASES);
+    // The screen's two views (ADR-270) are tabs labelled from the same kind of runtime key.
+    expectKeys('history view', locales, 'history.views.', HISTORY_VIEWS);
   });
 
   it('every kind of active-alert note has a filter label (alerts:active.noteKind.*)', () => {

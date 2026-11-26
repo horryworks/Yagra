@@ -40,6 +40,8 @@ pub enum DeliveryEvent {
     Resolve,
     /// An alert was rolled up under an upstream root cause; its incident is closed.
     Suppress,
+    /// More down nodes were grouped into an outage that already paged; added to its incident.
+    Update,
     /// A test notification sent from the channel list.
     Test,
     /// The close that follows a PagerDuty or JSM test notification.
@@ -52,6 +54,7 @@ yagra_base::stored_enum::token_enum!(DeliveryEvent, Unknown, "notification_deliv
     Fire => "fire",
     Resolve => "resolve",
     Suppress => "suppress",
+    Update => "update",
     Test => "test",
     TestClose => "test_close",
     Unknown => "unknown",
@@ -63,6 +66,7 @@ impl From<NotifyEvent> for DeliveryEvent {
             NotifyEvent::Fire => Self::Fire,
             NotifyEvent::Resolve => Self::Resolve,
             NotifyEvent::Suppress => Self::Suppress,
+            NotifyEvent::Update => Self::Update,
         }
     }
 }
@@ -135,8 +139,8 @@ pub enum DeliveryRoute {
     HoldFailed,
     /// A resolve or roll-up, sent to the channels of every rule that matches the alert now.
     ClosingRule,
-    /// A resolve or roll-up, sent because this channel holds the alert's incident although no
-    /// rule matches any more.
+    /// Sent because this channel holds the alert's incident: a resolve or roll-up when no rule
+    /// matches any more, and every update (ADR-270), which goes only where the fire went.
     OpenIncident,
     /// The environment default route (`YAGRA_WEBHOOK_URL` / `YAGRA_SMTP_*`), which hears every
     /// alert whatever the rules say.
@@ -185,6 +189,8 @@ pub(crate) struct DeliveryRecord {
     pub event: DeliveryEvent,
     /// The alert's subject as its stable text (a node UUID, `pool:<name>`, ...).
     pub subject: String,
+    /// The check the alert is about (ADR-270); `None` for a test notification.
+    pub check_id: Option<Uuid>,
     /// The node, when the subject is one.
     pub node_id: Option<Uuid>,
     /// The subject's display name, when the notifier had resolved it.
@@ -243,6 +249,9 @@ pub struct DeliveryRow {
     pub duration_ms: i64,
     /// The alert's subject as stored: a node UUID, `pool:<name>`, `meraki_org:<id>`, or `test`.
     pub subject: String,
+    /// The check the alert was about (ADR-270); absent for a test and on rows written before it
+    /// was kept.
+    pub check_id: Option<Uuid>,
     /// The node the alert was about, when it was about one.
     pub node_id: Option<Uuid>,
     /// The subject's display name, when it was known at delivery time.
@@ -275,6 +284,11 @@ pub struct DeliveryFilter {
     pub results: Vec<DeliveryResult>,
     pub sides: Vec<DeliverySide>,
     pub events: Vec<DeliveryEvent>,
+    /// Only deliveries about this subject, as stored (a node's UUID) - with `check_id`, the
+    /// deliveries of one alert, which is how History shows them (ADR-270).
+    pub subject: Option<String>,
+    /// Only deliveries about this check.
+    pub check_id: Option<Uuid>,
     /// Rows per page; clamped to `1..=MAX_LIMIT` by [`DeliveryLogRepo::list`].
     pub limit: i64,
 }
@@ -292,22 +306,24 @@ const DELIVERY_FILTER_WHERE: &str = "($1::timestamptz IS NULL OR (d.at, d.id) < 
      AND ($5::uuid[] IS NULL OR d.channel_id = ANY($5) OR ($6::boolean AND d.channel_id IS NULL)) \
      AND ($7::text[] IS NULL OR d.result = ANY($7)) \
      AND ($8::text[] IS NULL OR d.side = ANY($8)) \
-     AND ($9::text[] IS NULL OR d.event = ANY($9))";
+     AND ($9::text[] IS NULL OR d.event = ANY($9)) \
+     AND ($10::text IS NULL OR d.subject = $10) \
+     AND ($11::uuid IS NULL OR d.check_id = $11)";
 
 fn list_sql() -> String {
     format!(
         "SELECT d.id, d.at, d.channel_id, COALESCE(c.name, d.channel_name) AS channel_name, \
                 d.channel_kind, d.destination, d.route, d.route_rules, d.event, \
                 d.result, d.side, d.status, d.attempts, d.duration_ms, d.subject, d.node_id, \
-                d.subject_name, d.severity, d.error, d.response, d.attempt_log \
+                d.subject_name, d.severity, d.error, d.response, d.attempt_log, d.check_id \
          FROM notification_deliveries d \
          LEFT JOIN notification_channels c ON c.id = d.channel_id \
          WHERE {DELIVERY_FILTER_WHERE} \
-         ORDER BY d.at DESC, d.id DESC LIMIT $10"
+         ORDER BY d.at DESC, d.id DESC LIMIT $12"
     )
 }
 
-/// Bind `$1..=$9` of [`DELIVERY_FILTER_WHERE`], in the one order that matches it.
+/// Bind `$1..=$11` of [`DELIVERY_FILTER_WHERE`], in the one order that matches it.
 fn bind_filter<'q>(
     q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     f: &'q DeliveryFilter,
@@ -325,6 +341,8 @@ fn bind_filter<'q>(
         .bind(tokens(&f.results, DeliveryResult::as_str))
         .bind(tokens(&f.sides, DeliverySide::as_str))
         .bind(tokens(&f.events, DeliveryEvent::as_str))
+        .bind(f.subject.clone())
+        .bind(f.check_id)
 }
 
 /// The columns derived from a record's attempts: the side, status, error and response of the
@@ -389,7 +407,8 @@ impl DeliveryLogRepo {
             "INSERT INTO notification_deliveries \
              (at, channel_id, channel_kind, channel_name, destination, route, route_rules, \
               event, result, side, status, attempts, duration_ms, \
-              subject, node_id, subject_name, severity, error, response, attempt_log) ",
+              subject, node_id, subject_name, severity, error, response, attempt_log, \
+              check_id) ",
         );
         qb.push_values(records, |mut b, r| {
             let (side, status, error, response) = failure_columns(r);
@@ -421,7 +440,8 @@ impl DeliveryLogRepo {
                 .push_bind(r.severity.map(|s| s.as_str()))
                 .push_bind(error)
                 .push_bind(response)
-                .push_bind(log);
+                .push_bind(log)
+                .push_bind(r.check_id);
         });
         let res = qb.build().execute(&self.pool).await?;
         Ok(res.rows_affected())
@@ -476,6 +496,7 @@ fn read_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<DeliveryRow> {
         attempts: row.try_get("attempts")?,
         duration_ms: row.try_get("duration_ms")?,
         subject: row.try_get("subject")?,
+        check_id: row.try_get("check_id")?,
         node_id: row.try_get("node_id")?,
         subject_name: row.try_get("subject_name")?,
         severity: severity
@@ -575,6 +596,7 @@ mod tests {
             }],
             event: DeliveryEvent::Fire,
             subject: Uuid::from_u128(9).to_string(),
+            check_id: Some(Uuid::from_u128(11)),
             node_id: Some(Uuid::from_u128(9)),
             subject_name: Some("sw-01".to_owned()),
             severity: Some(Severity::Critical),
@@ -699,6 +721,9 @@ mod tests {
         dflt.route = DeliveryRoute::DefaultRoute;
         dflt.route_rules = Vec::new();
         dflt.at = base - chrono::Duration::seconds(10);
+        // About another alert of the same node (ADR-270), so the per-alert filter has one to
+        // leave out.
+        dflt.check_id = Some(Uuid::from_u128(12));
         records.push(dflt);
         assert_eq!(repo.insert(&records).await.unwrap(), 6);
         assert_eq!(pgtest::rows(&pool, "notification_deliveries").await, 6);
@@ -749,6 +774,30 @@ mod tests {
         assert_eq!(only_default[0].channel_name, None);
         assert_eq!(only_default[0].route, Some(DeliveryRoute::DefaultRoute));
         assert!(only_default[0].route_rules.is_empty());
+
+        // One alert's deliveries: its subject and its check (ADR-270), what History reads.
+        let one_alert = repo
+            .list(&DeliveryFilter {
+                subject: Some(Uuid::from_u128(9).to_string()),
+                check_id: Some(Uuid::from_u128(11)),
+                limit: 100,
+                ..DeliveryFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(one_alert.len(), 5);
+        assert!(one_alert
+            .iter()
+            .all(|r| r.check_id == Some(Uuid::from_u128(11))));
+        let other_subject = repo
+            .list(&DeliveryFilter {
+                subject: Some(Uuid::from_u128(10).to_string()),
+                limit: 100,
+                ..DeliveryFilter::default()
+            })
+            .await
+            .unwrap();
+        assert!(other_subject.is_empty());
 
         // The cursor resumes strictly after the last row of a page.
         let page1 = repo

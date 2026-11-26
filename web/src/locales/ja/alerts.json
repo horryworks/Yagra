@@ -10,6 +10,7 @@
     "noteKind": {
       "upstream": "上流が原因",
       "self": "このノードの停止",
+      "grouping": "まとめたノードあり",
       "snmpFailure": "SNMP の失敗",
       "flapping": "フラッピング",
       "waitingNeighbour": "隣の確定待ち",
@@ -33,6 +34,8 @@
     "configRemoteSubject": "config のバックアップの Git の送り先",
     "merakiOrgSubject": "Meraki 組織「{{org}}」",
     "partOfOutage": "このノードの停止に含まれる",
+    "grouped_one": "まとめたノード {{count}} 台",
+    "grouped_other": "まとめたノード {{count}} 台",
     "poolSubjectWhy": {
       "info": "ノードではなく、Yagra 自身の監視についてのアラートです。このプールにはノードがあるのに稼働中のポーラーがなく、監視されていません。"
     },
@@ -58,7 +61,23 @@
     },
     "phase": {
       "fired": "発生",
-      "cleared": "解消"
+      "cleared": "解消",
+      "rolledUp": "まとめ"
+    },
+    "views": {
+      "transitions": "発生と解消",
+      "deliveries": "通知"
+    },
+    "detail": {
+      "groupedUnder": "まとめ先",
+      "grouped_one": "まとめたノード {{count}} 台",
+      "grouped_other": "まとめたノード {{count}} 台",
+      "groupedNodes": "まとめたノード",
+      "notifications": "通知",
+      "notSentGrouped": "送っていない（ほかのノードの障害にまとめた）",
+      "noneSent": "送った記録なし",
+      "nothing": "この行に出せることはほかにありません。",
+      "unread": "読み込めませんでした。"
     },
     "emptyFiltered": "この絞り込みに一致する遷移がありません。",
     "filter": {

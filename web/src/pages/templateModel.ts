@@ -45,7 +45,7 @@ export interface Variant {
   body: Segment[];
 }
 
-/** What resolve or suppress sends, field by field. `null` is "the same as fire" for that field:
+/** What update, resolve or suppress sends, field by field. `null` is "the same as fire" for that field:
  *  the built-in subject differs at every point in the alert's life while the body does not, so
  *  the two fields have to be able to follow fire separately. */
 export interface BranchVariant {
@@ -56,14 +56,17 @@ export interface BranchVariant {
 /** A whole template. */
 export interface VisualTemplate {
   fire: Variant;
+  update: BranchVariant;
   resolve: BranchVariant;
   suppress: BranchVariant;
 }
 
-/** The three points in an alert's life, in the order the editor's tabs show them. */
-export const TEMPLATE_EVENTS = ['fire', 'resolve', 'suppress'] as const satisfies readonly NotifyEvent[];
+/** The four points in an alert's life, in the order the editor's tabs show them. `update` is an
+ *  outage telling its open incident about more grouped nodes (ADR-270). */
+export const TEMPLATE_EVENTS = ['fire', 'update', 'resolve', 'suppress'] as const satisfies readonly NotifyEvent[];
 export type BranchEvent = Exclude<NotifyEvent, 'fire'>;
-const BRANCH_EVENTS: readonly BranchEvent[] = ['resolve', 'suppress'];
+/** The events a template branches on, in the order the editor writes the branches. */
+export const BRANCH_EVENTS: readonly BranchEvent[] = ['update', 'resolve', 'suppress'];
 
 /** JSM cuts its alert title here. The Rust side truncates at the same number
  *  (`alerts/notify.rs::JSM_MESSAGE_MAX_CHARS`), and a test there reads this line. */
@@ -456,6 +459,8 @@ export function builtinDraft(templates: readonly BuiltinSubjectTemplate[] | null
     if (!parsed.ok) return null;
     out[t.event] = parsed.branches.fire;
   }
+  // A core older than ADR-270 serves no `update`: an update then sends what a fire sends.
+  if (!out.update && out.fire) out.update = out.fire;
   return TEMPLATE_EVENTS.every((e) => out[e]) ? (out as Record<NotifyEvent, Segment[]>) : null;
 }
 
@@ -472,6 +477,7 @@ export function templateFrom(subject: FieldBranches, body: FieldBranches): Visua
   });
   return {
     fire: { subject: clone(subject.fire), body: clone(body.fire) },
+    update: variant('update'),
     resolve: variant('resolve'),
     suppress: variant('suppress'),
   };
@@ -479,7 +485,7 @@ export function templateFrom(subject: FieldBranches, body: FieldBranches): Visua
 
 function draftBranches(draft: BuiltinDraft): FieldBranches {
   if (!draft) return { fire: [] };
-  return { fire: draft.fire, resolve: draft.resolve, suppress: draft.suppress };
+  return { fire: draft.fire, update: draft.update, resolve: draft.resolve, suppress: draft.suppress };
 }
 
 /** The template a channel opens on, or why it has to open as code. A field with no stored template
@@ -575,6 +581,7 @@ export function backToFire(model: VisualTemplate, event: BranchEvent, field?: Te
 export function clearField(model: VisualTemplate, field: TemplateField): VisualTemplate {
   return {
     fire: { ...model.fire, [field]: [] },
+    update: { ...model.update, [field]: null },
     resolve: { ...model.resolve, [field]: null },
     suppress: { ...model.suppress, [field]: null },
   };
@@ -592,6 +599,7 @@ export function fieldHasText(model: VisualTemplate, field: TemplateField): boole
 export const PREVIEW_SAMPLES = [
   { id: 'nodeDown', event: 'fire', sample: 'liveness' },
   { id: 'threshold', event: 'fire', sample: 'threshold' },
+  { id: 'grouped', event: 'update', sample: 'liveness' },
   { id: 'recovered', event: 'resolve', sample: 'liveness' },
   { id: 'rolledUp', event: 'suppress', sample: 'liveness' },
 ] as const;

@@ -12,6 +12,7 @@ import {
   nextCursor,
   PAGE_SIZE,
   queryFor,
+  resultTone,
   routeText,
   subjectText,
 } from './deliveryLogQuery';
@@ -102,6 +103,12 @@ describe('delivery log query', () => {
 });
 
 describe('delivery log row text', () => {
+  it('colours a delivery by its result, the same on the log and on a History row', () => {
+    expect(resultTone('delivered')).toBe('up');
+    expect(resultTone('failed')).toBe('critical');
+    expect(resultTone('unknown')).toBe('neutral');
+  });
+
   it('names the channel, the default route, or a deleted channel by its kind', () => {
     expect(channelLabel(t, row())).toBe('jsm-prod');
     expect(channelLabel(t, row({ channel_id: null, channel_name: null, channel_kind: null }))).toBe(

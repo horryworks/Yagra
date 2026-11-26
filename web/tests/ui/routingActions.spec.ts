@@ -31,15 +31,15 @@ test('every row action on Notification delivery can be pressed', async ({ page }
 // `waitForRequest` times out instead of passing on nothing.
 test('Refresh on the delivery log asks the server again', async ({ page }) => {
   const first = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
-  await page.goto('/alerts/deliveries');
+  await page.goto('/alerts/history?view=deliveries');
   await first;
   const again = page.waitForRequest((r) => r.url().includes('/api/v1/notification-deliveries'));
   await page.getByRole('button', { name: 'Refresh' }).click();
   await again;
 });
 
-// ADR-262 decision 7: the log is its own page, and a channel row opens it narrowed to that channel
-// - the server is asked for that channel's rows, not the whole log.
+// A channel row opens the log narrowed to that channel - History's Notifications view since
+// ADR-270 - and the server is asked for that channel's rows, not the whole log.
 test('a channel row opens the delivery log narrowed to that channel', async ({ page }) => {
   await page.goto('/alerts/routing');
   const channelRow = section(page, 'Notification channels').locator('.dt-row').first();
@@ -48,7 +48,7 @@ test('a channel row opens the delivery log narrowed to that channel', async ({ p
     (r) => r.url().includes('/api/v1/notification-deliveries') && r.url().includes('channel='),
   );
   await channelRow.getByRole('button', { name: 'Show delivery log' }).click();
-  await expect(page).toHaveURL(/\/alerts\/deliveries\?channel=/);
+  await expect(page).toHaveURL(/\/alerts\/history\?view=deliveries&sent\.channel=/);
   await narrowed;
 });
 

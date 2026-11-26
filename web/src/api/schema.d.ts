@@ -6193,6 +6193,11 @@ export interface components {
             check: components["schemas"]["CheckId"];
             /** @description Whether the underlying check is currently flapping. */
             flapping: boolean;
+            /**
+             * @description The down nodes whose liveness alerts are rolled up into this one (ADR-270): set on a
+             *     border's liveness fire and on the update sent when more join, empty everywhere else.
+             */
+            grouped?: components["schemas"]["NodeId"][];
             ifindex?: null | components["schemas"]["IfIndex"];
             /**
              * @description Metric the check measured (e.g. `"icmp_rtt_ms"`; the liveness sentinel for up/down).
@@ -6311,6 +6316,18 @@ export interface components {
              */
             recorded_at: string;
             resolved: boolean;
+            /**
+             * @description This row records an alert that had paged on its own being grouped into an outage (ADR-270).
+             *     It is still open: the row is neither a fire nor a resolve, and `resolved` is `false`.
+             */
+            rolled_up: boolean;
+            /**
+             * Format: uuid
+             * @description The node this alert was grouped under when the row was written (ADR-270): the border of the
+             *     outage it sat in, or its own node for a down node's other alerts (ADR-087). `None` when it
+             *     was not grouped, and on every row recorded before this was kept.
+             */
+            root_cause?: string | null;
             /**
              * Format: int32
              * @description The row of a vendor table this was about — a memory pool, a CPU, a sensor — as the row key
@@ -8382,7 +8399,7 @@ export interface components {
          * @description What a delivery was for.
          * @enum {string}
          */
-        DeliveryEvent: "fire" | "resolve" | "suppress" | "test" | "test_close" | "unknown";
+        DeliveryEvent: "fire" | "resolve" | "suppress" | "update" | "test" | "test_close" | "unknown";
         /** @description Every schedule, and the zone a node with no zoned folder above it keeps time in. */
         DeliveryHoursConfig: {
             /** @description IANA name, or null for UTC. */
@@ -8449,6 +8466,12 @@ export interface components {
              *     absent for the default route.
              */
             channel_name?: string | null;
+            /**
+             * Format: uuid
+             * @description The check the alert was about (ADR-270); absent for a test and on rows written before it
+             *     was kept.
+             */
+            check_id?: string | null;
             /**
              * @description Where it was sent: scheme and host (for PagerDuty and JSM also the path, token-like parts
              *     replaced), or an email's recipients. Never a key. Absent on rows written before it was kept.
@@ -13242,7 +13265,7 @@ export interface components {
          *     variable rather than three separate template fields.
          * @enum {string}
          */
-        NotifyEvent: "fire" | "resolve" | "suppress";
+        NotifyEvent: "fire" | "resolve" | "suppress" | "update";
         /**
          * @description Why a release cannot be installed.
          * @enum {string}
@@ -17982,6 +18005,12 @@ export interface operations {
                  *     nested inside another is its own site. Combines with `group_id` (both must hold).
                  */
                 site?: string;
+                /**
+                 * @description The id of a History row that opened an outage: only the other nodes' up/down rows grouped
+                 *     under that row's node while the outage lasted — the nodes the outage held. Narrows the
+                 *     other filters rather than replacing them.
+                 */
+                outage_row?: string;
             };
             header?: never;
             path?: never;
@@ -18025,7 +18054,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The requested `node_id`, `group_id` or `site` is outside the caller's scope */
+            /** @description The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row about a node the caller can see */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -32962,10 +32991,14 @@ export interface operations {
                  */
                 side?: string;
                 /**
-                 * @description Comma-separated kinds (`fire`, `resolve`, `suppress`, `test`, `test_close`); empty or
-                 *     absent means every kind.
+                 * @description Comma-separated kinds (`fire`, `update`, `resolve`, `suppress`, `test`, `test_close`);
+                 *     empty or absent means every kind.
                  */
                 event?: string;
+                /** @description Only deliveries about this subject, as rows store it (a node's UUID). */
+                subject?: string;
+                /** @description Only deliveries about this check: with `subject`, one alert's deliveries. */
+                check_id?: string;
             };
             header?: never;
             path?: never;

@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+use yagra_alert::action::HistoryEvent;
 use yagra_alert::{Alert, Subject, SubjectKind};
 use yagra_common::{Direction, NodeState, Severity};
 
@@ -88,6 +89,14 @@ pub struct AlertHistoryRow {
     /// timestamp alone silently **skipped** that flush's remaining rows. A fleet-wide event is
     /// exactly when a flush is large and exactly when someone is reading this log.
     pub recorded_at: String,
+    /// The node this alert was grouped under when the row was written (ADR-270): the border of the
+    /// outage it sat in, or its own node for a down node's other alerts (ADR-087). `None` when it
+    /// was not grouped, and on every row recorded before this was kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_cause: Option<Uuid>,
+    /// This row records an alert that had paged on its own being grouped into an outage (ADR-270).
+    /// It is still open: the row is neither a fire nor a resolve, and `resolved` is `false`.
+    pub rolled_up: bool,
 }
 
 impl AlertHistoryRow {
@@ -160,6 +169,17 @@ fn ifindex_column(alert: &Alert) -> Option<i32> {
     )
 }
 
+/// The span of one outage, read off the row that opened it (ADR-270).
+#[derive(Debug, Clone, Copy)]
+pub struct OutageWindow {
+    /// The node the row is about: the outage's border, when it was one.
+    pub node: Uuid,
+    /// When that row was recorded.
+    pub from: DateTime<Utc>,
+    /// When its check next recorded a resolve; `None` while it is open.
+    pub until: Option<DateTime<Utc>>,
+}
+
 /// A validated alert-history query. Built at the API edge by `api::alerts::history_page`.
 #[derive(Debug, Default, Clone)]
 pub struct HistoryFilter<'a> {
@@ -198,12 +218,15 @@ pub struct HistoryFilter<'a> {
     /// as a subquery against `nodes` rather than by the caller, because the caller would otherwise
     /// have to page the whole inventory to build the id list.
     pub node_q: Option<&'a str>,
+    /// Only the liveness rows of other nodes grouped under this one (ADR-270): what "the nodes in
+    /// this border's outage" reads, with `since`/`until` set to the outage.
+    pub root_cause: Option<Uuid>,
     /// Rows per page; clamped to `1..=1000` by [`AlertHistoryStore::search`].
     pub limit: i64,
 }
 
-/// The `WHERE` of a page of alert history. Binds `$1..=$12` in the order [`bind_history_filter`]
-/// writes them; `$13` is the page size.
+/// The `WHERE` of a page of alert history. Binds `$1..=$13` in the order [`bind_history_filter`]
+/// writes them; `$14` is the page size.
 ///
 /// `$12` belongs to `$10`'s arm rather than having one of its own: it is the metrics whose alert
 /// **name** contains the same term (ADR-196 decision 8), so it widens a metric search and never
@@ -240,7 +263,9 @@ const HISTORY_FILTER_WHERE: &str = "\
           AND node IN (SELECT id FROM nodes WHERE group_id = ANY($9)))) \
      AND ($10::text IS NULL OR metric ILIKE '%' || $10 || '%' OR metric = ANY($12::text[])) \
      AND ($11::text IS NULL OR (subject_kind = 'node' \
-          AND node IN (SELECT id FROM nodes WHERE name ILIKE '%' || $11 || '%')))";
+          AND node IN (SELECT id FROM nodes WHERE name ILIKE '%' || $11 || '%'))) \
+     AND ($13::uuid IS NULL OR (subject_kind = 'node' AND root_cause = $13 AND node <> $13 \
+          AND metric = '__liveness__'))";
 
 /// Every column [`AlertHistoryStore::read_rows`] reads, in the order it reads them.
 ///
@@ -249,7 +274,7 @@ const HISTORY_FILTER_WHERE: &str = "\
 /// would not be a compile error; it would be a `try_get` failure at core startup.
 const HISTORY_COLUMNS: &str = "id, node, subject_kind, subject_ref, check_id, severity, state, \
      at_unix_ms, resolved, metric, observed_value, threshold_value, direction, ifindex, row_key, \
-     row_name, recorded_at";
+     row_name, recorded_at, root_cause, rolled_up";
 
 /// The one statement that reads a page of history. `ORDER BY` names the cursor's columns in the
 /// cursor's direction — a keyset cursor is only valid for the ordering it was built for, and
@@ -259,7 +284,7 @@ fn history_page_sql() -> String {
         "SELECT {HISTORY_COLUMNS} \
          FROM alert_history \
          WHERE {HISTORY_FILTER_WHERE} \
-         ORDER BY recorded_at DESC, id DESC LIMIT $13"
+         ORDER BY recorded_at DESC, id DESC LIMIT $14"
     )
 }
 
@@ -375,7 +400,7 @@ fn set_or_null(tokens: impl IntoIterator<Item = &'static str>) -> Option<Vec<Str
     (!v.is_empty()).then_some(v)
 }
 
-/// Bind `$1..=$12` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
+/// Bind `$1..=$13` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
 ///
 /// One helper because the sequence is positional and silent when wrong: swapping `$3` and `$4`
 /// still compiles, still runs, and just answers a different question.
@@ -399,6 +424,7 @@ fn bind_history_filter<'q>(
         .bind(f.metric)
         .bind(f.node_q)
         .bind(named)
+        .bind(f.root_cause)
 }
 
 /// PostgreSQL-backed alert history.
@@ -417,13 +443,20 @@ impl AlertHistoryStore {
     ///
     /// Every subject is recorded. `node` holds the subject's storage identity — the node's own id
     /// for a node alert — and `subject_kind` is what says which it is (migration 0075).
-    pub async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
+    pub async fn record(
+        &self,
+        alert: &Alert,
+        event: impl Into<HistoryEvent>,
+    ) -> anyhow::Result<()> {
+        let event = event.into();
         let (metric, value, threshold, direction) = breach_columns(alert);
         sqlx::query(
             "INSERT INTO alert_history \
              (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
-              metric, observed_value, threshold_value, direction, ifindex, row_key, row_name) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+              metric, observed_value, threshold_value, direction, ifindex, row_key, row_name, \
+              root_cause, rolled_up) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
+                     $18)",
         )
         .bind(Uuid::new_v4())
         .bind(alert.subject.storage_id())
@@ -433,7 +466,7 @@ impl AlertHistoryStore {
         .bind(alert.severity.as_str())
         .bind(alert.state.as_str())
         .bind(alert.at_unix_ms)
-        .bind(resolved)
+        .bind(event.resolved())
         .bind(metric)
         .bind(value)
         .bind(threshold)
@@ -441,6 +474,8 @@ impl AlertHistoryStore {
         .bind(ifindex_column(alert))
         .bind(alert.row.map(i64::from))
         .bind(alert.row_name.as_deref())
+        .bind(alert.root_cause.map(|n| n.as_uuid()))
+        .bind(event.rolled_up())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -450,16 +485,21 @@ impl AlertHistoryStore {
     /// ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot path; a DB
     /// hiccup must not stop alerting. 14 columns × the writer's batch cap stays well under Postgres'
     /// 65535-parameter ceiling. Returns rows inserted.
-    pub async fn record_batch(&self, records: &[(Alert, bool)]) -> anyhow::Result<u64> {
+    pub async fn record_batch<E: Copy + Into<HistoryEvent>>(
+        &self,
+        records: &[(Alert, E)],
+    ) -> anyhow::Result<u64> {
         if records.is_empty() {
             return Ok(0);
         }
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO alert_history \
              (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
-              metric, observed_value, threshold_value, direction, ifindex, row_key, row_name) ",
+              metric, observed_value, threshold_value, direction, ifindex, row_key, row_name, \
+              root_cause, rolled_up) ",
         );
-        qb.push_values(records, |mut b, (alert, resolved)| {
+        qb.push_values(records, |mut b, (alert, event)| {
+            let event: HistoryEvent = (*event).into();
             let (metric, value, threshold, direction) = breach_columns(alert);
             b.push_bind(Uuid::new_v4())
                 .push_bind(alert.subject.storage_id())
@@ -469,14 +509,16 @@ impl AlertHistoryStore {
                 .push_bind(alert.severity.as_str())
                 .push_bind(alert.state.as_str())
                 .push_bind(alert.at_unix_ms)
-                .push_bind(*resolved)
+                .push_bind(event.resolved())
                 .push_bind(metric)
                 .push_bind(value)
                 .push_bind(threshold)
                 .push_bind(direction.map(Direction::as_str))
                 .push_bind(ifindex_column(alert))
                 .push_bind(alert.row.map(i64::from))
-                .push_bind(alert.row_name.clone());
+                .push_bind(alert.row_name.clone())
+                .push_bind(alert.root_cause.map(|n| n.as_uuid()))
+                .push_bind(event.rolled_up());
         });
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
@@ -510,7 +552,7 @@ impl AlertHistoryStore {
     /// survivable while they only had to agree with each other; it stopped being so when
     /// [`Self::fires_by_severity`] arrived, because its answer and [`Self::top_nodes_by_fires`]'s
     /// appear **two sections apart in one report** and a reader compares them.
-    const FIRES_SINCE: &'static str = "resolved = false AND at_unix_ms >= $1";
+    const FIRES_SINCE: &'static str = "resolved = false AND NOT rolled_up AND at_unix_ms >= $1";
 
     /// Alert **fires** in the window, counted per severity. Powers the report's "Alert summary".
     ///
@@ -625,14 +667,14 @@ impl AlertHistoryStore {
             "(SELECT at_unix_ms, (extract(epoch FROM recorded_at) * 1000)::bigint AS rec_ms, \
                      resolved, 0 AS part \
               FROM alert_history \
-              WHERE check_id = $1 AND subject_kind = 'node' \
+              WHERE check_id = $1 AND subject_kind = 'node' AND NOT rolled_up \
                 AND recorded_at < to_timestamp($2::double precision / 1000.0) \
               ORDER BY recorded_at DESC, resolved DESC LIMIT 1) \
              UNION ALL \
              (SELECT at_unix_ms, (extract(epoch FROM recorded_at) * 1000)::bigint AS rec_ms, \
                      resolved, 1 AS part \
               FROM alert_history \
-              WHERE check_id = $1 AND subject_kind = 'node' \
+              WHERE check_id = $1 AND subject_kind = 'node' AND NOT rolled_up \
                 AND recorded_at >= to_timestamp($2::double precision / 1000.0) \
               ORDER BY recorded_at, resolved LIMIT $3) \
              ORDER BY part, rec_ms, resolved",
@@ -664,7 +706,7 @@ impl AlertHistoryStore {
     ) -> anyhow::Result<Vec<(Uuid, i64, bool)>> {
         let rows = sqlx::query(
             "SELECT node, at_unix_ms, resolved FROM alert_history \
-             WHERE subject_kind = 'node' AND metric = $1 AND at_unix_ms >= $2 \
+             WHERE subject_kind = 'node' AND metric = $1 AND at_unix_ms >= $2 AND NOT rolled_up \
              ORDER BY at_unix_ms, resolved LIMIT $3",
         )
         .bind(yagra_alert::rules::LIVENESS)
@@ -709,6 +751,31 @@ impl AlertHistoryStore {
             .fetch_all(&self.pool)
             .await?;
         Self::read_rows(rows)
+    }
+
+    /// The outage a History row opened (ADR-270): the node it is about, when it was recorded, and
+    /// when the same check next recorded a resolve, or `None` while it is still open. `None`
+    /// overall when no such row exists or it is not about a node.
+    pub async fn outage_window(&self, row: Uuid) -> anyhow::Result<Option<OutageWindow>> {
+        let found = sqlx::query(
+            "SELECT h.node, h.recorded_at, \
+                    (SELECT min(r.recorded_at) FROM alert_history r \
+                     WHERE r.check_id = h.check_id AND r.resolved \
+                       AND r.recorded_at >= h.recorded_at) AS ended \
+             FROM alert_history h WHERE h.id = $1 AND h.subject_kind = 'node'",
+        )
+        .bind(row)
+        .fetch_optional(&self.pool)
+        .await?;
+        found
+            .map(|r| {
+                Ok(OutageWindow {
+                    node: r.try_get("node")?,
+                    from: r.try_get("recorded_at")?,
+                    until: r.try_get("ended")?,
+                })
+            })
+            .transpose()
     }
 
     /// A page of history rows (newest first).
@@ -855,6 +922,8 @@ impl AlertHistoryStore {
                     .and_then(|v| u32::try_from(v).ok()),
                 row_name: row.try_get("row_name")?,
                 recorded_at: recorded_at.to_rfc3339(),
+                root_cause: row.try_get("root_cause")?,
+                rolled_up: row.try_get("rolled_up")?,
             });
         }
         Ok(out)
@@ -889,6 +958,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 
@@ -1029,6 +1099,8 @@ mod tests {
                 threshold_value: None,
                 direction: None,
                 recorded_at: String::new(),
+                root_cause: None,
+                rolled_up: false,
                 ifindex: None,
                 row: None,
                 row_name: None,
@@ -1052,9 +1124,10 @@ mod tests {
         // exactly what the const removed, and writing them out here would put the third copy in
         // the test. What made it worth removing: two of the three answer the *same report*, two
         // sections apart, and a reader compares them.
+        // A roll-up row (ADR-270) is not a fire: every aggregate skips it through this one const.
         assert_eq!(
             AlertHistoryStore::FIRES_SINCE,
-            "resolved = false AND at_unix_ms >= $1"
+            "resolved = false AND NOT rolled_up AND at_unix_ms >= $1"
         );
         assert_eq!(
             src.matches("Self::FIRES_SINCE").count(),
@@ -1144,7 +1217,7 @@ mod tests {
         // `$11` (the node-name substring) is here for the same reason and is the newer trap: it
         // reads like a filter on a *name*, so the subject-kind pairing looks redundant until you
         // notice a pool subject's derived UUID can collide with a real node's id.
-        for bind in ["$8", "$9", "$11"] {
+        for bind in ["$8", "$9", "$11", "$13"] {
             let clause = HISTORY_FILTER_WHERE
                 .split(&format!("({bind}::"))
                 .nth(1)
@@ -1161,13 +1234,13 @@ mod tests {
     fn the_history_filter_binds_every_placeholder_it_names() {
         // Positional and silent when wrong: swapping two binds still compiles, still runs, and just
         // answers a different question.
-        let named = (1..=12)
+        let named = (1..=13)
             .filter(|n| HISTORY_FILTER_WHERE.contains(&format!("${n}")))
             .count();
-        assert_eq!(named, 12, "the predicate should name exactly $1..=$12");
+        assert_eq!(named, 13, "the predicate should name exactly $1..=$13");
         assert!(
-            !HISTORY_FILTER_WHERE.contains("$13"),
-            "$13 is the page size"
+            !HISTORY_FILTER_WHERE.contains("$14"),
+            "$14 is the page size"
         );
         let binds = production_source()
             .split("fn bind_history_filter")
@@ -1179,7 +1252,7 @@ mod tests {
             .matches(".bind(")
             .count();
         assert_eq!(binds, named, "one bind per placeholder");
-        assert!(history_page_sql().contains("LIMIT $13"));
+        assert!(history_page_sql().contains("LIMIT $14"));
     }
 
     #[test]
@@ -1208,7 +1281,7 @@ mod tests {
         // The fail-open shape: a conditionally-built WHERE has a branch someone can forget, and the
         // branch that gets forgotten returns *more* rows, not fewer.
         //
-        // Ten arms for twelve binds, and two deliberate exceptions. `before_id` (`$2`) has no
+        // Eleven arms for thirteen binds, and two deliberate exceptions. `before_id` (`$2`) has no
         // meaning without `before`, so instead of its own "no filter" arm it is absorbed by the
         // `coalesce` inside `$1`'s. That is what makes a cursor of `before` alone degrade to
         // "strictly before this instant" rather than matching nothing. The named metrics (`$12`)
@@ -1216,7 +1289,7 @@ mod tests {
         // filter on names when no term was given.
         assert_eq!(
             HISTORY_FILTER_WHERE.matches(" IS NULL").count(),
-            10,
+            11,
             "every bind but the cursor's second half must carry its own 'no filter' arm"
         );
         assert!(
@@ -1374,6 +1447,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 
@@ -1434,6 +1508,102 @@ mod tests {
             base + 11 * H,
             "the clear's own recorded time"
         );
+    }
+
+    /// ADR-270: an outage's members are the other nodes' liveness rows grouped under its border
+    /// while it lasted; a roll-up is a row of its own that no fire count sees; and the window ends
+    /// at the border's resolve.
+    #[sqlx::test(migrator = "yagra_base::repo::MIGRATIONS")]
+    #[ignore = "needs DATABASE_URL"]
+    async fn an_outages_members_are_read_from_their_own_rows(pool: sqlx::PgPool) {
+        let border = yagra_base::pgtest::node(&pool, "sw-01", 1, None).await;
+        let inner = yagra_base::pgtest::node(&pool, "ap-01", 2, None).await;
+        let paged = yagra_base::pgtest::node(&pool, "ap-02", 3, None).await;
+        let later = yagra_base::pgtest::node(&pool, "ap-03", 4, None).await;
+        let store = AlertHistoryStore::new(pool.clone());
+        let liveness = |node: Uuid, at: i64, root: Option<Uuid>| Alert {
+            check: yagra_alert::rules::check_id(NodeId::from(node), yagra_alert::rules::LIVENESS),
+            metric: yagra_alert::rules::LIVENESS.to_owned(),
+            root_cause: root.map(NodeId::from),
+            ..fire(node, Severity::Critical, at)
+        };
+        const M: i64 = 60_000;
+        let base = 1_700_000_000_000i64;
+        store
+            .record_batch(&[
+                (liveness(paged, base, None), HistoryEvent::Fire), // paged on its own first
+                (liveness(border, base + M, None), HistoryEvent::Fire),
+                (
+                    liveness(paged, base + M, Some(border)),
+                    HistoryEvent::RolledUp,
+                ),
+                (
+                    liveness(inner, base + 2 * M, Some(border)),
+                    HistoryEvent::Fire,
+                ),
+                (liveness(border, base + 9 * M, None), HistoryEvent::Resolve),
+                // The next outage of the same border, which is not this one's.
+                (
+                    liveness(later, base + 20 * M, Some(border)),
+                    HistoryEvent::Fire,
+                ),
+            ])
+            .await
+            .expect("record");
+        sqlx::query("UPDATE alert_history SET recorded_at = to_timestamp(at_unix_ms / 1000.0)")
+            .execute(&pool)
+            .await
+            .expect("stamp");
+
+        let all = store
+            .search(&HistoryFilter {
+                limit: 100,
+                ..HistoryFilter::default()
+            })
+            .await
+            .expect("read");
+        let rolled: Vec<_> = all.iter().filter(|r| r.rolled_up).collect();
+        assert_eq!(rolled.len(), 1);
+        assert_eq!(rolled[0].node, Some(paged));
+        assert_eq!(rolled[0].root_cause, Some(border));
+        assert!(!rolled[0].resolved, "a roll-up leaves the alert open");
+
+        // The border's fire opens the window, and its resolve closes it.
+        let opened = all
+            .iter()
+            .find(|r| r.node == Some(border) && !r.resolved)
+            .expect("the border's fire");
+        let w = store
+            .outage_window(opened.id)
+            .await
+            .expect("read")
+            .expect("a node's row");
+        assert_eq!(w.node, border);
+        let members = store
+            .search(&HistoryFilter {
+                root_cause: Some(w.node),
+                since: Some(w.from),
+                until: w.until,
+                limit: 100,
+                ..HistoryFilter::default()
+            })
+            .await
+            .expect("read");
+        let mut nodes: Vec<Uuid> = members.iter().filter_map(|r| r.node).collect();
+        nodes.sort();
+        let mut want = vec![inner, paged];
+        want.sort();
+        assert_eq!(nodes, want, "the members, and not the next outage's");
+
+        // A roll-up is not a fire: three fires about ap-02, sw-01, ap-01, plus ap-03 later.
+        let counted: i64 = store
+            .fires_by_severity(0)
+            .await
+            .expect("count")
+            .into_iter()
+            .map(|(_, n)| n)
+            .sum();
+        assert_eq!(counted, 4);
     }
 
     /// **The What search finds an alert by the name the screen shows** (ADR-196 decision 7).

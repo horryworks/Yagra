@@ -30,13 +30,22 @@ import {
 } from '../types/api';
 import { appendPage, nextCursorFrom } from '../lib/keysetPage';
 
-/** Where the delivery log lives (ADR-262 decision 7): its own page under Alerts ▸ Monitor. Alone
- *  on its route, so its filter keys carry no prefix. */
-export const DELIVERY_LOG_PATH = '/alerts/deliveries';
+/** Where the delivery log lives since ADR-270: the Notifications view of Alerts ▸ History. */
+export const DELIVERY_LOG_PATH = '/alerts/history';
+
+/** The delivery log's filter keys in the URL (ADR-153 decision 3): it shares its route with the
+ *  transitions, whose `range` it would otherwise also set. */
+export const DELIVERY_FILTER_PREFIX = 'sent.';
+
+/** The query that opens the delivery log, as `HistoryPage` reads it. */
+export const DELIVERY_LOG_VIEW = { view: 'deliveries' } as const;
 
 /** The delivery log narrowed to one channel: where a channel row's "Delivery log" goes. */
 export function deliveryLogFor(channelId: string): string {
-  return `${DELIVERY_LOG_PATH}?${new URLSearchParams({ channel: channelId }).toString()}`;
+  return `${DELIVERY_LOG_PATH}?${new URLSearchParams({
+    ...DELIVERY_LOG_VIEW,
+    [`${DELIVERY_FILTER_PREFIX}channel`]: channelId,
+  }).toString()}`;
 }
 
 /** Rows per request: the backend's default, under its 500 ceiling, so a short page means the end. */
@@ -153,6 +162,12 @@ export function channelLabel(t: TFunction, r: DeliveryRow): string {
 export function routeText(t: TFunction, r: DeliveryRow): string | null {
   if (r.route_rules.length > 0) return r.route_rules.map((rule) => rule.name).join(', ');
   return r.route ? t(`routing.log.route.${r.route}`) : null;
+}
+
+/** The colour a delivery's result is drawn in, on the log and on an opened History row alike. */
+export function resultTone(result: DeliveryRow['result']): 'up' | 'critical' | 'neutral' {
+  if (result === 'delivered') return 'up';
+  return result === 'failed' ? 'critical' : 'neutral';
 }
 
 /** Milliseconds as a person reads them: `85 ms`, `1.6 s`, `31.5 s`. */

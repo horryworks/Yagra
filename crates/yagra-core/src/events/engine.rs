@@ -412,6 +412,7 @@ impl EventEngine {
                 row_name: None,
                 notify_held_until: None,
                 snmp_failure: None,
+                grouped: Vec::new(),
             };
             // Raise in the manager while holding the runtime lock, then mirror into
             // `runtime.active`. Because both sets are mutated together, the sweeper can
@@ -463,6 +464,8 @@ impl EventEngine {
             // demonstrably reachable), so the event pipeline never produces a roll-up. Handled
             // defensively for exhaustiveness; it is still delivered below.
             NotifyAction::Suppress(_) => {}
+            // Nor an outage's update (ADR-270), which only a liveness border has.
+            NotifyAction::Update(_) => {}
         }
         self.sink.dispatch(action).await;
     }
@@ -597,7 +600,9 @@ mod tests {
             .iter()
             .filter_map(|(a, _)| match a {
                 NotifyAction::Fire(alert) => Some(alert),
-                NotifyAction::Resolve(_) | NotifyAction::Suppress(_) => None,
+                NotifyAction::Resolve(_) | NotifyAction::Suppress(_) | NotifyAction::Update(_) => {
+                    None
+                }
             })
             .collect()
     }
@@ -815,6 +820,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
 
         // First raise fires; a same-severity duplicate is deduped at the manager.

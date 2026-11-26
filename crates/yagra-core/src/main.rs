@@ -1757,6 +1757,7 @@ impl LeaderTasks {
         );
         // Notifications held for a failing neighbour (ADR-236 Inc.2): released when the neighbour
         // comes back or the wait runs out, neither of which any poll of the held node reports.
+        // The same tick sends an outage's update once its minute of gathering is over (ADR-270).
         // Leader-only for the same reason the loops above are.
         spawn_cancellable(
             &self.shutdown,

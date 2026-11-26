@@ -77,7 +77,7 @@ pub(crate) mod sink;
 pub(crate) mod stale;
 pub(crate) mod thresholds;
 
-pub(crate) use yagra_alert::action::{history_row, NotifyAction, StreamFrame};
+pub(crate) use yagra_alert::action::{history_row, HistoryEvent, NotifyAction, StreamFrame};
 pub(crate) use yagra_alert::engine::AlertManager;
 // Only what the rest of the crate actually imports. The four channel types, `RuleCoverage` and
 // the scope-resolution helpers are reached through the module that owns them

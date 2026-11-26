@@ -897,11 +897,15 @@ pub(super) async fn execute_scalar_get(
             }
             r
         }
-        Err(TransportError::Silent(_)) => {
+        Err(TransportError::Silent(_) | TransportError::Refused(_)) => {
             // Not one OID answered, not even with "no such object": nobody is home. The same
             // `Unreachable` and `snmp_up = 0` an empty answer gets — what a silent agent means for
             // liveness has not changed — but no identity probe, which would only wait on the same
             // silence again. Debug rather than warn: an outage is every device in this state.
+            //
+            // A session whose every reply was an error lands here too. Before ADR-268 it read as
+            // an empty answer, and so as `Unreachable`; telling it apart is for `snmp_failure`,
+            // not for what the poll says about the device.
             tracing::debug!(job_id = %job.job_id, "snmp agent answered nothing");
             let mut r = result(
                 job,
@@ -916,8 +920,7 @@ pub(super) async fn execute_scalar_get(
             err @ (TransportError::Io(_)
             | TransportError::Unimplemented(_)
             | TransportError::HandshakeTimeout(_)
-            | TransportError::HandshakeRefused { .. }
-            | TransportError::Refused(_)),
+            | TransportError::HandshakeRefused { .. }),
         ) => {
             tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
             // `snmp_up = 0` on the error path too: a GET that could not be issued is an agent the
@@ -988,44 +991,57 @@ mod tests {
     }
 
     /// ADR-268: every way a scalar GET comes back empty names its stage on the result, and a GET
-    /// that read a value names none. The token is what core puts on the `snmp_up` alert.
+    /// that read a value names none. The token is what core puts on the `snmp_up` alert. The
+    /// outcome each one gives is pinned too: naming the stage must not move what a poll says about
+    /// the device, and a session of errors read as `Unreachable` before the stage had a name.
     #[tokio::test]
     async fn an_empty_scalar_get_names_the_stage_it_failed_at() {
         use yagra_transport::FakeSnmpFailure;
         let job = snmp_job();
-        let cases: Vec<(FakeTransport, Option<SnmpFailure>)> = vec![
+        let cases: Vec<(FakeTransport, Option<SnmpFailure>, CheckOutcome)> = vec![
             (
                 FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
                     oid: "1.3.6.1.2.1.1.3.0".to_owned(),
                     value: 1.0,
                 }]),
                 None,
+                CheckOutcome::Reachable,
             ),
-            (FakeTransport::reachable(0.0), Some(SnmpFailure::NoValues)),
+            (
+                FakeTransport::reachable(0.0),
+                Some(SnmpFailure::NoValues),
+                CheckOutcome::Unreachable,
+            ),
             (
                 FakeTransport::reachable(0.0).with_silent_snmp_gets(),
                 Some(SnmpFailure::NoAnswer),
+                CheckOutcome::Unreachable,
             ),
             (
                 FakeTransport::reachable(0.0)
                     .with_snmp_get_failure(FakeSnmpFailure::HandshakeTimeout),
                 Some(SnmpFailure::HandshakeTimeout),
+                CheckOutcome::Error,
             ),
             (
                 FakeTransport::reachable(0.0)
                     .with_snmp_get_failure(FakeSnmpFailure::HandshakeRefused),
                 Some(SnmpFailure::HandshakeRefused),
+                CheckOutcome::Error,
             ),
             (
                 FakeTransport::reachable(0.0).with_snmp_get_failure(FakeSnmpFailure::Refused),
+                // Every reply an error: told apart by its reason, read as before for liveness.
                 Some(SnmpFailure::Refused),
+                CheckOutcome::Unreachable,
             ),
             (
                 FakeTransport::reachable(0.0).with_snmp_get_error("snmp connect: refused"),
                 Some(SnmpFailure::SendFailed),
+                CheckOutcome::Error,
             ),
         ];
-        for (t, want) in cases {
+        for (t, want, outcome) in cases {
             let r = execute(&job, &t, 1_000).await;
             assert_eq!(
                 r.snmp_failure.as_deref(),
@@ -1034,6 +1050,7 @@ mod tests {
             );
             let up = sample(&r, METRIC_SNMP_UP);
             assert_eq!(up, Some(if want.is_some() { 0.0 } else { 1.0 }), "{want:?}");
+            assert_eq!(r.outcome, outcome, "{want:?}");
         }
     }
 

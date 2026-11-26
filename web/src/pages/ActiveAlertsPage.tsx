@@ -20,7 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { sortedAlerts, useAlertStore, useCan } from '../store';
 import { api } from '../services/api';
 import { alertRowKey, subjectNodeId } from '../lib/alertSubject';
-import { alertNotes } from '../lib/alertNotes';
+import { alertNotes, groupedCounts, groupedFor } from '../lib/alertNotes';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { alertWhatOf, formatTimestamp, severityColorVar, severityLabel, stateLabel } from '../lib/format';
 import { SEVERITIES, type Alert } from '../types/api';
@@ -73,10 +73,17 @@ export function ActiveAlertsPage() {
   const sites = useMemo(() => siteOptions(groups), [groups]);
   const held = useHeldNotifications();
 
+  // How many nodes each outage holds, from every alert the store has (ADR-270).
+  const grouped = useMemo(() => groupedCounts(all), [all]);
   // One answer per row to "which notes", shared by the cell, the Notes filter and its sort.
   const notesOf = useCallback(
-    (a: Alert) => alertNotes(a, held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a))),
-    [held],
+    (a: Alert) =>
+      alertNotes(
+        a,
+        held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a)),
+        groupedFor(a, grouped, subjectNodeId(a)),
+      ),
+    [held, grouped],
   );
   const noteKindsOf = useCallback((a: Alert) => notesOf(a).map((n) => n.kind), [notesOf]);
 

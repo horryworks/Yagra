@@ -21,6 +21,7 @@ const channel = (over: Partial<NotificationChannel> = {}): NotificationChannel =
 const LINES = '\n\nSeverity:  {{ severity }}\n';
 const BUILTIN = [
   { event: 'fire', subject: 'F', body: `F${LINES}` },
+  { event: 'update', subject: 'U', body: `U${LINES}` },
   { event: 'resolve', subject: 'R', body: `R${LINES}` },
   { event: 'suppress', subject: 'S', body: `S${LINES}` },
 ] as const;
@@ -66,9 +67,17 @@ describe('the laid-out copy of the built-in text', () => {
   it('puts each event tag on its own line and indents the text under it', () => {
     const laid = laidOutBuiltinSource([...BUILTIN])!;
     expect(laid.subject).toBe(
-      ['{% if event == "resolve" %}', '  R', '{% elif event == "suppress" %}', '  S', '{% else %}', '  F', '{% endif %}'].join(
-        '\n',
-      ),
+      [
+        '{% if event == "update" %}',
+        '  U',
+        '{% elif event == "resolve" %}',
+        '  R',
+        '{% elif event == "suppress" %}',
+        '  S',
+        '{% else %}',
+        '  F',
+        '{% endif %}',
+      ].join('\n'),
     );
     // The shared lines follow once, giving up one leading line break to the subject's own.
     expect(laid.body).toBe(`${laid.subject}\n${LINES.slice(1)}`);

@@ -260,6 +260,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         crate::alerts::history::AlertHistoryStore::new(pool.clone())
             .record_batch(&[(liveness.clone(), false), (liveness, true)])

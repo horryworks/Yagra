@@ -10,6 +10,7 @@
     "noteKind": {
       "upstream": "Caused upstream",
       "self": "This node’s outage",
+      "grouping": "Holds grouped nodes",
       "snmpFailure": "SNMP failure",
       "flapping": "Flapping",
       "waitingNeighbour": "Waiting for a neighbour",
@@ -33,6 +34,8 @@
     "configRemoteSubject": "Config backup Git destination",
     "merakiOrgSubject": "Meraki organization “{{org}}”",
     "partOfOutage": "part of this node’s outage",
+    "grouped_one": "{{count}} node grouped",
+    "grouped_other": "{{count}} nodes grouped",
     "poolSubjectWhy": {
       "info": "This alert is about Yagra's own monitoring, not a device. The pool still has nodes but no live poller, so they are not being polled."
     },
@@ -58,7 +61,23 @@
     },
     "phase": {
       "fired": "fired",
-      "cleared": "cleared"
+      "cleared": "cleared",
+      "rolledUp": "grouped"
+    },
+    "views": {
+      "transitions": "Transitions",
+      "deliveries": "Notifications"
+    },
+    "detail": {
+      "groupedUnder": "Grouped under",
+      "grouped_one": "{{count}} node grouped",
+      "grouped_other": "{{count}} nodes grouped",
+      "groupedNodes": "Grouped nodes",
+      "notifications": "Notifications",
+      "notSentGrouped": "Not sent: grouped into another node’s outage",
+      "noneSent": "None sent",
+      "nothing": "Nothing more to show for this row.",
+      "unread": "Could not be read."
     },
     "emptyFiltered": "No transitions match these filters.",
     "filter": {

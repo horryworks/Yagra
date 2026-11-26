@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Alert history (Alerts ▸ History). Append-only lifecycle log from /alerts/history. Each row
-// is a transition (fire / clear). MTTR is open→clear in this model (§3.2: ack/response time is
+// is a transition (fire / clear / grouped into an outage, ADR-270), and opens to show the outage it
+// was grouped into, the nodes an outage held and what it sent. Since ADR-270 the delivery log is
+// this screen's second view, for those who may read it. MTTR is open→clear in this model (§3.2: ack/response time is
 // external and not measured here). Empty in skeleton mode (no persistent store). Rendered with
 // the virtualized DataTable on the v2 table standard.
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import type { TFunction } from 'i18next';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -21,6 +24,21 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { LoadGate } from '../components/ui/LoadGate';
 import { useLoad } from '../lib/useLoad';
 import { Badge } from '../components/ui/Badge';
+import { Tabs } from '../components/ui/Tabs';
+import { ACTION_TONE } from '../components/EventLog/eventTone';
+import { useCan } from '../store';
+import { readEnumParam, writeEnumParam } from '../lib/filterParams';
+import { DeliveryLogView } from './DeliveryLog';
+import { HistoryRowDetail } from './HistoryRowDetail';
+import {
+  hasDetail,
+  HISTORY_VIEW_KEY,
+  HISTORY_VIEWS,
+  momentOf,
+  phaseOf,
+  type HistoryPhase,
+  type HistoryView,
+} from './historyRow';
 import { siteOptions, useEntityNames } from '../components/ui/entityNames';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClippedText } from '../components/ui/ClippedText';
@@ -41,7 +59,47 @@ import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import { allScope, scopeFromUrl, scopeLabelOf, type ScopeValue } from '../components/ScopePicker/scope';
 import { readScope, scopeFilter, writeScope } from '../troubleshoot/findingsQuery';
 
+/** The badge a row carries in the Event column: a fire and a clear in the lifecycle's colours
+ *  (`eventTone.ts`), and a roll-up as one more thing that was suppressed. */
+function phaseBadge(t: TFunction, r: AlertHistoryRow) {
+  const p: HistoryPhase = phaseOf(r);
+  const tone = ACTION_TONE[p === 'rolledUp' ? 'suppressed' : p];
+  return <Badge tone={tone}>{t(`history.phase.${p}`)}</Badge>;
+}
+
 export function HistoryPage() {
+  const { t } = useTranslation('alerts');
+  const [params, setParams] = useSearchParams();
+  // The delivery log names where pages went, so it is read with ManageSystem (ADR-195); without it
+  // the screen is the transitions alone, whatever the URL asks.
+  const canDeliveries = useCan('manage_system');
+  const asked = readEnumParam(params, HISTORY_VIEW_KEY, HISTORY_VIEWS, 'transitions');
+  const view: HistoryView = canDeliveries ? asked : 'transitions';
+  // One write, and only the view: each view's filters are its own, so they do not cross over.
+  const onView = (next: HistoryView) => {
+    const p = new URLSearchParams();
+    writeEnumParam(p, HISTORY_VIEW_KEY, next, 'transitions');
+    setParams(p);
+  };
+  return (
+    <Page layout="list">
+      <PageHeader
+        title={t('nav:alerts.history')}
+        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.history') }]}
+      />
+      {canDeliveries && (
+        <Tabs
+          tabs={HISTORY_VIEWS.map((v) => ({ key: v, label: t(`history.views.${v}`) }))}
+          active={view}
+          onChange={onView}
+        />
+      )}
+      {view === 'deliveries' ? <DeliveryLogView /> : <HistoryTransitions />}
+    </Page>
+  );
+}
+
+function HistoryTransitions() {
   const { t } = useTranslation('alerts');
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
@@ -115,12 +173,7 @@ export function HistoryPage() {
         key: 'phase',
         header: t('history.cols.event'),
         width: '100px',
-        render: (r) =>
-          r.resolved ? (
-            <Badge tone="up">{t('history.phase.cleared')}</Badge>
-          ) : (
-            <Badge tone="critical">{t('history.phase.fired')}</Badge>
-          ),
+        render: (r) => phaseBadge(t, r),
       },
       {
         key: 'range',
@@ -129,8 +182,9 @@ export function HistoryPage() {
         // `title` because the column is `1fr`: the formatted stamp is a fixed ~20 characters and
         // does not shrink with the window, so on a narrow viewport it is the first cell to lose its
         // tail — and half a timestamp is not a weaker answer, it is no answer (ADR-088).
+        // A roll-up's own moment, not the fire it closes (`momentOf`), so it sits where it is listed.
         render: (r) => {
-          const when = formatTimestamp(r.at_unix_ms);
+          const when = formatTimestamp(momentOf(r));
           return (
             <span className="muted" title={when}>
               {when}
@@ -217,12 +271,12 @@ export function HistoryPage() {
       });
   }, [cursor, filterCols, filters, scopeIds, nowMs, firstPage.data]);
 
+  // One row open at a time, by its id (ADR-270). A row with nothing to show does not open.
+  const [open, setOpen] = useState<string | null>(null);
+  const canDeliveries = useCan('manage_system');
+
   return (
-    <Page layout="list">
-      <PageHeader
-        title={t('nav:alerts.history')}
-        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.history') }]}
-      />
+    <>
       {/* Fixed toolbar order (design-system §4.1): search → filters → spacer → count → primary action.
           There is no search box: the only free-text column is `metric`, unindexed on a table that
           reaches millions of rows, so an ILIKE there would turn the keyset seek into a seq scan.
@@ -265,6 +319,13 @@ export function HistoryPage() {
           // same subject and check, in the same millisecond, collided — and a duplicate React key is
           // a silent misrender rather than an error.
           rowKey={(r) => r.id}
+          onRowClick={(r) => {
+            if (hasDetail(r, canDeliveries)) setOpen((cur) => (cur === r.id ? null : r.id));
+          }}
+          expanded={(r) =>
+            open === r.id ? <HistoryRowDetail row={r} rows={rows} nodeName={nodeName} /> : null
+          }
+          expandedKey={open}
           onReachEnd={cursor === null ? undefined : loadMore}
           // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered query
           // that legitimately returns zero is indistinguishable from an empty log.
@@ -274,6 +335,6 @@ export function HistoryPage() {
           // reaches millions of rows, per popover open. ADR-023 puts UI load third.
         />
       </LoadGate>
-    </Page>
+    </>
   );
 }

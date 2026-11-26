@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { alertNotes, noteKey, type NotedAlert } from './alertNotes';
+import { alertNotes, groupedCounts, groupedFor, noteKey, type NotedAlert } from './alertNotes';
 
 const NODE = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 const UPSTREAM = '0a8e3b71-5d2c-4f69-8b10-7c4d9e2f1a35';
@@ -66,5 +66,30 @@ describe('alertNotes', () => {
       { release_at: null },
     );
     expect(new Set(notes.map(noteKey)).size).toBe(notes.length);
+  });
+});
+
+describe('groupedCounts (ADR-270)', () => {
+  const live = (node: string, root: string | null) => ({
+    node,
+    subject_kind: 'node' as const,
+    metric: '__liveness__',
+    root_cause: root,
+  });
+
+  it('counts the up/down alerts grouped under each border, and shows it on the border alone', () => {
+    const alerts = [
+      live('sw-01', null),
+      live('ap-01', 'sw-01'),
+      live('ap-02', 'sw-01'),
+      // A down node's other alert names its own node (ADR-087): not a member.
+      { ...live('sw-01', 'sw-01'), metric: 'snmp_up' },
+    ];
+    const counts = groupedCounts(alerts);
+    expect(counts.get('sw-01')).toBe(2);
+    expect(groupedFor(alerts[0], counts, 'sw-01')).toBe(2);
+    expect(groupedFor(alerts[3], counts, 'sw-01')).toBe(0);
+    expect(alertNotes(alerts[0], null, 2)).toEqual([{ kind: 'grouping', count: 2 }]);
+    expect(alertNotes(alerts[1], null, 0)).toEqual([{ kind: 'upstream', nodeId: 'sw-01' }]);
   });
 });

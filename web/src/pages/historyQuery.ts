@@ -31,7 +31,7 @@ import type { ScopeIds } from '../troubleshoot/findingsQuery';
 /** The lifecycle phases the column offers, mapped to the API's `resolved` boolean. `''` — both
  *  ticked, or neither — is the unfiltered view rather than a third phase. */
 export const HISTORY_PHASES = ['fired', 'cleared'] as const;
-export type HistoryPhase = '' | (typeof HISTORY_PHASES)[number];
+export type HistoryPhaseFilter = '' | (typeof HISTORY_PHASES)[number];
 
 /** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
  *  `satisfies` is what makes a token added here without one there a compile error. */
@@ -167,13 +167,13 @@ export type HistoryColumns = readonly FilterableColumn<AlertHistoryRow>[];
  *
  *  Reading `picked[0]` without re-checking it is safe only because `queryFor` has already run the
  *  state through `normalizeSets`, which drops any token the column does not offer. */
-function phaseOf(value: string | undefined): HistoryPhase {
+function phaseOf(value: string | undefined): HistoryPhaseFilter {
   const picked = decodeSet(value ?? '');
-  return picked.length === 1 ? (picked[0] as HistoryPhase) : '';
+  return picked.length === 1 ? (picked[0] as HistoryPhaseFilter) : '';
 }
 
 /** `resolved` for a phase: `undefined` means "both", which is not the same as `false`. */
-export function resolvedFor(phase: HistoryPhase): boolean | undefined {
+export function resolvedFor(phase: HistoryPhaseFilter): boolean | undefined {
   if (phase === 'fired') return false;
   if (phase === 'cleared') return true;
   return undefined;

@@ -13,7 +13,7 @@
 // a channel has a template of its own at all (decision 5).
 
 import type { BuiltinSubjectTemplate, NotifyEvent } from '../types/api';
-import { TEMPLATE_EVENTS } from './templateModel';
+import { BRANCH_EVENTS, TEMPLATE_EVENTS } from './templateModel';
 import { isTemplateVariable } from './templateVariables';
 
 /** One clause of a condition. */
@@ -284,7 +284,8 @@ function perEvent(
 ): Record<NotifyEvent, string> | null {
   const out: Partial<Record<NotifyEvent, string>> = {};
   for (const e of TEMPLATE_EVENTS) {
-    const t = templates.find((x) => x.event === e);
+    // A core older than ADR-270 serves no `update`: it sends what a fire sends, so no branch.
+    const t = templates.find((x) => x.event === e) ?? (e === 'update' ? templates.find((x) => x.event === 'fire') : undefined);
     const text = t ? (field === 'subject' ? t.subject : t.body) : null;
     if (text == null) return null;
     out[e] = text;
@@ -300,7 +301,7 @@ function inner(text: string): string {
 
 /** One template sending each event's own text: the event branch the editor itself writes. */
 function branched(by: Record<NotifyEvent, string>): string {
-  const arms = (['resolve', 'suppress'] as const).filter((e) => by[e] !== by.fire);
+  const arms = BRANCH_EVENTS.filter((e) => by[e] !== by.fire);
   if (arms.length === 0) return by.fire;
   return (
     arms.map((e, i) => `{% ${i === 0 ? 'if' : 'elif'} event == "${e}" %}${inner(by[e])}`).join('') +
@@ -324,7 +325,7 @@ function laidOutBranched(by: Record<NotifyEvent, string>): string {
       .split('\n')
       .map((l) => `  ${l}`)
       .join('\n');
-  const arms = (['resolve', 'suppress'] as const).filter((e) => by[e] !== by.fire);
+  const arms = BRANCH_EVENTS.filter((e) => by[e] !== by.fire);
   if (arms.length === 0) return by.fire;
   return [
     ...arms.flatMap((e, i) => [`{% ${i === 0 ? 'if' : 'elif'} event == "${e}" %}`, indent(by[e])]),

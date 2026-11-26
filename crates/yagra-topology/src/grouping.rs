@@ -130,6 +130,9 @@ pub struct LinkGraph {
     site_members: BTreeMap<GroupId, BTreeSet<NodeId>>,
     rank: BTreeMap<NodeId, Rank>,
     level: BTreeMap<NodeId, Level>,
+    /// How many of `level`'s entries are not [`Level::Off`], kept by [`Self::set_level`] so
+    /// [`Self::groups_anywhere`] answers without walking every node.
+    levels_on: usize,
     default_level: Level,
 }
 
@@ -179,7 +182,23 @@ impl LinkGraph {
 
     /// Set `node`'s own level, overriding the default.
     pub fn set_level(&mut self, node: NodeId, level: Level) {
-        self.level.insert(node, level);
+        if self
+            .level
+            .insert(node, level)
+            .is_some_and(|old| old != Level::Off)
+        {
+            self.levels_on -= 1;
+        }
+        if level != Level::Off {
+            self.levels_on += 1;
+        }
+    }
+
+    /// Whether any node groups at all. False when the deployment level and every folder level are
+    /// off: then nothing can be rolled up into anything, and a caller can skip looking.
+    #[must_use]
+    pub fn groups_anywhere(&self) -> bool {
+        self.default_level != Level::Off || self.levels_on > 0
     }
 
     /// The same graph with a different deployment level; folder levels set on a node stay. For a
@@ -596,6 +615,24 @@ mod tests {
         let down = whole_branch_down(&b);
         assert!(b.g.attribute(&down).is_empty());
         assert_eq!(b.g.notified_count(&down), 7);
+        assert!(!b.g.groups_anywhere());
+    }
+
+    /// The shortcut the alert engine takes with grouping off (ADR-270) must notice one folder
+    /// switched on, and switched back off, without walking every node.
+    #[test]
+    fn groups_anywhere_follows_the_default_and_every_folder_level() {
+        let mut g = LinkGraph::new(Level::Off);
+        assert!(!g.groups_anywhere());
+        g.set_level(id(1), Level::Links);
+        assert!(g.groups_anywhere());
+        g.set_level(id(1), Level::Site); // still on: counted once
+        g.set_level(id(2), Level::Off);
+        assert!(g.groups_anywhere());
+        g.set_level(id(1), Level::Off);
+        assert!(!g.groups_anywhere());
+        assert!(LinkGraph::new(Level::Certain).groups_anywhere());
+        assert!(g.with_default_level(Level::Links).groups_anywhere());
     }
 
     #[test]

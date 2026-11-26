@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Alerts ▸ Delivery log (ADR-195; its own page under Monitor since ADR-262 decision 7). One row per
+// The delivery log (ADR-195): the Notifications view of Alerts ▸ History since ADR-270 (its own page
+// under Monitor from ADR-262 decision 7 until then). One row per
 // notification sent to a channel, newest first, saying whether it arrived and - when it did not -
 // whether Yagra, the network or the receiving service failed. A row opens in place to show every
 // attempt and the start of what the receiving service answered.
@@ -20,8 +21,6 @@ import { EntityName } from '../components/ui/EntityName';
 import { ClippedText } from '../components/ui/ClippedText';
 import { useEntityNames } from '../components/ui/entityNames';
 import { TimeCell } from '../components/ui/tableCells';
-import { Page } from '../components/ui/Page';
-import { PageHeader } from '../components/ui/PageHeader';
 import { LoadGate } from '../components/ui/LoadGate';
 import { useLoad } from '../lib/useLoad';
 import { useFilterParams } from '../lib/useFilterParams';
@@ -32,10 +31,12 @@ import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import {
   appendPage,
   channelLabel,
+  DELIVERY_FILTER_PREFIX,
   deliveryFilters,
   durationText,
   nextCursor,
   queryFor,
+  resultTone,
   routeText,
   sideExplanationKey,
   subjectText,
@@ -93,7 +94,7 @@ function columnsFor(
       header: t('routing.log.cols.result'),
       width: '110px',
       render: (r) => (
-        <Badge tone={r.result === 'delivered' ? 'up' : r.result === 'failed' ? 'critical' : 'neutral'}>
+        <Badge tone={resultTone(r.result)}>
           {t(`routing.log.result.${r.result}`)}
         </Badge>
       ),
@@ -135,7 +136,7 @@ function columnsFor(
 }
 
 /** What a row shows when it is opened: the verdict, every attempt, and what the remote answered. */
-function DeliveryDetail({ row }: { row: DeliveryRow }) {
+export function DeliveryDetail({ row }: { row: DeliveryRow }) {
   const { t } = useTranslation('alertsConfig');
   return (
     <div className="routing-log-detail">
@@ -188,23 +189,16 @@ function DeliveryDetail({ row }: { row: DeliveryRow }) {
   );
 }
 
-/** Alerts ▸ Delivery log. The channel list is what the channel filter offers; a channel row on
- *  Notification delivery links here with `?channel=<id>` (`deliveryLogFor`). */
-export function DeliveryLogPage() {
-  const { t } = useTranslation('alertsConfig');
+/** The Notifications view of Alerts ▸ History. The channel list is what the channel filter offers;
+ *  a channel row on Notification delivery links here with `?channel=<id>` (`deliveryLogFor`). */
+export function DeliveryLogView() {
   const channels = useLoad<NotificationChannel[]>(() => api.listNotificationChannels(), [], {
     initial: [],
   });
   return (
-    <Page layout="list">
-      <PageHeader
-        title={t('nav:alerts.deliveries')}
-        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.deliveries') }]}
-      />
-      <LoadGate load={channels} permission="manage_system">
-        <DeliveryLog channels={channels.data} />
-      </LoadGate>
-    </Page>
+    <LoadGate load={channels} permission="manage_system">
+      <DeliveryLog channels={channels.data} />
+    </LoadGate>
   );
 }
 
@@ -226,7 +220,7 @@ function DeliveryLog({ channels }: { channels: NotificationChannel[] }) {
   // name resolver. The fetch reads the specs only, so a name resolving does not refetch the log.
   const specs = useMemo(() => deliveryFilters(t, channels), [t, channels]);
   const filterCols = useMemo(() => specColumns(specs), [specs]);
-  const { filters, setFilters, nowMs } = useFilterParams(filterCols);
+  const { filters, setFilters, nowMs } = useFilterParams(filterCols, DELIVERY_FILTER_PREFIX);
   const columns = useMemo(() => columnsFor(t, specs, nodeName), [t, specs, nodeName]);
   const filtered = isAnyFiltered(filterCols, filters);
 

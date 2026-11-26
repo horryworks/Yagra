@@ -56,6 +56,24 @@ fn breach_clause(facts: &AlertFacts) -> String {
         .unwrap_or_default()
 }
 
+/// `1 node` / `3 nodes`.
+fn nodes(n: usize) -> String {
+    if n == 1 {
+        "1 node".to_owned()
+    } else {
+        format!("{n} nodes")
+    }
+}
+
+/// ` (+3 nodes grouped)` on a border's title, nothing on any other (ADR-270 decision 1).
+fn grouped_clause(facts: &AlertFacts) -> String {
+    if facts.grouped_count == 0 {
+        String::new()
+    } else {
+        format!(" (+{} grouped)", nodes(facts.grouped_count))
+    }
+}
+
 /// The title. The pool and Meraki organization sentences are the JSON built-in's, with the
 /// subject's name in place of its id.
 #[must_use]
@@ -64,12 +82,19 @@ pub(crate) fn subject(alert: &Alert, facts: &AlertFacts) -> String {
     match (&alert.subject, facts.event) {
         (Subject::Node(_), NotifyEvent::Fire) => {
             format!(
-                "{} is {}{}",
+                "{} is {}{}{}",
                 facts.node_label(),
                 facts.state,
-                breach_clause(facts)
+                breach_clause(facts),
+                grouped_clause(facts)
             )
         }
+        (Subject::Node(_), NotifyEvent::Update) => format!(
+            "update: {} is {}, now with {} grouped",
+            facts.node_label(),
+            facts.state,
+            nodes(facts.grouped_count)
+        ),
         (Subject::Node(_), NotifyEvent::Resolve) => {
             format!("resolved: {} recovered", facts.node_label())
         }
@@ -92,6 +117,11 @@ pub(crate) fn subject(alert: &Alert, facts: &AlertFacts) -> String {
         (Subject::Pool(_), NotifyEvent::Suppress) => {
             format!("rolled up: poller pool \"{name}\" suppressed")
         }
+        // Unreachable: only a node's liveness alert has members (ADR-270). Spelled out for the
+        // reason the pool's roll-up is.
+        (Subject::Pool(_), NotifyEvent::Update) => {
+            format!("update: poller pool \"{name}\" has no live poller")
+        }
         (Subject::MerakiOrg(_), NotifyEvent::Fire) => format!(
             "Meraki organization {name}: the Dashboard API is not answering — its devices' states \
              are the last ones collected"
@@ -101,6 +131,10 @@ pub(crate) fn subject(alert: &Alert, facts: &AlertFacts) -> String {
         }
         (Subject::MerakiOrg(_), NotifyEvent::Suppress) => {
             format!("rolled up: Meraki organization {name} suppressed")
+        }
+        // Unreachable, as the pool's update is.
+        (Subject::MerakiOrg(_), NotifyEvent::Update) => {
+            format!("update: Meraki organization {name}: the Dashboard API is not answering")
         }
         (Subject::ConfigRemote, event) => config_remote_title(event),
     }
@@ -120,6 +154,10 @@ pub(crate) fn config_remote_title(event: NotifyEvent) -> String {
         }
         // Unreachable today: the alert is raised with no root cause, and roll-ups walk nodes.
         NotifyEvent::Suppress => "rolled up: config backup Git destination suppressed".to_owned(),
+        // Unreachable for the same reason: only a node's outage has members (ADR-270).
+        NotifyEvent::Update => {
+            "update: config backups are not reaching their Git destination".to_owned()
+        }
     }
 }
 
@@ -173,6 +211,21 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
     if facts.flapping {
         lines.push(("Flapping", "yes".to_owned()));
     }
+    // ADR-270: the nodes grouped into this outage, one per line under their count. Marked with
+    // "- " rather than indented, because free layout (ADR-199) strips an indent from a laid-out copy.
+    if facts.grouped_count > 0 {
+        let mut v = nodes(facts.grouped_count);
+        for n in &facts.grouped_nodes {
+            v.push_str(&format!("\n- {n}"));
+        }
+        let more = facts
+            .grouped_count
+            .saturating_sub(facts.grouped_nodes.len());
+        if more > 0 {
+            v.push_str(&format!("\n- ... and {more} more"));
+        }
+        lines.push(("Grouped", v));
+    }
     lines.push(("Alert key", facts.dedup_key.clone()));
     if matches!(alert.subject, Subject::Node(_)) {
         lines.push(("Node ID", facts.node_id.clone()));
@@ -198,7 +251,16 @@ pub(crate) fn body(alert: &Alert, facts: &AlertFacts) -> String {
 #[must_use]
 pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
     let num = |v: Option<f64>| v.map(fmt_num);
-    let pairs: [(&str, Option<String>); 17] = [
+    // ADR-270: `3: ap-01 (192.0.2.21), ...`, cut at the cap like every value here - the body
+    // carries the whole list.
+    let grouped = (facts.grouped_count > 0).then(|| {
+        format!(
+            "{}: {}",
+            facts.grouped_count,
+            facts.grouped_nodes.join(", ")
+        )
+    });
+    let pairs: [(&str, Option<String>); 18] = [
         ("node", Some(facts.subject_name.clone())),
         ("address", facts.node_address.clone()),
         ("folder", facts.group.clone()),
@@ -216,6 +278,7 @@ pub(crate) fn details(facts: &AlertFacts) -> Vec<(String, String)> {
         ("node_id", Some(facts.node_id.clone())),
         ("subject_kind", Some(facts.subject_kind.clone())),
         ("node_url", facts.node_url.clone()),
+        ("grouped", grouped),
     ];
     pairs
         .into_iter()
@@ -238,7 +301,14 @@ pub(crate) const fn node_subject_template(event: NotifyEvent) -> &'static str {
     match event {
         NotifyEvent::Fire => concat!(
             "{{ node_label }} is {{ state }}",
-            "{% if alert_label is defined %}: {{ alert_label }}{% endif %}"
+            "{% if alert_label is defined %}: {{ alert_label }}{% endif %}",
+            "{% if grouped_count == 1 %} (+1 node grouped)",
+            "{% elif grouped_count %} (+{{ grouped_count }} nodes grouped){% endif %}"
+        ),
+        NotifyEvent::Update => concat!(
+            "update: {{ node_label }} is {{ state }}, now with ",
+            "{% if grouped_count == 1 %}1 node{% else %}{{ grouped_count }} nodes{% endif %}",
+            " grouped"
         ),
         NotifyEvent::Resolve => "resolved: {{ node_label }} recovered",
         NotifyEvent::Suppress => concat!(
@@ -292,6 +362,14 @@ pub(crate) fn node_body_template(event: NotifyEvent) -> String {
         "{{ root_cause_name }}",
     ));
     out.push_str(&when("flapping", "Flapping", "yes"));
+    out.push_str(&when(
+        "grouped_count",
+        "Grouped",
+        "{% if grouped_count == 1 %}1 node{% else %}{{ grouped_count }} nodes{% endif %}\
+         {% for n in grouped_nodes %}\n- {{ n }}{% endfor %}\
+         {% if grouped_count > grouped_nodes | length %}\n- ... and \
+         {{ grouped_count - grouped_nodes | length }} more{% endif %}",
+    ));
     out.push_str(&line("Alert key", "{{ dedup_key }}"));
     out.push_str(&line("Node ID", "{{ node_id }}"));
     out.push_str(&when("node_url is defined", "Yagra", "{{ node_url }}"));
@@ -345,7 +423,10 @@ mod tests {
         let s = subject(&alert, &facts);
         assert_eq!(
             s,
-            format!("{} is {}: Node not responding", facts.node_id, facts.state)
+            format!(
+                "{} is {}: Node not responding (+2 nodes grouped)",
+                facts.node_id, facts.state
+            )
         );
         let b = body(&alert, &facts);
         assert!(!b.contains("Folder:") && !b.contains("Profile:"), "{b}");

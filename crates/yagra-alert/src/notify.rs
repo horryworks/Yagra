@@ -109,6 +109,18 @@ pub trait NotifyChannel: Send + Sync {
     ) -> Result<ResolveSent, NotifyError> {
         Ok(ResolveSent::NothingToSend)
     }
+
+    /// Add to an incident this channel already holds: more down nodes were rolled up into it
+    /// (ADR-270 decision 3). The default sends nothing. Email keeps it, because a second mail per
+    /// joining node is the flood the roll-up exists to prevent; PagerDuty keeps it, because its
+    /// only way to add to an alert is another `trigger`, which re-opens an incident a person has
+    /// already resolved and pages again. JSM and the webhook override it.
+    async fn deliver_update(
+        &self,
+        _notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        Ok(ResolveSent::NothingToSend)
+    }
 }
 
 /// What a channel did with a resolve.
@@ -136,6 +148,21 @@ impl NotifyChannel for std::sync::Arc<dyn NotifyChannel> {
     ) -> Result<ResolveSent, NotifyError> {
         (**self).deliver_resolve(notification).await
     }
+
+    async fn deliver_update(
+        &self,
+        notification: &Notification,
+    ) -> Result<ResolveSent, NotifyError> {
+        (**self).deliver_update(notification).await
+    }
+}
+
+/// Which of a channel's three calls a delivery makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Call {
+    Fire,
+    Resolve,
+    Update,
 }
 
 /// Errors from a channel.
@@ -337,11 +364,27 @@ impl<C: NotifyChannel> Dispatcher<C> {
                 attempts: Vec::new(),
             };
         }
-        let report = self.deliver_with_retry(&notification, false).await;
+        let report = self.deliver_with_retry(&notification, Call::Fire).await;
         if matches!(report.outcome, DispatchOutcome::Delivered { .. }) {
             active.insert(notification.dedup_key.clone());
         }
         report
+    }
+
+    /// Add to the incident this channel opened for `notification`'s alert (ADR-270 decision 3).
+    /// `None` when this channel was never delivered that fire, or was told it closed: there is no
+    /// incident here to add to, and no row to record. ⚠️ After a restart that is every channel —
+    /// the set is memory only, as [`Self::is_active`] says.
+    pub async fn dispatch_update(&self, notification: Notification) -> Option<DispatchReport> {
+        let active = self.active.lock().await;
+        if !active.contains(&notification.dedup_key) {
+            return None;
+        }
+        // Held across the call like every other delivery, so an update cannot overtake the close
+        // of the incident it adds to.
+        let report = self.deliver_with_retry(&notification, Call::Update).await;
+        drop(active);
+        Some(report)
     }
 
     /// Clear the dedup state and deliver the resolve with the retry policy. The resolve is
@@ -351,7 +394,7 @@ impl<C: NotifyChannel> Dispatcher<C> {
     pub async fn dispatch_resolve(&self, notification: Notification) -> DispatchReport {
         let mut active = self.active.lock().await;
         active.remove(&notification.dedup_key);
-        self.deliver_with_retry(&notification, true).await
+        self.deliver_with_retry(&notification, Call::Resolve).await
     }
 
     /// Whether this channel was delivered the fire for `dedup_key` and has not been told it closed.
@@ -374,28 +417,26 @@ impl<C: NotifyChannel> Dispatcher<C> {
     /// Deliver with the retry policy, keeping every attempt's result (ADR-195 decision 3). The
     /// failure used to be matched as `Err(_)` and dropped here, which is why nothing downstream
     /// could say why a page did not arrive.
-    async fn deliver_with_retry(
-        &self,
-        notification: &Notification,
-        resolve: bool,
-    ) -> DispatchReport {
+    async fn deliver_with_retry(&self, notification: &Notification, call: Call) -> DispatchReport {
         let max = self.policy.max_attempts.max(1);
         let mut attempts = Vec::new();
         for attempt in 1..=max {
             let started = std::time::Instant::now();
-            let result = if resolve {
-                match self.channel.deliver_resolve(notification).await {
-                    // Asked once: a channel with nothing to send has nothing to retry either.
-                    Ok(ResolveSent::NothingToSend) => {
-                        return DispatchReport {
-                            outcome: DispatchOutcome::Skipped,
-                            attempts: Vec::new(),
-                        };
-                    }
-                    other => other.map(|_| ()),
+            let answer = match call {
+                Call::Fire => self.channel.deliver(notification).await.map(|()| None),
+                Call::Resolve => self.channel.deliver_resolve(notification).await.map(Some),
+                Call::Update => self.channel.deliver_update(notification).await.map(Some),
+            };
+            let result = match answer {
+                // Asked once: a channel with nothing to send has nothing to retry either.
+                Ok(Some(ResolveSent::NothingToSend)) => {
+                    return DispatchReport {
+                        outcome: DispatchOutcome::Skipped,
+                        attempts: Vec::new(),
+                    };
                 }
-            } else {
-                self.channel.deliver(notification).await
+                Ok(None | Some(ResolveSent::Sent)) => Ok(()),
+                Err(e) => Err(e),
             };
             let duration = started.elapsed();
             match result {
@@ -469,6 +510,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         };
         Notification::for_alert(&alert, "node down", "{}")
     }
@@ -478,6 +520,74 @@ mod tests {
             max_attempts: 3,
             base_backoff_ms: 0,
         }
+    }
+
+    /// A channel that answers updates, counting each kind of call.
+    #[derive(Default)]
+    struct Updating {
+        fires: Arc<AtomicU32>,
+        updates: Arc<AtomicU32>,
+    }
+
+    #[async_trait]
+    impl NotifyChannel for Updating {
+        async fn deliver(&self, _n: &Notification) -> Result<(), NotifyError> {
+            self.fires.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn deliver_update(&self, _n: &Notification) -> Result<ResolveSent, NotifyError> {
+            self.updates.fetch_add(1, Ordering::SeqCst);
+            Ok(ResolveSent::Sent)
+        }
+    }
+
+    /// ADR-270: an update adds to an incident this channel opened, so it goes nowhere before the
+    /// fire and nowhere after the close - and the fire's own dedup does not swallow it.
+    #[tokio::test]
+    async fn an_update_reaches_only_a_channel_holding_the_incident() {
+        let ch = Updating::default();
+        let (fires, updates) = (ch.fires.clone(), ch.updates.clone());
+        let d = Dispatcher::new(ch, no_backoff());
+        let n = notification();
+        assert!(d.dispatch_update(n.clone()).await.is_none(), "no fire yet");
+        d.dispatch(n.clone()).await;
+        let report = d
+            .dispatch_update(n.clone())
+            .await
+            .expect("the incident is open");
+        assert_eq!(report.outcome, DispatchOutcome::Delivered { attempts: 1 });
+        assert!(
+            d.dispatch_update(n.clone()).await.is_some(),
+            "a second one too"
+        );
+        assert_eq!(updates.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            fires.load(Ordering::SeqCst),
+            1,
+            "an update is not a second fire"
+        );
+        d.mark_resolved(&n.dedup_key).await;
+        assert!(d.dispatch_update(n).await.is_none(), "closed");
+    }
+
+    /// A channel that has nothing to send for an update (email) is skipped, not counted delivered.
+    #[tokio::test]
+    async fn an_update_to_a_channel_with_nothing_to_send_is_skipped() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let d = Dispatcher::new(
+            FlakyChannel {
+                fail_first: 0,
+                calls: calls.clone(),
+            },
+            no_backoff(),
+        );
+        let n = notification();
+        d.dispatch(n.clone()).await;
+        let report = d.dispatch_update(n).await.expect("the incident is open");
+        assert_eq!(report.outcome, DispatchOutcome::Skipped);
+        assert!(report.attempts.is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "only the fire was sent");
     }
 
     #[tokio::test]

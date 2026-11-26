@@ -19,7 +19,7 @@ import { useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { subjectNodeId, alertRowKey as rowKey } from '../lib/alertSubject';
-import { alertNotes } from '../lib/alertNotes';
+import { alertNotes, groupedCounts, groupedFor } from '../lib/alertNotes';
 import { alertWhatOf, formatTimestamp, severityColorVar } from '../lib/format';
 import { sortedAlerts, useAlertStore } from '../store';
 import { useHeldNotifications } from './useHeldNotifications';
@@ -44,6 +44,7 @@ export function AlertRows({ limit, empty }: Props) {
   // batch-resolves them after the commit.
   const { nodeName } = useEntityNames();
   const held = useHeldNotifications();
+  const grouped = useMemo(() => groupedCounts(Object.values(alerts)), [alerts]);
   const heldOf = useCallback(
     (a: Alert) => (held.length === 0 ? null : heldFireFor(a, held, subjectNodeId(a))),
     [held],
@@ -67,7 +68,10 @@ export function AlertRows({ limit, empty }: Props) {
           <span className="alertrow-check" title={a.check}>
             <AlertWhatText what={alertWhatOf(a)} />
           </span>
-          <AlertNotes notes={alertNotes(a, heldOf(a))} nodeName={nodeName} />
+          <AlertNotes
+            notes={alertNotes(a, heldOf(a), groupedFor(a, grouped, subjectNodeId(a)))}
+            nodeName={nodeName}
+          />
           <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
         </div>
       ))}

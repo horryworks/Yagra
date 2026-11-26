@@ -135,6 +135,7 @@
       },
       "tabs": {
         "fire": "When it fires",
+        "update": "When more nodes are grouped",
         "resolve": "When it recovers",
         "suppress": "When rolled up under upstream"
       },
@@ -194,7 +195,7 @@
         },
         "event": {
           "label": "Notification kind",
-          "desc": "fire, resolve or suppress"
+          "desc": "fire, update, resolve or suppress"
         },
         "severity": {
           "label": "Severity",
@@ -260,6 +261,14 @@
           "label": "Upstream node ID",
           "desc": "That node’s UUID"
         },
+        "grouped_count": {
+          "label": "Grouped node count",
+          "desc": "How many down nodes this outage groups; 0 when none"
+        },
+        "grouped_nodes": {
+          "label": "Grouped nodes",
+          "desc": "Those nodes with their addresses, joined with “, ”"
+        },
         "node_url": {
           "label": "Node page link",
           "desc": "The node's page in Yagra; empty until the WebUI address is set"
@@ -303,6 +312,7 @@
       "samples": {
         "nodeDown": "Node down",
         "threshold": "Port over threshold",
+        "grouped": "More nodes grouped",
         "recovered": "Node recovered",
         "rolledUp": "Rolled up under upstream"
       },
@@ -429,6 +439,7 @@
         "fire": "Fired",
         "resolve": "Resolved",
         "suppress": "Rolled up",
+        "update": "Update",
         "test": "Test",
         "test_close": "Test close",
         "unknown": "Unknown"
@@ -455,7 +466,7 @@
         "catch_all": "Catch-all",
         "hold_failed": "Could not hold, sent at once",
         "closing_rule": "Closing, through matching rules",
-        "open_incident": "Closing its open incident",
+        "open_incident": "To its open incident",
         "default_route": "Default route",
         "test": "Test",
         "unknown": "Unknown"

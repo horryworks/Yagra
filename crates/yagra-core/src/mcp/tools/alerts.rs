@@ -70,6 +70,10 @@ pub(crate) struct AlertHistoryParams {
     /// folder above them, the `site_name` a row carries) is one of these. Find the ids with
     /// `list_node_groups`.
     site: Option<String>,
+    /// A row's `cursor_id` where an outage began: only the other nodes whose up/down alerts were
+    /// grouped under that row's node while the outage lasted. A row with `grouped_under` set names
+    /// such a node by its id; this takes the row's `cursor_id`, never a node id.
+    outage_row: Option<Uuid>,
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -233,13 +237,19 @@ impl YagraMcp {
             node_q: p.node_q.as_deref(),
             group_id: p.group_id,
             site: p.site.as_deref(),
+            outage_row: p.outage_row,
         };
         let rows = match crate::api::alerts::history_page(&self.state, scope, input).await {
             Ok(r) => r,
             Err(e) => return tool_api_error(TOOL, &e),
         };
         let names = self
-            .resolve_names(scope, rows.iter().filter_map(|r| r.node))
+            .resolve_names(
+                scope,
+                rows.iter()
+                    .filter_map(|r| r.node)
+                    .chain(rows.iter().filter_map(|r| r.root_cause)),
+            )
             .await;
         let ports = crate::api::alerts::port_names(
             &self.state,
@@ -255,6 +265,7 @@ impl YagraMcp {
                 let mut dto =
                     AlertHistoryDto::from_row(r, r.node.and_then(|n| names.get(&n).cloned()));
                 dto.site_name = r.node.and_then(|n| sites.get(&n).cloned());
+                dto.grouped_under_name = r.root_cause.and_then(|n| names.get(&n).cloned());
                 dto.if_name = r.node.zip(r.ifindex).and_then(|k| ports.get(&k).cloned());
                 if dto.subject_name.is_none() {
                     dto.subject_name = r

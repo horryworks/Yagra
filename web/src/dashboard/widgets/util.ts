@@ -71,7 +71,9 @@ export interface HourBucket {
 }
 
 /** Bucket alert-history rows into `hours` trailing 1-hour bins by their open time, counting only
- *  fires (not resolves). `now` is injectable for deterministic tests. Oldest bucket first. */
+ *  fires: not resolves, and not the row an alert that had paged gets when it is grouped into an
+ *  outage (ADR-270), which repeats its fire's time. `now` is injectable for deterministic tests.
+ *  Oldest bucket first. */
 export function bucketAlertsByHour(
   rows: AlertHistoryRow[],
   hours: number,
@@ -86,7 +88,7 @@ export function bucketAlertsByHour(
   }
   const start = buckets[0].t;
   for (const r of rows) {
-    if (r.resolved) continue;
+    if (r.resolved || r.rolled_up) continue;
     if (r.at_unix_ms < start || r.at_unix_ms >= end) continue;
     const idx = Math.floor((r.at_unix_ms - start) / HOUR);
     if (idx >= 0 && idx < buckets.length) buckets[idx].count += 1;

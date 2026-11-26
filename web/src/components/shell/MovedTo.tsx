@@ -13,8 +13,22 @@
 
 import { Navigate, useLocation } from 'react-router-dom';
 
-/** Redirect to `to`, carrying whatever query string and hash the old URL arrived with. */
-export function MovedTo({ to }: { to: string }) {
+/** Redirect to `to`, carrying whatever query string and hash the old URL arrived with. For a screen
+ *  that became one view of another (the delivery log, ADR-270), `keyPrefix` renames the old keys to
+ *  the ones that view reads and `params` are set on top. */
+export function MovedTo({
+  to,
+  params,
+  keyPrefix = '',
+}: {
+  to: string;
+  params?: Readonly<Record<string, string>>;
+  keyPrefix?: string;
+}) {
   const { search, hash } = useLocation();
-  return <Navigate to={`${to}${search}${hash}`} replace />;
+  if (!params && !keyPrefix) return <Navigate to={`${to}${search}${hash}`} replace />;
+  const q = new URLSearchParams();
+  for (const [k, v] of new URLSearchParams(search)) q.append(`${keyPrefix}${k}`, v);
+  for (const [k, v] of Object.entries(params ?? {})) q.set(k, v);
+  return <Navigate to={`${to}?${q.toString()}${hash}`} replace />;
 }

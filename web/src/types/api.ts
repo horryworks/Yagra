@@ -904,6 +904,7 @@ export const DELIVERY_EVENTS = [
   'fire',
   'resolve',
   'suppress',
+  'update',
   'test',
   'test_close',
   'unknown',

@@ -57,19 +57,19 @@ use async_trait::async_trait;
 use yagra_alert::action::AlertSink;
 use yagra_alert::Alert;
 
-use super::{history_row, notify::Notifier, NotifyAction};
+use super::{history_row, notify::Notifier, HistoryEvent, NotifyAction};
 use crate::alerts::history::AlertHistoryStore;
 
 /// The `alert_history` half, as a seam. Implemented by [`AlertHistoryStore`] over PostgreSQL.
 #[async_trait]
 pub(crate) trait HistoryWriter: Send + Sync {
-    async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()>;
+    async fn record(&self, alert: &Alert, event: HistoryEvent) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 impl HistoryWriter for AlertHistoryStore {
-    async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
-        AlertHistoryStore::record(self, alert, resolved).await
+    async fn record(&self, alert: &Alert, event: HistoryEvent) -> anyhow::Result<()> {
+        AlertHistoryStore::record(self, alert, event).await
     }
 }
 
@@ -145,14 +145,13 @@ impl RecordingSink {
 #[async_trait]
 impl AlertSink for RecordingSink {
     async fn dispatch(&self, action: NotifyAction) {
-        if let Some((alert, resolved)) = history_row(&action) {
-            if let Err(e) = self.history.record(alert, resolved).await {
+        if let Some((alert, event)) = history_row(&action) {
+            if let Err(e) = self.history.record(alert, event).await {
                 let subject = self.subject;
                 tracing::warn!(error = %e, "recording {subject} failed");
             }
         }
-        // Unconditional, and outside the `if`: a suppression produces no row but is still a
-        // delivery — it is what closes the incident that was opened before the roll-up.
+        // Unconditional, and outside the `if`: an update produces no row but is still a delivery.
         self.notifier.handle(action).await;
     }
 }
@@ -166,21 +165,21 @@ pub(crate) mod testkit {
     /// A [`HistoryWriter`] that remembers, and optionally refuses.
     #[derive(Default)]
     pub(crate) struct FakeHistory {
-        pub(crate) rows: Mutex<Vec<(Alert, bool)>>,
+        pub(crate) rows: Mutex<Vec<(Alert, HistoryEvent)>>,
         /// When true, every write fails — the case where the notification must still go out.
         pub(crate) fail: bool,
     }
 
     #[async_trait]
     impl HistoryWriter for FakeHistory {
-        async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
+        async fn record(&self, alert: &Alert, event: HistoryEvent) -> anyhow::Result<()> {
             if self.fail {
                 anyhow::bail!("the database said no");
             }
             self.rows
                 .lock()
                 .expect("no panic holds this lock")
-                .push((alert.clone(), resolved));
+                .push((alert.clone(), event));
             Ok(())
         }
     }
@@ -225,6 +224,7 @@ mod tests {
             row_name: None,
             notify_held_until: None,
             snmp_failure: None,
+            grouped: Vec::new(),
         }
     }
 
@@ -248,7 +248,11 @@ mod tests {
         sink.dispatch(NotifyAction::Fire(alert())).await;
         let rows = history.rows.lock().unwrap();
         assert_eq!(rows.len(), 1, "the fire left no History row");
-        assert!(!rows[0].1, "a fire is recorded with resolved = false");
+        assert_eq!(
+            rows[0].1,
+            HistoryEvent::Fire,
+            "a fire is recorded as a fire"
+        );
         assert_eq!(
             notifier.delivered.lock().unwrap().len(),
             1,
@@ -261,21 +265,28 @@ mod tests {
     async fn a_resolve_is_recorded_as_resolved() {
         let (sink, history, _) = sink(false);
         sink.dispatch(NotifyAction::Resolve(alert())).await;
-        assert!(
+        assert_eq!(
             history.rows.lock().unwrap()[0].1,
-            "a resolve is recorded with resolved = true"
+            HistoryEvent::Resolve,
+            "a resolve is recorded as a resolve"
         );
     }
 
-    /// A roll-up is delivered but not recorded: it is not a lifecycle transition, and the incident
-    /// it closes was opened by the fire that *was* recorded.
+    /// A roll-up is recorded as a row of its own (ADR-270), neither a fire nor a resolve, and still
+    /// delivered: the delivery is what closes the incident opened before the roll-up.
     #[tokio::test]
-    async fn a_suppression_is_delivered_but_not_recorded() {
+    async fn a_suppression_is_recorded_as_a_roll_up_and_delivered() {
         let (sink, history, notifier) = sink(false);
         sink.dispatch(NotifyAction::Suppress(alert())).await;
-        assert!(
-            history.rows.lock().unwrap().is_empty(),
-            "a roll-up must not be written as a lifecycle row"
+        assert_eq!(
+            history
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|r| r.1)
+                .collect::<Vec<_>>(),
+            vec![HistoryEvent::RolledUp]
         );
         assert_eq!(
             notifier.delivered.lock().unwrap().len(),

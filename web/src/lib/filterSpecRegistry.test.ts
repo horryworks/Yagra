@@ -61,7 +61,7 @@ import { pollerFilters } from '../pages/pollerFilters';
 import { siteRowFilters, SUBNET_FILTER_PREFIX, subnetRowFilters } from '../pages/missingPrefixes';
 import { overlapFilters } from '../pages/subnetOverlaps';
 import { channelFilters, routingRuleFilters } from '../pages/routingFilters';
-import { deliveryFilters } from '../pages/deliveryLogQuery';
+import { DELIVERY_FILTER_PREFIX, deliveryFilters } from '../pages/deliveryLogQuery';
 import { windowFilters } from '../pages/suppressionFilters';
 import { thresholdFilters } from '../pages/thresholdQuery';
 import { userFilters } from '../pages/userFilters';
@@ -421,8 +421,16 @@ const ROUTES: readonly Route[] = [
   },
   {
     path: '/alerts/history',
-    own: ['node_id', 'group_id'],
-    tables: [{ entries: ['historyFilters'], prefix: '' }],
+    own: ['node_id', 'group_id', 'view'],
+    tables: [
+      { entries: ['historyFilters'], prefix: '' },
+      // The delivery log, the screen's Notifications view since ADR-270.
+      {
+        entries: ['deliveryFilters'],
+        prefix: DELIVERY_FILTER_PREFIX,
+        wiredIn: { file: 'pages/DeliveryLog.tsx', spelling: 'DELIVERY_FILTER_PREFIX' },
+      },
+    ],
   },
   { path: '/alerts/rules', own: [], tables: [{ entries: ['thresholdFilters'], prefix: '' }] },
   {
@@ -441,7 +449,6 @@ const ROUTES: readonly Route[] = [
       },
     ],
   },
-  { path: '/alerts/deliveries', own: [], tables: [{ entries: ['deliveryFilters'], prefix: '' }] },
   {
     path: '/alerts/rules/events',
     own: [EVENT_VIEW_KEYS.tab, EVENT_VIEW_KEYS.target],
