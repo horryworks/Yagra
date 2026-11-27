@@ -9,8 +9,9 @@
 // default name), then a year-first start date and a 24-hour start time in a zone the operator can
 // change from its name beside the time, then the end, always as a date and a time (Inc.6), with
 // shortcuts that fill it from the start. Moving the start moves the end with it, so the length
-// stays. The reading of all of that is `lib/maintenanceTime.ts`; the zone the times were typed in
-// is sent with the window and stored.
+// stays. A new window opens from the next whole hour to an hour after it (Inc.7), and the end is
+// never left at or before the start. The reading of all of that is `lib/maintenanceTime.ts`; the
+// zone the times were typed in is sent with the window and stored.
 //
 // The same dialog edits a window that exists (ADR-261 Inc.5): every field starts from the window
 // on the window's own clock, and Save replaces all of it.
@@ -48,15 +49,18 @@ import { formatDuration } from '../../lib/format';
 import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
 import {
   TONIGHT_HOUR,
+  NEW_WINDOW_MINUTES,
   WINDOW_LENGTHS,
   dateText,
   endAfter,
-  endBase,
   followStart,
   instantToWall,
   keptLength,
+  newWindowFields,
   nextWholeHour,
   rangeLine,
+  settleEnd,
+  stepEnd,
   stepWallText,
   targetZone,
   timeText,
@@ -125,23 +129,25 @@ export function AddMaintenanceWindowModal({
   const mine = displayTimeZone();
   // An edited window keeps the clock it was asked in; one that recorded none reads on mine.
   const [zone, setZone] = useState(win?.time_zone ?? mine);
+  // A new window opens from the next whole hour to an hour after it (decision 40).
   const [initial] = useState(() =>
-    win ? windowFields(win.starts_at, win.ends_at, win.time_zone ?? mine) : null,
+    win
+      ? windowFields(win.starts_at, win.ends_at, win.time_zone ?? mine)
+      : newWindowFields(Date.now(), mine),
   );
-  const [startDate, setStartDate] = useState(initial?.startDate ?? '');
-  const [startTime, setStartTime] = useState(initial?.startTime ?? '');
-  const [endDate, setEndDate] = useState(initial?.endDate ?? '');
-  const [endTime, setEndTime] = useState(initial?.endTime ?? '');
-  // The length the end keeps while the start moves (decision 34): set whenever the end is set
-  // after a start that reads, and an edited window's own length from the outset.
-  const [kept, setKept] = useState(() =>
-    initial
-      ? keptLength(
-          { date: initial.startDate, time: initial.startTime },
-          { date: initial.endDate, time: initial.endTime },
-          zone,
-        )
-      : null,
+  const [startDate, setStartDate] = useState(initial.startDate);
+  const [startTime, setStartTime] = useState(initial.startTime);
+  const [endDate, setEndDate] = useState(initial.endDate);
+  const [endTime, setEndTime] = useState(initial.endTime);
+  // The length the end keeps while the start moves (decision 34): the window's own length from
+  // the outset, and again whenever the end is set after a start that reads (decision 41).
+  const [kept, setKept] = useState(
+    () =>
+      keptLength(
+        { date: initial.startDate, time: initial.startTime },
+        { date: initial.endDate, time: initial.endTime },
+        zone,
+      ) ?? NEW_WINDOW_MINUTES * 60_000,
   );
   const recentZones = usePrefsStore((s) => s.recentZones);
   const rememberZone = usePrefsStore((s) => s.rememberZone);
@@ -184,7 +190,18 @@ export function AddMaintenanceWindowModal({
     return null;
   }, [batch, scope, scopeId, initialScope, groups]);
 
-  const times = windowTimes({ startDate, startTime, endDate, endTime, zone });
+  const start: WallText = { date: startDate, time: startTime };
+  const end: WallText = { date: endDate, time: endTime };
+  // What is measured and saved: the end where it settles once it is left (decision 41), so an end
+  // still being typed is never reported as before the start.
+  const settled = settleEnd(start, end, kept, zone) ?? end;
+  const times = windowTimes({
+    startDate,
+    startTime,
+    endDate: settled.date,
+    endTime: settled.time,
+    zone,
+  });
   // What the abbreviations are read at: the start once it is known, else now.
   const at = times.kind === 'ok' ? times.startMs : Date.now();
 
@@ -212,8 +229,6 @@ export function AddMaintenanceWindowModal({
   const ready =
     !!savedName && (!!batch || !!scopeId.trim()) && times.kind === 'ok';
 
-  const start: WallText = { date: startDate, time: startTime };
-  const end: WallText = { date: endDate, time: endTime };
   // Every way the start changes goes through here, so the end follows it (decision 34).
   const moveStart = (next: WallText) => {
     setStartDate(next.date);
@@ -224,12 +239,14 @@ export function AddMaintenanceWindowModal({
       setEndTime(followed.time);
     }
   };
-  // And every way the end changes goes through here, so the length it now makes is the one kept.
+  // And every way the end changes goes through here, so the length it now makes is the one kept -
+  // while it is after the start; one still being typed keeps the length it had (decision 41).
   const moveEnd = (next: WallText) => {
     setEndDate(next.date);
     setEndTime(next.time);
-    setKept(keptLength(start, next, zone));
+    setKept((k) => keptLength(start, next, zone) ?? k);
   };
+  const settleTo = (next: WallText) => moveEnd(settleEnd(start, next, kept, zone) ?? next);
   const setStart = (w: Wall) => moveStart({ date: dateText(w.date), time: timeText(w.time) });
 
   const submit = () => {
@@ -452,22 +469,25 @@ export function AddMaintenanceWindowModal({
             }
           >
             <>
-              <WallTimeCols>
+              <WallTimeCols onLeave={() => settleTo(end)}>
                 <DateInput
                   id="maint-end-date"
                   value={endDate}
                   onChange={(date) => moveEnd({ ...end, date })}
-                  onStep={(dir) =>
-                    moveEnd(stepWallText(end, 'day', dir, endBase(start, Date.now(), zone)))
-                  }
+                  onPick={(date) => settleTo({ ...end, date })}
+                  onStep={(dir) => {
+                    const next = stepEnd(start, end, 'day', dir, kept, zone, Date.now());
+                    if (next) moveEnd(next);
+                  }}
                   invalid={times.kind === 'invalid' && times.field === 'endDate'}
                 />
                 <TimeInput
                   value={endTime}
                   onChange={(time) => moveEnd({ ...end, time })}
-                  onStep={(unit, dir) =>
-                    moveEnd(stepWallText(end, unit, dir, endBase(start, Date.now(), zone)))
-                  }
+                  onStep={(unit, dir) => {
+                    const next = stepEnd(start, end, unit, dir, kept, zone, Date.now());
+                    if (next) moveEnd(next);
+                  }}
                   invalid={times.kind === 'invalid' && times.field === 'endTime'}
                   aria-label={t('maintenanceForm.endTime')}
                 />

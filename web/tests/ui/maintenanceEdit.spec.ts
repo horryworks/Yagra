@@ -2,7 +2,8 @@
 // Alerts ▸ Maintenance windows: a window is edited after it was made (ADR-261 Inc.5). The row's
 // menu opens the add dialog filled from the window, on the clock it was asked in; Save replaces
 // the window through its own route. The upgrade's fleet-wide window offers no Edit. The second
-// test drives the time boxes' ▲▼ and the end that follows the start (Inc.6).
+// test drives the time boxes' ▲▼ and the end that follows the start (Inc.6); the third opens a new
+// window filled in and keeps its end after its start (Inc.7).
 import { expect, test } from '../support/app';
 
 const ID = '00000000-0000-4000-8000-0000000000aa';
@@ -144,4 +145,55 @@ test('the end follows the start, every box steps, and the two rows line up', asy
     time_zone: 'Asia/Tokyo',
   });
   expect(errors.uncaught).toEqual([]);
+});
+
+test.describe('a new window', () => {
+  // Fixed, so "the next whole hour" is the same on every machine that runs this.
+  test.use({ timezoneId: 'Asia/Tokyo' });
+
+  test('opens filled in, and its end never stays at or before its start', async ({
+    page,
+    errors,
+  }) => {
+    // ADR-261 Inc.7: from the next whole hour to an hour after it (decision 40). The end's ▼
+    // stops short of the start, and an earlier time typed in the end lands on the next day once
+    // the end is left - with the length counted that way while it is still being typed
+    // (decision 41).
+    await page.clock.setFixedTime(new Date('2030-01-02T05:20:00Z')); // 14:20 in Tokyo
+    await page.goto('/alerts/maintenance');
+    await page.getByRole('button', { name: '+ Add window', exact: true }).click({ timeout: 15_000 });
+    const dialog = page.getByRole('dialog');
+    const startHour = dialog.getByLabel('Start time, hour', { exact: true });
+    const endHour = dialog.getByLabel('End time, hour', { exact: true });
+    await expect(dialog.locator('#maint-start-date')).toHaveValue('2030-01-02');
+    await expect(startHour).toHaveValue('15');
+    await expect(dialog.getByLabel('Start time, minute', { exact: true })).toHaveValue('00');
+    await expect(dialog.locator('#maint-end-date')).toHaveValue('2030-01-02');
+    await expect(endHour).toHaveValue('16');
+    await expect(dialog.getByText('Length 1h', { exact: true })).toBeVisible();
+
+    // 16:00 an hour earlier would be the start itself: the press does nothing.
+    const endTime = dialog.getByRole('group', { name: 'End time', exact: true });
+    await endTime.getByRole('button', { name: '1 hour earlier' }).click();
+    await expect(endHour).toHaveValue('16');
+
+    // 14:00 typed for a 15:00 start: counted as the next day while typing, moved there on leaving.
+    await endHour.fill('14');
+    await expect(dialog.getByText('Length 23h', { exact: true })).toBeVisible();
+    await expect(dialog.locator('#maint-end-date')).toHaveValue('2030-01-02');
+    await dialog.getByLabel('End time, minute', { exact: true }).press('Tab');
+    await expect(dialog.locator('#maint-end-date')).toHaveValue('2030-01-03');
+    await expect(endHour).toHaveValue('14');
+    await expect(dialog.getByText('Length 23h', { exact: true })).toBeVisible();
+
+    // The start moves the end with it, keeping the 23 hours.
+    await dialog
+      .getByRole('group', { name: 'Start time', exact: true })
+      .getByRole('button', { name: '1 hour later' })
+      .click();
+    await expect(startHour).toHaveValue('16');
+    await expect(dialog.locator('#maint-end-date')).toHaveValue('2030-01-03');
+    await expect(endHour).toHaveValue('15');
+    expect(errors.uncaught).toEqual([]);
+  });
 });

@@ -9,7 +9,11 @@ import {
   endBase,
   followStart,
   keptLength,
+  NEW_WINDOW_MINUTES,
+  newWindowFields,
   nextWholeHour,
+  settleEnd,
+  stepEnd,
   samePart,
   stepDateText,
   stepMinutes,
@@ -492,6 +496,124 @@ describe('the end that follows the start', () => {
     expect(endAfter({ date: '2026-11-01', time: '00:30' }, 120, 'America/New_York')).toEqual({
       date: '2026-11-01',
       time: '01:30',
+    });
+  });
+});
+
+// ── ADR-261 Inc.7: a new window opens filled in, and the end is always after the start ──────
+
+describe('a new window', () => {
+  it('opens from the next whole hour on the zone clock to an hour after it', () => {
+    // 05:20 UTC is 14:20 in Tokyo.
+    expect(newWindowFields(Date.parse('2026-11-27T05:20:00Z'), 'Asia/Tokyo')).toEqual({
+      startDate: '2026-11-27',
+      startTime: '15:00',
+      endDate: '2026-11-27',
+      endTime: '16:00',
+    });
+    expect(NEW_WINDOW_MINUTES).toBe(60);
+  });
+
+  it('crosses midnight with the date', () => {
+    // 14:30 UTC is 23:30 in Tokyo.
+    expect(newWindowFields(Date.parse('2026-11-27T14:30:00Z'), 'Asia/Tokyo')).toEqual({
+      startDate: '2026-11-28',
+      startTime: '00:00',
+      endDate: '2026-11-28',
+      endTime: '01:00',
+    });
+  });
+});
+
+describe('the end that settles after the start', () => {
+  const tz = 'Asia/Tokyo';
+  const start = { date: '2026-11-27', time: '22:00' };
+  const twoHours = 2 * 3_600_000;
+
+  it('leaves an end that is already after the start alone', () => {
+    expect(settleEnd(start, { date: '2026-11-28', time: '00:30' }, twoHours, tz)).toBeNull();
+  });
+
+  it('moves an end at or before the start to the first time after it on the same clock', () => {
+    // 02:00 typed for a 22:00 start is the next morning.
+    expect(settleEnd(start, { date: '2026-11-27', time: '02:00' }, twoHours, tz)).toEqual({
+      date: '2026-11-28',
+      time: '02:00',
+    });
+    // A later time on the start's own day stays on it, even from an earlier date.
+    expect(settleEnd(start, { date: '2026-11-20', time: '23:00' }, twoHours, tz)).toEqual({
+      date: '2026-11-27',
+      time: '23:00',
+    });
+    // The start itself is no window: the same clock a day later.
+    expect(settleEnd(start, { date: '2026-11-27', time: '22:00' }, twoHours, tz)).toEqual({
+      date: '2026-11-28',
+      time: '22:00',
+    });
+  });
+
+  it('fills an empty end with the start plus the kept length', () => {
+    expect(settleEnd(start, { date: '', time: '' }, twoHours, tz)).toEqual({
+      date: '2026-11-28',
+      time: '00:00',
+    });
+  });
+
+  it('leaves a half-typed or malformed end, and anything while the start cannot be read', () => {
+    expect(settleEnd(start, { date: '2026-11-', time: '02:00' }, twoHours, tz)).toBeNull();
+    expect(settleEnd(start, { date: '', time: '02:00' }, twoHours, tz)).toBeNull();
+    expect(settleEnd(start, { date: '2026-11-27', time: '' }, twoHours, tz)).toBeNull();
+    expect(settleEnd({ date: '', time: '22:00' }, { date: '', time: '' }, twoHours, tz)).toBeNull();
+  });
+
+  it('passes over a day on which the clocks skip that time', () => {
+    // New York springs forward at 02:00 on 14 March 2027, so 02:30 does not exist that day.
+    expect(
+      settleEnd(
+        { date: '2027-03-13', time: '03:00' },
+        { date: '2027-03-13', time: '02:30' },
+        twoHours,
+        'America/New_York',
+      ),
+    ).toEqual({ date: '2027-03-15', time: '02:30' });
+  });
+});
+
+describe('a step on the end', () => {
+  const tz = 'Asia/Tokyo';
+  const start = { date: '2026-11-27', time: '22:00' };
+  const twoHours = 2 * 3_600_000;
+  const now = Date.parse('2026-11-27T05:20:00Z');
+
+  it('steps like any end while it stays after the start', () => {
+    expect(stepEnd(start, { date: '2026-11-27', time: '22:30' }, 'minute', -1, twoHours, tz, now)).toEqual({
+      date: '2026-11-27',
+      time: '22:15',
+    });
+    expect(stepEnd(start, { date: '2026-11-27', time: '23:00' }, 'hour', 1, twoHours, tz, now)).toEqual({
+      date: '2026-11-28',
+      time: '00:00',
+    });
+  });
+
+  it('does not take the end to the start or before it', () => {
+    expect(stepEnd(start, { date: '2026-11-27', time: '23:00' }, 'hour', -1, twoHours, tz, now)).toBeNull();
+    expect(stepEnd(start, { date: '2026-11-27', time: '22:15' }, 'minute', -1, twoHours, tz, now)).toBeNull();
+    expect(stepEnd(start, { date: '2026-11-28', time: '02:00' }, 'day', -1, twoHours, tz, now)).toBeNull();
+  });
+
+  it('steps from where a just-typed end will settle', () => {
+    // 02:00 just typed beside the start's date: one hour up is the next day's 03:00.
+    expect(stepEnd(start, { date: '2026-11-27', time: '02:00' }, 'hour', 1, twoHours, tz, now)).toEqual({
+      date: '2026-11-28',
+      time: '03:00',
+    });
+  });
+
+  it('fills an empty end with the start plus the kept length and does not move it', () => {
+    expect(stepEnd(start, { date: '', time: '' }, 'hour', 1, twoHours, tz, now)).toEqual({
+      date: '2026-11-28',
+      time: '00:00',
     });
   });
 });

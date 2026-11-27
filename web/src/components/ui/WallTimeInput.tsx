@@ -130,11 +130,14 @@ interface DateProps {
   invalid?: boolean;
   /** What ▲ (1) and ▼ (-1) do; a day later or earlier when left out. */
   onStep?: (dir: StepDir) => void;
+  /** A date chosen from the calendar, taken at once rather than as typing; `onChange` when left
+   *  out. */
+  onPick?: (text: string) => void;
   /** The box's name when no `<label>` points at it. */
   'aria-label'?: string;
 }
 
-export function DateInput({ id, value, onChange, invalid, onStep, ...aria }: DateProps) {
+export function DateInput({ id, value, onChange, invalid, onStep, onPick, ...aria }: DateProps) {
   const { t } = useTranslation('common');
   const native = useRef<HTMLInputElement>(null);
   const parsed = parseDateText(value);
@@ -190,7 +193,7 @@ export function DateInput({ id, value, onChange, invalid, onStep, ...aria }: Dat
         value={iso}
         onChange={(e) => {
           const d = parseDateText(e.target.value);
-          if (d && d !== 'invalid') onChange(dateText(d));
+          if (d && d !== 'invalid') (onPick ?? onChange)(dateText(d));
         }}
       />
     </span>
@@ -305,8 +308,29 @@ export function WallTimeRows({ children }: { children: ReactNode }) {
   return <div className="wt-rows">{children}</div>;
 }
 
-export function WallTimeCols({ children }: { children: ReactNode }) {
-  return <div className="wt-cols">{children}</div>;
+/** `onLeave` runs when focus goes from one of the row's boxes to somewhere outside the row - the
+ *  moment the row's value is finished with (ADR-261 decision 41). Moving between its own boxes
+ *  and buttons does not count. */
+export function WallTimeCols({
+  children,
+  onLeave,
+}: {
+  children: ReactNode;
+  onLeave?: () => void;
+}) {
+  return (
+    <div
+      className="wt-cols"
+      onBlur={
+        onLeave &&
+        ((e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onLeave();
+        })
+      }
+    >
+      {children}
+    </div>
+  );
 }
 
 /** A zone's name in the last column, where the row above has the zone's button: its text starts

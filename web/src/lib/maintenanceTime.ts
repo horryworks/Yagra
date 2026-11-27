@@ -384,13 +384,33 @@ export function nextWholeHour(nowMs: number, tz: string): Wall {
   return addWallMinutes({ date: w.date, time: { hour: w.time.hour, minute: 0 } }, 60);
 }
 
+/** How long a new window is, and how far after the start an empty end box lands (decisions 37
+ *  and 40). */
+export const NEW_WINDOW_MINUTES = 60;
+
 /** What an empty end box becomes on its first press: an hour after the start, or after the next
  *  whole hour while the start cannot be read. Never the start itself, which is no window. */
 export function endBase(start: WallText, nowMs: number, tz: string): Wall {
   const d = parseDateText(start.date);
   const t = parseTimeText(start.time);
   const from = readable(d) && readable(t) ? { date: d, time: t } : nextWholeHour(nowMs, tz);
-  return addWallMinutes(from, 60);
+  return addWallMinutes(from, NEW_WINDOW_MINUTES);
+}
+
+/** The fields a new window opens with (decision 40): from the next whole hour on the clock in
+ *  `tz` to an hour after it - what pressing ▲ in both empty boxes would have put there. */
+export function newWindowFields(
+  nowMs: number,
+  tz: string,
+): { startDate: string; startTime: string; endDate: string; endTime: string } {
+  const start = nextWholeHour(nowMs, tz);
+  const end = addWallMinutes(start, NEW_WINDOW_MINUTES);
+  return {
+    startDate: dateText(start.date),
+    startTime: timeText(start.time),
+    endDate: dateText(end.date),
+    endTime: timeText(end.time),
+  };
 }
 
 /** Which way an arrow key steps a box, or `null` for any other key. */
@@ -483,4 +503,57 @@ export function followStart(start: WallText, length: number | null, tz: string):
 export function endAfter(start: WallText, minutes: number, tz: string): WallText | null {
   const s = fieldsInstant(start, tz);
   return s == null ? null : instantFields(s + minutes * 60_000, tz);
+}
+
+// ── The end is always after the start (ADR-261 decision 41) ─────────────────────────────────
+
+/** Where the end belongs once the operator has left it (decision 41): an end at or before the
+ *  start moves to the first time after the start that its clock reads the same (`02:00` for a
+ *  `22:00` start is the next day's), and an end with both boxes empty is the start plus `kept`.
+ *  `null` leaves it as it is - it is already after the start, the start cannot be read, or the
+ *  end is half typed or malformed, which stays an error rather than being guessed at. */
+export function settleEnd(
+  start: WallText,
+  end: WallText,
+  kept: number,
+  tz: string,
+): WallText | null {
+  const s = fieldsInstant(start, tz);
+  if (s == null) return null;
+  if (!end.date.trim() && !end.time.trim()) return instantFields(s + kept, tz);
+  const e = fieldsInstant(end, tz);
+  if (e == null || e > s) return null;
+  const time = parseTimeText(end.time);
+  const from = parseDateText(start.date);
+  if (!readable(time) || !readable(from)) return null;
+  // The start's own day first, then the days after it; a day on which that time is skipped by a
+  // clock change is passed over.
+  for (let day = 0; day < 3; day++) {
+    const date = addWallMinutes({ date: from, time: { hour: 0, minute: 0 } }, day * DAY_MINUTES).date;
+    const next = { date: dateText(date), time: timeText(time) };
+    const ms = fieldsInstant(next, tz);
+    if (ms != null && ms > s) return next;
+  }
+  return null;
+}
+
+/** One ▲▼ on the end (decision 41): stepped from where the end will settle, so a press right
+ *  after typing `02` for a `22:00` start moves the next day's `02:00`; `null` when the step would
+ *  put the end at or before the start, which the end does not go to. An end box that cannot be
+ *  read takes its half of the start plus `kept` and does not move (decision 37). */
+export function stepEnd(
+  start: WallText,
+  end: WallText,
+  unit: StepUnit,
+  dir: StepDir,
+  kept: number,
+  tz: string,
+  nowMs: number,
+): WallText | null {
+  const s = fieldsInstant(start, tz);
+  const base = s != null ? instantToWall(s + kept, tz) : endBase(start, nowMs, tz);
+  const from = fieldsInstant(end, tz) != null ? (settleEnd(start, end, kept, tz) ?? end) : end;
+  const next = stepWallText(from, unit, dir, base);
+  const e = fieldsInstant(next, tz);
+  return s != null && e != null && e <= s ? null : next;
 }
