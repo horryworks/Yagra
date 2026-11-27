@@ -6317,8 +6317,9 @@ export interface components {
             recorded_at: string;
             resolved: boolean;
             /**
-             * @description This row records an alert that had paged on its own being grouped into an outage (ADR-270).
-             *     It is still open: the row is neither a fire nor a resolve, and `resolved` is `false`.
+             * @description This row records an open alert being grouped into an outage (ADR-270): one that had paged on
+             *     its own, or a member moving into a wider outage from the one it sat in (Inc.4). It is still
+             *     open: the row is neither a fire nor a resolve, and `resolved` is `false`.
              */
             rolled_up: boolean;
             /**
@@ -13262,7 +13263,7 @@ export interface components {
          * @description Which point in an alert's life produced this notification.
          *
          *     Templates branch on it — a resolve usually wants different wording from a fire — so it is a
-         *     variable rather than three separate template fields.
+         *     variable rather than a separate template field for each point.
          * @enum {string}
          */
         NotifyEvent: "fire" | "resolve" | "suppress" | "update";
@@ -14069,7 +14070,7 @@ export interface components {
         /** @description A template to render against a representative alert. */
         PreviewRequest: {
             body?: string | null;
-            /** @description Which point in an alert's life to render: `fire`, `resolve`, or `suppress`. */
+            /** @description Which point in an alert's life to render: `fire`, `resolve`, `suppress`, or `update`. */
             event?: components["schemas"]["NotifyEvent"];
             /** @description As on the saved template: line breaks and indentation around the tags are layout. */
             free_layout?: boolean;
@@ -18036,7 +18037,7 @@ export interface operations {
                     "application/json": components["schemas"]["AlertHistoryView"][];
                 };
             };
-            /** @description A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder */
+            /** @description A cursor or range bound is not RFC 3339, `severity`/`state`/`phase` is not one of the listed values, or `site` names something that is not a Site folder */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -32568,7 +32569,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The built-in subject and body of a node alert as templates, for `fire`, `resolve` and `suppress` */
+            /** @description The built-in subject and body of a node alert as templates, for `fire`, `resolve`, `suppress` and `update` */
             200: {
                 headers: {
                     [name: string]: unknown;

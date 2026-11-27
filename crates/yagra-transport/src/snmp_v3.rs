@@ -217,7 +217,9 @@ async fn read_scalars<S: ScalarSession + ?Sized, T: Send + 'static>(
 ///
 /// As the v2c GET: `Ok(vec![])` means the agent answered and implements none of these OIDs,
 /// and a session that then heard nothing is [`TransportError::Silent`] (ADR-138 Increment 5).
-/// A device silent from the start fails engine discovery instead, as an `Io` error.
+/// A session whose every reply was an error is [`TransportError::Refused`] (ADR-268). A device
+/// silent from the start fails engine discovery instead, as [`TransportError::HandshakeTimeout`]
+/// (or [`TransportError::HandshakeRefused`] when that exchange was answered with an error).
 pub async fn snmp_get_v3(
     target: IpAddr,
     params: &SnmpV3Params,
@@ -240,7 +242,7 @@ pub async fn snmp_get_v3(
     // As the v2c GET: a session that opened and then heard nothing is reported as silent, so the
     // caller can tell it from an agent that answered `noSuchObject` to everything (ADR-138
     // Increment 5). A device that is silent from the start never reaches here — engine discovery
-    // in [`open_session`] fails first, as an `Io` error.
+    // in [`open_session`] fails first, as `HandshakeTimeout`.
     if budget.heard_nothing() {
         return Err(TransportError::Silent(target));
     }

@@ -3,8 +3,8 @@
 #   https://standards-oui.ieee.org/oui/oui.csv
 #   https://standards-oui.ieee.org/oui28/mam.csv
 #   https://standards-oui.ieee.org/oui36/oui36.csv
-# fetched: 2026-11-25
-# counts: MA-L=40451 MA-L-repeats-dropped=3 MA-M=6623 MA-S=7270 withheld=3
+# fetched: 2026-11-27
+# counts: MA-L=40454 MA-L-repeats-dropped=3 MA-M=6624 MA-S=7273 withheld=3
 000000	XEROX CORPORATION
 000001	XEROX CORPORATION
 000002	XEROX CORPORATION
@@ -14658,6 +14658,7 @@
 0C45BA	HUAWEI TECHNOLOGIES CO.,LTD
 0C45C6	IEEE Registration Authority
 0C45C61	Tianjin Umore Technology Co.，Ltd.
+0C45C63	ZEINDIA TECH PVT LTD
 0C45C64	Nokia
 0C45C6B	Hefei BOE Vision-electronic Technology Co.,Ltd.
 0C45C6D	Shenzhen Jingheng Digital Technology Co., Ltd.
@@ -37991,6 +37992,7 @@
 8C1F64A50	Simply Embededded Inc
 8C1F64A51	BABTEL
 8C1F64A52	TIAMA
+8C1F64A53	ON LX Limited
 8C1F64A56	Flextronics International Kft
 8C1F64A57	EkspertStroyProekt
 8C1F64A5A	UniPOS EOOD
@@ -38159,6 +38161,7 @@
 8C1F64B35	RADA Electronics Industries Ltd.
 8C1F64B36	Pneumax Spa
 8C1F64B37	Flextronics International Kft
+8C1F64B38	Foshan Xizhaode Technology Co., Ltd.
 8C1F64B3A	dream DNS
 8C1F64B3B	Sicon srl
 8C1F64B3C	Safepro AI Video Research Labs Pvt Ltd
@@ -38475,6 +38478,7 @@
 8C1F64CDA	SPX Flow Technology BV
 8C1F64CDB	EUROPEAN TELECOMMUNICATION INTERNATIONAL KFT
 8C1F64CDD	The Signalling Company
+8C1F64CDE	TFE
 8C1F64CDF	Canway Technology GmbH
 8C1F64CE0	Potter Electric Signal Co. LLC
 8C1F64CE2	Kova, Corp.
@@ -43605,6 +43609,7 @@ AC9A3F	Texas Instruments
 AC9A96	Maxlinear, Inc
 AC9B0A	Sony Corporation
 AC9B84	Smak Tecnologia e Automacao
+AC9BBC	Dongguan Edifier Esports Technology Co.,Ltd.
 AC9CE4	Alcatel-Lucent Shanghai Bell Co., Ltd
 AC9E17	ASUSTek COMPUTER INC.
 AC9FC3	Ring LLC
@@ -48501,6 +48506,7 @@ D0AA5FD	Level Up Holding Co., Inc.
 D0AA5FE	MBX International Ltd.
 D0AB4A	Telink Micro LLC
 D0ABD5	Intel Corporate
+D0ABDD	ProMik GmbH
 D0AD08	HP Inc.
 D0AE05	Xiaomi Communications Co Ltd
 D0AEEC	Alpha Networks Inc.
@@ -49394,6 +49400,7 @@ D85B22	Shenzhen Hohunet Technology Co., Ltd
 D85B27	WNC Corporation
 D85B2A	Samsung Electronics Co.,Ltd
 D85C11	Optiview USA
+D85CFE	Hewlett Packard Enterprise
 D85D4C	TP-LINK TECHNOLOGIES CO.,LTD.
 D85D84	CAx soft GmbH
 D85DE2	Hon Hai Precision Ind. Co.,Ltd.

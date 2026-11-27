@@ -478,12 +478,12 @@
         "allSides": "すべての場所"
       },
       "detail": {
-        "severity": "重大度:",
-        "error": "最後のエラー:",
+        "severity": "重大度",
+        "error": "最後のエラー",
         "response": "相手が返した内容:",
         "attemptOk": "受け付け",
-        "destination": "送り先:",
-        "route": "理由:"
+        "destination": "送り先",
+        "route": "理由"
       },
       "err": {
         "load": "配信ログを読み込めませんでした"

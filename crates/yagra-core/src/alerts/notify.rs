@@ -2234,26 +2234,12 @@ impl Notifier {
     }
 }
 
-/// Every border's rolled-up down nodes among `active`, each list in id order (ADR-270): what the
-/// engine puts on a border's fire, for a fire sent later from what is open. Built once per
-/// release pass, so a morning that releases many held fires reads `active` once, not once each.
+/// Every border's rolled-up down nodes among `active`: the engine's own answer, so a fire sent
+/// later from what is open names the members the engine would have put on it (ADR-270). Built
+/// once per release pass, so a morning that releases many held fires reads `active` once, not
+/// once each.
 fn members_by_border(active: &[Alert]) -> HashMap<NodeId, Vec<NodeId>> {
-    let mut out: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
-    for a in active
-        .iter()
-        .filter(|a| a.metric == crate::alerts::LIVENESS)
-    {
-        if let (Some(border), Some(node)) = (a.root_cause, a.node()) {
-            if node != border {
-                out.entry(border).or_default().push(node);
-            }
-        }
-    }
-    for members in out.values_mut() {
-        members.sort_by_key(|n| n.as_uuid());
-        members.dedup();
-    }
-    out
+    yagra_alert::engine::members_by_border(active)
 }
 
 /// What `border`'s fire carries, read from [`members_by_border`]: its members when it is a
@@ -4710,6 +4696,95 @@ mod delivery_tests {
         );
         assert_eq!(dflt.lock().unwrap().kinds(), ["fire"]);
         assert!(drain(&mut rx).is_empty(), "nothing to log");
+    }
+
+    /// A channel that tells an outage update from a fire.
+    struct Updater(Log);
+
+    #[async_trait]
+    impl NotifyChannel for Updater {
+        async fn deliver(&self, n: &Notification) -> Result<(), NotifyError> {
+            self.0.lock().unwrap().0.push(("fire", n.summary.clone()));
+            Ok(())
+        }
+        async fn deliver_update(&self, n: &Notification) -> Result<ResolveSent, NotifyError> {
+            self.0.lock().unwrap().0.push(("update", n.summary.clone()));
+            Ok(ResolveSent::Sent)
+        }
+    }
+
+    /// An email-shaped channel: an update has nothing to add to a message already sent.
+    struct NoUpdate(Log);
+
+    #[async_trait]
+    impl NotifyChannel for NoUpdate {
+        async fn deliver(&self, n: &Notification) -> Result<(), NotifyError> {
+            self.0.lock().unwrap().0.push(("fire", n.summary.clone()));
+            Ok(())
+        }
+        async fn deliver_update(&self, _n: &Notification) -> Result<ResolveSent, NotifyError> {
+            Ok(ResolveSent::NothingToSend)
+        }
+    }
+
+    /// ADR-270 decision 3, through `Notifier::handle`: an outage update reaches only the channels
+    /// holding the border's incident, is logged there as an `update` sent because of that open
+    /// incident, and a channel with nothing to send for it (an email) leaves no row.
+    #[tokio::test]
+    async fn an_update_reaches_the_channels_holding_the_incident_and_is_logged_so() {
+        let n = Notifier::with_default(None);
+        let (dlog, mut rx) = crate::alerts::notification_log::DeliveryLog::for_test();
+        n.set_delivery_log(dlog);
+        let (paged, mail, other) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let (paged_log, mail_log, other_log) = (log(), log(), log());
+        n.install_routing(
+            vec![
+                built(paged, Updater(paged_log.clone())),
+                built(mail, NoUpdate(mail_log.clone())),
+                built(other, Updater(other_log.clone())),
+            ],
+            // The first open rule that matches decides (ADR-262 decision 14), so one rule sends the
+            // critical fire to both channels.
+            vec![
+                RoutingRule {
+                    channel_ids: vec![paged, mail],
+                    ..rule(paged, Some(Severity::Critical))
+                },
+                rule(other, Some(Severity::Warning)),
+            ],
+        );
+        let border = alert(NodeId::new(), Severity::Critical, None);
+        n.handle(NotifyAction::Fire(border.clone())).await;
+        drain(&mut rx);
+
+        n.handle(NotifyAction::Update(Alert {
+            grouped: vec![NodeId::new()],
+            ..border
+        }))
+        .await;
+        assert_eq!(paged_log.lock().unwrap().kinds(), ["fire", "update"]);
+        assert_eq!(
+            mail_log.lock().unwrap().kinds(),
+            ["fire"],
+            "an email has nothing to add"
+        );
+        assert!(
+            other_log.lock().unwrap().kinds().is_empty(),
+            "never paged, so it holds no incident to add to"
+        );
+        let rows = drain(&mut rx);
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the channel that sent the update is on the log"
+        );
+        assert_eq!(rows[0].channel_id, Some(paged));
+        assert_eq!(
+            rows[0].event,
+            crate::alerts::notification_log::DeliveryEvent::Update
+        );
+        assert_eq!(rows[0].route, DeliveryRoute::OpenIncident);
+        assert!(rows[0].delivered);
     }
 
     /// ADR-269 decision 3: a fire a rule wanted held, with nowhere to hold it, goes to every

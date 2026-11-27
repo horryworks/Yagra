@@ -397,7 +397,7 @@ impl DeliveryLogRepo {
         Self { pool }
     }
 
-    /// Insert a batch. 20 columns ×[`WRITE_BATCH_MAX`] stays far under PostgreSQL's
+    /// Insert a batch. 21 columns ×[`WRITE_BATCH_MAX`] stays far under PostgreSQL's
     /// 65,535-parameter ceiling.
     pub(crate) async fn insert(&self, records: &[DeliveryRecord]) -> anyhow::Result<u64> {
         if records.is_empty() {

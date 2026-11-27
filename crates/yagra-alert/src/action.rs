@@ -125,8 +125,9 @@ impl From<bool> for HistoryEvent {
 /// **[`NotifyAction::Suppress`] writes a [`HistoryEvent::RolledUp`] row since ADR-270** (it wrote
 /// none before, so the moment an alert that had paged was grouped into an outage left no trace once
 /// the alerts closed). It is not a resolve — the node is still down, and the eventual real recovery
-/// is what records one. Only the poll path produces it: pool coverage, interface utilisation and
-/// events never reach `resweep_suppression`.
+/// is what records one. The poll path produces it, and so does a configuration change through
+/// [`AlertManager::regroup`](crate::engine::AlertManager::regroup), whose actions reach History the
+/// same way; pool coverage, interface utilisation and events never reach `reattribute`.
 ///
 /// **[`NotifyAction::Update`] returns `None`**: the members of an open outage changed, its
 /// lifecycle did not, and History reads the members from the members' own rows.

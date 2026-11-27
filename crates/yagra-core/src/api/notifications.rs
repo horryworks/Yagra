@@ -841,7 +841,7 @@ fn check_template_size(template: &ChannelTemplate) -> Result<(), ApiError> {
 pub(super) struct PreviewRequest {
     /// The channel kind the template is for. Decides whether the body has to be valid JSON.
     kind: ChannelKind,
-    /// Which point in an alert's life to render: `fire`, `resolve`, or `suppress`.
+    /// Which point in an alert's life to render: `fire`, `resolve`, `suppress`, or `update`.
     #[serde(default = "default_event")]
     event: NotifyEvent,
     /// Which representative alert to render against: `threshold` (a port over its threshold, every
@@ -1008,7 +1008,7 @@ pub(super) struct BuiltinTemplateQuery {
     get, path = "/api/v1/notification-channels/builtin-template", tag = "notifications",
     params(BuiltinTemplateQuery),
     responses(
-        (status = 200, description = "The built-in subject and body of a node alert as templates, for `fire`, `resolve` and `suppress`", body = Vec<BuiltinSubjectTemplate>),
+        (status = 200, description = "The built-in subject and body of a node alert as templates, for `fire`, `resolve`, `suppress` and `update`", body = Vec<BuiltinSubjectTemplate>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
     ),

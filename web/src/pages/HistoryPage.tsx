@@ -319,9 +319,9 @@ function HistoryTransitions() {
           // same subject and check, in the same millisecond, collided — and a duplicate React key is
           // a silent misrender rather than an error.
           rowKey={(r) => r.id}
-          onRowClick={(r) => {
-            if (hasDetail(r, canDeliveries)) setOpen((cur) => (cur === r.id ? null : r.id));
-          }}
+          // Only a row with something to open looks pressable (ADR-270).
+          rowClickable={(r) => hasDetail(r, canDeliveries)}
+          onRowClick={(r) => setOpen((cur) => (cur === r.id ? null : r.id))}
           expanded={(r) =>
             open === r.id ? <HistoryRowDetail row={r} rows={rows} nodeName={nodeName} /> : null
           }

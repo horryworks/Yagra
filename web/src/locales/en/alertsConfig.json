@@ -481,12 +481,12 @@
         "allSides": "Anywhere"
       },
       "detail": {
-        "severity": "Severity:",
-        "error": "Last error:",
+        "severity": "Severity",
+        "error": "Last error",
         "response": "The service answered:",
         "attemptOk": "accepted",
-        "destination": "Sent to:",
-        "route": "Why:"
+        "destination": "Sent to",
+        "route": "Why"
       },
       "err": {
         "load": "failed to load the delivery log"

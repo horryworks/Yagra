@@ -16,6 +16,7 @@ import type { DeliveryRow, NotificationChannel } from '../types/api';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ListToolbar } from '../components/ui/ListToolbar';
 import { Badge } from '../components/ui/Badge';
+import { Facts, type Fact } from '../components/ui/Facts';
 import { Button } from '../components/ui/Button';
 import { EntityName } from '../components/ui/EntityName';
 import { ClippedText } from '../components/ui/ClippedText';
@@ -135,33 +136,52 @@ function columnsFor(
   return cols;
 }
 
-/** What a row shows when it is opened: the verdict, every attempt, and what the remote answered. */
-export function DeliveryDetail({ row }: { row: DeliveryRow }) {
+/** What a row shows when it is opened: the verdict, every attempt, and what the remote answered.
+ *  `nested` is for inside another opened row (History's), which already carries the frame. */
+export function DeliveryDetail({ row, nested = false }: { row: DeliveryRow; nested?: boolean }) {
   const { t } = useTranslation('alertsConfig');
-  return (
-    <div className="routing-log-detail">
-      {row.side && <p className="routing-log-verdict">{t(sideExplanationKey(row.side))}</p>}
-      {row.destination && (
-        <p className="routing-log-line">
-          {t('routing.log.detail.destination')} <span className="mono">{row.destination}</span>
-        </p>
-      )}
-      {row.route && (
-        <p className="routing-log-line">
-          {t('routing.log.detail.route')} {t(`routing.log.route.${row.route}`)}
+  const facts: Fact[] = [];
+  if (row.destination) {
+    facts.push({
+      key: 'destination',
+      label: t('routing.log.detail.destination'),
+      value: <span className="mono">{row.destination}</span>,
+    });
+  }
+  if (row.route) {
+    facts.push({
+      key: 'route',
+      label: t('routing.log.detail.route'),
+      value: (
+        <>
+          {t(`routing.log.route.${row.route}`)}
           {row.route_rules.length > 0 && ` — ${row.route_rules.map((r) => r.name).join(', ')}`}
-        </p>
-      )}
-      {row.severity && (
-        <p className="routing-log-line">
-          {t('routing.log.detail.severity')}{' '}
-          <Badge tone={SEVERITY_TONE[row.severity]}>{severityLabel(row.severity)}</Badge>
-        </p>
-      )}
-      {row.error && (
-        <p className="routing-log-line">
-          {t('routing.log.detail.error')} <span className="mono">{row.error}</span>
-        </p>
+        </>
+      ),
+    });
+  }
+  if (row.severity) {
+    facts.push({
+      key: 'severity',
+      label: t('routing.log.detail.severity'),
+      value: <Badge tone={SEVERITY_TONE[row.severity]}>{severityLabel(row.severity)}</Badge>,
+    });
+  }
+  if (row.error) {
+    facts.push({
+      key: 'error',
+      label: t('routing.log.detail.error'),
+      value: <span className="mono">{row.error}</span>,
+    });
+  }
+  return (
+    // Nested, the frame and the type size are the opened row's around it.
+    <div className={nested ? undefined : 'routing-log-detail'}>
+      {row.side && <p className="routing-log-verdict">{t(sideExplanationKey(row.side))}</p>}
+      {facts.length > 0 && (
+        <div className="routing-log-line">
+          <Facts items={facts} />
+        </div>
       )}
       {row.response && (
         <div className="routing-log-line">
@@ -190,7 +210,8 @@ export function DeliveryDetail({ row }: { row: DeliveryRow }) {
 }
 
 /** The Notifications view of Alerts ▸ History. The channel list is what the channel filter offers;
- *  a channel row on Notification delivery links here with `?channel=<id>` (`deliveryLogFor`). */
+ *  a channel row on Notification delivery links here with `?view=deliveries&sent.channel=<id>`
+ *  (`deliveryLogFor`). */
 export function DeliveryLogView() {
   const channels = useLoad<NotificationChannel[]>(() => api.listNotificationChannels(), [], {
     initial: [],

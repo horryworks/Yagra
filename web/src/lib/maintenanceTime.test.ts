@@ -32,7 +32,6 @@ import {
   requesterClock,
   targetZone,
   tonightStart,
-  wallLine,
   weekdayOf,
   windowFields,
   windowName,
@@ -198,12 +197,6 @@ describe('tonightStart', () => {
 });
 
 describe('the lines the dialog shows', () => {
-  it('names the end on the chosen clock', () => {
-    expect(wallLine(Date.parse('2026-11-21T05:00:00Z'), 'America/New_York')).toBe(
-      '2026-11-21 Sat 00:00 EST',
-    );
-  });
-
   it('shows the viewer’s own range, with the date on the end only when it is another day', () => {
     const start = Date.parse('2026-11-21T03:00:00Z');
     // The abbreviation is whatever this runtime's Intl calls Tokyo (`JST` or `GMT+9`).

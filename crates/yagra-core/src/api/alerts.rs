@@ -351,7 +351,7 @@ pub(crate) struct HistoryQuery {
     params(HistoryQuery),
     responses(
         (status = 200, description = "A page of history rows, newest first; empty when this deployment keeps no history", body = Vec<AlertHistoryView>),
-        (status = 400, description = "A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder", body = super::error::ErrorBody),
+        (status = 400, description = "A cursor or range bound is not RFC 3339, `severity`/`state`/`phase` is not one of the listed values, or `site` names something that is not a Site folder", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
         (status = 404, description = "The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row that opened an outage of a node the caller can see", body = super::error::ErrorBody),

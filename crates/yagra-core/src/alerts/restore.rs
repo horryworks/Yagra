@@ -157,10 +157,12 @@ fn read(
 
 /// One stored transition, read back as the alert the engine was holding.
 ///
-/// Two fields are not stored and are re-derived rather than guessed:
+/// Two fields are re-derived rather than read back, and one is not stored at all:
 ///
-/// - **`root_cause`** — [`AlertManager::restore`] re-derives it from the restored down set, because
-///   it needs every liveness row before it can answer for any one alert.
+/// - **`root_cause`** — stored since migration 0193, but deliberately not read back:
+///   [`AlertManager::restore`] re-derives it from the restored down set, because it needs every
+///   liveness row before it can answer for any one alert, and the grouping may have changed.
+/// - **`snmp_failure`** — not stored; a restored alert carries none.
 /// - **`flapping`** — starts `false`. The flap detector's window is a property of the running
 ///   process, and a restart genuinely has no flap history to carry.
 fn alert_from_row(row: AlertHistoryRow) -> Option<Alert> {

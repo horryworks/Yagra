@@ -794,7 +794,8 @@ impl SnmpWalker {
 /// name and kind; a bare OID falls back to the poller's built-in naming), and run the identity
 /// probe when it was asked for and the agent answered — with values or without (ADR-138
 /// Increment 5). The transport tells the two apart from a device that answered nothing
-/// ([`TransportError::Silent`]), which gets the same `Unreachable` and no probe.
+/// ([`TransportError::Silent`]) and one whose every reply was an error
+/// ([`TransportError::Refused`], ADR-268): both get the same `Unreachable` and no probe.
 ///
 /// The v2c and v3 arms of [`execute`] used to carry a copy of this each — ~48 lines apiece that
 /// differed only in the credential type and which transport method was called. The table path had

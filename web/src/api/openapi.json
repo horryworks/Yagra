@@ -660,7 +660,7 @@
             }
           },
           "400": {
-            "description": "A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder",
+            "description": "A cursor or range bound is not RFC 3339, `severity`/`state`/`phase` is not one of the listed values, or `site` names something that is not a Site folder",
             "content": {
               "application/json": {
                 "schema": {
@@ -19238,7 +19238,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The built-in subject and body of a node alert as templates, for `fire`, `resolve` and `suppress`",
+            "description": "The built-in subject and body of a node alert as templates, for `fire`, `resolve`, `suppress` and `update`",
             "content": {
               "application/json": {
                 "schema": {
@@ -29595,7 +29595,7 @@
           },
           "rolled_up": {
             "type": "boolean",
-            "description": "This row records an alert that had paged on its own being grouped into an outage (ADR-270).\nIt is still open: the row is neither a fire nor a resolve, and `resolved` is `false`."
+            "description": "This row records an open alert being grouped into an outage (ADR-270): one that had paged on\nits own, or a member moving into a wider outage from the one it sat in (Inc.4). It is still\nopen: the row is neither a fire nor a resolve, and `resolved` is `false`."
           },
           "root_cause": {
             "type": [
@@ -43771,7 +43771,7 @@
       },
       "NotifyEvent": {
         "type": "string",
-        "description": "Which point in an alert's life produced this notification.\n\nTemplates branch on it — a resolve usually wants different wording from a fire — so it is a\nvariable rather than three separate template fields.",
+        "description": "Which point in an alert's life produced this notification.\n\nTemplates branch on it — a resolve usually wants different wording from a fire — so it is a\nvariable rather than a separate template field for each point.",
         "enum": [
           "fire",
           "resolve",
@@ -45431,7 +45431,7 @@
           },
           "event": {
             "$ref": "#/components/schemas/NotifyEvent",
-            "description": "Which point in an alert's life to render: `fire`, `resolve`, or `suppress`."
+            "description": "Which point in an alert's life to render: `fire`, `resolve`, `suppress`, or `update`."
           },
           "free_layout": {
             "type": "boolean",

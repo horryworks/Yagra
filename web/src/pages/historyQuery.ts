@@ -30,7 +30,8 @@ import type { HistoryPhase } from './historyRow';
 
 /** The phases the column offers: the API's `phase` tokens (ADR-270 Inc.4). A roll-up is a phase
  *  of its own, so "fired" asks for fires and not for the rows written when an alert was grouped
- *  into an outage. */
+ *  into an outage. ⚠️ Keep the array on one line: a Rust test reads it against `HistoryPhase::ALL`
+ *  (`alerts/history.rs`). */
 export const HISTORY_PHASES = ['fired', 'cleared', 'rolled_up'] as const;
 export type HistoryPhaseToken = (typeof HISTORY_PHASES)[number];
 

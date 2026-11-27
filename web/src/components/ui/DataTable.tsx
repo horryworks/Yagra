@@ -65,6 +65,10 @@ interface Props<T> {
   onReachEnd?: () => void;
   /** Row click (drill-down). */
   onRowClick?: (row: T) => void;
+  /** Which rows `onRowClick` answers, when not every row does: a row it rejects gets no pointer
+   *  and no click, so a row that opens nothing does not look as if it would. Every row when left
+   *  out. */
+  rowClickable?: (row: T) => boolean;
   /** Extra class(es) for one row — for a *state* the row is in, never for layout.
    *
    *  Added by ADR-053 Inc.5 so the Routing tables could keep their `is-muted` row while moving off
@@ -181,6 +185,7 @@ export function DataTable<T>({
   rowKey,
   onReachEnd,
   onRowClick,
+  rowClickable,
   rowClass,
   empty,
   loading,
@@ -436,6 +441,8 @@ export function DataTable<T>({
           <div className="dt-body" style={{ height: virtualizer.getTotalSize() }}>
             {items.map((vi) => {
               const row = rows[vi.index];
+              const onClick =
+                onRowClick && (rowClickable?.(row) ?? true) ? () => onRowClick(row) : undefined;
               if (cardMode) {
                 // Variable-height card: measured by the virtualizer (data-index + measureElement).
                 const cardBody = renderCard ? (
@@ -458,10 +465,10 @@ export function DataTable<T>({
                       id={rowKey(row)}
                       data-index={vi.index}
                       extraRef={virtualizer.measureElement}
-                      className={onRowClick ? 'dt-card clickable' : 'dt-card'}
+                      className={onClick ? 'dt-card clickable' : 'dt-card'}
                       offsetY={vi.start}
                       disabled={sortable.disabled}
-                      onClick={onRowClick ? () => onRowClick(row) : undefined}
+                      onClick={onClick}
                     >
                       {cardBody}
                     </SortableItem>
@@ -472,9 +479,9 @@ export function DataTable<T>({
                     key={rowKey(row)}
                     data-index={vi.index}
                     ref={virtualizer.measureElement}
-                    className={onRowClick ? 'dt-card clickable' : 'dt-card'}
+                    className={onClick ? 'dt-card clickable' : 'dt-card'}
                     style={{ transform: `translateY(${vi.start}px)` }}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    onClick={onClick}
                   >
                     {cardBody}
                   </div>
@@ -491,7 +498,7 @@ export function DataTable<T>({
                 // decoration — a taller cell without this class overflows into the next row
                 // rather than pushing it down.
                 autoRowHeight ? 'dt-row-auto' : '',
-                onRowClick ? 'clickable' : '',
+                onClick ? 'clickable' : '',
                 rowClass?.(row) ?? '',
               ]
                 .filter(Boolean)
@@ -507,7 +514,7 @@ export function DataTable<T>({
                     style={{ gridTemplateColumns: template }}
                     offsetY={vi.start}
                     disabled={sortable.disabled}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    onClick={onClick}
                   >
                     {cells}
                   </SortableItem>
@@ -528,7 +535,7 @@ export function DataTable<T>({
                       gridTemplateColumns: template,
                       transform: `translateY(${vi.start}px)`,
                     }}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    onClick={onClick}
                   >
                     {cells}
                   </div>
@@ -549,7 +556,7 @@ export function DataTable<T>({
                   <div
                     className={rowCls}
                     style={{ gridTemplateColumns: template }}
-                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                    onClick={onClick}
                   >
                     {cells}
                   </div>

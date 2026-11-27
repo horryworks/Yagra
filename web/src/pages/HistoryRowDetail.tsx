@@ -16,6 +16,7 @@ import { useCan } from '../store';
 import { nodeHref } from '../lib/entityHref';
 import { channelLabel, resultTone, routeText } from './deliveryLogQuery';
 import { DeliveryDetail } from './DeliveryLog';
+import './DeliveryLog.css';
 import {
   deliveriesOf,
   deliveryQueryOf,
@@ -103,7 +104,7 @@ export function HistoryRowDetail({
                 </Badge>{' '}
                 <span className="muted">{routeText(tc, d)}</span>
               </span>
-              {d.result === 'failed' && <DeliveryDetail row={d} />}
+              {d.result === 'failed' && <DeliveryDetail row={d} nested />}
             </Stack>
           ))}
         </Stack>
@@ -116,7 +117,17 @@ export function HistoryRowDetail({
     items.push({ key: 'sent', label: t('history.detail.notifications'), value });
   }
   if (items.length === 0) {
-    return pending ? null : <span className="muted">{t('history.detail.nothing')}</span>;
+    if (pending) return null;
+    return (
+      <div className="routing-log-detail">
+        <span className="muted">{t('history.detail.nothing')}</span>
+      </div>
+    );
   }
-  return <Facts items={items} />;
+  // The same frame as an opened row of the Notifications view beside it.
+  return (
+    <div className="routing-log-detail">
+      <Facts items={items} />
+    </div>
+  );
 }

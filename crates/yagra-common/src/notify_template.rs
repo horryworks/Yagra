@@ -29,7 +29,7 @@ use std::fmt;
 /// Which point in an alert's life produced this notification.
 ///
 /// Templates branch on it — a resolve usually wants different wording from a fire — so it is a
-/// variable rather than three separate template fields.
+/// variable rather than a separate template field for each point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum NotifyEvent {

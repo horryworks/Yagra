@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Alert history persistence (Workstream #3).
 //!
-//! Appends one row per alert fire/resolve so the lifecycle is durable beyond the in-memory
+//! Appends one row per alert fire/resolve, and one when an open alert is grouped into an outage
+//! (ADR-270), so the lifecycle is durable beyond the in-memory
 //! active set. Live-only (PostgreSQL); the read endpoint returns an empty list in skeleton
 //! mode.
 
@@ -94,8 +95,9 @@ pub struct AlertHistoryRow {
     /// was not grouped, and on every row recorded before this was kept.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_cause: Option<Uuid>,
-    /// This row records an alert that had paged on its own being grouped into an outage (ADR-270).
-    /// It is still open: the row is neither a fire nor a resolve, and `resolved` is `false`.
+    /// This row records an open alert being grouped into an outage (ADR-270): one that had paged on
+    /// its own, or a member moving into a wider outage from the one it sat in (Inc.4). It is still
+    /// open: the row is neither a fire nor a resolve, and `resolved` is `false`.
     pub rolled_up: bool,
 }
 
@@ -520,9 +522,9 @@ impl AlertHistoryStore {
         Ok(())
     }
 
-    /// Append a **batch** of fire/resolve records in one multi-row INSERT (the async ingest writer,
-    /// ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot path; a DB
-    /// hiccup must not stop alerting. 14 columns × the writer's batch cap stays well under Postgres'
+    /// Append a **batch** of fire/resolve/roll-up records in one multi-row INSERT (the async ingest
+    /// writer, ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot
+    /// path; a DB hiccup must not stop alerting. 18 columns × the writer's batch cap stays well under Postgres'
     /// 65535-parameter ceiling. Returns rows inserted.
     pub async fn record_batch<E: Copy + Into<HistoryEvent>>(
         &self,
@@ -839,6 +841,10 @@ impl AlertHistoryStore {
     /// `coalesce` to the nil UUID makes the row comparison degrade to the timestamp, because no
     /// UUID sorts below nil. That keeps an N-1 client — which sends only `before` — correct rather
     /// than empty-handed.
+    ///
+    /// Fires and clears only. A roll-up row (ADR-270) is neither: it records an alert that stays
+    /// open being grouped into an outage, and it carries the time of the fire it follows, so read
+    /// as a transition it would show that fire a second time.
     pub async fn recent(
         &self,
         limit: i64,
@@ -849,6 +855,7 @@ impl AlertHistoryStore {
             before,
             before_id,
             limit,
+            phase: vec![HistoryPhase::Fired, HistoryPhase::Cleared],
             ..HistoryFilter::default()
         })
         .await
@@ -1285,6 +1292,30 @@ mod tests {
         assert_eq!(HistoryPhase::from_token("resolved"), None);
     }
 
+    /// The History screen's Event column offers `HISTORY_PHASES` (`web/src/pages/historyQuery.ts`),
+    /// which the API document cannot carry: `phase` is a plain string list. A token the screen
+    /// offers and the API does not know answers 400 for the whole page; one the API gains and the
+    /// screen does not list is never offered. ⚠️ It reads the TS array from one line.
+    #[test]
+    fn the_history_screen_offers_exactly_the_phases_the_api_takes() {
+        let ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../web/src/pages/historyQuery.ts"),
+        )
+        .expect("web/src/pages/historyQuery.ts");
+        let line = ts
+            .lines()
+            .find(|l| l.contains("export const HISTORY_PHASES"))
+            .expect("HISTORY_PHASES is declared in historyQuery.ts");
+        let listed: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+        let ours: Vec<&str> = HistoryPhase::ALL.iter().map(|p| p.as_str()).collect();
+        assert_eq!(ours.len(), 3, "the published tokens");
+        assert_eq!(
+            listed, ours,
+            "historyQuery.ts lists exactly these, in this order"
+        );
+    }
+
     #[test]
     fn the_history_filter_binds_every_placeholder_it_names() {
         // Positional and silent when wrong: swapping two binds still compiles, still runs, and just
@@ -1682,6 +1713,12 @@ mod tests {
             .await
             .expect("read");
         assert_eq!(either.len(), 2);
+
+        // The latest transitions are fires and clears: the roll-up is left out, not shown as a
+        // second fire of ap-02 at its first fire's time.
+        let recent = store.recent(100, None, None).await.expect("read");
+        assert_eq!(recent.len(), 5);
+        assert!(recent.iter().all(|r| !r.rolled_up));
 
         // A roll-up is not a fire: three fires about ap-02, sw-01, ap-01, plus ap-03 later.
         let counted: i64 = store

@@ -138,7 +138,6 @@ export const WINDOW_LENGTHS = [
   { key: '4h', minutes: 240 },
   { key: '8h', minutes: 480 },
 ] as const;
-export type WindowLengthKey = (typeof WINDOW_LENGTHS)[number]['key'];
 
 /** The hour the "Tonight" button starts at, in the chosen zone. Fixed, not remembered (decision 5). */
 export const TONIGHT_HOUR = 22;
@@ -196,13 +195,6 @@ export function windowTimes(input: WindowTimeInput): WindowTimes {
 
 /** The weekday names the date line uses. English codes, like the zone abbreviation beside them. */
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-
-/** `2026-11-21 Sat 00:00 EST` - an instant on a clock in `tz`. */
-export function wallLine(ms: number, tz: string): string {
-  const w = wallClock(ms, tz);
-  const date = dateText({ year: w.year, month: w.month, day: w.day });
-  return `${date} ${WEEKDAYS[w.weekday]} ${timeText(w)} ${zoneAbbreviation(tz, ms)}`;
-}
 
 /** The weekday of a typed date, shown beside the box (`Fri`), or `''` for an unreadable one. */
 export function weekdayOf(text: string): string {

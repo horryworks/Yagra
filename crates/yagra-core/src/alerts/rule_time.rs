@@ -3,8 +3,8 @@
 //!
 //! A rule's window is read in the local time of the node an alert is about: its nearest folder's
 //! zone, else the deployment's default (ADR-226 decision 5, kept). Where an alert goes is one
-//! judgement, [`route_at`], shared by the notifier (who to send to, or whether to hold) and the
-//! screens that say "goes to NOC mail until 17:20" beside a site's clock, so the two cannot
+//! judgement, [`decide_local`], shared by the notifier through [`decide_at`] (who to send to, or
+//! whether to hold) and by [`route_at`] for the screens that say "goes to NOC mail until 17:20" beside a site's clock, so the two cannot
 //! disagree. Pure: the zones are handed in by the refresh that reads them.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};

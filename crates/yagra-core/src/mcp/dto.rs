@@ -201,7 +201,7 @@ pub struct AlertDto {
     /// was answered with an error), `no_answer` (nothing came back; on SNMPv2c a wrong community
     /// looks the same), `refused` (every request was answered with an error, e.g. authentication),
     /// `no_values` (the agent answered and none of the objects asked for exist on it) or
-    /// `send_failed`. `null` on every other alert, and on one whose poller or restart left no
+    /// `send_failed`. Absent on every other alert, and on one whose poller or restart left no
     /// reason. It is the reason at the poll that fired the alert, not updated while it stays open.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snmp_failure: Option<String>,
@@ -307,8 +307,9 @@ pub struct AlertHistoryDto {
     pub grouped_under: Option<Uuid>,
     /// That node's name now; `null` when it cannot be named.
     pub grouped_under_name: Option<String>,
-    /// `true` on the row written when an alert that had already paged was grouped into an
-    /// outage: it is still open, so the row is neither a fire nor a resolve.
+    /// `true` on the row written when an open alert was grouped into an outage: one that had
+    /// already paged, or a member moving into a wider outage from the one it sat in. It is still
+    /// open, so the row is neither a fire nor a resolve.
     pub rolled_up: bool,
 }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The notes beside an active alert — its cause, why an SNMP GET came back empty, flapping, and the
-// two holds (ADR-243 decision 5, ADR-268).
+// The notes beside an active alert — its cause, the nodes its outage groups, why an SNMP GET came
+// back empty, flapping, and the two holds (ADR-243 decision 5, ADR-268, ADR-270).
 // Which notes a row carries is `lib/alertNotes.ts`; this file only draws them. The Active alerts
 // table stacks them one per line; the dashboard widget's compact row lays them side by side.
 

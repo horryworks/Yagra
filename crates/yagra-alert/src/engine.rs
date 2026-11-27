@@ -1194,18 +1194,10 @@ impl AlertManager {
         if !groups {
             return Vec::new();
         }
-        let mut members: Vec<NodeId> = self
-            .active
-            .lock()
-            .expect("alerts mutex poisoned")
-            .values()
-            .filter(|a| a.metric == LIVENESS && a.root_cause == Some(border))
-            .filter_map(Alert::node)
-            .filter(|n| *n != border)
-            .collect();
-        members.sort_by_key(|n| n.as_uuid());
-        members.dedup();
-        members
+        let active = self.active.lock().expect("alerts mutex poisoned");
+        members_by_border(active.values())
+            .remove(&border)
+            .unwrap_or_default()
     }
 
     /// Put the outage's members on what is about to leave the engine (ADR-270 decisions 1-3).
@@ -2000,7 +1992,8 @@ impl AlertManager {
     /// Judge every open liveness alert's roll-up again against the config now installed (ADR-236):
     /// a new grouping level, or a link the derivation just found, changes who is rolled up into whom
     /// for an outage that is already open. The caller delivers the returned actions — a `Suppress`
-    /// for an alert now rolled up, a `Fire` for one that pages on its own again.
+    /// for an alert now rolled up, a `Fire` for one that pages on its own again, and a `Regroup`
+    /// for a member that moved from one outage to another (ADR-270 Inc.4).
     pub fn regroup(&self) -> Vec<NotifyAction> {
         let actions = self.reattribute(None);
         self.finish_grouping(actions, yagra_common::clock::now_unix_ms())
@@ -3680,6 +3673,29 @@ fn breach_for(severity: Severity, ev: ThresholdEval) -> Breach {
         threshold,
         direction: ev.direction,
     }
+}
+
+/// Every border's members among `alerts`, each list in id order without repeats (ADR-270): the
+/// down nodes whose liveness alert is rolled up into another node's outage. The one answer to
+/// "who is in this outage" - the engine reads it for a border's fire ([`AlertManager`]'s
+/// `grouped_under`), and core's notifier for a held fire it sends later from what is open, so the
+/// two cannot name different members.
+pub fn members_by_border<'a>(
+    alerts: impl IntoIterator<Item = &'a Alert>,
+) -> HashMap<NodeId, Vec<NodeId>> {
+    let mut out: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    for a in alerts.into_iter().filter(|a| a.metric == LIVENESS) {
+        if let (Some(border), Some(node)) = (a.root_cause, a.node()) {
+            if node != border {
+                out.entry(border).or_default().push(node);
+            }
+        }
+    }
+    for members in out.values_mut() {
+        members.sort_by_key(|n| n.as_uuid());
+        members.dedup();
+    }
+    out
 }
 
 #[cfg(test)]

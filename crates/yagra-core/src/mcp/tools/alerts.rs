@@ -191,9 +191,10 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
+        description = "Recent alert history (fires, clears, and the rows written when an open \
+                       alert was grouped into an outage), newest first. `limit` is 1–1000 \
                        (default 100). Narrow with `severity` and `state` (each comma-separated for \
-                       several values), `resolved` (false=fires, true=clears), `phase` (fired, cleared, rolled_up), `metric` (substring of the metric name or the alert's name), \
+                       several values), `resolved` (false=still open, true=clears), `phase` (fired, cleared, rolled_up), `metric` (substring of the metric name or the alert's name), \
                        `node_id`, `node_q` (substring of the node's name), `group_id` (that folder \
                        and everything beneath it), `site` (Site folder ids, comma-separated) and `since`/`until` — the window to search, which \
                        is separate from the cursor. To page, pass the oldest returned row's \
