@@ -16,6 +16,7 @@
 // occurrence, and the "your time" line shows which instant that is.
 
 import { wallClock, wallInstants, utcOffsetText, zoneAbbreviation } from './timeZone';
+import { isImeComposing, type ImeKeyEvent } from './ime';
 
 export interface DateParts {
   year: number;
@@ -127,7 +128,8 @@ export function windowFields(
   return { startDate: start.date, startTime: start.time, endDate: end.date, endTime: end.time };
 }
 
-/** The length buttons (ADR-261 decision 5), in minutes. `custom` is "pick the end yourself". */
+/** The shortcuts under the end (ADR-261 decision 33, which replaced decision 5's length
+ *  buttons): each fills the end with the start plus its length. */
 export const WINDOW_LENGTHS = [
   { key: '30m', minutes: 30 },
   { key: '1h', minutes: 60 },
@@ -135,12 +137,7 @@ export const WINDOW_LENGTHS = [
   { key: '4h', minutes: 240 },
   { key: '8h', minutes: 480 },
 ] as const;
-export type WindowLengthKey = (typeof WINDOW_LENGTHS)[number]['key'] | 'custom';
-export const DEFAULT_WINDOW_LENGTH: WindowLengthKey = '2h';
-
-export function lengthMinutes(key: WindowLengthKey): number | null {
-  return WINDOW_LENGTHS.find((l) => l.key === key)?.minutes ?? null;
-}
+export type WindowLengthKey = (typeof WINDOW_LENGTHS)[number]['key'];
 
 /** The hour the "Tonight" button starts at, in the chosen zone. Fixed, not remembered (decision 5). */
 export const TONIGHT_HOUR = 22;
@@ -171,7 +168,6 @@ export type WindowTimes =
 export interface WindowTimeInput {
   startDate: string;
   startTime: string;
-  length: WindowLengthKey;
   endDate: string;
   endTime: string;
   zone: string;
@@ -186,8 +182,6 @@ export function windowTimes(input: WindowTimeInput): WindowTimes {
   if (sd === null || st === null) return { kind: 'incomplete' };
   const start = wallToInstant(sd, st, input.zone);
   if (start === 'gap') return { kind: 'gap', field: 'start' };
-  const minutes = lengthMinutes(input.length);
-  if (minutes != null) return { kind: 'ok', startMs: start, endMs: start + minutes * 60_000 };
   const ed = parseDateText(input.endDate);
   const et = parseTimeText(input.endTime);
   if (ed === 'invalid') return { kind: 'invalid', field: 'endDate' };
@@ -297,4 +291,196 @@ export function targetZone(
  *  nothing (ADR-261 decision 2). */
 export function windowName(typed: string, fallback: string): string {
   return typed.trim() || fallback;
+}
+
+// ── Stepping with ▲▼ (ADR-261 Inc.6) ───────────────────────────────────────────────────────
+// What one press of a box's ▲ (or ↑) and ▼ (or ↓) does. Every step is wall-clock arithmetic:
+// `23:00` and one hour later is `00:00` on the next day, whatever the zone does that night - a
+// time the clocks skip is then refused by `windowTimes`, as a typed one is.
+
+export type StepDir = 1 | -1;
+export type TimeUnit = 'hour' | 'minute';
+export type StepUnit = 'day' | TimeUnit;
+export interface WallText {
+  date: string;
+  time: string;
+}
+export interface Wall {
+  date: DateParts;
+  time: TimeParts;
+}
+
+/** How far a minute press moves: to the next mark of this many minutes in its direction. */
+export const MINUTE_STEP = 15;
+const DAY_MINUTES = 24 * 60;
+
+const readable = <T>(v: T | null | 'invalid'): v is T => v !== null && v !== 'invalid';
+
+/** A wall date and time moved by `minutes`, the date following across midnight. */
+export function addWallMinutes(w: Wall, minutes: number): Wall {
+  const x = new Date(
+    Date.UTC(w.date.year, w.date.month - 1, w.date.day, w.time.hour, w.time.minute + minutes),
+  );
+  return {
+    date: { year: x.getUTCFullYear(), month: x.getUTCMonth() + 1, day: x.getUTCDate() },
+    time: { hour: x.getUTCHours(), minute: x.getUTCMinutes() },
+  };
+}
+
+/** The minutes one press moves `time` by: an hour keeps the minutes, a minute press lands on the
+ *  next `MINUTE_STEP` mark in its direction (`22:10` up is `22:15`, down is `22:00`). */
+export function stepMinutes(time: TimeParts, unit: TimeUnit, dir: StepDir): number {
+  if (unit === 'hour') return dir * 60;
+  const m = time.hour * 60 + time.minute;
+  const mark =
+    dir > 0
+      ? (Math.floor(m / MINUTE_STEP) + 1) * MINUTE_STEP
+      : (Math.ceil(m / MINUTE_STEP) - 1) * MINUTE_STEP;
+  return mark - m;
+}
+
+/** A date box alone: a day later or earlier. A box that cannot be read takes `base` and does not
+ *  move (decision 37). */
+export function stepDateText(text: string, dir: StepDir, base: DateParts): string {
+  const d = parseDateText(text);
+  if (!readable(d)) return dateText(base);
+  return dateText(addWallMinutes({ date: d, time: { hour: 0, minute: 0 } }, dir * DAY_MINUTES).date);
+}
+
+/** A time box with no date beside it (`TimeOfDayInput`): it goes round within its day, so `23:00`
+ *  and one hour later is `00:00` (decision 36). An unreadable box takes `base`. */
+export function stepTimeOfDayText(
+  text: string,
+  unit: TimeUnit,
+  dir: StepDir,
+  base: TimeParts,
+): string {
+  const t = parseTimeText(text);
+  if (!readable(t)) return timeText(base);
+  const raw = t.hour * 60 + t.minute + stepMinutes(t, unit, dir);
+  const m = ((raw % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+  return timeText({ hour: Math.floor(m / 60), minute: m % 60 });
+}
+
+/** A date box and its time box, stepped as one: a time stepped past midnight carries the date
+ *  (decision 36). An unreadable box takes its half of `base` and does not move; a time with no
+ *  readable date beside it steps from `base`'s date. */
+export function stepWallText(fields: WallText, unit: StepUnit, dir: StepDir, base: Wall): WallText {
+  if (unit === 'day') return { date: stepDateText(fields.date, dir, base.date), time: fields.time };
+  const d = parseDateText(fields.date);
+  const t = parseTimeText(fields.time);
+  if (!readable(t)) {
+    return { date: readable(d) ? dateText(d) : dateText(base.date), time: timeText(base.time) };
+  }
+  const from = { date: readable(d) ? d : base.date, time: t };
+  const moved = addWallMinutes(from, stepMinutes(t, unit, dir));
+  return { date: dateText(moved.date), time: timeText(moved.time) };
+}
+
+/** The next whole hour on the clock in `tz` - what an empty start box becomes on its first press
+ *  (decision 37). */
+export function nextWholeHour(nowMs: number, tz: string): Wall {
+  const w = instantToWall(nowMs, tz);
+  return addWallMinutes({ date: w.date, time: { hour: w.time.hour, minute: 0 } }, 60);
+}
+
+/** What an empty end box becomes on its first press: an hour after the start, or after the next
+ *  whole hour while the start cannot be read. Never the start itself, which is no window. */
+export function endBase(start: WallText, nowMs: number, tz: string): Wall {
+  const d = parseDateText(start.date);
+  const t = parseTimeText(start.time);
+  const from = readable(d) && readable(t) ? { date: d, time: t } : nextWholeHour(nowMs, tz);
+  return addWallMinutes(from, 60);
+}
+
+/** Which way an arrow key steps a box, or `null` for any other key. */
+export function arrowStep(key: string): StepDir | null {
+  if (key === 'ArrowUp') return 1;
+  if (key === 'ArrowDown') return -1;
+  return null;
+}
+
+/** Which way a key press in a box steps it: an arrow, unless an input method is walking its
+ *  candidates with it. */
+export function keyStep(e: ImeKeyEvent & { key: string }): StepDir | null {
+  return isImeComposing(e) ? null : arrowStep(e.key);
+}
+
+// ── The two boxes of a time (ADR-261 decision 35, 38) ──────────────────────────────────────
+
+/** The hour (`0`) or minute (`1`) a time box shows: two digits once the time reads, else what was
+ *  typed on that side of the colon. */
+export function timePart(text: string, part: 0 | 1): string {
+  const t = parseTimeText(text);
+  if (readable(t)) return pad2(part === 0 ? t.hour : t.minute);
+  return text.split(':')[part] ?? '';
+}
+
+/** Typing in one of the two boxes: the text that box now shows, and the whole time to hand on.
+ *  `whole` is a paste or a fill of several characters at once - `22:00` or `2200` put in the hour
+ *  box fills both. Otherwise the box keeps its last two digits, and an hour typed beside an empty
+ *  minute brings `00` with it. */
+export function typedTimePart(
+  raw: string,
+  part: 0 | 1,
+  current: string,
+  whole: boolean,
+): { shown: string; text: string } {
+  if (whole) {
+    const t = parseTimeText(raw);
+    if (readable(t)) return { shown: pad2(part === 0 ? t.hour : t.minute), text: timeText(t) };
+  }
+  const digits = raw.replace(/\D/g, '').slice(-2);
+  const parts: [string, string] = [timePart(current, 0), timePart(current, 1)];
+  parts[part] = digits;
+  if (part === 0 && digits && !parts[1]) parts[1] = '00';
+  return { shown: digits, text: !parts[0] && !parts[1] ? '' : `${parts[0]}:${parts[1]}` };
+}
+
+/** Whether a box's own text still says the same as the part of the value it shows (`2` and `02`
+ *  do), so a value coming back from the caller does not overwrite what is being typed. */
+export function samePart(shown: string, part: string): boolean {
+  if (shown === part) return true;
+  return /^\d+$/.test(shown) && /^\d+$/.test(part) && Number(shown) === Number(part);
+}
+
+// ── The end follows the start (ADR-261 decision 33, 34) ────────────────────────────────────
+
+/** The instant a date and a time name in `tz`, or `null` when either cannot be read or the clocks
+ *  skip that time. */
+export function fieldsInstant(f: WallText, tz: string): number | null {
+  const d = parseDateText(f.date);
+  const t = parseTimeText(f.time);
+  if (!readable(d) || !readable(t)) return null;
+  const ms = wallToInstant(d, t, tz);
+  return ms === 'gap' ? null : ms;
+}
+
+/** The date and time a clock in `tz` reads at `ms`. */
+export function instantFields(ms: number, tz: string): WallText {
+  const w = instantToWall(ms, tz);
+  return { date: dateText(w.date), time: timeText(w.time) };
+}
+
+/** The length a window keeps while its start moves: the end minus the start, when both read and
+ *  the end is after the start. */
+export function keptLength(start: WallText, end: WallText, tz: string): number | null {
+  const s = fieldsInstant(start, tz);
+  const e = fieldsInstant(end, tz);
+  return s != null && e != null && e > s ? e - s : null;
+}
+
+/** The end that keeps `length` after the start moved to `start` (decision 34), or `null` to leave
+ *  the end alone - no length is kept, or the start does not read yet. */
+export function followStart(start: WallText, length: number | null, tz: string): WallText | null {
+  if (length == null) return null;
+  const s = fieldsInstant(start, tz);
+  return s == null ? null : instantFields(s + length, tz);
+}
+
+/** The end a shortcut puts in: the start plus `minutes` as time passes, so `+2 h` is two hours of
+ *  window even across a clock change. `null` while the start does not read. */
+export function endAfter(start: WallText, minutes: number, tz: string): WallText | null {
+  const s = fieldsInstant(start, tz);
+  return s == null ? null : instantFields(s + minutes * 60_000, tz);
 }

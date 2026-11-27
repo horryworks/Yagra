@@ -142,6 +142,23 @@ export function ConfigFileIcon(props: IconProps) {
   );
 }
 
+/** Up / down chevrons — the ▲▼ on a date or time box (ADR-261 Inc.6). */
+export function ChevronUpIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 15l6-6 6 6" />
+    </svg>
+  );
+}
+
+export function ChevronDownIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 /** Calendar — opens the custom date-range popover in RangeControl. */
 export function CalendarIcon(props: IconProps) {
   return (

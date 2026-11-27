@@ -7,11 +7,13 @@
 //
 // The time fields follow ADR-261: the target comes first, then what the work is (blank saves the
 // default name), then a year-first start date and a 24-hour start time in a zone the operator can
-// change from its name beside the time, then the length. The reading of all of that is
-// `lib/maintenanceTime.ts`; the zone the times were typed in is sent with the window and stored.
+// change from its name beside the time, then the end, always as a date and a time (Inc.6), with
+// shortcuts that fill it from the start. Moving the start moves the end with it, so the length
+// stays. The reading of all of that is `lib/maintenanceTime.ts`; the zone the times were typed in
+// is sent with the window and stored.
 //
-// The same dialog edits a window that exists (ADR-261 Inc.5): every field starts from the window,
-// the end as a picked end on the window's own clock, and Save replaces all of it.
+// The same dialog edits a window that exists (ADR-261 Inc.5): every field starts from the window
+// on the window's own clock, and Save replaces all of it.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -28,31 +30,42 @@ import { Modal } from '../ui/Modal';
 import { FormError, FormFooter } from '../ui/FormFooter';
 import { Field, TextInput, Select } from '../ui/Field';
 import { FieldGroup, Fields } from '../ui/FormLayout';
-import { Inline, Stack } from '../ui/Page';
+import { Inline } from '../ui/Page';
 import { Button } from '../ui/Button';
-import { Segmented } from '../ui/Segmented';
-import { DateInput, TimeInput } from '../ui/WallTimeInput';
+import {
+  DateInput,
+  TimeInput,
+  WallTimeCols,
+  WallTimeRows,
+  WallTimeZone,
+} from '../ui/WallTimeInput';
 import { ZonePicker } from '../ui/ZonePicker';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { GroupPicker } from '../ui/GroupPicker';
 import { displayTimeZone, zoneAbbreviation } from '../../lib/timeZone';
+import { formatDuration } from '../../lib/format';
 import { targetNodeNames, type ActionTarget } from '../../lib/actionTarget';
 import {
-  DEFAULT_WINDOW_LENGTH,
   TONIGHT_HOUR,
   WINDOW_LENGTHS,
   dateText,
+  endAfter,
+  endBase,
+  followStart,
   instantToWall,
+  keptLength,
+  nextWholeHour,
   rangeLine,
+  stepWallText,
   targetZone,
   timeText,
   tonightStart,
-  wallLine,
   windowFields,
   windowName,
   windowTimes,
-  type WindowLengthKey,
+  type Wall,
+  type WallText,
 } from '../../lib/maintenanceTime';
 import { usePrefsStore } from '../../prefs';
 
@@ -117,9 +130,19 @@ export function AddMaintenanceWindowModal({
   );
   const [startDate, setStartDate] = useState(initial?.startDate ?? '');
   const [startTime, setStartTime] = useState(initial?.startTime ?? '');
-  const [length, setLength] = useState<WindowLengthKey>(win ? 'custom' : DEFAULT_WINDOW_LENGTH);
   const [endDate, setEndDate] = useState(initial?.endDate ?? '');
   const [endTime, setEndTime] = useState(initial?.endTime ?? '');
+  // The length the end keeps while the start moves (decision 34): set whenever the end is set
+  // after a start that reads, and an edited window's own length from the outset.
+  const [kept, setKept] = useState(() =>
+    initial
+      ? keptLength(
+          { date: initial.startDate, time: initial.startTime },
+          { date: initial.endDate, time: initial.endTime },
+          zone,
+        )
+      : null,
+  );
   const recentZones = usePrefsStore((s) => s.recentZones);
   const rememberZone = usePrefsStore((s) => s.rememberZone);
   const form = useSubmit({
@@ -161,7 +184,7 @@ export function AddMaintenanceWindowModal({
     return null;
   }, [batch, scope, scopeId, initialScope, groups]);
 
-  const times = windowTimes({ startDate, startTime, length, endDate, endTime, zone });
+  const times = windowTimes({ startDate, startTime, endDate, endTime, zone });
   // What the abbreviations are read at: the start once it is known, else now.
   const at = times.kind === 'ok' ? times.startMs : Date.now();
 
@@ -189,10 +212,25 @@ export function AddMaintenanceWindowModal({
   const ready =
     !!savedName && (!!batch || !!scopeId.trim()) && times.kind === 'ok';
 
-  const setStart = (w: { date: { year: number; month: number; day: number }; time: { hour: number; minute: number } }) => {
-    setStartDate(dateText(w.date));
-    setStartTime(timeText(w.time));
+  const start: WallText = { date: startDate, time: startTime };
+  const end: WallText = { date: endDate, time: endTime };
+  // Every way the start changes goes through here, so the end follows it (decision 34).
+  const moveStart = (next: WallText) => {
+    setStartDate(next.date);
+    setStartTime(next.time);
+    const followed = followStart(next, kept, zone);
+    if (followed) {
+      setEndDate(followed.date);
+      setEndTime(followed.time);
+    }
   };
+  // And every way the end changes goes through here, so the length it now makes is the one kept.
+  const moveEnd = (next: WallText) => {
+    setEndDate(next.date);
+    setEndTime(next.time);
+    setKept(keptLength(start, next, zone));
+  };
+  const setStart = (w: Wall) => moveStart({ date: dateText(w.date), time: timeText(w.time) });
 
   const submit = () => {
     if (!ready || times.kind !== 'ok') return;
@@ -237,10 +275,6 @@ export function AddMaintenanceWindowModal({
     });
   };
 
-  const lengthOptions = [
-    ...WINDOW_LENGTHS.map((l) => ({ value: l.key, label: t(`maintenanceForm.lengths.${l.key}`) })),
-    { value: 'custom', label: t('maintenanceForm.lengths.custom') },
-  ];
 
   return (
     <Modal
@@ -351,85 +385,113 @@ export function AddMaintenanceWindowModal({
           />
         </Field>
 
-        <Field label={t('maintenanceForm.start')} htmlFor="maint-start-date" error={startError}>
-          <Stack gap={6}>
-            <Inline gap={8}>
-              <DateInput
-                id="maint-start-date"
-                value={startDate}
-                onChange={setStartDate}
-                invalid={times.kind === 'invalid' && times.field === 'startDate'}
-              />
-              <TimeInput
-                value={startTime}
-                onChange={setStartTime}
-                invalid={times.kind === 'invalid' && times.field === 'startTime'}
-                aria-label={t('maintenanceForm.startTime')}
-              />
-              <ZonePicker
-                zone={zone}
-                onChange={setZone}
-                at={at}
-                mine={mine}
-                site={site}
-                recent={recentZones}
-              />
-            </Inline>
-            <Inline gap={6}>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setStart(instantToWall(Date.now(), zone))}
-              >
-                {t('maintenanceForm.now')}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setStart(tonightStart(Date.now(), zone))}
-              >
-                {t('maintenanceForm.tonight', { time: timeText({ hour: TONIGHT_HOUR, minute: 0 }) })}
-              </Button>
-            </Inline>
-          </Stack>
-        </Field>
-
-        <Field
-          label={t('maintenanceForm.length')}
-          htmlFor="maint-length"
-          status={
-            times.kind === 'ok' && length !== 'custom'
-              ? t('maintenanceForm.ends', { at: wallLine(times.endMs, zone) })
-              : null
-          }
-        >
-          <Segmented
-            options={lengthOptions}
-            value={length}
-            onChange={(v) => setLength(v as WindowLengthKey)}
-            ariaLabel={t('maintenanceForm.length')}
-          />
-        </Field>
-
-        {length === 'custom' && (
-          <Field label={t('maintenanceForm.end')} htmlFor="maint-end-date" error={endError}>
-            <Inline gap={8}>
-              <DateInput
-                id="maint-end-date"
-                value={endDate}
-                onChange={setEndDate}
-                invalid={times.kind === 'invalid' && times.field === 'endDate'}
-              />
-              <TimeInput
-                value={endTime}
-                onChange={setEndTime}
-                invalid={times.kind === 'invalid' && times.field === 'endTime'}
-                aria-label={t('maintenanceForm.endTime')}
-              />
-              <span className="form-status">{zoneAbbreviation(zone, at)}</span>
-            </Inline>
+        <WallTimeRows>
+          <Field label={t('maintenanceForm.start')} htmlFor="maint-start-date" error={startError}>
+            <>
+              <WallTimeCols>
+                <DateInput
+                  id="maint-start-date"
+                  value={startDate}
+                  onChange={(date) => moveStart({ ...start, date })}
+                  onStep={(dir) =>
+                    moveStart(stepWallText(start, 'day', dir, nextWholeHour(Date.now(), zone)))
+                  }
+                  invalid={times.kind === 'invalid' && times.field === 'startDate'}
+                />
+                <TimeInput
+                  value={startTime}
+                  onChange={(time) => moveStart({ ...start, time })}
+                  onStep={(unit, dir) =>
+                    moveStart(stepWallText(start, unit, dir, nextWholeHour(Date.now(), zone)))
+                  }
+                  invalid={times.kind === 'invalid' && times.field === 'startTime'}
+                  aria-label={t('maintenanceForm.startTime')}
+                />
+                <ZonePicker
+                  zone={zone}
+                  onChange={setZone}
+                  at={at}
+                  mine={mine}
+                  site={site}
+                  recent={recentZones}
+                />
+              </WallTimeCols>
+              <Inline gap={6}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setStart(instantToWall(Date.now(), zone))}
+                >
+                  {t('maintenanceForm.now')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setStart(tonightStart(Date.now(), zone))}
+                >
+                  {t('maintenanceForm.tonight', { time: timeText({ hour: TONIGHT_HOUR, minute: 0 }) })}
+                </Button>
+              </Inline>
+            </>
           </Field>
-        )}
+
+          <Field
+            label={t('maintenanceForm.end')}
+            htmlFor="maint-end-date"
+            error={endError}
+            status={
+              times.kind === 'ok'
+                ? t('maintenanceForm.lengthIs', {
+                    duration: formatDuration((times.endMs - times.startMs) / 1000, {
+                      units: 3,
+                      smallest: 'm',
+                      skipZero: true,
+                    }),
+                  })
+                : null
+            }
+          >
+            <>
+              <WallTimeCols>
+                <DateInput
+                  id="maint-end-date"
+                  value={endDate}
+                  onChange={(date) => moveEnd({ ...end, date })}
+                  onStep={(dir) =>
+                    moveEnd(stepWallText(end, 'day', dir, endBase(start, Date.now(), zone)))
+                  }
+                  invalid={times.kind === 'invalid' && times.field === 'endDate'}
+                />
+                <TimeInput
+                  value={endTime}
+                  onChange={(time) => moveEnd({ ...end, time })}
+                  onStep={(unit, dir) =>
+                    moveEnd(stepWallText(end, unit, dir, endBase(start, Date.now(), zone)))
+                  }
+                  invalid={times.kind === 'invalid' && times.field === 'endTime'}
+                  aria-label={t('maintenanceForm.endTime')}
+                />
+                <WallTimeZone>{zoneAbbreviation(zone, at)}</WallTimeZone>
+              </WallTimeCols>
+              <Inline gap={6}>
+                {WINDOW_LENGTHS.map((l) => (
+                  <Button
+                    key={l.key}
+                    type="button"
+                    variant="ghost"
+                    disabled={endAfter(start, l.minutes, zone) == null}
+                    onClick={() => {
+                      const next = endAfter(start, l.minutes, zone);
+                      if (next) moveEnd(next);
+                    }}
+                  >
+                    {t(`maintenanceForm.later.${l.key}`)}
+                  </Button>
+                ))}
+              </Inline>
+            </>
+          </Field>
+        </WallTimeRows>
 
         {times.kind === 'ok' && zone !== mine && (
           <p className="form-status">

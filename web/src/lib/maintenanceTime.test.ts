@@ -2,7 +2,21 @@
 import { describe, expect, it } from 'vitest';
 import {
   RECENT_ZONES_MAX,
+  addWallMinutes,
+  arrowStep,
   clockValue,
+  endAfter,
+  endBase,
+  followStart,
+  keptLength,
+  nextWholeHour,
+  samePart,
+  stepDateText,
+  stepMinutes,
+  stepTimeOfDayText,
+  stepWallText,
+  timePart,
+  typedTimePart,
   joinDateTime,
   splitDateTime,
   matchZones,
@@ -70,14 +84,13 @@ describe('parseTimeText', () => {
 const base: WindowTimeInput = {
   startDate: '2026-11-20',
   startTime: '22:00',
-  length: '2h',
-  endDate: '',
-  endTime: '',
+  endDate: '2026-11-21',
+  endTime: '00:00',
   zone: 'America/New_York',
 };
 
 describe('windowTimes', () => {
-  it('reads the start in the chosen zone and adds the length', () => {
+  it('reads the start and the end in the chosen zone', () => {
     const r = windowTimes(base);
     // 22:00 EST (UTC-5) on 20 November is 03:00 UTC on the 21st.
     expect(r).toEqual({
@@ -121,8 +134,8 @@ describe('windowTimes', () => {
     expect(r).toMatchObject({ kind: 'ok', startMs: Date.parse('2026-11-01T05:30:00Z') });
   });
 
-  it('reads a picked end, and refuses one at or before the start', () => {
-    const custom = { ...base, length: 'custom' as const };
+  it('reads the end, and refuses one at or before the start', () => {
+    const custom = { ...base, endDate: '', endTime: '' };
     expect(windowTimes(custom)).toEqual({ kind: 'incomplete' });
     expect(windowTimes({ ...custom, endDate: '2026-11-21', endTime: '01:30' })).toEqual({
       kind: 'ok',
@@ -291,7 +304,7 @@ describe('windowFields', () => {
 
   it('round-trips through windowTimes to the same instants', () => {
     const f = windowFields('2030-03-09T06:15:00Z', '2030-03-09T09:00:00Z', 'America/New_York');
-    const t = windowTimes({ ...f, length: 'custom', zone: 'America/New_York' });
+    const t = windowTimes({ ...f, zone: 'America/New_York' });
     expect(t).toEqual({
       kind: 'ok',
       startMs: Date.parse('2030-03-09T06:15:00Z'),
@@ -305,6 +318,180 @@ describe('windowFields', () => {
       startTime: '',
       endDate: '2030-01-01',
       endTime: '00:00',
+    });
+  });
+});
+
+// ── ADR-261 Inc.6: the ▲▼ on the boxes, and the end that follows the start ─────────────────
+
+const wall = (date: string, time: string) => {
+  const d = parseDateText(date);
+  const t = parseTimeText(time);
+  if (!d || d === 'invalid' || !t || t === 'invalid') throw new Error('bad fixture');
+  return { date: d, time: t };
+};
+
+describe('stepping a date or a time', () => {
+  it('moves a date a day, across a month and a year end', () => {
+    const today = wall('2026-11-27', '00:00').date;
+    expect(stepDateText('2026-11-30', 1, today)).toBe('2026-12-01');
+    expect(stepDateText('2027-01-01', -1, today)).toBe('2026-12-31');
+    expect(stepDateText('2028/02/28', 1, today)).toBe('2028-02-29');
+  });
+
+  it('fills an empty or unreadable date with the base and does not move it', () => {
+    const today = wall('2026-11-27', '00:00').date;
+    expect(stepDateText('', 1, today)).toBe('2026-11-27');
+    expect(stepDateText('11/30', -1, today)).toBe('2026-11-27');
+  });
+
+  it('moves an hour by an hour and keeps the minutes', () => {
+    expect(stepMinutes({ hour: 22, minute: 10 }, 'hour', 1)).toBe(60);
+    expect(stepMinutes({ hour: 22, minute: 10 }, 'hour', -1)).toBe(-60);
+  });
+
+  it('moves a minute to the next quarter in its direction', () => {
+    expect(stepMinutes({ hour: 22, minute: 10 }, 'minute', 1)).toBe(5); // 22:15
+    expect(stepMinutes({ hour: 22, minute: 10 }, 'minute', -1)).toBe(-10); // 22:00
+    expect(stepMinutes({ hour: 22, minute: 0 }, 'minute', 1)).toBe(15);
+    expect(stepMinutes({ hour: 22, minute: 0 }, 'minute', -1)).toBe(-15);
+    expect(stepMinutes({ hour: 22, minute: 45 }, 'minute', 1)).toBe(15); // 23:00
+  });
+
+  it('goes round within the day for a time with no date', () => {
+    const base = { hour: 15, minute: 0 };
+    expect(stepTimeOfDayText('23:00', 'hour', 1, base)).toBe('00:00');
+    expect(stepTimeOfDayText('00:00', 'minute', -1, base)).toBe('23:45');
+    expect(stepTimeOfDayText('9:05', 'minute', 1, base)).toBe('09:15');
+    expect(stepTimeOfDayText('', 'hour', 1, base)).toBe('15:00');
+    expect(stepTimeOfDayText('25:00', 'minute', -1, base)).toBe('15:00');
+  });
+
+  it('carries the date when a time beside one steps past midnight', () => {
+    const base = wall('2026-11-27', '15:00');
+    expect(stepWallText({ date: '2026-11-27', time: '23:00' }, 'hour', 1, base)).toEqual({
+      date: '2026-11-28',
+      time: '00:00',
+    });
+    expect(stepWallText({ date: '2026-12-01', time: '00:00' }, 'minute', -1, base)).toEqual({
+      date: '2026-11-30',
+      time: '23:45',
+    });
+    expect(stepWallText({ date: '2026-11-27', time: '22:00' }, 'day', 1, base)).toEqual({
+      date: '2026-11-28',
+      time: '22:00',
+    });
+  });
+
+  it('fills an empty time with the base and keeps a typed date', () => {
+    const base = wall('2026-11-27', '15:00');
+    expect(stepWallText({ date: '', time: '' }, 'hour', 1, base)).toEqual({
+      date: '2026-11-27',
+      time: '15:00',
+    });
+    expect(stepWallText({ date: '2026-12-24', time: '' }, 'minute', -1, base)).toEqual({
+      date: '2026-12-24',
+      time: '15:00',
+    });
+    // A readable time with no date steps from the base's day.
+    expect(stepWallText({ date: '', time: '23:30' }, 'hour', 1, base)).toEqual({
+      date: '2026-11-28',
+      time: '00:30',
+    });
+  });
+
+  it('starts an empty start box at the next whole hour on the chosen clock', () => {
+    // 14:37 in Tokyo is 05:37 UTC.
+    const now = Date.parse('2026-11-27T05:37:00Z');
+    expect(nextWholeHour(now, 'Asia/Tokyo')).toEqual(wall('2026-11-27', '15:00'));
+    expect(nextWholeHour(now, 'UTC')).toEqual(wall('2026-11-27', '06:00'));
+    // 23:20 rolls into the next day.
+    expect(nextWholeHour(Date.parse('2026-11-27T14:20:00Z'), 'Asia/Tokyo')).toEqual(
+      wall('2026-11-28', '00:00'),
+    );
+  });
+
+  it('starts an empty end box an hour after the start, never on it', () => {
+    const now = Date.parse('2026-11-27T05:37:00Z');
+    expect(endBase({ date: '2026-11-27', time: '23:30' }, now, 'Asia/Tokyo')).toEqual(
+      wall('2026-11-28', '00:30'),
+    );
+    expect(endBase({ date: '', time: '' }, now, 'Asia/Tokyo')).toEqual(wall('2026-11-27', '16:00'));
+  });
+
+  it('adds wall minutes with the date following', () => {
+    expect(addWallMinutes(wall('2026-12-31', '23:30'), 45)).toEqual(wall('2027-01-01', '00:15'));
+  });
+
+  it('reads the arrow keys and nothing else', () => {
+    expect(arrowStep('ArrowUp')).toBe(1);
+    expect(arrowStep('ArrowDown')).toBe(-1);
+    expect(arrowStep('Enter')).toBeNull();
+  });
+});
+
+describe('the two boxes of a time', () => {
+  it('shows each half with two digits once the time reads, else what was typed', () => {
+    expect(timePart('9:05', 0)).toBe('09');
+    expect(timePart('9:05', 1)).toBe('05');
+    expect(timePart('2200', 1)).toBe('00');
+    expect(timePart('25:00', 0)).toBe('25');
+    expect(timePart('22:3', 1)).toBe('3');
+    expect(timePart('', 0)).toBe('');
+  });
+
+  it('keeps the last two digits typed in a box, and brings 00 with a lone hour', () => {
+    expect(typedTimePart('2', 0, '', false)).toEqual({ shown: '2', text: '2:00' });
+    expect(typedTimePart('22', 0, '2:00', false)).toEqual({ shown: '22', text: '22:00' });
+    expect(typedTimePart('223', 0, '22:00', false)).toEqual({ shown: '23', text: '23:00' });
+    expect(typedTimePart('3', 1, '22:00', false)).toEqual({ shown: '3', text: '22:3' });
+    expect(typedTimePart('30', 1, '22:3', false)).toEqual({ shown: '30', text: '22:30' });
+    expect(typedTimePart('', 0, '22:00', false)).toEqual({ shown: '', text: ':00' });
+    expect(typedTimePart('', 1, '', false)).toEqual({ shown: '', text: '' });
+  });
+
+  it('splits a whole time pasted into one box', () => {
+    expect(typedTimePart('22:00', 0, '', true)).toEqual({ shown: '22', text: '22:00' });
+    expect(typedTimePart('0930', 0, '', true)).toEqual({ shown: '09', text: '09:30' });
+    expect(typedTimePart('0930', 1, '', true)).toEqual({ shown: '30', text: '09:30' });
+    // Not a time: the digits go in the box as if typed.
+    expect(typedTimePart('7', 0, '', true)).toEqual({ shown: '7', text: '7:00' });
+  });
+
+  it('treats 2 and 02 as the same text, so a value coming back does not overwrite typing', () => {
+    expect(samePart('2', '02')).toBe(true);
+    expect(samePart('', '')).toBe(true);
+    expect(samePart('2', '03')).toBe(false);
+    expect(samePart('', '00')).toBe(false);
+  });
+});
+
+describe('the end that follows the start', () => {
+  const tz = 'Asia/Tokyo';
+  const start = { date: '2026-11-27', time: '22:00' };
+
+  it('keeps the length between a start and an end that read', () => {
+    expect(keptLength(start, { date: '2026-11-28', time: '00:30' }, tz)).toBe(150 * 60_000);
+    expect(keptLength(start, { date: '2026-11-27', time: '21:00' }, tz)).toBeNull();
+    expect(keptLength(start, { date: '', time: '' }, tz)).toBeNull();
+    expect(keptLength({ date: '', time: '' }, { date: '2026-11-28', time: '00:30' }, tz)).toBeNull();
+  });
+
+  it('moves the end with the start, and leaves it alone when there is nothing to keep', () => {
+    const later = { date: '2026-11-27', time: '23:00' };
+    expect(followStart(later, 2 * 3_600_000, tz)).toEqual({ date: '2026-11-28', time: '01:00' });
+    expect(followStart(later, null, tz)).toBeNull();
+    // Half-typed: the end waits until the start reads again.
+    expect(followStart({ date: '2026-11-', time: '23:00' }, 2 * 3_600_000, tz)).toBeNull();
+  });
+
+  it('fills the end from a shortcut as time passes, across a clock change', () => {
+    expect(endAfter(start, 120, tz)).toEqual({ date: '2026-11-28', time: '00:00' });
+    expect(endAfter({ date: '', time: '22:00' }, 120, tz)).toBeNull();
+    // New York falls back at 02:00 on 1 November 2026: two hours after 00:30 EDT is 01:30 EST.
+    expect(endAfter({ date: '2026-11-01', time: '00:30' }, 120, 'America/New_York')).toEqual({
+      date: '2026-11-01',
+      time: '01:30',
     });
   });
 });

@@ -487,11 +487,16 @@ test('the selection bar can open a maintenance window over every selected node',
   // The scope controls are locked and the nodes are listed, so what is about to be written is on
   // screen before the operator presses the button.
   await expect(dialog.locator('.form-targets li')).toHaveCount(2);
-  // ADR-261: a year-first date, a 24-hour time typed without its colon, and the length buttons
-  // (two hours by default). The work field is left blank, so the default name is what is sent.
+  // ADR-261: a year-first date, a 24-hour time put in the hour box without its colon (it fills
+  // both boxes), and the end filled by a shortcut (Inc.6). The work field is left blank, so the
+  // default name is what is sent.
   await dialog.getByLabel('Start', { exact: true }).fill('2030/01/01');
-  await dialog.getByLabel('Start time', { exact: true }).fill('0900');
-  await expect(dialog.locator('.form-status', { hasText: 'Ends 2030-01-01 Tue 11:00' })).toBeVisible();
+  await dialog.getByLabel('Start time, hour', { exact: true }).fill('0900');
+  await expect(dialog.getByLabel('Start time, minute', { exact: true })).toHaveValue('00');
+  await dialog.getByRole('button', { name: '+2 h', exact: true }).click();
+  await expect(dialog.locator('#maint-end-date')).toHaveValue('2030-01-01');
+  await expect(dialog.getByLabel('End time, hour', { exact: true })).toHaveValue('11');
+  await expect(dialog.locator('.form-status', { hasText: 'Length 2h' })).toBeVisible();
   await dialog.getByRole('button', { name: 'Add window', exact: true }).click();
 
   await expect.poll(() => seen.length).toBe(1);

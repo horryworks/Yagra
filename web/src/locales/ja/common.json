@@ -184,7 +184,16 @@
   },
   "wallTime": {
     "pickDate": "日付を選ぶ",
-    "time": "{{label}}の時刻"
+    "time": "{{label}}の時刻",
+    "hour": "{{label}}（時）",
+    "minute": "{{label}}（分）",
+    "minuteAlone": "分",
+    "dayLater": "1 日後",
+    "dayEarlier": "1 日前",
+    "hourLater": "1 時間後",
+    "hourEarlier": "1 時間前",
+    "minutesLater": "15 分後",
+    "minutesEarlier": "15 分前"
   },
   "zonePicker": {
     "label": "タイムゾーン",

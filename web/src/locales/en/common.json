@@ -193,7 +193,16 @@
   },
   "wallTime": {
     "pickDate": "Pick a date",
-    "time": "{{label}} time"
+    "time": "{{label}} time",
+    "hour": "{{label}}, hour",
+    "minute": "{{label}}, minute",
+    "minuteAlone": "Minute",
+    "dayLater": "1 day later",
+    "dayEarlier": "1 day earlier",
+    "hourLater": "1 hour later",
+    "hourEarlier": "1 hour earlier",
+    "minutesLater": "15 minutes later",
+    "minutesEarlier": "15 minutes earlier"
   },
   "zonePicker": {
     "label": "Time zone",

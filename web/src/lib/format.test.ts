@@ -589,6 +589,17 @@ describe('format', () => {
     expect(formatDuration(90_061, { units: 1 })).toBe('1d');
   });
 
+  it('formatDuration can leave out the zeros of a round length (a maintenance window)', () => {
+    const length = (s: number) => formatDuration(s, { units: 3, smallest: 'm', skipZero: true });
+    expect(length(7_200)).toBe('2h');
+    expect(length(27_000)).toBe('7h 30m');
+    expect(length(86_400 + 1_800)).toBe('1d 30m');
+    expect(length(86_400 + 6 * 3_600 + 1_800)).toBe('1d 6h 30m');
+    expect(length(1_800)).toBe('30m');
+    // The first unit is always shown, even when it is all there is and it is zero.
+    expect(length(0)).toBe('0m');
+  });
+
   it('formatDuration never goes finer than `smallest` (the core-uptime row)', () => {
     // Moved from upgradeStatus.ts's own `uptime`, whose outputs these are.
     const up = (s: number) => formatDuration(s, { smallest: 'm' });

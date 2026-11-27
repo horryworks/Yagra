@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-/* The year-first date box and the 24-hour time box (ADR-261). */
+/* The year-first date box and the 24-hour time boxes (ADR-261), each with ▲▼ inside its right
+   edge (ADR-261 Inc.6). */
 
 .wt-date {
   position: relative;
@@ -10,26 +11,117 @@
   min-width: 0;
 }
 
-.wt-date .field-affix {
+/* A box and its ▲▼: the frame is `.field`'s, the text box inside it has none of its own. Deeper
+   than a dialog's `.modal-field .field { width: 100% }`, which would otherwise stretch every box
+   onto a line of its own (ADR-262 decision 11 met the same rule). */
+.field.wt-box,
+.modal-field .field.wt-box {
+  display: inline-flex;
+  align-items: stretch;
+  width: auto;
+  padding: 0;
+  overflow: hidden;
+  font-family: var(--font-family);
+}
+
+.field.wt-box:focus-within {
+  border-color: var(--accent-color);
+}
+
+.wt-date .field.wt-box {
   flex: 1;
   min-width: 0;
 }
 
-.wt-date .field-affix .field {
-  width: 100%;
-  font-family: var(--font-family);
+.wt-in {
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
 }
 
-/* Deeper than a dialog's `.modal-field .field { width: 100% }`, so it is not stretched and
-   pushed onto a line of its own. Two classes were not enough: equal weight left the winner to
-   whichever stylesheet loaded last, and in the routing rule dialog that was the dialog's (ADR-262
-   decision 11). */
-.field.wt-time,
-.modal-field .field.wt-time {
+.wt-in::placeholder {
+  color: var(--text-tertiary);
+}
+
+.wt-suffix {
+  align-self: center;
+  padding-right: var(--space-2);
+  color: var(--text-tertiary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+/* The ▲▼: two halves of the box's height, divided from the text by a hairline. */
+.wt-step {
+  display: flex;
+  flex-direction: column;
   flex: none;
-  width: 6em; /* fits HH:MM in the monospace face */
-  font-family: var(--font-family);
+  width: 18px;
+  border-left: var(--border-width) solid var(--border-color);
+}
+
+.wt-step-btn {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.wt-step-btn + .wt-step-btn {
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.wt-step-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.wt-step-btn:active {
+  color: var(--accent-color);
+}
+
+.wt-step-btn svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* A finger needs more than a mouse; the height stays the box's. */
+@media (hover: none) {
+  .wt-step {
+    width: 28px;
+  }
+}
+
+/* Hours and minutes, each in its own box. */
+.wt-time {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  flex: none;
+}
+
+.wt-part .wt-in {
+  flex: none;
+  box-sizing: content-box;
+  width: 2ch; /* two digits in the monospace face, the padding outside them */
+  padding: 0 var(--space-1-5);
   text-align: center;
+}
+
+.wt-colon {
+  color: var(--text-secondary);
+  font-family: var(--font-family);
 }
 
 /* The browser's date picker opens over this input, so it is laid out (a hidden element cannot
@@ -52,4 +144,50 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* Start and end rows whose columns line up (ADR-261 decision 39). The fields step aside so their
+   date, time and last column sit in one grid; everything else in a field spans the row. The row
+   gap is a field's own, and a field after the first keeps the gap between fields. */
+.wt-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: var(--space-2);
+  row-gap: var(--space-1-5);
+  align-items: center;
+}
+
+.wt-rows > .ui-field {
+  display: contents;
+}
+
+.wt-rows > .ui-field > * {
+  grid-column: 1 / -1;
+}
+
+.wt-rows > .ui-field + .ui-field > .field-head {
+  margin-top: var(--space-1-5);
+}
+
+.wt-rows .wt-cols {
+  display: contents;
+}
+
+.wt-rows .wt-cols > :nth-child(n + 2) {
+  justify-self: start;
+}
+
+/* On a phone the last column goes under the date. */
+html[data-viewport='mobile'] .wt-rows {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+/* A zone name in the last column, where the other row has the zone's button: the same padding
+   and an invisible border, so the two names start at the same place. */
+.wt-zone {
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  white-space: nowrap;
 }

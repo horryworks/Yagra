@@ -214,23 +214,26 @@ const DURATION_UNITS = [
 /** A length of time as its largest non-zero unit and the `units - 1` below it — `3d 4h`, `1h 0m`,
  *  `42s` — in the interface language. Lower units are truncated, never rounded up, so 3599 seconds
  *  is `59m 59s` and never `60m`. `smallest` is the finest unit ever shown: `'m'` makes 59 seconds
- *  `0m`.
+ *  `0m`. `skipZero` leaves out a zero below the first unit, for a length that is usually round
+ *  (`2h` rather than `2h 0m`; `1d 30m` with three units).
  *
  *  One implementation for the poller-gap and the core-uptime columns, which had one each — the
- *  uptime one in English only (ADR-184). Deliberately *not* used for a window label (`24h`, `7d`)
- *  or a cadence, which are exact values in their own vocabularies. */
+ *  uptime one in English only (ADR-184), and for a maintenance window's length (ADR-261).
+ *  Deliberately *not* used for a window label (`24h`, `7d`) or a cadence, which are exact values
+ *  in their own vocabularies. */
 export function formatDuration(
   secs: number,
-  opts: { units?: 1 | 2; smallest?: 'm' | 's' } = {},
+  opts: { units?: 1 | 2 | 3; smallest?: 'm' | 's'; skipZero?: boolean } = {},
 ): string {
   const units = opts.units ?? 2;
   const last = DURATION_UNITS.findIndex((u) => u.key === (opts.smallest ?? 's'));
   let rest = Math.max(0, Math.floor(secs));
   const first = DURATION_UNITS.findIndex((u, i) => i === last || rest >= u.secs);
   const parts: string[] = [];
-  for (let i = first; i <= last && parts.length < units; i++) {
+  for (let i = first; i <= last && i < first + units; i++) {
     const n = Math.floor(rest / DURATION_UNITS[i].secs);
     rest -= n * DURATION_UNITS[i].secs;
+    if (opts.skipZero && n === 0 && i !== first) continue;
     parts.push(i18n.t(`format:duration.${DURATION_UNITS[i].key}`, { count: n }));
   }
   return parts.join(' ');

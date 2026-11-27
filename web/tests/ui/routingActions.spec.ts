@@ -149,8 +149,9 @@ test("a rule's hours name the zones they are read in, on one line of times", asy
   const when = dialog.getByRole('group', { name: 'When', exact: true });
   await when.getByRole('button', { name: 'During', exact: true }).click();
   await expect(when.locator('.form-status')).toContainText(/node/);
-  const from = await when.getByRole('textbox', { name: 'From' }).boundingBox();
-  const until = await when.getByRole('textbox', { name: 'Until' }).boundingBox();
+  // Each time is a group of two boxes, hours and minutes (ADR-261 Inc.6).
+  const from = await when.getByRole('group', { name: 'From', exact: true }).boundingBox();
+  const until = await when.getByRole('group', { name: 'Until', exact: true }).boundingBox();
   expect(from && until && Math.abs(from.y - until.y)).toBeLessThan(2);
   if (process.env.SHOT_ZONES) {
     await when.scrollIntoViewIfNeeded();
