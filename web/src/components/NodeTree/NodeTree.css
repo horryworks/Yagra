@@ -289,14 +289,15 @@
   display: inline-flex;
 }
 
-/* No hover to reveal them with, so they are simply there (ui-conventions: every hover-revealed
-   action is always visible under `(hover: none)`). `display: none` had also taken them out of
-   reach entirely on touch — the right-click menu carries the same verbs, but iOS Safari fires no
-   `contextmenu` on a long press, so there these were the only way in. Keyed on the input, not on
-   the layout mode: a tablet forced to the desktop shell still has fingers. */
+/* No hover: the actions stay shown, and a long press opens the menu without a callout (ADR-271). */
 @media (hover: none) {
   .ntree-actions {
     display: inline-flex;
+  }
+  .ntree-row,
+  .ntree-empty {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
   }
 }
 
@@ -445,7 +446,6 @@
   color: var(--accent-hover);
 }
 
-/* Right-click context menu (HoTTY-style). */
 /* The context menu. Its SURFACE — fixed positioning, portal, clamping, background, border,
    shadow — is `.apop` (AnchoredPopover.css) since ADR-124 Inc.2; this class carries only what is
    about a context menu: the item layout, the sections and the chips. Deliberately no property is

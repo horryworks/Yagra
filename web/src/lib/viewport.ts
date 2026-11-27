@@ -14,9 +14,11 @@ import { usePrefsStore, type UiMode } from '../prefs';
  *  a CSS custom property can't be used inside an `@media` condition (tokens.css / ui-conventions.md). */
 export const MOBILE_BP = 768;
 
-// Touch affordances are decided in CSS via `@media (hover: none)` (ui-conventions.md, channel 2),
-// so there is deliberately no JS-side coarse-pointer hook to keep in sync with it.
+// Touch affordances are decided in CSS via `@media (hover: none)` (ui-conventions.md, channel 2).
+// `useNoHover` asks the same query for the one thing CSS cannot say: whether an element carries the
+// `draggable` attribute (ADR-271 decision 4). The query is spelled once, here.
 const mobileQuery = `(max-width: ${MOBILE_BP - 1}px)`;
+const NO_HOVER_QUERY = '(hover: none)';
 
 /** A tiny matchMedia → useSyncExternalStore adapter (one shared MediaQueryList per query). Degrades
  *  to a constant `false` when there is no `window`/`matchMedia` (SSR, the Vitest node env). */
@@ -41,10 +43,18 @@ function mediaStore(query: string) {
 }
 
 const mobile = mediaStore(mobileQuery);
+const noHover = mediaStore(NO_HOVER_QUERY);
 
 /** True when the viewport is narrower than the mobile boundary. `false` without matchMedia. */
 export function useIsMobileViewport(): boolean {
   return useSyncExternalStore(mobile.subscribe, mobile.get, () => false);
+}
+
+/** True on a device whose primary input cannot hover — a phone or a tablet without a mouse. The
+ *  same question CSS asks with `@media (hover: none)`; independent of the layout mode, because a
+ *  tablet forced to the desktop shell still has fingers. `false` without matchMedia. */
+export function useNoHover(): boolean {
+  return useSyncExternalStore(noHover.subscribe, noHover.get, () => false);
 }
 
 /** The pure layout-mode decision: `desktop` pref forces desktop; `auto` follows the viewport. */

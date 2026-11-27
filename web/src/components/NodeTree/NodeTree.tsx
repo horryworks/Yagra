@@ -76,6 +76,9 @@ import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { ActionMenu } from '../ui/ActionMenu';
 import { AnchoredPopover } from '../ui/AnchoredPopover';
+import { useMenuGesture } from '../ui/menuGesture';
+import { menuPointBelow } from '../../lib/longPress';
+import { useNoHover } from '../../lib/viewport';
 import { WrenchIcon, PinIcon, ConfigFileIcon } from '../ui/icons';
 import { nothingPinned, type PinnedView } from '../../lib/pins';
 import type { BackupMark } from '../../lib/configBackupMarks';
@@ -159,9 +162,6 @@ const GUIDE_X = 8;
 /** Fixed row height (matches `--row-h` in tokens.css) — every tree row is one line, so the
  *  flattened list virtualizes with a uniform estimate (S13). */
 const ROW_H = 30;
-/** How far in from a row's left edge a menu opened from the keyboard appears (ADR-155 decision 7) — past
- *  the twisty and the icon, where a right-click on the name would have put it. */
-const MENU_KEY_INSET_PX = 40;
 
 /** How long the viewport must settle before its folders are fetched (ADR-125).
  *
@@ -474,6 +474,11 @@ export function NodeTree({
   const [drag, setDrag] = useState<DragItem | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [menu, setMenu] = useState<Menu>(null);
+  /** Right-click and, for a finger, a long press (ADR-271). One per tree: one press at a time. */
+  const gesture = useMenuGesture();
+  /** A device with no hover gets no draggable rows: a finger's long press is the menu, and moving
+   *  is the menu's Move or the row's ↗ (ADR-271 decision 4). A mouse drags as before. */
+  const noHover = useNoHover();
   /** Group row whose + menu is open — keeps that row's hover-revealed actions on screen. */
   const [addMenuGroup, setAddMenuGroup] = useState<string | null>(null);
   /** Where the keyboard has put the selection before `?sel=` has been written (ADR-155 decision 3).
@@ -1217,21 +1222,24 @@ export function NodeTree({
         aria-expanded={hasChildren ? isOpen : undefined}
         className={`ntree-row ntree-grow${isSel ? ' sel' : ''}${dropClass(group.id)}${parentMarkId === group.id ? ' drop-parent' : ''}${draggingIds.has(group.id) ? ' dragging' : ''}`}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
-        draggable={canEdit}
+        draggable={canEdit && !noHover}
         onClick={() => selectGroup(group)}
         onDragStart={(e) => {
           e.stopPropagation();
+          // A finger held down is asking for the menu, not starting a move (ADR-271).
+          if (gesture.pressing()) {
+            e.preventDefault();
+            return;
+          }
           e.dataTransfer.effectAllowed = 'move';
           setDrag({ kind: 'group', id: group.id });
         }}
         onDragEnd={reset}
         onDragOver={(e) => onRowDragOver(e, target, true)}
         onDrop={(e) => onRowDrop(e, target, true)}
-        onContextMenu={(e) => {
-          if (!groupMenuHasItems(caps)) return;
-          e.preventDefault();
-          setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
-        }}
+        {...gesture.bind(
+          groupMenuHasItems(caps) ? (at) => setMenu({ ...at, kind: 'group', group }) : null,
+        )}
       >
         {guideCells(index)}
         {/* Out of the Tab order, like the name beside it (ADR-155 decision 1): the tree is one Tab stop,
@@ -1406,10 +1414,15 @@ export function NodeTree({
         className={`ntree-row ntree-node${isSel ? ' sel' : ''}${isChecked ? ' checked' : ''}${dropClass(node.id)}${draggingIds.has(node.id) ? ' dragging' : ''}`}
         key={node.id}
         style={{ paddingLeft: depth * INDENT + BASE_PAD }}
-        draggable={canEdit}
+        draggable={canEdit && !noHover}
         onClick={(e) => clickNode(e, node)}
         onDragStart={(e) => {
           e.stopPropagation();
+          // A finger held down is asking for the menu, not starting a move (ADR-271).
+          if (gesture.pressing()) {
+            e.preventDefault();
+            return;
+          }
           e.dataTransfer.effectAllowed = 'move';
           // What this carries is `nodeTreeDnd.ts`'s call, not a shape spelled out here — the
           // same rule the ↗ two elements below reads through `nodeMoveItems`.
@@ -1418,10 +1431,7 @@ export function NodeTree({
         onDragEnd={reset}
         onDragOver={(e) => onRowDragOver(e, target, false)}
         onDrop={(e) => onRowDrop(e, target, false)}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setMenu({ x: e.clientX, y: e.clientY, kind: 'node', node });
-        }}
+        {...gesture.bind((at) => setMenu({ ...at, kind: 'node', node }))}
       >
         {guideCells(index)}
         {/* Spacer keeps the status dot in the same column as a group's icon at this depth. */}
@@ -1542,11 +1552,7 @@ export function NodeTree({
           e.preventDefault();
           dropOnRoot();
         }}
-        onContextMenu={(e) => {
-          if (!rootMenuHasItems(caps)) return;
-          e.preventDefault();
-          setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
-        }}
+        {...gesture.bind(rootMenuHasItems(caps) ? (at) => setMenu({ ...at, kind: 'root' }) : null)}
       >
         <span className="ntree-twisty ntree-twisty-spacer" aria-hidden="true" />
         <span className="ntree-icon ntree-ungrouped-icon">⌁</span>
@@ -2018,8 +2024,8 @@ export function NodeTree({
         document.getElementById(rowDomId(sel)) ?? scrollRef.current
       )?.getBoundingClientRect();
       if (!box) return;
-      const x = box.left + MENU_KEY_INSET_PX;
-      const y = box.bottom;
+      // Below the row, where a long press puts it too (ADR-155 decision 7, ADR-271 decision 2).
+      const { x, y } = menuPointBelow(box);
       if (row.kind === 'group') {
         if (!groupMenuHasItems(caps)) return;
         setMenu({ x, y, kind: 'group', group: row.group });
@@ -2296,11 +2302,9 @@ export function NodeTree({
           ) : (
             <div
               className="muted ntree-empty"
-              onContextMenu={(e) => {
-                if (!rootMenuHasItems(caps)) return;
-                e.preventDefault();
-                setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
-              }}
+              {...gesture.bind(
+                rootMenuHasItems(caps) ? (at) => setMenu({ ...at, kind: 'root' }) : null,
+              )}
             >
               {/* The first step, where an empty inventory is seen (ADR-209 decision 5). */}
               <EmptyState
