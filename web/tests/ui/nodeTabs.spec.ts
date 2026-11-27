@@ -183,6 +183,11 @@ const SUBJECTS: { subject: NodeDetailSubject; name: string }[] = [
       });
 
       test('opens every tab it offers, and none it does not', async ({ page }) => {
+        // One page load per tab, so the budget grows with the tabs: about 8 s for nine of them on
+        // an idle machine, against the 20 s default. A machine three times slower ran out of it -
+        // 13 of these at once, with every screen correct (2026-11-28). This checks what each tab
+        // shows, not how fast it loads.
+        test.setTimeout(NODE_DETAIL_TABS.length * 5_000);
         for (const tab of NODE_DETAIL_TABS) {
           const allowed = visibleNodeDetailTabs(subject).includes(tab);
           await page.goto(`/nodes/${NODE_ID}?tab=${tab}`);
