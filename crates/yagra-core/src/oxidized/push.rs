@@ -93,6 +93,7 @@ mod tests {
                     NotifyAction::Resolve(_) => "resolve",
                     NotifyAction::Suppress(_) => "suppress",
                     NotifyAction::Update(_) => "update",
+                    NotifyAction::Regroup(_) => "regroup",
                 })
                 .collect()
         }

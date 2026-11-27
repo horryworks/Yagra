@@ -355,6 +355,7 @@
         "jsonNote": "The skeleton lists common facts as variables; it is not the built-in JSON.",
         "sameAsTitle": "Same sentence as the title",
         "closeOnly": {
+          "update": "When more nodes join the outage, PagerDuty is sent nothing. This template is not used.",
           "resolve": "When it recovers, PagerDuty is sent only a close signal (the dedup key). This template is not used.",
           "suppress": "When it is rolled up under upstream, PagerDuty is sent only a close signal (the dedup key). This template is not used."
         }
@@ -396,7 +397,9 @@
         "breach": "For a threshold alert: the measured value, the threshold and which way it crossed. null for an up/down alert.",
         "ifindex": "Only for a per-port alert: the port’s ifIndex.",
         "row": "Only for a per-row alert (a memory pool, a sensor): the row’s index.",
-        "row_name": "Only for a per-row alert: the row’s name."
+        "row_name": "Only for a per-row alert: the row’s name.",
+        "snmp_failure": "Only for an SNMP not responding alert: what the SNMP request ran into, such as handshake_timeout or no_answer.",
+        "grouped": "Only on an outage’s fire or update: the IDs of the down nodes grouped into it, at most 200."
       }
     },
     "test": {

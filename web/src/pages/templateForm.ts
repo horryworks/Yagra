@@ -28,7 +28,7 @@ export const TEMPLATE_FORMS: Record<ChannelKind, TemplateForm> = {
   jsm: { subject: 'title', body: 'text', json: false, unusedAt: [] },
   email: { subject: 'subject', body: 'text', json: false, unusedAt: [] },
   webhook: { subject: null, body: 'json', json: true, unusedAt: [] },
-  pagerduty: { subject: 'summary', body: 'customDetails', json: true, unusedAt: ['resolve', 'suppress'] },
+  pagerduty: { subject: 'summary', body: 'customDetails', json: true, unusedAt: ['update', 'resolve', 'suppress'] },
 };
 
 /** The keys of Yagra's built-in JSON body, in the order it writes them (`yagra_alert::Alert`).
@@ -46,6 +46,8 @@ export const BUILTIN_JSON_KEYS = [
   'ifindex',
   'row',
   'row_name',
+  'snmp_failure',
+  'grouped',
 ] as const;
 export type BuiltinJsonKey = (typeof BUILTIN_JSON_KEYS)[number];
 

@@ -17980,8 +17980,17 @@ export interface operations {
                 severity?: string;
                 /** @description Comma-separated node states; empty or absent means every state. */
                 state?: string;
-                /** @description `false` for fires only, `true` for clears only. Omit for both. */
+                /**
+                 * @description `false` for fires only, `true` for clears only. Omit for both. A roll-up row is not a
+                 *     clear, so `false` includes it; `phase` tells the two apart.
+                 */
                 resolved?: boolean;
+                /**
+                 * @description Comma-separated phases (`fired`, `cleared`, `rolled_up`): what each row records. A
+                 *     `rolled_up` row is an alert grouped into an outage while it stayed open. Empty or absent
+                 *     means every phase; an unknown token is rejected.
+                 */
+                phase?: string;
                 /**
                  * @description Only transitions whose metric name, or whose alert name in English or Japanese, contains
                  *     this text (case-insensitive): `Node` finds `__liveness__`, "Node not responding".
@@ -18054,7 +18063,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row about a node the caller can see */
+            /** @description The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row that opened an outage of a node the caller can see */
             404: {
                 headers: {
                     [name: string]: unknown;

@@ -11,6 +11,7 @@ import {
   mayHoldGrouped,
   memberNodes,
   membersCut,
+  momentAmong,
   momentOf,
   nextTransitionOf,
   phaseOf,
@@ -121,6 +122,28 @@ describe('a History row (ADR-270)', () => {
     const rolled = row({ id: 'h3', rolled_up: true, recorded_at: '2026-11-26T10:20:00Z' });
     expect(deliveryQueryOf(rolled, [rolled])?.since).toBe('2026-11-26T10:19:00.000Z');
     expect(deliveryQueryOf(row({ node: null, subject_kind: 'pool' }), [])).toBeNull();
+  });
+
+  it('reads the deliveries of a fire that pages again after its outage let it go as its own', () => {
+    // ap-02 paged at 10:00, was grouped into sw-01's outage at 10:20, and paged again at 10:40
+    // when sw-01 came back. The engine sends that last fire with the first one's time.
+    const first = row({ node: 'ap-02', check: 'c-ap' });
+    const rolled = row({ id: 'h2', node: 'ap-02', check: 'c-ap', rolled_up: true, recorded_at: '2026-11-26T10:20:00Z' });
+    const again = row({ id: 'h3', node: 'ap-02', check: 'c-ap', recorded_at: '2026-11-26T10:40:00Z' });
+    const rows = [again, rolled, first];
+    expect(momentAmong(again, rows)).toBe(Date.parse('2026-11-26T10:40:00Z'));
+    expect(momentAmong(first, rows)).toBe(Date.parse('2026-11-26T10:00:00Z'));
+    expect(deliveryQueryOf(again, rows)?.since).toBe('2026-11-26T10:39:00.000Z');
+    expect(deliveryQueryOf(again, rows)?.until).toBeUndefined();
+    expect(deliveryQueryOf(first, rows)?.until).toBe('2026-11-26T10:20:00.000Z');
+    expect(nextTransitionOf(rolled, rows)).toBe(Date.parse('2026-11-26T10:40:00Z'));
+    const sent = [
+      delivery('2026-11-26T10:41:00Z', { id: 3 }),
+      delivery('2026-11-26T10:20:01Z', { id: 2, event: 'suppress' }),
+      delivery('2026-11-26T10:00:01Z', { id: 1 }),
+    ];
+    // The first fire's own page, and not the roll-up's close or the second page.
+    expect(deliveriesOf(first, rows, sent).map((d) => d.id)).toEqual([1]);
   });
 
   it('keeps the deliveries sent before the same check next changed, oldest first', () => {

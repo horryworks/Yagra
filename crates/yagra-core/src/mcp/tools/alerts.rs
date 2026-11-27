@@ -54,8 +54,12 @@ pub(crate) struct AlertHistoryParams {
     severity: Option<String>,
     /// Node states to include, comma-separated, e.g. `critical,unreachable`. Omit for all.
     state: Option<String>,
-    /// `false` for fires only, `true` for clears only. Omit for both.
+    /// `false` for fires only, `true` for clears only. Omit for both. A `rolled_up` row is not a
+    /// clear, so `false` includes it; use `phase` to tell them apart.
     resolved: Option<bool>,
+    /// Phases to include, comma-separated: `fired` | `cleared` | `rolled_up` (an alert grouped
+    /// into an outage while it stayed open). Omit for all.
+    phase: Option<String>,
     /// Only transitions whose metric name, or whose alert name in English or Japanese, contains
     /// this text (case-insensitive), e.g. `cpu`, or `Node not responding` for liveness.
     metric: Option<String>,
@@ -189,7 +193,7 @@ impl YagraMcp {
     #[tool(
         description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
                        (default 100). Narrow with `severity` and `state` (each comma-separated for \
-                       several values), `resolved` (false=fires, true=clears), `metric` (substring of the metric name or the alert's name), \
+                       several values), `resolved` (false=fires, true=clears), `phase` (fired, cleared, rolled_up), `metric` (substring of the metric name or the alert's name), \
                        `node_id`, `node_q` (substring of the node's name), `group_id` (that folder \
                        and everything beneath it), `site` (Site folder ids, comma-separated) and `since`/`until` — the window to search, which \
                        is separate from the cursor. To page, pass the oldest returned row's \
@@ -232,6 +236,7 @@ impl YagraMcp {
             severity: p.severity.as_deref(),
             state: p.state.as_deref(),
             resolved: p.resolved,
+            phase: p.phase.as_deref(),
             metric: p.metric.as_deref(),
             node_id: p.node_id,
             node_q: p.node_q.as_deref(),

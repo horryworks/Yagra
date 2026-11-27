@@ -2718,8 +2718,8 @@ at 2026-08-04T09:41:07+00:00"
             row: Some(1),
             row_name: Some("r".to_owned()),
             notify_held_until: None,
-            snmp_failure: None,
-            grouped: Vec::new(),
+            snmp_failure: Some(yagra_common::SnmpFailure::NoAnswer),
+            grouped: vec![yagra_common::NodeId::new()],
         };
         let written = serde_json::to_string(&alert).unwrap();
         let mut order: Vec<(usize, &str)> = listed

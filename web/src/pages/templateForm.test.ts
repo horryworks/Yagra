@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { CHANNEL_KINDS } from '../types/api';
 import { JSON_SKELETON, prettyJson, TEMPLATE_FORMS } from './templateForm';
+import { TEMPLATE_EVENTS } from './templateModel';
 
 const text = (tokens: ReturnType<typeof prettyJson>) => (tokens ?? []).map((t) => t.text).join('');
 
@@ -10,7 +11,9 @@ describe('the template form per channel kind (ADR-197 Inc.2)', () => {
     expect(Object.keys(TEMPLATE_FORMS).sort()).toEqual([...CHANNEL_KINDS].sort());
     expect(TEMPLATE_FORMS.webhook.subject).toBeNull();
     expect(TEMPLATE_FORMS.pagerduty).toMatchObject({ subject: 'summary', body: 'customDetails', json: true });
-    expect(TEMPLATE_FORMS.pagerduty.unusedAt).toEqual(['resolve', 'suppress']);
+    // Every point but the fire: a recovery and a roll-up send only a close signal, and an outage's
+    // update sends PagerDuty nothing (ADR-270).
+    expect(TEMPLATE_FORMS.pagerduty.unusedAt).toEqual(TEMPLATE_EVENTS.filter((e) => e !== 'fire'));
     for (const k of ['jsm', 'email'] as const) {
       expect(TEMPLATE_FORMS[k]).toMatchObject({ body: 'text', json: false, unusedAt: [] });
     }

@@ -34,17 +34,42 @@ export function momentOf(r: Pick<AlertHistoryRow, 'at_unix_ms' | 'rolled_up' | '
   return r.at_unix_ms;
 }
 
+type MomentRow = Pick<AlertHistoryRow, 'id' | 'check' | 'at_unix_ms' | 'resolved' | 'rolled_up' | 'recorded_at'>;
+
+/** Whether a fire is an alert paging again after its outage let go of it: the engine sends that
+ *  fire with the time of the alert's first fire, so a roll-up of the same check, carrying that
+ *  same time, was written before it. */
+function refiresAfterRollUp(r: MomentRow, rows: readonly MomentRow[]): boolean {
+  if (phaseOf(r) !== 'fired') return false;
+  const written = Date.parse(r.recorded_at);
+  return rows.some(
+    (o) =>
+      o.id !== r.id &&
+      o.check === r.check &&
+      o.rolled_up &&
+      o.at_unix_ms === r.at_unix_ms &&
+      Date.parse(o.recorded_at) < written,
+  );
+}
+
+/** `momentOf`, with a fire that follows a roll-up of the same check dated by when it was written:
+ *  its `at_unix_ms` is the first fire's, so by that it would sort before the roll-up it follows. */
+export function momentAmong(r: MomentRow, rows: readonly MomentRow[]): number {
+  if (refiresAfterRollUp(r, rows)) {
+    const written = Date.parse(r.recorded_at);
+    if (Number.isFinite(written)) return written;
+  }
+  return momentOf(r);
+}
+
 /** The moment the same check next changed, among the rows on screen, or `null` when none of them
  *  is later. */
-export function nextTransitionOf(
-  r: Pick<AlertHistoryRow, 'id' | 'check' | 'at_unix_ms' | 'rolled_up' | 'recorded_at'>,
-  rows: readonly Pick<AlertHistoryRow, 'id' | 'check' | 'at_unix_ms' | 'rolled_up' | 'recorded_at'>[],
-): number | null {
-  const at = momentOf(r);
+export function nextTransitionOf(r: MomentRow, rows: readonly MomentRow[]): number | null {
+  const at = momentAmong(r, rows);
   let next: number | null = null;
   for (const o of rows) {
     if (o.id === r.id || o.check !== r.check) continue;
-    const m = momentOf(o);
+    const m = momentAmong(o, rows);
     if (m > at && (next === null || m < next)) next = m;
   }
   return next;
@@ -134,7 +159,7 @@ export function deliveryQueryOf(r: TransitionRow, rows: readonly TransitionRow[]
     subject: r.node,
     check_id: r.check,
     event: deliveryEventsOf(r).join(','),
-    since: new Date(momentOf(r) - DELIVERY_LEAD_MS).toISOString(),
+    since: new Date(momentAmong(r, rows) - DELIVERY_LEAD_MS).toISOString(),
     ...(next === null ? {} : { until: new Date(next).toISOString() }),
     limit: 100,
   };

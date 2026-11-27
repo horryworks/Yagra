@@ -56,6 +56,11 @@ pub enum NotifyAction {
     /// not only the new ones. Nothing recovered and nothing new fired, so it records no History
     /// row; the notifier adds it to the incident the fire opened.
     Update(Alert),
+    /// A down node's alert, already rolled up into one outage, now sits inside another: carries
+    /// the alert with its new `root_cause` (ADR-270 Inc.4). It never paged, so there is nothing
+    /// to close and nothing to send; it is History's record of the move, so the outage it joined
+    /// lists it, and the new border's incident is told through an [`Self::Update`].
+    Regroup(Alert),
 }
 
 /// Which kind of `alert_history` row a transition writes.
@@ -65,9 +70,9 @@ pub enum HistoryEvent {
     Fire,
     /// The alert recovered.
     Resolve,
-    /// An alert that had paged on its own was grouped into an outage (ADR-270 decision 4). It is
-    /// still open, so the row is not a resolve, and it is no new fire either: every reader that
-    /// counts fires skips it.
+    /// An alert was grouped into an outage: one that had paged on its own (ADR-270 decision 4),
+    /// or one that moved there from another outage (Inc.4). It is still open, so the row is not a
+    /// resolve, and it is no new fire either: every reader that counts fires skips it.
     RolledUp,
 }
 
@@ -126,7 +131,11 @@ impl From<bool> for HistoryEvent {
 /// **[`NotifyAction::Update`] returns `None`**: the members of an open outage changed, its
 /// lifecycle did not, and History reads the members from the members' own rows.
 ///
-/// It is spelled out rather than caught by a wildcard so a fifth action variant has to decide what
+/// **[`NotifyAction::Regroup`] writes a [`HistoryEvent::RolledUp`] row** (ADR-270 Inc.4): it is
+/// the member's own row naming the outage it moved into, which is what that outage's member list
+/// reads. Without it a node moved from one border to the next was listed under neither.
+///
+/// It is spelled out rather than caught by a wildcard so a sixth action variant has to decide what
 /// History should do with it.
 pub fn history_row(action: &NotifyAction) -> Option<(&Alert, HistoryEvent)> {
     match action {
@@ -134,6 +143,7 @@ pub fn history_row(action: &NotifyAction) -> Option<(&Alert, HistoryEvent)> {
         NotifyAction::Resolve(a) => Some((a, HistoryEvent::Resolve)),
         NotifyAction::Suppress(a) => Some((a, HistoryEvent::RolledUp)),
         NotifyAction::Update(_) => None,
+        NotifyAction::Regroup(a) => Some((a, HistoryEvent::RolledUp)),
     }
 }
 
@@ -175,6 +185,11 @@ mod tests {
         let rolled = history_row(&NotifyAction::Suppress(alert.clone())).map(|(_, r)| r);
         assert_eq!(rolled, Some(HistoryEvent::RolledUp));
         assert!(rolled.is_some_and(|r| !r.resolved() && r.rolled_up()));
-        assert!(history_row(&NotifyAction::Update(alert)).is_none());
+        assert!(history_row(&NotifyAction::Update(alert.clone())).is_none());
+        // ADR-270 Inc.4: a move between outages is a roll-up row of its own.
+        assert_eq!(
+            history_row(&NotifyAction::Regroup(alert)).map(|(_, r)| r),
+            Some(HistoryEvent::RolledUp)
+        );
     }
 }

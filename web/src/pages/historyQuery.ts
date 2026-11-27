@@ -12,7 +12,6 @@ import type { TFunction } from 'i18next';
 import {
   CUSTOM_RANGE,
   decodeRange,
-  decodeSet,
   normalizeSets,
   rangeSecondsIn,
   type ColumnFilterSpec,
@@ -27,11 +26,20 @@ import { SEVERITY_ORDER } from '../lib/nodeState';
 import { PAGE_SIZE } from './historyCursor';
 import { SEVERITIES, type AlertHistoryRow } from '../types/api';
 import type { ScopeIds } from '../troubleshoot/findingsQuery';
+import type { HistoryPhase } from './historyRow';
 
-/** The lifecycle phases the column offers, mapped to the API's `resolved` boolean. `''` — both
- *  ticked, or neither — is the unfiltered view rather than a third phase. */
-export const HISTORY_PHASES = ['fired', 'cleared'] as const;
-export type HistoryPhaseFilter = '' | (typeof HISTORY_PHASES)[number];
+/** The phases the column offers: the API's `phase` tokens (ADR-270 Inc.4). A roll-up is a phase
+ *  of its own, so "fired" asks for fires and not for the rows written when an alert was grouped
+ *  into an outage. */
+export const HISTORY_PHASES = ['fired', 'cleared', 'rolled_up'] as const;
+export type HistoryPhaseToken = (typeof HISTORY_PHASES)[number];
+
+/** Each phase's label under `alerts:history.phase.*`: the words a row's own badge uses. */
+const PHASE_LABEL: Record<HistoryPhaseToken, HistoryPhase> = {
+  fired: 'fired',
+  cleared: 'cleared',
+  rolled_up: 'rolledUp',
+};
 
 /** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
  *  `satisfies` is what makes a token added here without one there a compile error. */
@@ -42,9 +50,8 @@ export type HistoryRange = (typeof HISTORY_RANGES)[number];
  * The Alerts ▸ History filter row, keyed by `Column.key` (ADR-053 Inc.4 / Inc.4b).
  *
  * The enums are multi-select: since Inc.4b `GET /api/v1/alerts/history` takes `severity` and
- * `state` as comma-separated sets. `phase` stays effectively single-valued because it maps onto a
- * *boolean* (`resolved`) — ticking both fired and cleared is the unfiltered view, and
- * [`resolvedFor`] returns `undefined` for it, which is exactly right rather than a special case.
+ * `state` as comma-separated sets, and since ADR-270 Inc.4 `phase` too. It used to map onto the
+ * `resolved` boolean, which could not tell a fire from a roll-up: both are `resolved = false`.
  *
  * ⚠️ **The node / what columns had no filter until Inc.4b, and the reason mattered: neither
  * could be asked of the API.** A user reported them as missing twice, which is
@@ -123,7 +130,7 @@ export function historyFilters(
     },
     phase: {
       kind: 'enum',
-      options: HISTORY_PHASES.map((v) => ({ value: v, label: t(`history.phase.${v}`) })),
+      options: HISTORY_PHASES.map((v) => ({ value: v, label: t(`history.phase.${PHASE_LABEL[v]}`) })),
       allLabel: t('history.filter.allPhases'),
     },
     range: {
@@ -163,22 +170,6 @@ export function customWindow(
 /** The columns this module's functions read (ADR-053 Inc.10, decision AA). */
 export type HistoryColumns = readonly FilterableColumn<AlertHistoryRow>[];
 
-/** Both phases ticked (or neither) is the unfiltered view; exactly one is a filter.
- *
- *  Reading `picked[0]` without re-checking it is safe only because `queryFor` has already run the
- *  state through `normalizeSets`, which drops any token the column does not offer. */
-function phaseOf(value: string | undefined): HistoryPhaseFilter {
-  const picked = decodeSet(value ?? '');
-  return picked.length === 1 ? (picked[0] as HistoryPhaseFilter) : '';
-}
-
-/** `resolved` for a phase: `undefined` means "both", which is not the same as `false`. */
-export function resolvedFor(phase: HistoryPhaseFilter): boolean | undefined {
-  if (phase === 'fired') return false;
-  if (phase === 'cleared') return true;
-  return undefined;
-}
-
 /**
  * The request for one page.
  *
@@ -186,9 +177,7 @@ export function resolvedFor(phase: HistoryPhaseFilter): boolean | undefined {
  * whereas `severity=` would reach the backend as an empty string and be rejected as an unknown
  * severity — a filter nobody set turning into a 400.
  *
- * ⚠️ **`normalizeSets` is what keeps a hand-typed `?severity=bogus` out of that same 400**, and on
- * this screen it does a second job: `phaseOf` below reads `picked[0]` as a known token,
- * which is only true downstream of it.
+ * ⚠️ **`normalizeSets` is what keeps a hand-typed `?severity=bogus` out of that same 400.**
  *
  * The scope is a parameter rather than a column because it is not one — the ScopePicker in the
  * action row answers "all / this group / this node", and its two ids ride in the URL beside the
@@ -209,7 +198,7 @@ export function queryFor(
     limit: PAGE_SIZE,
     severity: unset(f.severity),
     state: unset(f.state),
-    resolved: resolvedFor(phaseOf(f.phase)),
+    phase: unset(f.phase),
     // The text columns store an encoded condition; only the term reaches this API, which has
     // neither a regex nor a negated form for either parameter.
     metric: unset(decodeCondition(f.metric ?? '').term),

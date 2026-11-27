@@ -318,8 +318,13 @@ pub(crate) struct HistoryQuery {
     pub severity: Option<String>,
     /// Comma-separated node states; empty or absent means every state.
     pub state: Option<String>,
-    /// `false` for fires only, `true` for clears only. Omit for both.
+    /// `false` for fires only, `true` for clears only. Omit for both. A roll-up row is not a
+    /// clear, so `false` includes it; `phase` tells the two apart.
     pub resolved: Option<bool>,
+    /// Comma-separated phases (`fired`, `cleared`, `rolled_up`): what each row records. A
+    /// `rolled_up` row is an alert grouped into an outage while it stayed open. Empty or absent
+    /// means every phase; an unknown token is rejected.
+    pub phase: Option<String>,
     /// Only transitions whose metric name, or whose alert name in English or Japanese, contains
     /// this text (case-insensitive): `Node` finds `__liveness__`, "Node not responding".
     pub metric: Option<String>,
@@ -349,7 +354,7 @@ pub(crate) struct HistoryQuery {
         (status = 400, description = "A cursor or range bound is not RFC 3339, `severity`/`state` is not one of the listed values, or `site` names something that is not a Site folder", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
-        (status = 404, description = "The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row about a node the caller can see", body = super::error::ErrorBody),
+        (status = 404, description = "The requested `node_id`, `group_id` or `site` is outside the caller's scope, or `outage_row` names no History row that opened an outage of a node the caller can see", body = super::error::ErrorBody),
     ),
 )]
 async fn list_alert_history(
@@ -370,6 +375,7 @@ async fn list_alert_history(
             severity: q.severity.as_deref(),
             state: q.state.as_deref(),
             resolved: q.resolved,
+            phase: q.phase.as_deref(),
             metric: q.metric.as_deref(),
             node_id: q.node_id,
             node_q: q.node_q.as_deref(),
@@ -427,6 +433,7 @@ pub(crate) struct HistoryFilterInput<'a> {
     pub severity: Option<&'a str>,
     pub state: Option<&'a str>,
     pub resolved: Option<bool>,
+    pub phase: Option<&'a str>,
     pub metric: Option<&'a str>,
     pub node_id: Option<Uuid>,
     pub node_q: Option<&'a str>,
@@ -472,6 +479,16 @@ pub(crate) async fn history_page(
         input.state,
         &super::util::token_list(NodeState::ALL.iter().map(NodeState::as_str)),
         NodeState::from_token,
+    )?;
+    let phase = super::util::parse_set(
+        "phase",
+        input.phase,
+        &super::util::token_list(
+            crate::alerts::history::HistoryPhase::ALL
+                .iter()
+                .map(|p| p.as_str()),
+        ),
+        crate::alerts::history::HistoryPhase::from_token,
     )?;
     let metric = super::util::normalize_search(input.metric);
     let node_q = super::util::normalize_search(input.node_q);
@@ -525,7 +542,7 @@ pub(crate) async fn history_page(
             let Some(w) = window else {
                 return Err(ApiError::not_found(
                     "history_row_not_found",
-                    "no History row about a node has that id",
+                    "no History row that opened an outage has that id",
                 ));
             };
             super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(w.node))?;
@@ -547,6 +564,7 @@ pub(crate) async fn history_page(
         severity,
         state,
         resolved: input.resolved,
+        phase,
         node_id: input.node_id,
         in_group: in_group.as_deref(),
         metric: metric.as_deref(),
@@ -1214,6 +1232,14 @@ mod tests {
         for bad in ["severity=fatal", "severity=CRITICAL", "state=broken"] {
             assert_eq!(history_error(bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
         }
+        // The phases too (ADR-270 Inc.4): `resolved` is the boolean's name, not a phase.
+        for bad in ["phase=resolved", "phase=fired,Rolled_up"] {
+            assert_eq!(history_error(bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        }
+        assert_eq!(
+            history_error("phase=fired,rolled_up").await.0,
+            StatusCode::OK
+        );
     }
 
     #[tokio::test]

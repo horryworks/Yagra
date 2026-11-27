@@ -291,10 +291,6 @@ pub struct AlertManager {
     /// only too (`Dispatcher::dispatch_update`). An outage open across a restart gets no update;
     /// Active alerts and History still name its members.
     sent_groups: Mutex<HashMap<CheckId, BTreeSet<NodeId>>>,
-    /// Borders whose members may have grown without any action naming them: [`Self::reattribute`]
-    /// moving an alert from one border to another emits nothing, so it leaves the new border here
-    /// for [`Self::finish_grouping`].
-    regrouped: Mutex<HashSet<NodeId>>,
     /// Borders that gained members since their fire, with the instant their update is due
     /// ([`UPDATE_WAIT_MS`] after the first new member): an outage spreading over a poll cycle sends
     /// one update, not one per node. Sent by [`Self::release_held`]'s tick. Memory only.
@@ -363,7 +359,6 @@ impl AlertManager {
             releasing: Mutex::new(HashMap::new()),
             held: Mutex::new(HashMap::new()),
             sent_groups: Mutex::new(HashMap::new()),
-            regrouped: Mutex::new(HashSet::new()),
             pending_updates: Mutex::new(HashMap::new()),
             titles,
         }
@@ -1178,7 +1173,10 @@ impl AlertManager {
                 self.broadcast_node_state(node, state, result.at_unix_ms);
             }
         }
-        self.finish_grouping(actions, result.at_unix_ms)
+        // Core's clock, not the result's: the update's wait is measured against `release_held`'s
+        // tick, which reads core's clock, and a result can carry a poller's skewed clock or arrive
+        // late from a store-and-forward backlog (ADR-270).
+        self.finish_grouping(actions, yagra_common::clock::now_unix_ms())
     }
 
     /// The down nodes whose liveness alerts are rolled up into `border` now (ADR-270), in id order.
@@ -1221,19 +1219,16 @@ impl AlertManager {
     ///   member leaving sends nothing.
     ///
     /// Every public entry that can move a roll-up returns through this: the poll path, `regroup`
-    /// and `release_held`. Only the borders an action in this batch names (or that
-    /// [`Self::reattribute`] moved an alert to) are looked at. A border's fire reads the active set
-    /// once for its members, except with grouping off everywhere, where [`Self::grouped_under`]
+    /// and `release_held`. Only the borders an action in this batch names are looked at - a
+    /// [`NotifyAction::Regroup`] names the border an alert moved to (ADR-270 Inc.4). A border's
+    /// fire reads the active set once for its members, except with grouping off everywhere, where [`Self::grouped_under`]
     /// answers without reading it - so then this costs a scan of `actions` and nothing else.
     fn finish_grouping(
         &self,
         mut actions: Vec<NotifyAction>,
         now_unix_ms: i64,
     ) -> Vec<NotifyAction> {
-        let mut touched: BTreeSet<NodeId> =
-            std::mem::take(&mut *self.regrouped.lock().expect("regrouped mutex poisoned"))
-                .into_iter()
-                .collect();
+        let mut touched: BTreeSet<NodeId> = BTreeSet::new();
         let mut fired: HashSet<CheckId> = HashSet::new();
         for action in &mut actions {
             match action {
@@ -1270,10 +1265,17 @@ impl AlertManager {
                         .remove(&a.check);
                     self.forget_update(a.check);
                 }
+                // A member moved here from another outage: the border it joined has news.
+                NotifyAction::Regroup(a) if a.metric == LIVENESS => {
+                    if let Some(border) = a.root_cause {
+                        touched.insert(border);
+                    }
+                }
                 NotifyAction::Fire(_)
                 | NotifyAction::Suppress(_)
                 | NotifyAction::Resolve(_)
-                | NotifyAction::Update(_) => {}
+                | NotifyAction::Update(_)
+                | NotifyAction::Regroup(_) => {}
             }
         }
         for border in touched {
@@ -1974,7 +1976,8 @@ impl AlertManager {
     ///   [`NotifyAction::Suppress`] to close its remote incident (rolled up under the parent).
     /// - **no longer suppressed but still down** (`Some → None`): emit [`NotifyAction::Fire`] so
     ///   it pages on its own now that its upstream is back.
-    /// - **re-attributed** (`Some → Some`): never paged; just refresh the attribution.
+    /// - **re-attributed** (`Some → Some`): never paged, so nothing is sent; emit
+    ///   [`NotifyAction::Regroup`] so History records the move (ADR-270 Inc.4).
     ///
     /// The liveness alerts of every other node the grouping now rolls up or no longer does
     /// (ADR-236: a region's border can move with any flip), **plus `changed`'s own non-liveness
@@ -2333,13 +2336,11 @@ impl AlertManager {
             match (alert.root_cause, new_rc) {
                 (None, Some(_)) => actions.push(NotifyAction::Suppress(updated)),
                 (Some(_), None) => actions.push(NotifyAction::Fire(updated)),
-                // Moved from one border to another: nothing to page or close, but the new border
-                // has one more member to tell its incident about (ADR-270).
-                (Some(_), Some(to)) if updated.metric == LIVENESS => {
-                    self.regrouped
-                        .lock()
-                        .expect("regrouped mutex poisoned")
-                        .insert(to);
+                // Moved from one border to another: nothing to page or close, but History records
+                // the move, so the outage it joined lists it, and that border has one more member
+                // to tell its incident about (ADR-270 Inc.4).
+                (Some(_), Some(_)) if updated.metric == LIVENESS => {
+                    actions.push(NotifyAction::Regroup(updated));
                 }
                 _ => {}
             }
@@ -3412,6 +3413,13 @@ impl AlertManager {
                     .lock()
                     .expect("states mutex poisoned")
                     .remove(&check);
+                // A border closed here never passes `finish_grouping`, which is where its outage
+                // bookkeeping is otherwise dropped (ADR-270).
+                self.sent_groups
+                    .lock()
+                    .expect("sent groups mutex poisoned")
+                    .remove(&check);
+                self.forget_update(check);
                 action
             })
             .collect()
@@ -6853,7 +6861,10 @@ mod tests {
             Vec::<NodeId>::new()
         );
 
-        // a joins at 100 and b at 200: nothing is sent while the wait runs.
+        // a joins and then b: nothing is sent while the wait runs. Their results carry timestamps
+        // from 1970, as a late store-and-forward backlog would: the wait is still measured on
+        // core's clock, from when a joined.
+        let before = yagra_common::clock::now_unix_ms();
         let joined = drive_all(&mgr, a, CheckOutcome::Unreachable, 100);
         assert_eq!(
             fire_of(&joined, a).expect("a fires").root_cause,
@@ -6861,14 +6872,13 @@ mod tests {
         );
         assert!(updates(&joined).is_empty(), "{joined:?}");
         assert!(updates(&drive_all(&mgr, b, CheckOutcome::Unreachable, 200)).is_empty());
-        // a commits on its last sample of the dwell.
-        let a_joined = 100 + i64::from(DEFAULT_LIVENESS_DWELL) - 1;
+        let after = yagra_common::clock::now_unix_ms();
         assert!(
-            mgr.release_held(a_joined + UPDATE_WAIT_MS - 1).is_empty(),
-            "the wait runs from the first new member"
+            mgr.release_held(before + UPDATE_WAIT_MS - 1).is_empty(),
+            "the wait runs from the first new member, on core's clock"
         );
 
-        let sent = updates(&mgr.release_held(a_joined + UPDATE_WAIT_MS));
+        let sent = updates(&mgr.release_held(after + UPDATE_WAIT_MS));
         assert_eq!(sent.len(), 1, "one update for both");
         assert!(sent[0].subject.is_node(border));
         let mut want = vec![a, b];
@@ -6899,6 +6909,71 @@ mod tests {
         drive_all(&mgr, a, CheckOutcome::Unreachable, 100);
         drive_all(&mgr, border, CheckOutcome::Reachable, 200);
         assert!(updates(&mgr.release_held(i64::MAX / 2)).is_empty());
+    }
+
+    /// ADR-270 Inc.4: a member that moves from one outage to the one that swallowed it is recorded
+    /// as a move - a `Regroup` carrying its new border, which History writes and the notifier
+    /// sends nowhere - and the border it joined carries it on its fire.
+    #[test]
+    fn a_member_moved_into_a_wider_outage_is_recorded_as_a_regroup() {
+        let (gp, parent, child) = (NodeId::new(), NodeId::new(), NodeId::new());
+        let mgr = manager();
+        mgr.set_config(
+            cfg(Vec::new(), HashMap::new()).with_grouping(linked(&[(parent, gp), (child, parent)])),
+        );
+        drive_all(&mgr, parent, CheckOutcome::Unreachable, 0);
+        let joined = drive_all(&mgr, child, CheckOutcome::Unreachable, 100);
+        assert_eq!(
+            fire_of(&joined, child).expect("child fires").root_cause,
+            Some(parent)
+        );
+
+        let fell = drive_all(&mgr, gp, CheckOutcome::Unreachable, 200);
+        let moved: Vec<&Alert> = fell
+            .iter()
+            .filter_map(|a| match a {
+                NotifyAction::Regroup(al) => Some(al),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moved.len(), 1, "{fell:?}");
+        assert!(moved[0].subject.is_node(child));
+        assert_eq!(moved[0].root_cause, Some(gp));
+        assert_eq!(
+            crate::action::history_row(&NotifyAction::Regroup(moved[0].clone())).map(|(_, e)| e),
+            Some(crate::action::HistoryEvent::RolledUp)
+        );
+        // gp's fire names both the parent it rolled up and the child that moved with it.
+        let mut want = vec![parent, child];
+        want.sort_by_key(|n| n.as_uuid());
+        assert_eq!(fire_of(&fell, gp).expect("gp pages").grouped, want);
+        assert!(
+            updates(&fell).is_empty(),
+            "its own fire already says it all"
+        );
+    }
+
+    /// A border whose alert a sweep closes (its node deleted, its rule gone) never passes
+    /// `finish_grouping`, so the sweep itself drops what the engine kept about its outage.
+    #[test]
+    fn a_border_closed_by_a_sweep_leaves_no_outage_bookkeeping_behind() {
+        let border = NodeId::new();
+        let a = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_grouping(linked(&[(a, border)])));
+        drive_all(&mgr, border, CheckOutcome::Unreachable, 0);
+        drive_all(&mgr, a, CheckOutcome::Unreachable, 100);
+        let check = check_id(border, LIVENESS);
+        assert!(mgr.sent_groups.lock().unwrap().contains_key(&check));
+        assert!(mgr.pending_updates.lock().unwrap().contains_key(&check));
+
+        let closed = mgr.resolve_stale_alerts(vec![check]);
+        assert!(
+            matches!(closed.as_slice(), [NotifyAction::Resolve(al)] if al.check == check),
+            "{closed:?}"
+        );
+        assert!(!mgr.sent_groups.lock().unwrap().contains_key(&check));
+        assert!(!mgr.pending_updates.lock().unwrap().contains_key(&check));
     }
 
     /// A border whose own page is held (ADR-236 decision 10) has no incident to add to yet: it

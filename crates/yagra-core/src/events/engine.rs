@@ -464,8 +464,9 @@ impl EventEngine {
             // demonstrably reachable), so the event pipeline never produces a roll-up. Handled
             // defensively for exhaustiveness; it is still delivered below.
             NotifyAction::Suppress(_) => {}
-            // Nor an outage's update (ADR-270), which only a liveness border has.
-            NotifyAction::Update(_) => {}
+            // Nor an outage's update or a move between outages (ADR-270), which only a liveness
+            // alert has.
+            NotifyAction::Update(_) | NotifyAction::Regroup(_) => {}
         }
         self.sink.dispatch(action).await;
     }
@@ -600,9 +601,10 @@ mod tests {
             .iter()
             .filter_map(|(a, _)| match a {
                 NotifyAction::Fire(alert) => Some(alert),
-                NotifyAction::Resolve(_) | NotifyAction::Suppress(_) | NotifyAction::Update(_) => {
-                    None
-                }
+                NotifyAction::Resolve(_)
+                | NotifyAction::Suppress(_)
+                | NotifyAction::Update(_)
+                | NotifyAction::Regroup(_) => None,
             })
             .collect()
     }

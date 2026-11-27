@@ -840,12 +840,19 @@ export function ChannelTemplateModal({
               </div>
               {previewFailed && <p className="form-error">{t('routing.err.preview')}</p>}
               {view && unusedNow ? (
-                <div className="tpl-card">
-                  <div className="tpl-card-meta">{t('routing.template.preview.closeOnly')}</div>
-                  <pre className="tpl-card-body is-json">
-                    <JsonText text={'{"event_action":"resolve","dedup_key":"…"}'} />
-                  </pre>
-                </div>
+                sample.event === 'update' ? (
+                  // PagerDuty is sent nothing for an update (ADR-270): no close signal to show either.
+                  <div className="tpl-card">
+                    <div className="tpl-card-meta">{t('routing.template.builtinView.closeOnly.update')}</div>
+                  </div>
+                ) : (
+                  <div className="tpl-card">
+                    <div className="tpl-card-meta">{t('routing.template.preview.closeOnly')}</div>
+                    <pre className="tpl-card-body is-json">
+                      <JsonText text={'{"event_action":"resolve","dedup_key":"…"}'} />
+                    </pre>
+                  </div>
+                )
               ) : view && (
                 <div className="tpl-card">
                   {shape.subject !== null && (

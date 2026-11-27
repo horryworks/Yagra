@@ -1745,7 +1745,10 @@ impl Notifier {
         let alert = match action {
             // An update reaches only a channel that heard the fire, so a held fire leaves it
             // nowhere to go by itself (`Dispatcher::dispatch_update`).
-            NotifyAction::Fire(_) | NotifyAction::Update(_) => return false,
+            // A move between outages is delivered nowhere at all.
+            NotifyAction::Fire(_) | NotifyAction::Update(_) | NotifyAction::Regroup(_) => {
+                return false
+            }
             NotifyAction::Resolve(a) | NotifyAction::Suppress(a) => a,
         };
         let Some(store) = self.held_store() else {
@@ -1857,9 +1860,13 @@ impl Notifier {
             NotifyAction::Resolve(a) => self.context(a, NotifyEvent::Resolve).await,
             NotifyAction::Suppress(a) => self.context(a, NotifyEvent::Suppress).await,
             NotifyAction::Update(a) => self.context(a, NotifyEvent::Update).await,
+            // A member moved from one outage to another (ADR-270 Inc.4) never paged: nothing to
+            // close and nothing to send. The new border's incident hears of it as an update.
+            NotifyAction::Regroup(_) => return true,
         };
         let routing = self.routing();
         match action {
+            NotifyAction::Regroup(_) => {}
             NotifyAction::Update(alert) => {
                 self.update(&routing, &alert, facts.as_ref()).await;
             }
@@ -4676,6 +4683,33 @@ mod delivery_tests {
         let closed = rows.iter().find(|r| r.channel_id == Some(a)).unwrap();
         assert_eq!(closed.route, DeliveryRoute::OpenIncident);
         assert!(closed.route_rules.is_empty());
+    }
+
+    /// ADR-270 Inc.4: a member moved from one outage to another is History's record and nothing
+    /// else - no channel is paged or closed, and the delivery log gets no row.
+    #[tokio::test]
+    async fn a_move_between_outages_is_sent_nowhere() {
+        let (ch, dflt) = (log(), log());
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let (dlog, mut rx) = crate::alerts::notification_log::DeliveryLog::for_test();
+        n.set_delivery_log(dlog);
+        let a = Uuid::from_u128(1);
+        n.install_routing(vec![built(a, Recorder(ch.clone()))], vec![rule(a, None)]);
+        let node = NodeId::new();
+        n.handle(NotifyAction::Fire(alert(node, Severity::Critical, None)))
+            .await;
+        assert_eq!(ch.lock().unwrap().kinds(), ["fire"]);
+        drain(&mut rx);
+
+        let moved = alert(node, Severity::Critical, Some(NodeId::new()));
+        n.handle(NotifyAction::Regroup(moved)).await;
+        assert_eq!(
+            ch.lock().unwrap().kinds(),
+            ["fire"],
+            "no close, no second page"
+        );
+        assert_eq!(dflt.lock().unwrap().kinds(), ["fire"]);
+        assert!(drain(&mut rx).is_empty(), "nothing to log");
     }
 
     /// ADR-269 decision 3: a fire a rule wanted held, with nowhere to hold it, goes to every

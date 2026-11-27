@@ -17,7 +17,6 @@ import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import {
   historyFilters,
   queryFor,
-  resolvedFor,
   type HistoryColumns,
 } from './historyQuery';
 import { readScope, writeScope, type ScopeIds } from '../troubleshoot/findingsQuery';
@@ -44,23 +43,13 @@ const contains = (term: string) => encodeCondition({ term, mode: 'contains', not
 /** What the page holds after the router hands it a query string. */
 const read = (qs: string) => readFilterParams(COLUMNS, new URLSearchParams(qs));
 
-describe('resolvedFor', () => {
-  it('distinguishes "both" from "fires only"', () => {
-    // undefined and false are different requests: undefined omits the parameter, false asks the
-    // backend for fires. Collapsing them would silently hide every clear.
-    expect(resolvedFor('')).toBeUndefined();
-    expect(resolvedFor('fired')).toBe(false);
-    expect(resolvedFor('cleared')).toBe(true);
-  });
-});
-
 describe('queryFor', () => {
   it('sends only the page size when nothing is filtered', () => {
     expect(query()).toEqual({
       limit: PAGE_SIZE,
       severity: undefined,
       state: undefined,
-      resolved: undefined,
+      phase: undefined,
       metric: undefined,
       node_id: undefined,
       node_q: undefined,
@@ -91,7 +80,7 @@ describe('queryFor', () => {
     ).toMatchObject({
       severity: 'warning,critical',
       state: 'unreachable',
-      resolved: false,
+      phase: 'fired',
       metric: 'cpu',
       node_id: 'n1',
       node_q: 'core-sw',
@@ -109,20 +98,22 @@ describe('queryFor', () => {
     expect(queryFor(bare, { ...defaultFilters(bare), site: SITE_A }, NO_SCOPE, null, NOW).site).toBeUndefined();
   });
 
-  it('treats both boxes ticked as the unfiltered view, not as a third answer', () => {
-    // `phase` maps onto a boolean, so "fired and cleared" is the same request as neither.
-    // `undefined` omits the parameter; `false` would ask for fires only.
-    expect(query({ phase: 'fired,cleared' }).resolved).toBeUndefined();
-    expect(query({ phase: 'cleared' }).resolved).toBe(true);
+  it('sends the ticked phases as a set, so "fired" leaves the roll-ups out (ADR-270 Inc.4)', () => {
+    // A roll-up row is `resolved = false` like a fire, which is why the boolean is no longer sent:
+    // it could not tell them apart. "Fired and cleared" is now a real filter that drops roll-ups.
+    expect(query({ phase: 'fired,cleared' }).phase).toBe('fired,cleared');
+    expect(query({ phase: 'rolled_up' }).phase).toBe('rolled_up');
+    expect(query({ phase: 'fired' })).not.toHaveProperty('resolved');
+    expect(query().phase).toBeUndefined();
   });
 
   it('drops a token the column does not offer instead of forwarding it', () => {
     // 🚨 The trap decision AA had to close: the URL is read without validation on purpose, so
     // `?severity=bogus` would otherwise reach an endpoint that rejects unknown severities. It is
-    // also what lets `phaseOf` read `picked[0]` as a token it already knows.
+    // also what keeps `?phase=exploded` from reaching the API, which rejects it.
     expect(query({ severity: 'bogus' }).severity).toBeUndefined();
     expect(query({ severity: 'bogus,critical' }).severity).toBe('critical');
-    expect(query({ phase: 'exploded' }).resolved).toBeUndefined();
+    expect(query({ phase: 'exploded' }).phase).toBeUndefined();
   });
 
   it('sends a custom window as since and until (ADR-250)', () => {
@@ -215,7 +206,7 @@ describe('URL round trip', () => {
     expect(query({ severity: 'fatal', state: 'melted', phase: 'exploded' })).toMatchObject({
       severity: undefined,
       state: undefined,
-      resolved: undefined,
+      phase: undefined,
     });
     expect(queryFor(COLUMNS, read('range=forever'), NO_SCOPE, null, NOW).since).toBeUndefined();
   });
@@ -253,9 +244,8 @@ describe('the filter row (ADR-053 Inc.4)', () => {
 
   it('offers a multi-select on every enum, because the endpoint takes a set', () => {
     // 🚨 What must stay true is the *pairing*: a multi-select over a parameter that accepts one
-    // value drops rows with nothing on screen saying so. `phase` is the exception that proves it —
-    // a set in the control and a boolean on the wire, and `queryFor` sends "both ticked" as no
-    // parameter at all rather than as one of the two.
+    // value drops rows with nothing on screen saying so. `phase` was the exception — a set in the
+    // control and a boolean on the wire — until ADR-270 Inc.4 gave it a set on the wire too.
     const specs = historyFilters(t, SITES);
     for (const key of ['severity', 'site', 'state', 'phase']) {
       expect(specs[key].kind, key).toBe('enum');

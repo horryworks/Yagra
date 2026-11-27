@@ -180,6 +180,39 @@ pub struct OutageWindow {
     pub until: Option<DateTime<Utc>>,
 }
 
+/// What one History row records (ADR-270 Inc.4): the `phase` filter's vocabulary, and what the
+/// `resolved` / `rolled_up` columns say between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryPhase {
+    /// The alert fired.
+    Fired,
+    /// The alert recovered.
+    Cleared,
+    /// The alert was grouped into an outage while it stayed open.
+    RolledUp,
+}
+
+impl HistoryPhase {
+    /// Every phase, in the order a row passes through them.
+    pub const ALL: [HistoryPhase; 3] = [Self::Fired, Self::Cleared, Self::RolledUp];
+
+    /// The token the `phase` parameter takes and [`HISTORY_FILTER_WHERE`] derives from a row.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fired => "fired",
+            Self::Cleared => "cleared",
+            Self::RolledUp => "rolled_up",
+        }
+    }
+
+    /// The inverse of [`Self::as_str`].
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.as_str() == s)
+    }
+}
+
 /// A validated alert-history query. Built at the API edge by `api::alerts::history_page`.
 #[derive(Debug, Default, Clone)]
 pub struct HistoryFilter<'a> {
@@ -193,8 +226,11 @@ pub struct HistoryFilter<'a> {
     pub severity: Vec<Severity>,
     /// Any of these states. Empty means unfiltered.
     pub state: Vec<NodeState>,
-    /// `Some(false)` = fires only, `Some(true)` = clears only.
+    /// `Some(false)` = fires only, `Some(true)` = clears only. A roll-up row is `resolved = false`,
+    /// so `Some(false)` includes it; [`Self::phase`] is what tells the two apart.
     pub resolved: Option<bool>,
+    /// Any of these phases (ADR-270 Inc.4). Empty means unfiltered.
+    pub phase: Vec<HistoryPhase>,
     /// Restrict to one node subject.
     pub node_id: Option<Uuid>,
     /// Restrict to node subjects currently in these folder groups — the **caller's requested**
@@ -225,8 +261,8 @@ pub struct HistoryFilter<'a> {
     pub limit: i64,
 }
 
-/// The `WHERE` of a page of alert history. Binds `$1..=$13` in the order [`bind_history_filter`]
-/// writes them; `$14` is the page size.
+/// The `WHERE` of a page of alert history. Binds `$1..=$14` in the order [`bind_history_filter`]
+/// writes them; `$15` is the page size.
 ///
 /// `$12` belongs to `$10`'s arm rather than having one of its own: it is the metrics whose alert
 /// **name** contains the same term (ADR-196 decision 8), so it widens a metric search and never
@@ -265,7 +301,9 @@ const HISTORY_FILTER_WHERE: &str = "\
      AND ($11::text IS NULL OR (subject_kind = 'node' \
           AND node IN (SELECT id FROM nodes WHERE name ILIKE '%' || $11 || '%'))) \
      AND ($13::uuid IS NULL OR (subject_kind = 'node' AND root_cause = $13 AND node <> $13 \
-          AND metric = '__liveness__'))";
+          AND metric = '__liveness__')) \
+     AND ($14::text[] IS NULL OR (CASE WHEN resolved THEN 'cleared' WHEN rolled_up THEN 'rolled_up' \
+          ELSE 'fired' END) = ANY($14))";
 
 /// Every column [`AlertHistoryStore::read_rows`] reads, in the order it reads them.
 ///
@@ -284,7 +322,7 @@ fn history_page_sql() -> String {
         "SELECT {HISTORY_COLUMNS} \
          FROM alert_history \
          WHERE {HISTORY_FILTER_WHERE} \
-         ORDER BY recorded_at DESC, id DESC LIMIT $14"
+         ORDER BY recorded_at DESC, id DESC LIMIT $15"
     )
 }
 
@@ -400,7 +438,7 @@ fn set_or_null(tokens: impl IntoIterator<Item = &'static str>) -> Option<Vec<Str
     (!v.is_empty()).then_some(v)
 }
 
-/// Bind `$1..=$13` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
+/// Bind `$1..=$14` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
 ///
 /// One helper because the sequence is positional and silent when wrong: swapping `$3` and `$4`
 /// still compiles, still runs, and just answers a different question.
@@ -425,6 +463,7 @@ fn bind_history_filter<'q>(
         .bind(f.node_q)
         .bind(named)
         .bind(f.root_cause)
+        .bind(set_or_null(f.phase.iter().map(|p| p.as_str())))
 }
 
 /// PostgreSQL-backed alert history.
@@ -755,14 +794,18 @@ impl AlertHistoryStore {
 
     /// The outage a History row opened (ADR-270): the node it is about, when it was recorded, and
     /// when the same check next recorded a resolve, or `None` while it is still open. `None`
-    /// overall when no such row exists or it is not about a node.
+    /// overall when no such row exists, or when the row opened no outage: only a node's up/down
+    /// fire that was grouped under nobody does. A resolve, a roll-up or a threshold row would
+    /// otherwise give a window that is about nothing, and members of whatever fell in it.
     pub async fn outage_window(&self, row: Uuid) -> anyhow::Result<Option<OutageWindow>> {
         let found = sqlx::query(
             "SELECT h.node, h.recorded_at, \
                     (SELECT min(r.recorded_at) FROM alert_history r \
                      WHERE r.check_id = h.check_id AND r.resolved \
                        AND r.recorded_at >= h.recorded_at) AS ended \
-             FROM alert_history h WHERE h.id = $1 AND h.subject_kind = 'node'",
+             FROM alert_history h \
+             WHERE h.id = $1 AND h.subject_kind = 'node' AND h.metric = '__liveness__' \
+               AND NOT h.resolved AND NOT h.rolled_up AND h.root_cause IS NULL",
         )
         .bind(row)
         .fetch_optional(&self.pool)
@@ -1230,17 +1273,29 @@ mod tests {
         }
     }
 
+    /// ADR-270 Inc.4: the `phase` filter's tokens are the ones the SQL derives from a row's two
+    /// columns, so a token the parser accepts is one a row can carry.
+    #[test]
+    fn every_phase_token_is_one_the_sql_derives_from_a_row() {
+        for p in HistoryPhase::ALL {
+            assert_eq!(HistoryPhase::from_token(p.as_str()), Some(p));
+            let literal = format!("'{}'", p.as_str());
+            assert!(HISTORY_FILTER_WHERE.contains(&literal), "{p:?}");
+        }
+        assert_eq!(HistoryPhase::from_token("resolved"), None);
+    }
+
     #[test]
     fn the_history_filter_binds_every_placeholder_it_names() {
         // Positional and silent when wrong: swapping two binds still compiles, still runs, and just
         // answers a different question.
-        let named = (1..=13)
+        let named = (1..=14)
             .filter(|n| HISTORY_FILTER_WHERE.contains(&format!("${n}")))
             .count();
-        assert_eq!(named, 13, "the predicate should name exactly $1..=$13");
+        assert_eq!(named, 14, "the predicate should name exactly $1..=$14");
         assert!(
-            !HISTORY_FILTER_WHERE.contains("$14"),
-            "$14 is the page size"
+            !HISTORY_FILTER_WHERE.contains("$15"),
+            "$15 is the page size"
         );
         let binds = production_source()
             .split("fn bind_history_filter")
@@ -1252,7 +1307,7 @@ mod tests {
             .matches(".bind(")
             .count();
         assert_eq!(binds, named, "one bind per placeholder");
-        assert!(history_page_sql().contains("LIMIT $14"));
+        assert!(history_page_sql().contains("LIMIT $15"));
     }
 
     #[test]
@@ -1281,7 +1336,7 @@ mod tests {
         // The fail-open shape: a conditionally-built WHERE has a branch someone can forget, and the
         // branch that gets forgotten returns *more* rows, not fewer.
         //
-        // Eleven arms for thirteen binds, and two deliberate exceptions. `before_id` (`$2`) has no
+        // Twelve arms for fourteen binds, and two deliberate exceptions. `before_id` (`$2`) has no
         // meaning without `before`, so instead of its own "no filter" arm it is absorbed by the
         // `coalesce` inside `$1`'s. That is what makes a cursor of `before` alone degrade to
         // "strictly before this instant" rather than matching nothing. The named metrics (`$12`)
@@ -1289,7 +1344,7 @@ mod tests {
         // filter on names when no term was given.
         assert_eq!(
             HISTORY_FILTER_WHERE.matches(" IS NULL").count(),
-            11,
+            12,
             "every bind but the cursor's second half must carry its own 'no filter' arm"
         );
         assert!(
@@ -1579,6 +1634,16 @@ mod tests {
             .expect("read")
             .expect("a node's row");
         assert_eq!(w.node, border);
+        // Only a row that opened an outage names one: a resolve, a roll-up and a member's fire
+        // do not.
+        for not_an_opening in [
+            all.iter().find(|r| r.node == Some(border) && r.resolved),
+            all.iter().find(|r| r.rolled_up),
+            all.iter().find(|r| r.node == Some(inner)),
+        ] {
+            let id = not_an_opening.expect("the row is there").id;
+            assert!(store.outage_window(id).await.expect("read").is_none());
+        }
         let members = store
             .search(&HistoryFilter {
                 root_cause: Some(w.node),
@@ -1594,6 +1659,29 @@ mod tests {
         let mut want = vec![inner, paged];
         want.sort();
         assert_eq!(nodes, want, "the members, and not the next outage's");
+
+        // The phase filter tells a roll-up from a fire (ADR-270 Inc.4), which `resolved` cannot.
+        let phase = |phase: Vec<HistoryPhase>| HistoryFilter {
+            phase,
+            limit: 100,
+            ..HistoryFilter::default()
+        };
+        let fired = store
+            .search(&phase(vec![HistoryPhase::Fired]))
+            .await
+            .expect("read");
+        assert_eq!(fired.len(), 4);
+        assert!(fired.iter().all(|r| !r.resolved && !r.rolled_up));
+        let rolled = store
+            .search(&phase(vec![HistoryPhase::RolledUp]))
+            .await
+            .expect("read");
+        assert_eq!(rolled.len(), 1);
+        let either = store
+            .search(&phase(vec![HistoryPhase::Cleared, HistoryPhase::RolledUp]))
+            .await
+            .expect("read");
+        assert_eq!(either.len(), 2);
 
         // A roll-up is not a fire: three fires about ap-02, sw-01, ap-01, plus ap-03 later.
         let counted: i64 = store

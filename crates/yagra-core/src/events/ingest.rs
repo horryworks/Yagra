@@ -203,7 +203,7 @@ async fn flush_actions(
                 metrics::counter!("yagra_event_alerts_resolved_total", "reason" => ea.reason)
                     .increment(1);
             }
-            NotifyAction::Suppress(_) | NotifyAction::Update(_) => {}
+            NotifyAction::Suppress(_) | NotifyAction::Update(_) | NotifyAction::Regroup(_) => {}
         }
         notifier.handle(ea.action).await;
     }
