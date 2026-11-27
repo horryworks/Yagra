@@ -20,6 +20,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -83,10 +84,10 @@ function Stepper({
     timers.current = {};
   };
   useEffect(() => stop, []);
-  const press = (dir: StepDir) => (e: MouseEvent) => {
-    if (e.button !== 0) return;
-    // Keep the caret where it is: the box being typed in stays the one being typed in.
-    e.preventDefault();
+  // Pointer events, not mouse ones: a finger's mousedown and mouseup arrive together after it
+  // lifts, so a held finger would step once and never repeat.
+  const press = (dir: StepDir) => (e: PointerEvent) => {
+    if (e.button !== 0 || !e.isPrimary) return;
     stop();
     latest.current(dir);
     timers.current.wait = window.setTimeout(() => {
@@ -111,9 +112,12 @@ function Stepper({
           className="wt-step-btn"
           tabIndex={-1}
           aria-label={label}
-          onMouseDown={press(dir)}
-          onMouseUp={stop}
-          onMouseLeave={stop}
+          onPointerDown={press(dir)}
+          onPointerUp={stop}
+          onPointerLeave={stop}
+          onPointerCancel={stop}
+          // Keep the caret where it is: the box being typed in stays the one being typed in.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={click(dir)}
         >
           {icon}
@@ -237,12 +241,20 @@ export function TimeInput({
   }
   const step = (unit: TimeUnit, dir: StepDir) =>
     onStep ? onStep(unit, dir) : onChange(stepTimeOfDayText(value, unit, dir, nextWholeHour(Date.now(), displayTimeZone()).time));
-  const typed = (part: 0 | 1) => (e: ChangeEvent<HTMLInputElement>) => {
-    const native = e.nativeEvent as InputEvent;
-    const whole = native.inputType === 'insertFromPaste' || (native.data?.length ?? 0) > 1;
-    const next = typedTimePart(e.target.value, part, value, whole);
+  const take = (part: 0 | 1, raw: string, whole: boolean) => {
+    const next = typedTimePart(raw, part, value, whole);
     setTyping({ part, shown: next.shown });
     onChange(next.text);
+  };
+  const typed = (part: 0 | 1) => (e: ChangeEvent<HTMLInputElement>) => {
+    const native = e.nativeEvent as InputEvent;
+    // An input method's text is not a number until it is committed: show it as it stands, or
+    // rewriting the box under the input method throws the composition away.
+    if (native.isComposing) {
+      setTyping({ part, shown: e.target.value });
+      return;
+    }
+    take(part, e.target.value, native.inputType === 'insertFromPaste' || (native.data?.length ?? 0) > 1);
   };
   const box = (part: 0 | 1) => {
     const unit: TimeUnit = part === 0 ? 'hour' : 'minute';
@@ -253,6 +265,9 @@ export function TimeInput({
           className="wt-in"
           value={typing?.part === part ? typing.shown : timePart(value, part)}
           onChange={typed(part)}
+          // Chromium sends no input event after the composition ends, so the committed text is
+          // read here.
+          onCompositionEnd={(e) => take(part, e.currentTarget.value, (e.data?.length ?? 0) > 1)}
           onFocus={(e) => {
             setTyping({ part, shown: timePart(value, part) });
             e.target.select();

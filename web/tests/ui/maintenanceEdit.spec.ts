@@ -196,4 +196,62 @@ test.describe('a new window', () => {
     await expect(endHour).toHaveValue('15');
     expect(errors.uncaught).toEqual([]);
   });
+
+  test('takes an hour typed through a Japanese input method', async ({ page, errors }) => {
+    // The box used to read every composition update as typing, and a full-width digit is no
+    // digit to `\D`: the box was emptied under the input method and the number never arrived.
+    await page.clock.setFixedTime(new Date('2030-01-02T05:20:00Z')); // 14:20 in Tokyo
+    await page.goto('/alerts/maintenance');
+    await page.getByRole('button', { name: '+ Add window', exact: true }).click({ timeout: 15_000 });
+    const dialog = page.getByRole('dialog');
+    const startHour = dialog.getByLabel('Start time, hour', { exact: true });
+    await startHour.click();
+    const cdp = await page.context().newCDPSession(page);
+    for (const text of ['２', '２２']) {
+      await cdp.send('Input.imeSetComposition', {
+        text,
+        selectionStart: text.length,
+        selectionEnd: text.length,
+      });
+    }
+    await cdp.send('Input.insertText', { text: '２２' });
+    await expect(startHour).toHaveValue('22');
+    await expect(dialog.getByLabel('End time, hour', { exact: true })).toHaveValue('23');
+    expect(errors.uncaught).toEqual([]);
+  });
+});
+
+test.describe('a finger on the steppers', () => {
+  test.use({ timezoneId: 'Asia/Tokyo', hasTouch: true });
+
+  test('a held finger keeps stepping, and stops when it lifts', async ({ page, errors }) => {
+    // ADR-261 decision 35: a held press repeats. A finger's mousedown and mouseup arrive together
+    // after it lifts, so a stepper driven by mouse events stepped once for any length of hold.
+    await page.clock.setFixedTime(new Date('2030-01-02T05:20:00Z')); // 14:20 in Tokyo
+    await page.goto('/alerts/maintenance');
+    await page.getByRole('button', { name: '+ Add window', exact: true }).click({ timeout: 15_000 });
+    const dialog = page.getByRole('dialog');
+    const endHour = dialog.getByLabel('End time, hour', { exact: true });
+    await expect(endHour).toHaveValue('16');
+
+    const up = dialog
+      .getByRole('group', { name: 'End time', exact: true })
+      .getByRole('button', { name: '1 hour later' });
+    const b = await up.boundingBox();
+    if (!b) throw new Error('the stepper has no box');
+    // Through the DevTools protocol, so the page sees `pointerType: 'touch'`; Playwright's own
+    // touchscreen only taps.
+    const cdp = await page.context().newCDPSession(page);
+    const at = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+    // One step at once, then one every 90 ms after 400 ms: about five in 800 ms.
+    await page.waitForTimeout(800);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+    const held = Number(await endHour.inputValue());
+    expect(held, 'more than one step for a held finger').toBeGreaterThanOrEqual(18);
+    await page.waitForTimeout(500);
+    expect(Number(await endHour.inputValue()), 'no step after the finger lifts').toBe(held);
+    expect(errors.uncaught).toEqual([]);
+  });
 });

@@ -96,10 +96,17 @@
   height: 10px;
 }
 
-/* A finger needs more than a mouse; the height stays the box's. */
+/* A finger needs more than a mouse; the height stays the box's. A held finger is a repeat, not a
+   scroll, a text selection or the browser's own long-press menu. */
 @media (hover: none) {
   .wt-step {
     width: 28px;
+  }
+  .wt-step-btn {
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 }
 

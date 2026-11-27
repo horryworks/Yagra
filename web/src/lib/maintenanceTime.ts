@@ -34,7 +34,8 @@ const pad2 = (n: number) => String(n).padStart(2, '0');
 /** A typed date: `2026-11-20` or `2026/11/20` (one-digit month and day allowed). `null` for an
  *  empty box, `'invalid'` for anything else - a date with no year included. */
 export function parseDateText(text: string): DateParts | null | 'invalid' {
-  const s = text.trim();
+  // Full-width digits and separators, as a Japanese input method commits them, read the same.
+  const s = text.normalize('NFKC').trim();
   if (!s) return null;
   const m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(s);
   if (!m) return 'invalid';
@@ -48,7 +49,7 @@ export function parseDateText(text: string): DateParts | null | 'invalid' {
 /** A typed 24-hour time: `22:00`, `9:05`, `2200`, `905`. `null` for an empty box, `'invalid'`
  *  for anything else - `10pm` included, because the dialog is 24-hour throughout. */
 export function parseTimeText(text: string): TimeParts | null | 'invalid' {
-  const s = text.trim();
+  const s = text.normalize('NFKC').trim();
   if (!s) return null;
   const m = /^(\d{1,2}):(\d{2})$/.exec(s) ?? /^(\d{1,2})(\d{2})$/.exec(s);
   if (!m) return 'invalid';
@@ -446,11 +447,13 @@ export function typedTimePart(
   current: string,
   whole: boolean,
 ): { shown: string; text: string } {
+  // A Japanese input method commits full-width digits and colons; they are the same numbers.
+  const typed = raw.normalize('NFKC');
   if (whole) {
-    const t = parseTimeText(raw);
+    const t = parseTimeText(typed);
     if (readable(t)) return { shown: pad2(part === 0 ? t.hour : t.minute), text: timeText(t) };
   }
-  const digits = raw.replace(/\D/g, '').slice(-2);
+  const digits = typed.replace(/\D/g, '').slice(-2);
   const parts: [string, string] = [timePart(current, 0), timePart(current, 1)];
   parts[part] = digits;
   if (part === 0 && digits && !parts[1]) parts[1] = '00';

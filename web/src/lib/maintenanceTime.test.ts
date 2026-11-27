@@ -48,6 +48,19 @@ describe('parseDateText', () => {
     expect(parseDateText('2026/1/5')).toEqual({ year: 2026, month: 1, day: 5 });
   });
 
+  it('reads the full-width text a Japanese input method commits', () => {
+    expect(parseDateText('２０２６－１１－２０')).toEqual({
+      year: 2026,
+      month: 11,
+      day: 20,
+    });
+    expect(parseDateText('２０２６／１１／２０')).toEqual({
+      year: 2026,
+      month: 11,
+      day: 20,
+    });
+  });
+
   it('is empty for a blank box', () => {
     expect(parseDateText('  ')).toBeNull();
   });
@@ -74,6 +87,11 @@ describe('parseTimeText', () => {
     expect(parseTimeText('9:05')).toEqual({ hour: 9, minute: 5 });
     expect(parseTimeText('905')).toEqual({ hour: 9, minute: 5 });
     expect(parseTimeText('0:00')).toEqual({ hour: 0, minute: 0 });
+  });
+
+  it('reads the full-width text a Japanese input method commits', () => {
+    expect(parseTimeText('２２：００')).toEqual({ hour: 22, minute: 0 });
+    expect(parseTimeText('２２００')).toEqual({ hour: 22, minute: 0 });
   });
 
   it('refuses AM/PM and out-of-range values', () => {
@@ -460,6 +478,15 @@ describe('the two boxes of a time', () => {
     expect(typedTimePart('0930', 1, '', true)).toEqual({ shown: '30', text: '09:30' });
     // Not a time: the digits go in the box as if typed.
     expect(typedTimePart('7', 0, '', true)).toEqual({ shown: '7', text: '7:00' });
+  });
+
+  it('reads the full-width digits and colon a Japanese input method commits', () => {
+    expect(typedTimePart('２２', 0, '', false)).toEqual({ shown: '22', text: '22:00' });
+    expect(typedTimePart('３０', 1, '22:00', false)).toEqual({ shown: '30', text: '22:30' });
+    expect(typedTimePart('２２：３０', 0, '', true)).toEqual({
+      shown: '22',
+      text: '22:30',
+    });
   });
 
   it('treats 2 and 02 as the same text, so a value coming back does not overwrite typing', () => {
