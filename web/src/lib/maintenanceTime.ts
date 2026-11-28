@@ -15,7 +15,13 @@
 // night the clocks skip it is not a time the requester can have meant. An overlap takes its first
 // occurrence, and the "your time" line shows which instant that is.
 
-import { wallClock, wallInstants, utcOffsetText, zoneAbbreviation } from './timeZone';
+import {
+  checkedZone,
+  wallClock,
+  wallInstants,
+  utcOffsetText,
+  zoneAbbreviation,
+} from './timeZone';
 import { isImeComposing, type ImeKeyEvent } from './ime';
 
 export interface DateParts {
@@ -264,15 +270,21 @@ export function matchZones(query: string, zones: readonly string[], nowMs: numbe
   });
 }
 
-/** The zone the window's target keeps time in (decision 6), or `null` when it has none or when
- *  its nodes sit in folders that disagree. `zoneOfGroup` answers a folder's effective zone. */
+/** The zone the window's target keeps time in (decision 6), or `null` when it has none, when its
+ *  nodes sit in folders that disagree, or when this browser cannot compute it. `zoneOfGroup`
+ *  answers a folder's effective zone.
+ *
+ *  🚨 The last case is `checkedZone` (ADR-253 decision 5), and it is not tidiness: the dialog hands
+ *  this zone to `Intl.DateTimeFormat`, which throws a RangeError on a name it does not know, and
+ *  that unmounted the whole WebUI the moment the dialog opened for such a folder. `null` makes the
+ *  dialog fall back to the display zone instead. */
 export function targetZone(
   groupIds: readonly (string | null | undefined)[],
   zoneOfGroup: (groupId: string) => string | null | undefined,
 ): string | null {
   let found: string | null = null;
   for (const id of groupIds) {
-    const z = (id && zoneOfGroup(id)) || null;
+    const z = checkedZone(id ? zoneOfGroup(id) : null);
     if (!z) return null;
     if (found && found !== z) return null;
     found = z;

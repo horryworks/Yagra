@@ -264,6 +264,14 @@ describe('targetZone', () => {
     expect(targetZone(['ny', null], zoneOf)).toBeNull();
     expect(targetZone([], zoneOf)).toBeNull();
   });
+
+  it('is nothing for a zone this browser cannot compute, rather than one that throws later', () => {
+    // The dialog formats times in this zone; an unknown name made `Intl` throw and blanked the app.
+    const odd = (id: string) => ({ bad: 'Not/A_Zone', ny: 'America/New_York' })[id];
+    expect(targetZone(['bad'], odd)).toBeNull();
+    expect(targetZone(['ny', 'bad'], odd)).toBeNull();
+    expect(() => new Intl.DateTimeFormat('en-US', { timeZone: 'Not/A_Zone' })).toThrow(RangeError);
+  });
 });
 
 describe('the value shapes of the inputs these boxes replace', () => {

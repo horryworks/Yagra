@@ -10,6 +10,14 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A folder's page has a Maintenance… button, as a node's does.** It sits beside Edit group and opens the Add maintenance window dialog for that folder and everything under it — before, a folder could be put into maintenance only from the tree's right-click menu. It is shown to anyone who may open a maintenance window, whether or not they may edit the folder.
+
+### Bug Fixes
+
+- **The maintenance window dialog no longer blanks the WebUI for a folder whose time zone the browser does not know.** The dialog offers the site's own clock, and a zone name the browser cannot compute made the whole page go dark when the dialog opened — from a folder, from a node in that folder, or from the tree. It now opens on your display time zone instead.
+
 ## v0.3.91 — Outage notifications that name every grouped node and update as more join, where and why each notification went, and what an SNMP request ran into
 
 ### Breaking changes

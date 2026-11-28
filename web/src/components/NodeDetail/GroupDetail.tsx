@@ -73,6 +73,9 @@ interface Props {
   /** The folder actions that were only in the tree's right-click menu (ADR-209 decision 9).
    *  Each absent ⇒ its button is not drawn. */
   onAddSubgroup?: () => void;
+  /** Open the maintenance dialog with this folder as its scope (ADR-209 decision 11). Gated by the
+   *  caller on `manage_maintenance` alone, not on `canEdit` (ADR-056). */
+  onSetMaintenance?: () => void;
   onRunDiscovery?: () => void;
   onSortChildren?: (direction: 'asc' | 'desc') => void;
   /** After the folder's note was saved in place (ADR-239): re-read the folder list. */
@@ -95,6 +98,7 @@ export function GroupDetail({
   onOpenNode,
   onPinError,
   onAddSubgroup,
+  onSetMaintenance,
   onRunDiscovery,
   onSortChildren,
   onNotesSaved,
@@ -184,15 +188,24 @@ export function GroupDetail({
               </span>
             )}
           </div>
-          {(canEdit || onPinError) && (
+          {(canEdit || onPinError || onSetMaintenance) && (
             <div className="nd-actions">
               {/* Not gated on `canEdit`: any signed-in account may pin a folder (ADR-146). */}
               {onPinError && <PinButton kind="group" id={group.id} onError={onPinError} />}
               {canEdit && (
+                <Button variant="outline" onClick={() => onEditGroup(group)}>
+                  {t('group.edit')}
+                </Button>
+              )}
+              {/* Beside Edit, as on a node's header. Its own permission, not `canEdit`: an account
+                  may open a maintenance window without being allowed to reshape the inventory. */}
+              {onSetMaintenance && (
+                <Button variant="outline" onClick={onSetMaintenance}>
+                  {t('detail.maintenance')}
+                </Button>
+              )}
+              {canEdit && (
                 <>
-                  <Button variant="outline" onClick={() => onEditGroup(group)}>
-                    {t('group.edit')}
-                  </Button>
                   {onAddSubgroup && (
                     <Button variant="outline" onClick={onAddSubgroup}>
                       {t('group.addSubgroup')}

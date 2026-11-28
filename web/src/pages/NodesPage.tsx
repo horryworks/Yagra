@@ -1628,6 +1628,17 @@ export function NodesPage() {
               onPinError={(e) => setError(errMsg(e, t('tree.pinFailed')))}
               // The tree's folder menu, as buttons (ADR-209 decision 9): the same handlers.
               onAddSubgroup={() => setGroupModal({ mode: 'add', parentId: selectedGroup.id })}
+              // The same dialog the tree's "Maintenance ▸ Custom…" opens for a folder.
+              onSetMaintenance={
+                canMaintenance
+                  ? () =>
+                      setMaintenanceTarget({
+                        kind: 'group',
+                        id: selectedGroup.id,
+                        name: selectedGroup.name,
+                      })
+                  : undefined
+              }
               onNotesSaved={() => void reload()}
               onReload={() => void reload()}
               onRunDiscovery={() =>
